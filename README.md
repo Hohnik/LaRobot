@@ -1,7 +1,20 @@
 # yam-robotics — SpaceMouse teleop for a YAM arm
 
-> **Status: 2026-08-07, session 1.** Input device **proven readable**. Arm **not yet commanded, by choice**.
-> Nothing in this repo has ever transmitted on the CAN bus.
+> **Status: session 1 closed, Friday 2026-08-07. Resuming Monday 2026-08-10.**
+> Input device **proven readable**. Arm **not yet commanded, by choice**. Nothing here has ever transmitted
+> on the CAN bus.
+>
+> ## ⛔ THE HARDWARE IS UNPLUGGED — read this before you debug anything
+>
+> Julien's time at the location ran out on Friday 2026-08-07 and **every device was disconnected**, dock
+> included. Verified: `ioreg -p IOUSB` now enumerates **nothing at all**.
+>
+> **So `scripts/probe_hardware.py` will report "No SpaceMouse found", and that is correct, not a
+> regression.** Everything in §1 below was measured on Friday while the hardware was attached; it is a
+> **snapshot**, not a live reading. Do not "fix" code in response to an empty enumeration — plug the dock in
+> first, re-run the probe, and only then believe a failure.
+>
+> Nothing was left in a broken state. No configuration was changed on any device.
 
 **Goal (Julien, 2026-08-07):** *"at best, I'm able to control the robot arm with the space mouse."*
 This session's honest scope: find out what is actually connected, what the toolchain must be, get the
@@ -103,10 +116,50 @@ frame sent, no bitrate set. Reasons:
 | **A YAM MJCF/URDF model** | `mink` IK needs one. Unknown whether one is published |
 | **Bitrate** | Typically 1 Mbit/s for arms, but that is a guess until documented |
 
+## 6.5 Why this is its own repo and not part of Mind Understanding
+
+Julien asked directly (2026-08-07), and the honest answer has two halves.
+
+**What actually happened:** he said the task was *"completely unrelated"*, and his standing convention is that
+standalone projects live in `~/Developer/Projects/` (`ai_book`, `AutonomousMAS`, `LearningApp`…). I followed
+that convention **without deliberating hard about it at the time**. The reasoning below is partly
+reconstructed — but it does hold up, and the decision is cheap to reverse if he disagrees.
+
+**Why it holds up:**
+
+1. **Different kind of thing.** Mind Understanding is a *learning programme* — "understand what intelligence
+   actually is", organised as topics, concepts and experiments, with no deadline. This is an *engineering
+   build* for a specific robotics programme with a friend and a professor: real hardware, a Linux target, a
+   collaborator's plan, and milestones. A **project**, not a **topic**.
+2. **Physical incompatibility.** Mind Understanding lives inside the **iCloud/Obsidian container** so its
+   markdown reaches his phone. Its `state/NOW.md` §5 documents that ~1.8 GB of binaries once produced a
+   ~3-hour sync backlog, which is why `.venv`, `imports/**/raw` and even `.git` are deliberately held
+   *outside* it. A robotics repo accrues exactly the wrong things — virtualenvs, MCAP/rosbag logs, camera
+   recordings, model checkpoints. Putting it there would attack that architecture head-on.
+3. **Different lifecycle.** This may well move to a Linux machine (§2). Mind Understanding is Mac-and-phone.
+
+**The counter-argument, which is real:** Mind Understanding's `DESIGN.md` §6.2 explicitly struck
+"content-on-demand" *because* material otherwise stays scattered across old repos forever — and a new
+separate repo is arguably that same failure.
+
+**How that is resolved without merging them:** the concern in §6.2 is that things get **lost**, not that they
+are stored apart. Mind Understanding now has `canon/SOURCES.md`, an index of every asset wherever it lives —
+built the same day, for exactly this. **This repo is indexed there.** Knowledge that comes *out* of this work
+(IK, VLA architectures, teleop as a data-collection problem) flows into Mind Understanding as topics; the
+rig, drivers and logs stay here.
+
+> **Reversible if he prefers otherwise.** Nothing here depends on the location: no absolute paths into it,
+> and its own git history is self-contained. Moving it under `Mind Understanding/lab/` later is a `git mv`
+> plus a `.gitignore` line — but the iCloud-binary problem in point 2 would need answering first.
+
 ## 7. Next steps, in order
 
+**Monday 2026-08-10, first thing — plug the dock back in and re-run `scripts/probe_hardware.py`.**
+Expect the same three 3Dconnexion interfaces, the C920 and the CANable. That single command re-establishes
+that the world matches §1 before anything else is attempted.
+
 1. **Julien runs `src/spacemouse_live.py` and moves the puck.** Confirms decode and reveals the report shape.
-   *Zero risk.*
+   *Zero risk.* **This is the one thing that was ready to test when the time ran out.**
 2. **Find the YAM SDK / CAN protocol** — vendor docs, I2RT GitHub, or whatever the friend used. Until this
    exists, step 4 cannot start.
 3. **Webcam check** — trivial, and the plan needs it for data collection anyway.
