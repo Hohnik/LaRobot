@@ -24,19 +24,29 @@ import time
 
 import hid
 
-VIDS = {0x256F, 0x046D}
+SPACEMOUSE_VID = 0x256F  # 3Dconnexion's own
+LEGACY_VID = 0x046D      # Logitech — 3Dconnexion shipped under it for years
+VIDS = {SPACEMOUSE_VID, LEGACY_VID}
 FULL_SCALE = 350.0  # raw counts at full deflection; nominal, calibrate if it matters
 DEADZONE = 0.02
 
 
 def find_device() -> dict | None:
+    """Pick the SpaceMouse's motion interface.
+
+    The order matters, and the reason is specific to this dock. VID 0x046D is Logitech,
+    which older 3Dconnexion units shipped under — but it is *also* the C920 webcam on
+    this same hub, and a webcam presents HID interfaces too. So a Logitech device is
+    accepted only if it independently identifies as multi-axis; blind fallback is
+    allowed for 3Dconnexion's own VID and nothing else. Picking the webcam would open
+    cleanly, print a plausible product string, and then never report motion.
+    """
     cands = [d for d in hid.enumerate() if d["vendor_id"] in VIDS]
-    if not cands:
-        return None
-    return next(
-        (d for d in cands if d.get("usage_page") == 0x01 and d.get("usage") == 0x08),
-        cands[0],
-    )
+    multi = [d for d in cands if d.get("usage_page") == 0x01 and d.get("usage") == 0x08]
+    if multi:
+        return multi[0]
+    own = [d for d in cands if d["vendor_id"] == SPACEMOUSE_VID]
+    return own[0] if own else None
 
 
 def open_device(info: dict):
@@ -67,7 +77,12 @@ def main() -> int:
         print("No SpaceMouse found. Plugged in?")
         return 1
 
-    print(f"Opening {info.get('product_string')} …")
+    print(
+        f"Opening {info.get('product_string')} "
+        f"[{info['vendor_id']:#06x}:{info['product_id']:#06x}] …"
+    )
+    if not (info.get("usage_page") == 0x01 and info.get("usage") == 0x08):
+        print("  ⚠️  this is NOT the multi-axis interface — if nothing moves, that is why.")
     try:
         h = open_device(info)
     except OSError as exc:

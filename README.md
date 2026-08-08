@@ -90,6 +90,16 @@ uv run src/spacemouse_live.py       # live 6-DoF bar readout — move the device
 - `src/spacemouse_live.py` — decodes and displays all six axes plus buttons. Handles **both** report shapes
   (split `0x01`/`0x02`, or a combined 13-byte `0x01`) and prints which one this unit uses. **Written and
   compile-checked; not yet run against actual motion** — that needs a human hand on the puck.
+  - **⚠️ Device-selection bug found and fixed 2026-08-08, before it could cost bench time.** The old
+    `find_device()` fell back to `cands[0]` over both accepted VIDs — and **`0x046D` is Logitech, which is
+    both 3Dconnexion's legacy VID *and* the C920 webcam on this very dock**. With the SpaceMouse unplugged
+    it would have opened the *webcam*, printed a plausible "Opening HD Pro Webcam C920 …", and then never
+    reported motion — indistinguishable from a decode bug, and a genuinely nasty thing to debug at the
+    bench. Now: a Logitech device is accepted **only** if it independently identifies as multi-axis
+    (`usage_page 0x01 / usage 0x08`); blind fallback is allowed for `0x256F` alone. The script also prints
+    the **VID:PID it opened** and warns explicitly when the interface is not the multi-axis one.
+    **Verified against four stubbed enumerations** (both present · webcam only · axis interface hidden ·
+    nothing at all) — the webcam is never selected, and "webcam only" now correctly reports no device.
 
 **Both are strictly read-only. Neither can move anything.**
 
