@@ -460,16 +460,31 @@ yam-robotics/
 │   ├── COMMANDS.md            # ⭐ every command, grouped by how much it can move
 │   ├── HANDOFF.md             # ⭐⭐ START HERE with no context: state, rules, traps, next steps
 │   └── FINDINGS.md            # ⭐⭐ the latent knowledge: every measurement, every trap, every rule
+├── config/
+│   ├── spacemouse_map.json    # which puck axis drives which motion, and its direction
+│   ├── gripper_limits.json    # measured jaw limits; re-measure after every power cycle
+│   └── park_pose.json         # the saved pose PARK returns to
 ├── scripts/
 │   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only
 │   ├── probe_can.py           # listen-only CAN watch                          read-only
+│   ├── map_axes.py            # ⭐ dial in the axis map. SpaceMouse only — NO robot, NO CAN
+│   ├── teleop_sim.py          # the full teleop loop against MuJoCo            no hardware
+│   ├── test_axis_map.py       # tests for the axis map                         no hardware
+│   ├── test_park_target.py    # tests for the PARK target logic                no hardware
 │   ├── ping_motors.py         # ⚠️ enables motors (--yes); sends no setpoint
 │   ├── identify_arm.py        # reads registers; identifies the arm without energising it
 │   ├── bench_can.py           # CAN round-trip / control-rate measurement    read-only
+│   ├── calibrate_gripper.py   # ⚠️ MOVES the jaws to both stops, gently, once (--yes)
+│   ├── teleop_session.py      # ⚠️⭐ MOVES THE WHOLE ARM — the one to use (--yes)
 │   ├── move_one_motor.py      # ⚠️ MOVES one motor on one arm (--yes)
 │   └── move_both_grippers.py  # ⚠️ MOVES motor 6 on BOTH arms (--yes)
 ├── src/
+│   ├── spacemouse.py          # device selection + the 6-axis decode
 │   ├── spacemouse_live.py     # live 6-DoF readout                             read-only
+│   ├── axis_map.py            # ⭐ puck axis → robot motion: the permutation and the signs
+│   ├── teleop.py              # twist → IK → joint targets (world frame)
+│   ├── keyboard.py            # non-blocking single-key input for the control loop
+│   ├── yam_robot.py           # build/teardown, gripper frames, the rate limiter
 │   └── yam_can.py             # the macOS CAN layer (§2.1)
 ├── third_party/i2rt/          # vendored I2RT SDK — GITIGNORED, clone with the command in §6.1
 └── pyproject.toml             # uv; hidapi · python-can · gs-usb · numpy · tyro · pydantic · crcmod-plus

@@ -169,7 +169,13 @@ the loop once cameras and inference compete for CPU — but the specific claim i
   **Re-run `calibrate_gripper.py` after every power cycle.** `teleop_session.py` detects the mismatch and
   says so.
 - ⛔ **Never command the gripper to 0.0 or 1.0.** Those *are* the mechanical stops, and holding a position at
-  a stop is stall torque: full current, no motion, no cooling. Commands are clamped to **[0.15, 0.85]**.
+  a stop is stall torque: full current, no motion, no cooling. Operator-requested values are clamped to
+  **[0.02, 0.98]**.
+  ⚠️ **The clamp is applied only to values the OPERATOR asks for, never to move the jaws to where they
+  already are.** The earlier `[0.15, 0.85]` band was applied *on entering TELEOP*, which meant that if the
+  jaws happened to sit outside it, the session **commanded them to move** the moment teleop began — a
+  motion nobody asked for, into a mechanical stop when the limits were also mis-framed. Entry now takes
+  the jaws exactly where they are.
 
 ---
 
@@ -331,8 +337,11 @@ positions at all times — proven this morning when a hand-twist of the gripper 
 
 **What was lost when the arm drooped was the control loop, not the knowledge of where the arm is.** So
 recovery is simply: read the true current pose, then interpolate slowly to the target. `teleop_session.py`'s
-PARK mode does exactly that at 0.25 rad/s.
-⚠️ What it *cannot* know is what is now in the way, which is why it moves slowly and any key aborts it.
+PARK mode does exactly that at **0.40 rad/s**.
+⚠️ What it *cannot* know is what is now in the way, which is why it moves slowly and `h` or `t` stops it.
+⛔ **Correction, 2026-08-10: "any key aborts it" was the bug, not the feature.** Every unrecognised key —
+Enter included — used to cancel PARK, so pressing `p` and then Enter out of habit killed the move in the
+same keyboard batch and looked exactly like "park just went to hold". Only `h` and `t` stop it now.
 
 ---
 
@@ -361,11 +370,242 @@ over-temperature.** The diagnosis held because two independent arms on two indep
 together for independent reasons — the only shared thing was mains.
 
 **Known-imperfect, deliberately deferred:**
-- **SpaceMouse axis directions are wrong/unintuitive.** Not yet mapped to Julien's expectation; the session
-  script lets him flip x/y/z live and saves the result to `config/spacemouse_map.json`.
+- **SpaceMouse axis directions are wrong/unintuitive.** Not yet mapped to Julien's expectation. **The tooling
+  for it is complete as of session 3** (`scripts/map_axes.py`, no hardware needed) — what remains is him
+  driving it. See §9 and §10.
 - **Two SpaceMice are now connected, and the ambiguity is SOLVED — by asking the hardware.** Both report an
   empty serial, so select-by-serial does not transfer from the CAN adapters. They differ only in USB
   `port_numbers` — `(1,3)` and `(1,4)` — which hidapi does not expose, and which tell a human nothing about
   which puck is under which hand. So `pick_device_by_wiggle()` opens all of them and uses **whichever one the
   operator moves.** Unambiguous, needs no config, survives replugging into any port, and costs five seconds.
 - No git remote. Everything exists only on this Mac.
+
+---
+
+## 9. Four defects found by READING, 2026-08-10 (session 3) — no hardware involved
+
+Nothing was plugged in for any of these. Each was found by checking the code against what the docs claimed
+about it, which is worth noting on its own: **the bench is not where the cheap defects are.**
+
+**1. ⛔ PARK with `--no-gripper` would have released a raised arm.** `config/park_pose.json` holds **7**
+joints; `--no-gripper` builds a **6**-DoF robot. `park_target - measured` on mismatched shapes raises
+`ValueError` — and that exception escaped the control loop, **skipped the "the arm is HOLDING, press g or d"
+consent flow**, and fell into `finally`, which disables the motors. A raised arm sags. The path matters:
+`--no-gripper` is exactly the escape hatch the gripper instructions tell you to fall back to, *so the
+fallback was the broken one.* Symmetrically, a pose saved **in** a no-gripper session had 6 entries and broke
+the next 7-DoF session. Fixed in `yam_robot.park_target_from()` — start from the measured pose and overlay
+only the joints the saved pose carries, so no target is ever invented for a joint we know nothing about.
+Tested: `scripts/test_park_target.py`.
+
+**2. PARK was the one motion path that bypassed the gripper clamp.** It commanded the saved jaw value
+directly. Harmless with the pose saved today (0.0366, inside the band) — but `s` saves wherever the jaws
+happen to be, so saving with the jaws on a stop would later drive them back onto that stop and **hold** them
+there. That is the stall condition from §4 rule 1, reachable through the one door the guard did not cover.
+
+**3. ⭐ The gripper thermal test could not detect the thing it tested.** The status line printed only
+`hottest` — the max over all seven motors. Motors 2/3 carry the arm's 4.3 kg and sit at **41-42 °C** in
+normal equilibrium, while an idle motor 7 is **31-36 °C**. So motor 7 climbing 33 → 41 °C was **entirely
+hidden inside the `max()`**, and "watch `hottest` plateau" agreed with the claim it was supposed to be able
+to refute. §0's own rule, missed in the one place it was load-bearing. The jaw temperature is now printed
+separately (`jaw NN°C`), and the session's peak jaw temperature is reported at exit.
+
+**4. A warn-and-continue, in the exact wording of the rule against warn-and-continue.** A second
+stale-limit check in `teleop_session.py` compared the raw jaw position against the **unshifted** limits from
+the file, so it re-flagged precisely the cases `frame_correct_gripper_limits()` had legitimately reconciled:
+at the measured raw **−1.380** it printed *"STALE GRIPPER LIMITS … re-run calibrate_gripper"* while the frame
+was correct and the jaws normalised to **0.3005**. It then continued. Two harms, neither hypothetical: a real
+warning and a false alarm became indistinguishable, and the remedy it advised is a routine that drives the
+jaws into both mechanical stops. Deleted — `build_robot()` already gates this twice, better, and *before* any
+control loop starts. **A duplicated weaker check is worse than no check**, because it launders the strong one.
+
+**Also fixed:** the PARK progress report was an `elif` on the motion branch, so one cycle in every hundred
+sent no command at all. Benign — the chain's own 250 Hz thread holds the last target — but not what the code
+said it did, in the one mode a human watches rather than steers.
+
+> ### The generalisation
+> All four are the same shape: **a guard, a test or a message that was written once and then not re-derived
+> against the thing it guards.** The clamp existed and PARK went around it. The refusal existed and a weaker
+> copy undermined it. The temperature monitor existed and aggregated away the signal. ⭐ **Ask of every
+> guard: what is the path that reaches the hazard without passing through you?**
+
+---
+
+## 10. The world frame, measured rather than assumed — 2026-08-10
+
+`CartesianTeleop.step()` integrates the twist in the **world** frame (deliberately — body frame is named in
+`src/teleop.py` as a later choice, not an ambiguity). What the world axes physically *are* had never been
+checked, and `scripts/map_axes.py` prompts with them, so a wrong label would make the whole tool lie.
+
+Measured in simulation, integrating a unit twist per component from the real saved park pose:
+
+```
+gravity                                  (0, 0, -9.81)        => +Z is up
+joint 1 (base_yaw) rotates about world Z => the arm stands Z-up
+twist [0.05,0,0] for 1 s  -> tcp moved [+0.0499,  0,       0     ]
+twist [0,0.05,0] for 1 s  -> tcp moved [ 0,      +0.0499,  0     ]
+twist [0,0,0.05] for 1 s  -> tcp moved [ 0,       0,      +0.0498]
+roll / pitch / yaw        -> rotation about exactly that world axis,
+                             tool point drifted <= 0.3 mm over 17 deg
+```
+
+| motion | world | meaning |
+|---|---|---|
+| `X` | `+X` | horizontal, straight out from the base at `base_yaw = 0` |
+| `Y` | `+Y` | horizontal, 90° left of +X seen from above |
+| `UP` | `+Z` | straight up, away from the table |
+| `ROLL`/`PITCH`/`YAW` | about `+X`/`+Y`/`+Z` | the tool turns; **the tool point stays put** |
+
+⭐ **Consequence worth having: a wrong rotation sign twists the wrist in place rather than flinging the
+gripper across the desk.** That refines ROADMAP step 4's caution — rotation is the *less* dangerous sign to
+get wrong, not the more.
+
+⚠️ **Deliberately NOT claimed: which way is "forward" or "left".** That depends on how the arm is physically
+turned on the desk, which no file in this repo records. Inventing a label would be exactly the confident,
+plausible, wrong answer §0 is a list of. `map_axes.py` therefore describes the operator's own gesture back
+to them from the reading, and never asserts a gesture-to-axis correspondence that has not been measured.
+
+---
+
+## 11. ⛔⭐ THE ARM FELL — 2026-08-10, session 3, and it was caused by advice in this repo
+
+Three failures in one attempt. All three are mine, and the first is the important one.
+
+### 11.1 `--no-gripper` silently breaks gravity compensation. The arm falls.
+
+**What Julien saw.** He ran `teleop_session.py --yes --arm arm1 --no-gripper --no-rotation`, which starts in
+GUIDE. His words: *"only the lowest motor… was in weightless mode, and all of the other motors were turned
+off. And therefore it just fell forward because the bottom motor didn't hold it in place."* The status line
+read a calm `hottest 35°C` for **33 seconds** while the arm sank to its own stops (`q [0.21, 0., 0., …]` —
+joints 2 and 3 at their zero limits).
+
+**The mechanism, proven in simulation, not guessed:**
+
+1. `GripperType.NO_GRIPPER` does **not** merely leave motor 7 unenabled. It swaps the *dynamics model*
+   `get_yam_robot` uses for gravity compensation (`get_robot.py:186`, `combine_arm_and_gripper_xml`).
+2. The bare arm XML gives its terminal body `mass="1e-6"` — **one microgram** (`yam.xml:38`). The real mass
+   arrives by merging the gripper XML. Summing `linear_4310.xml`: `0.553219 + 0.0710042 + 0.0710042 =`
+   **0.695 kg**, at the far end of the arm.
+3. `zero_gravity_mode=True` sets **`kp = 0`** and commands zero torque (`motor_chain_robot.py:241`), so
+   `motor_torques = joint_commands.torques + g * gravity_comp_factor + friction_comp` reduces to `g` alone
+   (`:366`). **There is no position term to absorb a modelling error.**
+
+Measured gravity torque at the saved park pose:
+
+```
+model mass          WITH gripper 4.987 kg      WITHOUT 4.292 kg     (missing 0.695 kg)
+gravity torque WITH    [-0.00, -4.81,  6.34,  1.34, -0.07, -0.00] Nm
+gravity torque WITHOUT [-0.00, -2.67,  3.88,  0.49, -0.00,  0.00] Nm
+shortfall              [ 0.00, -2.14, +2.47, +0.85, -0.07, -0.00] Nm
+                                       ^^^^^ joint 3 (elbow_pitch): 39% short
+```
+
+39% of the elbow's holding torque, unopposed. The arm folds forward. **Julien's observation was exactly
+right, and his interpretation was nearly right:** the other motors were not off, they were commanded with
+`kp = 0` and an under-computed gravity torque, which feels identical. Joint 1 felt free because `base_yaw`
+rotates about the vertical and gravity never loads it — in *any* mode.
+
+**⛔ THE RULE THAT FOLLOWS: `--no-gripper` is not a safe subset of normal operation. It is a different, less
+accurate robot.** It was reached for as "the smallest possible experiment", and it is the opposite: it
+removes the one thing that must not be removed.
+
+**Fix:** `build_robot()` now passes `ee_mass=GRIPPER_MASS_KG` (0.695) on the no-gripper path. Worst residual
+falls **2.465 → 0.188 Nm** (3% of the elbow's requirement), verified in simulation.
+⚠️ **`ee_inertia` cannot be used** — the SDK emits an `ipos` attribute MuJoCo rejects (*"Schema violation:
+unrecognized attribute: 'ipos'"*, it should be `pos`). That is a bug in the vendored tree, so the
+centre-of-mass offset stays uncorrected and 0.188 Nm is the residual we cannot remove.
+
+**Also fixed: GUIDE now prints live drift** from wherever it went weightless. The cause is gone, but the
+instrument should have existed anyway — nothing on screen was measuring the one quantity that was failing.
+*Same lesson as §9.3's jaw temperature: a readout must show what can fail, not what looks calm.*
+
+> **Considered and rejected: an automatic sink-detector that forces GUIDE → HOLD.** In GUIDE, motion is
+> *expected* — Julien is pushing the arm by hand — and there is no signal that distinguishes "he is lowering
+> it" from "it is falling". Every threshold either false-fires during legitimate hand-guiding or is too slow
+> to matter. Showing the number and fixing the cause beats automating a judgement the code cannot make.
+
+### 11.2 The remap mode destroyed the hand-dialled axis map
+
+The MAP mode written earlier that same session **bound whichever motion was selected the instant any clear
+puck deflection arrived, and then auto-advanced to the next motion.** So the entirely natural act of *"let me
+see what this does"* rewrote the map, cascading through several motions, each binding stealing a puck axis
+and unbinding its previous owner. Then the session **saved it unconditionally on exit.**
+
+Recovered from the terminal:
+
+```
+axis map saved → config/spacemouse_map.json
+  — Y←roll− — ROLL←pitch− — YAW←yaw+
+  ⚠️  UNBOUND, the arm will not perform these: X, UP, PITCH
+```
+
+His hand-dialled `[1, -1, -1, 1, 1, 1]`, produced on real hardware, was overwritten. It survived **only
+because the file happened to be committed to git.**
+
+**Three compounding faults, all now fixed:**
+
+| fault | fix |
+|---|---|
+| deflection *edited* the map | **deflection observes, keys edit.** Nothing in CONTROLS mode writes the map except a keypress |
+| auto-advance cascaded one wiggle into many bindings | there is no cursor and no advance any more |
+| unconditional save on exit | saved **only if changed**, and the previous contents are copied to `config/spacemouse_map.prev.json` first |
+
+> ⭐ **The generalisation, and it is the same as §9's:** *ask what path reaches the hazard without passing
+> through your guard.* Here the hazard was data loss and there was no guard at all — because "explore" and
+> "commit a change" had been collapsed into the same gesture.
+
+### 11.3 `mjpython --view` cannot start, and I claimed it worked
+
+```
+failed to dlopen '/…/.venv/bin/python3': Library not loaded: @rpath/libpython3.12.dylib
+```
+
+`mjpython` is a launcher app bundle that dlopens the venv's interpreter, and the uv-managed CPython does not
+place `libpython3.12.dylib` anywhere on mjpython's rpath. **It is present**, at
+`~/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/`, so one environment variable fixes it:
+
+```bash
+DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib" \
+  uv run mjpython scripts/teleop_sim.py --view
+```
+
+Verified: `mjpython OK, mujoco 3.11.0`.
+
+⛔ **The process failure matters more than the fix.** I recommended this command after checking that the
+`mjpython` *binary existed* — `ls` — and reported it as "verified". Presence is not function. That is
+**"verify the consequence, not the mechanism"** (§0, and the founding-session lesson), violated in the same
+turn that quoted it. *An `ls` is never verification of behaviour.*
+
+---
+
+## 12. CONTROLS mode — Julien's design, and why it replaced mine
+
+Mine was: hold the arm still, select a motion, gesture to bind it. It was wrong for a reason he identified
+immediately: **you cannot decide a direction is wrong until you have watched the arm go that way**, and the
+same document that admits "+X and +Y are horizontal but which one points away from you is not recorded
+anywhere" then asked him to bind X from memory. Incoherent.
+
+His design, in his words: *"similar to teleoperate, just move the space mouse in different directions and
+only the strongest direction is actually moved, and then I can press some key which reverses the direction of
+that specific control."*
+
+**Why it is better, point by point:**
+
+| | his design | mine |
+|---|---|---|
+| the arm | **moves** — you see what each direction does | frozen; nothing to observe |
+| cross-talk | **only the strongest axis is applied**, so the motion is attributable | a firm push moves 3 axes diagonally |
+| what you must know | nothing — push and look | which motion index you meant, in the abstract |
+| what a deflection does | **observes only** | *edited the map* — the data-loss bug in §11.2 |
+| the edit | an explicit key on "the control I just used" | a cursor and an auto-advancing wizard |
+
+**Implementation.** `isolate()` keeps only the largest-magnitude axis, with 1.3× hysteresis so two near-equal
+axes cannot make the arm jitter between two motions. The session remembers the last axis that actually moved
+— **with no timeout**, so `f` still works after the puck has sprung back to centre and his hand has left it.
+`f` resolves puck axis → motion via `AxisMap.motion_driven_by()` and flips that motion's sign. `1`-`6`
+reassign that same control to a different motion, taking **the direction he was last pushing** as the new
+motion's positive sense, so "push the way you want it, then name the motion" reads the same as a gesture.
+
+Speed is **half** teleop's (`CONTROLS_SCALE = 0.5`): it is the mode you enter with a mapping you have not yet
+confirmed, so a wrong direction should be a slow wrong direction. Everything below the twist is the
+*existing, hardware-proven* chain — IK, per-cycle joint-step clamp, joint limits, workspace box, `SafeRobot`
+rate limiter. **CONTROLS mode adds a twist source, not a control path.**

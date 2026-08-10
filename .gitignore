@@ -6,3 +6,4 @@ __pycache__/
 # Vendored I2RT SDK — upstream code, not ours. Re-clone it, do not commit it:
 #   git clone --depth 1 https://github.com/i2rt-robotics/i2rt.git third_party/i2rt
 third_party/
+config/spacemouse_map.prev.json

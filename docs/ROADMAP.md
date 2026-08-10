@@ -8,6 +8,20 @@
 > arm with a single space mouse — and then we can go from there."* Everything below is ordered to reach that
 > as directly as safety allows, and no more.
 
+> ## ⚠️ Steps 1-4 below are DONE. Read [HANDOFF.md §5.5](HANDOFF.md) for the live task list.
+>
+> This file is kept because the **ordering arguments** are still the valuable part — why simulation came
+> before hardware, why gravity compensation came before teleop, why the gripper was the safe first mover.
+> But as a to-do list it is spent: teleop works on the real arm, and step 5 (the MCAP recorder) is the next
+> unbuilt thing. **Step 4's caution about rotation signs is now refined by measurement** — see
+> [FINDINGS §10](FINDINGS.md): rotation happens about the tool point, so a wrong rotation sign twists the
+> wrist in place rather than swinging the gripper through space.
+>
+> **Axis remapping is also built** (2026-08-10): `scripts/map_axes.py` decides which puck axis drives which
+> motion with no hardware at all, and `teleop_sim.py` now applies the same map — so the entire "step 1 in
+> simulation first" argument below finally holds for axis conventions too, which was the one thing it could
+> not previously test.
+
 ---
 
 ## The target, stated precisely

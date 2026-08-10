@@ -32,17 +32,41 @@ learning programme, this is an engineering build with hardware and deadlines. It
 - Bimanual gripper motion from one loop across two independent CAN buses.
 - An interactive session with live mode switching, a rate limiter, and temperature monitoring.
 
+- **Full axis remapping** — any puck axis can drive any motion, taught by gesture
+  (`scripts/map_axes.py`, or `m` mid-session). 34 headless tests.
+
+**⛔⭐ READ THIS FIRST — the arm fell on 2026-08-10, and the cause was advice in these docs.**
+
+**`--no-gripper` swaps the gravity-compensation model, not just motor 7.** The bare arm XML carries a
+**1 microgram** end effector; the real 0.695 kg gripper is merged in from the gripper XML, which
+`NO_GRIPPER` replaces with a stub. In GUIDE mode `kp = 0`, so computed gravity torque is the *only* thing
+holding 4.3 kg up — and the elbow was **39% short**. The arm folded forward while the status line read a
+calm `hottest 35°C` for 33 seconds. **`--no-gripper` is not a safe subset of normal operation; it is a
+different, less accurate robot.** Now fixed (`ee_mass=0.695`, residual 0.19 Nm) and GUIDE prints live
+drift — but prefer running **with** the gripper. Full account: [FINDINGS §11](FINDINGS.md).
+
 **⛔ Known broken / deliberately disabled:**
 
 - **The gripper is controlled again**, after the 2π frame fix ([FINDINGS §3.5](FINDINGS.md)) — but that fix
   is **verified numerically, not yet on hardware.** Motor 7 was cooked three times before it. `--no-gripper`
-  is the escape hatch, and a startup check refuses to run if the frame is wrong.
-- **SpaceMouse axis directions** are still being dialled in. `x`/`y`/`z` flip translation and `1`/`2`/`3` flip
-  rotation, live, persisting to `config/spacemouse_map.json`; current state `[1, -1, -1, 1, 1, 1]`.
-- **PARK is fixed but untested on hardware** — it was being cancelled by any unrecognised key, Enter included.
+  is the escape hatch, and `build_robot()` refuses to start if the frame is wrong (two independent gates,
+  both before any control loop).
+- **SpaceMouse axis directions** are still being dialled in — but the *tooling* for it is now complete:
+  `scripts/map_axes.py` needs **no hardware at all**, and `x`/`y`/`z`/`1`/`2`/`3` still flip live.
+  Current state `X←x+ Y←y− UP←z− ROLL←roll+ PITCH←pitch+ YAW←yaw+`.
+- **PARK is fixed but untested on hardware** — three separate defects now: it was cancelled by any
+  unrecognised key (Enter included); a length mismatch against a `--no-gripper` robot **raised and dropped
+  the arm**; and it bypassed the gripper clamp. See §5.5 item 2.
 - **No git remote.** Everything exists only on Julien's Mac. See §6.
 
-## 3. The one command
+## 3. The two commands
+
+```bash
+cd ~/Developer/Projects/yam-robotics && uv run scripts/map_axes.py
+```
+
+⛔ Cannot move anything — no CAN bus, no robot, no motor. Decide which puck direction drives which
+motion, with the arms unplugged if you like. Then:
 
 ```bash
 cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes --arm arm1
@@ -50,7 +74,8 @@ cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes -
 
 ```
 MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
-DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
+DIRECTION x y z  flip X/Y/UP               1 2 3  flip ROLL/PITCH/YAW
+REMAP     m  MAP mode — rebind axes; the arm holds still and the puck moves nothing
 SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
 GRIPPER   o open   c close          r  wrist rotation on/off
 OTHER     ?  help                   q  QUIT (asks before releasing the arm)
@@ -71,9 +96,13 @@ These are not preferences, they were arrived at by things going wrong.
 5. **Prefer a test that could falsify the claim.** Two arms were "verified" identical by evidence that could
    not distinguish that from reading one arm twice; the fix was to find a measurement (per-unit `inertia`)
    that would have *differed* if the claim were wrong.
-6. ⛔ **This stack fails by lying, not by crashing.** Eleven defects in one day produced confident, plausible,
-   wrong answers and not one raised an exception. **Check values for plausibility, not just for the absence
-   of an exception.** [FINDINGS §0](FINDINGS.md) catalogues all of them.
+6. ⛔ **This stack fails by lying, not by crashing.** Every defect catalogued in
+   [FINDINGS §0](FINDINGS.md) produced a confident, plausible, wrong answer and **not one raised an
+   exception.** **Check values for plausibility, not just for the absence of an exception.**
+7. ⛔ **Ask of every guard: what path reaches the hazard without passing through you?** All four defects
+   found in session 3 ([FINDINGS §9](FINDINGS.md)) were guards, tests or messages that were written once
+   and never re-derived against the thing they guard — a clamp PARK went around, a refusal a weaker copy
+   undermined, a temperature monitor that aggregated away its own signal.
 
 ## 5. The three traps that will bite you first
 
@@ -94,25 +123,31 @@ to be able to control one of the arms."*
 
 | # | task | why / detail |
 |---|---|---|
-| 1 | ⭐ **Dial in the SpaceMouse axis directions** | The one thing standing between here and comfortable one-arm teleop. Drive, and flip whatever feels backwards: `x` `y` `z` for translation, `1` `2` `3` for roll/pitch/yaw. Persists to `config/spacemouse_map.json`. Current state `[1, -1, -1, 1, 1, 1]` |
-| 2 | **Verify PARK now works** | It was cancelled instantly by any unrecognised key — including Enter. Fixed but **not yet tested on hardware.** `s` to save a pose, move away, `p` to return |
-| 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** Watch `hottest` for ~30 s in TELEOP: a **plateau** is the pass, a steady climb means quit and use `--no-gripper` |
-| 4 | **Axis *remapping*, if flipping is not enough** | Only sign flips exist. If Julien wants puck-Y to drive robot-X, that is a permutation and needs building |
-| 5 | **Simultaneous bimanual teleop** | Hard half proven (`move_both_grippers.py`). Needs one process, two robots, two `CartesianTeleop`s, two pucks assigned up front. ~6.2 ms/cycle against a 10 ms budget |
+| 1 | ⭐ **Set up the mouse controls, in CONTROLS mode on the real arm** | `teleop_session.py --yes --arm arm1`, then `m`. The arm **moves**, one isolated axis at a time at half speed; push a direction, watch, press `f` to reverse it or `1`-`6` to reassign it. ⛔ **Do NOT use `--no-gripper` for this** — see §2 and FINDINGS §11.1. `scripts/map_axes.py` still exists for no-hardware sign tweaks but it cannot show you what a direction *is*, which is the actual difficulty |
+| 2 | **Verify PARK on hardware** | ⚠️ **Three defects, all fixed, none tested on the arm.** It was cancelled by any unrecognised key (Enter included); with `--no-gripper` the 7-vs-6 length mismatch **raised, skipped the release-consent flow and disabled the motors mid-air**; and it bypassed the gripper clamp. `s` to save a pose, move away, `p` to return. Also worth doing **once with `--no-gripper`**, since that was the broken path |
+| 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** The status line now prints **`jaw NN°C` separately from `hottest`** — watch *that* for **60 s** in TELEOP. A plateau near idle (31-36 °C) is the pass; a steady climb means quit and use `--no-gripper`. ⛔ Watching `hottest` is **not** this test: motors 2/3 carry the 4.3 kg and sit at 41-42 °C all session, so a gripper climbing 33 → 41 °C is invisible inside a `max()` |
+| 4 | ~~**Axis remapping**~~ | ✅ **Done 2026-08-10.** Any puck axis can drive any motion, in either direction, taught by gesture; motions can also be left deliberately unbound. `src/axis_map.py` + `scripts/map_axes.py`, 25 headless tests |
+| 5 | **Simultaneous bimanual teleop** | Hard half proven (`move_both_grippers.py`). Needs one process, two robots, two `CartesianTeleop`s, two pucks assigned up front. ~6.2 ms/cycle against a 10 ms budget. ⚠️ **Open question for Julien: should the axis map become per-arm?** It is one global file today. A mirrored left arm may well want inverted Y, and that is his call, not a guess |
 | 6 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
 
-⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile and item 3 is
-verified numerically against two independent failures, but *"verified in principle"* is not *"verified"*.
-Treat the first run as a test, not a demonstration.
+⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile, they have
+tests, and item 3 is verified numerically against two independent failures — but *"verified in principle"*
+is not *"verified"*. **Treat the first run as a test, not a demonstration.**
+
+⭐ **Item 1 is now free.** The axis map can be decided and verified with zero hardware risk
+(`map_axes.py` → `teleop_sim.py`), so there is no reason to spend bench time on it. Do it first,
+somewhere comfortable, and arrive at the arm with the mapping already right.
 
 ## 6. What to do next
 
 **Immediately:**
 
-1. ⭐ **Give this repo a git remote.** ~30 commits exist only on one Mac, including everything above.
+1. ⭐ **Give this repo a git remote.** ~40 commits exist only on one Mac, including everything above.
    Julien's own private GitHub first; `Hohnik/LaRobot` is planned separately — see README §7.5 for the
    fork-and-PR approach and the "clean" checklist. **Do not push to a collaborator's `main`.**
-2. **Work the §5.5 task list** — axis directions first, then verify PARK and the gripper on hardware.
+2. **Work the §5.5 task list** — the axis map first (no hardware needed, so it costs nothing), then
+   verify PARK and the gripper **on hardware**, in that order. Run the tests first; they are 2 seconds:
+   `uv run scripts/test_axis_map.py && uv run scripts/test_park_target.py`
 
 **Then, in roadmap order:** simultaneous bimanual teleop (the hard half is proven) → **recorder → MCAP in
 ABC's exact schema** (get this right and the whole training half works unmodified; get it wrong and every
@@ -124,7 +159,26 @@ demo must be re-collected) → cameras.
 |---|---|---|
 | 1 | 2026-08-07 | Hardware enumerated. SpaceMouse readable. **Wrongly concluded the CAN protocol was unknown and macOS unusable.** |
 | 2 | 2026-08-10, 09:30-14:00 CEST (40 min lunch) | Both prior conclusions refuted. Arm identified, driven, gravity-compensated, hand-guided and **teleoperated with a SpaceMouse**. Gripper disabled after cooking motor 7 three times. ~30 commits. |
+| 3 | 2026-08-10, ~14:25-15:xx CEST | **No hardware touched.** Full axis remapping built (`src/axis_map.py`, `scripts/map_axes.py`) with 25 tests. Four defects found **by reading** and fixed — see FINDINGS §9. The world-frame axis semantics measured in simulation instead of assumed. 34 headless tests now exist where there were none. |
+| 4 | 2026-08-10, ~15:20-16:xx CEST | ⛔ **First hardware run of session-3 code, and it went badly.** `mjpython --view` could not start; **the arm fell** in GUIDE because `--no-gripper` swaps the gravity model; and the new MAP mode **destroyed the hand-dialled axis map** (recovered from git). All three diagnosed to root cause and fixed, all three documented in [FINDINGS §11](FINDINGS.md). MAP mode replaced by **CONTROLS mode**, designed by Julien: the arm moves, one isolated axis at a time, and only keys edit the map. 43 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed
 instead of wall-clock read. Read the clock.
+
+⭐ **Session 3's lesson: the bench is not where the cheap defects are.** Nothing was plugged in, and it
+still turned up a path that would have released a raised arm (PARK with `--no-gripper`), a thermal test
+that could not have detected the thing it was testing, a warn-and-continue in the exact wording of the
+one rule this project wrote in blood, and a simulator that could not reproduce the mapping it exists to
+de-risk. All four were reachable by reading the code against its own documentation.
+
+⛔ **Session 4's lesson is the counterweight, and it is sharper: reading does not find what only hardware
+knows, and "it compiles and has tests" is not "it works".** Everything session 3 built passed 34 tests, three
+dry runs and a simulated IK loop — and the first contact with the arm produced three failures in one attempt,
+one of which dropped 4.3 kg. Two specific process faults worth carrying:
+
+1. **`ls` is not verification.** `mjpython --view` was recommended on the strength of the binary existing.
+   It could not start. *Verify the consequence, not the mechanism* — quoted in the same turn it was violated.
+2. **A flag named for one thing changed another.** `--no-gripper` was chosen *because* it sounded like the
+   smaller, safer experiment. It silently replaced the dynamics model. **Before recommending a flag as
+   "safer", read what it actually switches** — the name is not the contract.
