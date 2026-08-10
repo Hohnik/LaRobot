@@ -31,6 +31,44 @@ hand over joint angles directly and need no IK at all.
 
 ---
 
+## ⛔ The binding constraint is the desk, not the software — 2026-08-10
+
+Julien: *"it's not really safe right now. The only thing that should be moved is the gripper opening and
+closing and the gripper twisting… as soon as the SpaceMouse is connected I can move everything from the desk
+and we can control the whole thing."*
+
+**So the ordering below changed, and this is why.** The cartesian IK loop is *already working* in simulation —
+software is ahead of the workspace. Steps that move the whole arm through space (gravity comp, cartesian
+teleop on hardware) are **blocked on clearing the desk**, not on code. Meanwhile motors 6 and 7 —
+`gripper_twist` and `gripper_jaws` — can move freely, because neither changes the arm's reach.
+
+⭐ **That makes a real SpaceMouse-driven robot possible today**, which is step 1b.
+
+---
+
+## Step 1b — SpaceMouse → gripper twist + jaws, on the real arm ⭐ **do this now**
+
+`scripts/teleop_gripper.py`. Two motors, no IK.
+
+    puck YAW (twist)     →  motor 6, gripper_twist
+    puck Z (push / lift) →  motor 7, gripper_jaws
+
+**Why this is not a throwaway detour.** It proves the exact half of the teleop stack that IK cannot: reading
+the device and driving real motors together in one 100 Hz loop, with a deadman, bounds and a clean shutdown.
+When the desk is clear, IK drops in *above* this — the loop, the safety envelope and the shutdown path all
+survive unchanged. It is the same code shape, minus the coordinate transform.
+
+**And it answers the question Julien actually cares about right now:** is the SpaceMouse connected and does
+moving it move the robot.
+
+⚠️ `gripper_jaws` has no trustworthy limits (`gripper_limits: null`, `needs_calibration: true`), so it is
+clamped to a window around wherever it starts, never to an absolute target, and `--max-torque` is what stops
+it closing hard on itself. `--no-jaws` runs twist only.
+
+**Done when:** Julien twists the puck and the gripper twists.
+
+---
+
 ## Step 1 — Teleop in simulation, end to end
 
 **Do this first, and do all of it, before the real arm is involved.**
@@ -160,7 +198,36 @@ because nothing else depends on it.
 
 | # | Question | Why it matters |
 |---|---|---|
-| 1 | **How much clear space is around arm 1?** Table edges, walls, the other arm, anything fragile | Steps 3-4 move the *whole* arm through space for the first time. Gripper twist could not reach anything; a shoulder or elbow can |
+| 1 | ~~How much clear space is around arm 1?~~ **Answered: not safe yet.** Desk to be cleared | Gates every whole-arm step. Reordered the roadmap — see the top |
 | 2 | Are the **D405 wrist cameras** mounted? | Scopes step 7 |
-| 3 | The **second SpaceMouse** — owned, or still to buy? | Scopes step 6 |
+| 3 | ~~The second SpaceMouse~~ — **answered by measurement, see below** | — |
 | 4 | Is there an **e-stop**, or is wall power the only cut-off? | Changes how aggressive the step-4 safety envelope needs to be |
+
+
+---
+
+## ⛔ Do NOT connect the second SpaceMouse yet — and this is measured, not a preference
+
+Julien offered to free a USB port and connect the second SpaceMouse. **Recommendation: don't, yet.** Not
+because "one thing at a time", but because of a specific fact checked on 2026-08-10:
+
+```
+hid.enumerate() for VID 0x256f:
+  usage=0x08  serial=''  path=b'DevSrvsID:4295192284'
+  usage=0x30  serial=''  path=b'DevSrvsID:4295192284'
+  usage=0x33  serial=''  path=b'DevSrvsID:4295192284'
+```
+
+**The SpaceMouse reports an empty serial number.** So the trick that saved us on the CAN adapters — select by
+serial, never by index — **does not transfer**. Two SpaceMice would be indistinguishable except by
+`path`, a macOS IOService registry ID that changes on replug and carries no meaning.
+
+That is exactly the bug class that already bit twice today: `find_device()` returns `multi[0]`, so with two
+pucks attached, *which arm a given puck drives would be arbitrary and would silently change between runs.*
+Connecting the second one before fixing selection means debugging teleop and device-identity at once.
+
+**What to do instead, in order:** get one puck driving one arm (step 1b) → then build selection by **USB
+topology** (which hub port a device is on, stable while nothing is re-cabled) → *then* connect the second.
+
+**And keep the camera plugged in.** Nothing needs to be freed up: the camera is not competing for anything we
+need today, and unplugging it costs a re-verification later for no gain.

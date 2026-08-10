@@ -45,35 +45,16 @@ LINEAR_SCALE = 0.08   # m/s at full deflection
 ANGULAR_SCALE = 0.40  # rad/s at full deflection
 
 
-def read_spacemouse_twist(handle, state: dict) -> np.ndarray:
-    """Drain pending HID reports and return the latest twist. Non-blocking."""
-    import struct
+def twist_from_axes(axes: list[float]) -> np.ndarray:
+    """Scale six normalised SpaceMouse axes into a physical twist.
 
-    while True:
-        data = handle.read(64)
-        if not data:
-            break
-        rid, payload = data[0], bytes(data[1:])
-        if rid == 0x01 and len(payload) >= 12:
-            vals = struct.unpack("<6h", payload[:12])
-            state["t"] = [v / 350.0 for v in vals[:3]]
-            state["r"] = [v / 350.0 for v in vals[3:]]
-        elif rid == 0x01 and len(payload) >= 6:
-            state["t"] = [v / 350.0 for v in struct.unpack("<3h", payload[:6])]
-        elif rid == 0x02 and len(payload) >= 6:
-            state["r"] = [v / 350.0 for v in struct.unpack("<3h", payload[:6])]
-        elif rid == 0x03 and payload:
-            state["buttons"] = int.from_bytes(payload[:2], "little")
-
-    def dead(v: float) -> float:
-        return 0.0 if abs(v) < 0.06 else max(-1.0, min(1.0, v))
-
-    t = [dead(v) for v in state["t"]]
-    r = [dead(v) for v in state["r"]]
+    Decoding lives in `src/spacemouse.py:TwistReader` — one copy, shared with
+    `scripts/teleop_gripper.py`. Only the scaling is a teleop concern.
+    """
     return np.array(
         [
-            t[0] * LINEAR_SCALE, t[1] * LINEAR_SCALE, t[2] * LINEAR_SCALE,
-            r[0] * ANGULAR_SCALE, r[1] * ANGULAR_SCALE, r[2] * ANGULAR_SCALE,
+            axes[0] * LINEAR_SCALE, axes[1] * LINEAR_SCALE, axes[2] * LINEAR_SCALE,
+            axes[3] * ANGULAR_SCALE, axes[4] * ANGULAR_SCALE, axes[5] * ANGULAR_SCALE,
         ]
     )
 
@@ -104,10 +85,15 @@ def main() -> int:
     print(f"start EE pos : {np.round(start_ee, 4)} m  (site '{teleop.ee_site}')\n")
 
     handle = None
-    state = {"t": [0.0] * 3, "r": [0.0] * 3, "buttons": 0}
+    reader = None
     if not args.demo:
         sys.path.insert(0, str(REPO / "src"))
-        from spacemouse import countdown_hands_off, find_device, open_device  # noqa: PLC0415
+        from spacemouse import (  # noqa: PLC0415
+            TwistReader,
+            countdown_hands_off,
+            find_device,
+            open_device,
+        )
 
         info = find_device()
         if info is None:
@@ -116,13 +102,24 @@ def main() -> int:
         countdown_hands_off(3)
         handle = open_device(info)
         handle.set_nonblocking(True)
+        reader = TwistReader(handle)
         print("Move the SpaceMouse — the SIMULATED arm will follow.\n")
 
     viewer = None
     if args.view:
+        # macOS requires GUI code to own the main thread, so MuJoCo's passive
+        # viewer refuses to start under plain `python` and demands its `mjpython`
+        # launcher. Degrade to a headless run with the exact fix printed, rather
+        # than killing a working teleop loop over an optional window.
         import mujoco.viewer  # noqa: PLC0415
 
-        viewer = mujoco.viewer.launch_passive(teleop.model, teleop.configuration.data)
+        try:
+            viewer = mujoco.viewer.launch_passive(teleop.model, teleop.configuration.data)
+        except RuntimeError as exc:
+            print(f"⚠️  viewer unavailable: {exc}")
+            print("   On macOS the passive viewer needs mjpython. Re-run as:")
+            print("     uv run mjpython scripts/teleop_sim.py --view")
+            print("   Continuing WITHOUT the viewer — the teleop loop is unaffected.\n")
 
     dt = 1.0 / CONTROL_HZ
     t0 = time.perf_counter()
@@ -137,7 +134,7 @@ def main() -> int:
                 break
             loop_start = time.perf_counter()
 
-            twist = scripted_twist(t) if args.demo else read_spacemouse_twist(handle, state)
+            twist = scripted_twist(t) if args.demo else twist_from_axes(reader.read())
             q_arm = teleop.step(twist, dt)
 
             # Per-cycle joint step. This is the number that matters for hardware:

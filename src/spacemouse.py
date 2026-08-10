@@ -99,6 +99,60 @@ def open_device(info: dict) -> Any:
     return hid.Device(path=info["path"])
 
 
+FULL_SCALE = 350.0  # raw counts at full deflection; nominal
+DEFAULT_DEADZONE = 0.06
+
+
+class TwistReader:
+    """Turn a stream of HID reports into six normalised axes in [-1, 1].
+
+    Lives here, once, because this decode already existed in two files and is
+    about to be needed by a third — and the last time device logic was
+    duplicated, a bug fix landed in only one copy (see `find_device`).
+
+    Non-blocking: `read()` drains whatever reports have arrived and returns the
+    latest known deflection, so a caller running at 100 Hz never blocks and
+    never falls behind.
+
+    Axis order is `[x, y, z, roll, pitch, yaw]`. This unit uses the **split**
+    report shape — `0x01` carries translation, `0x02` rotation — confirmed
+    against raw bytes on 2026-08-10; the combined 13-byte `0x01` shape is
+    handled too, since 3Dconnexion firmware differs between units.
+    """
+
+    def __init__(self, handle: Any, deadzone: float = DEFAULT_DEADZONE, full_scale: float = FULL_SCALE):
+        self._handle = handle
+        self._deadzone = deadzone
+        self._full_scale = full_scale
+        self._t = [0.0, 0.0, 0.0]
+        self._r = [0.0, 0.0, 0.0]
+        self.buttons = 0
+
+    def _scale(self, raw: int) -> float:
+        v = max(-1.0, min(1.0, raw / self._full_scale))
+        return 0.0 if abs(v) < self._deadzone else v
+
+    def read(self) -> list[float]:
+        import struct
+
+        while True:
+            data = self._handle.read(64)
+            if not data:
+                break
+            rid, payload = data[0], bytes(data[1:])
+            if rid == 0x01 and len(payload) >= 12:
+                vals = struct.unpack("<6h", payload[:12])
+                self._t = [self._scale(v) for v in vals[:3]]
+                self._r = [self._scale(v) for v in vals[3:]]
+            elif rid == 0x01 and len(payload) >= 6:
+                self._t = [self._scale(v) for v in struct.unpack("<3h", payload[:6])]
+            elif rid == 0x02 and len(payload) >= 6:
+                self._r = [self._scale(v) for v in struct.unpack("<3h", payload[:6])]
+            elif rid == 0x03 and payload:
+                self.buttons = int.from_bytes(payload[:2], "little")
+        return [*self._t, *self._r]
+
+
 def describe(info: dict) -> str:
     return (
         f"{info.get('product_string')} "

@@ -136,21 +136,38 @@ def main() -> int:
     abort_reason: str | None = None
 
     def shutdown() -> None:
-        """Return every enabled arm to its start position, then disable. Never raises."""
-        for arm in arms:
-            if arm.iface is None:
-                continue
-            try:
-                # Ramp back rather than snapping: the sine may be stopped anywhere.
-                current = arm.samples[-1][2] if arm.samples else arm.start
-                steps = int(1.5 * CONTROL_HZ)
-                for i in range(steps + 1):
-                    tgt = current + (arm.start - current) * (i / steps)
+        """Ramp every arm home IN PARALLEL, then disable. Never raises.
+
+        ⛔ The arms must be interleaved, not handled one after the other. An
+        earlier version ramped arm1 home over 1.5 s and only then started arm2 --
+        so arm2 went 1.5 s without a command and tripped its own 400 ms firmware
+        watchdog, surfacing as `loss communication` and a failed ramp home.
+        Observed on the real hardware, 2026-08-10. The safety timeout worked
+        exactly as designed; the shutdown code was starving it.
+
+        The rule this generalises to: **once a motor is enabled, every code path
+        must keep feeding it faster than 400 ms, including the paths that run
+        while something else is being tidied up.**
+        """
+        live = [a for a in arms if a.iface is not None]
+        if not live:
+            return
+        starts = {a.name: (a.samples[-1][2] if a.samples else a.start) for a in live}
+        steps = int(1.5 * CONTROL_HZ)
+        for i in range(steps + 1):
+            frac = i / steps
+            for arm in live:
+                try:
+                    tgt = starts[arm.name] + (arm.start - starts[arm.name]) * frac
                     arm.iface.set_control(MOTOR, motor_type, tgt, 0.0, args.kp, args.kd, 0.0)
-                    time.sleep(period)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            time.sleep(period)
+        for arm in live:
+            try:
                 arm.iface.set_control(MOTOR, motor_type, arm.start, 0.0, 0.0, 0.0, 0.0)
-            except Exception as exc:  # noqa: BLE001
-                print(f"  ⚠️  {arm.name}: could not ramp home ({type(exc).__name__})")
+            except Exception:  # noqa: BLE001, S110
+                pass
             try:
                 arm.iface.motor_off(MOTOR)
             except Exception:  # noqa: BLE001, S110
@@ -208,7 +225,10 @@ def main() -> int:
                     raise RuntimeError(abort_reason)
 
             if t >= next_report:
-                next_report += 2.0
+                # 1.7 s, not 2.0: a report interval that is a multiple of a motion
+                # period samples the same phase every time and shows a moving
+                # joint as frozen. arm2's default period is exactly 2.0 s.
+                next_report += 1.7
                 where = "   ".join(f"{a.name} {a.samples[-1][2]:+.3f}" for a in arms)
                 print(f"  t={t:5.1f}s   {where}")
 
