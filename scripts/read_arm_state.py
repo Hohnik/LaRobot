@@ -63,6 +63,8 @@ def main() -> int:
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
     ap.add_argument("--seconds", type=float, default=0.0, help="stream for N seconds instead of one read")
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
+    ap.add_argument("--no-clean", action="store_true",
+                    help="skip disabling motors before opening (not recommended — see the code)")
     args = ap.parse_args()
 
     add_i2rt_to_path()
@@ -80,7 +82,35 @@ def main() -> int:
         print("DRY RUN — nothing transmitted. Re-run with --yes.")
         return 0
 
-    from i2rt.motor_drivers.dm_driver import DMChainCanInterface, MotorType  # noqa: PLC0415
+    from i2rt.motor_drivers.dm_driver import (  # noqa: PLC0415
+        ControlMode,
+        DMChainCanInterface,
+        DMSingleMotorCanInterface,
+        MotorType,
+    )
+
+    # ⛔ Start from a known state. DMChainCanInterface.close() sets running=False
+    # and shuts the bus — it does NOT disable the motors. So a previous run leaves
+    # all seven enabled; they then time out into damping, and the next _motor_on()
+    # takes the vendor's error-clearing retry path, which consumes extra frames and
+    # desynchronises request/response pairing. Observed 2026-08-10: run 1 fine,
+    # runs 2 and 3 both died with "fail to communicate with the motor 4".
+    #
+    # Disabling every motor first makes each run independent of how the last ended.
+    if not args.no_clean:
+        pre = DMSingleMotorCanInterface(
+            control_mode=ControlMode.MIT, channel=channel, name="preclean"
+        )
+        cleaned = []
+        for m in MOTOR_IDS:
+            try:
+                pre.motor_off(m)
+                cleaned.append(m)
+            except Exception:  # noqa: BLE001, S110
+                pass
+        pre.close()
+        time.sleep(0.1)
+        print(f"pre-clean: disabled motors {cleaned}\n")
 
     motor_list = [(m, getattr(MotorType, YAM_MOTOR_TYPES[m])) for m in MOTOR_IDS]
     chain = DMChainCanInterface(
@@ -106,6 +136,15 @@ def main() -> int:
             print()
             time.sleep(0.5)
     finally:
+        # Disable explicitly. chain.close() does not, and leaving motors enabled is
+        # what broke the two runs after the first one.
+        off = []
+        for mid, _ in motor_list:
+            try:
+                chain.motor_interface.motor_off(mid)
+                off.append(mid)
+            except Exception:  # noqa: BLE001, S110
+                pass
         try:
             chain.close()
         except Exception:  # noqa: BLE001
@@ -113,7 +152,7 @@ def main() -> int:
                 chain.motor_interface.close()
             except Exception:  # noqa: BLE001, S110
                 pass
-        print("\nchain closed. No control loop ever ran; the 400 ms timeout damps the motors.")
+        print(f"\nmotors {off} disabled; chain closed. No control loop ever ran.")
 
     print("\n✅ All seven joints read through the chain interface.")
     print("   Next gated step: gravity compensation — see docs/ROADMAP.md step 3.")

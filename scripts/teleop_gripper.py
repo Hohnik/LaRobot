@@ -100,7 +100,17 @@ MAX_TORQUE_BY_MOTOR = {
 DEFAULT_MAX_TORQUE = 1.2  # fallback for any motor not in the table
 MAX_TRACKING_ERROR = 0.35
 LIMIT_MARGIN = 0.05
-JAW_WINDOW = 0.60  # rad either side of the start position; limits are unknown
+# ⭐ The jaws' real travel, derived 2026-08-10 from two independent facts:
+#   · linear_4310.yml: motor_stroke 6.57 rad  <->  gripper_stroke 0.096 m,
+#     which matches the URDF's two prismatic tips at 0.0469 m each.
+#   · measured: this morning the jaws sat at ~0.000 rad and could NOT be driven
+#     positive (instant torque abort) while moving 0.6 rad negative freely.
+#     So motor position ~0 IS one of the two hard stops, and travel runs negative.
+# Julien then repositioned them to -2.41 rad, roughly a third along, with room
+# both ways — which is what made the aborts stop.
+JAW_STROKE = 6.57
+JAW_LIMITS = (-JAW_STROKE, 0.0)   # (far stop, near stop) in motor radians
+JAW_WINDOW = 3.0  # rad either side of start; a per-run cap ON TOP of the limits
 
 AXIS_Z = 2    # SpaceMouse translation z — push down / lift up
 AXIS_YAW = 5  # SpaceMouse rotation about the vertical — twisting the puck
@@ -137,7 +147,8 @@ def main() -> int:
         print(f"  motor {JAW_MOTOR} gripper_jaws  : DISABLED by --no-jaws")
     else:
         print(f"  puck Z (push/lift)→ motor {JAW_MOTOR} gripper_jaws   "
-              f"{args.jaw_speed} rad/s at full deflection, ±{args.jaw_window} rad around start")
+              f"{args.jaw_speed} rad/s at full deflection, "
+              f"stroke [{JAW_LIMITS[0]:+.2f}, {JAW_LIMITS[1]:+.2f}] capped ±{args.jaw_window} rad/run")
     print(f"  control          : {CONTROL_HZ:.0f} Hz for {args.seconds:.0f} s, kp={args.kp} kd={args.kd}")
     print(f"  torque limits    : " + "  ".join(f"m{m} {torque_limit[m]} Nm" for m in motors))
     print(f"  abort if         : error != normal, torque over the above, "
@@ -211,11 +222,21 @@ def main() -> int:
             target[m] = fb.position
             print(f"motor {m}: enabled, start = {fb.position:+.4f} rad, {fb.error_message}")
 
+        # Jaw bounds are the INTERSECTION of the mechanism's real stroke and a
+        # per-run window around the start. The stroke stops it reaching a hard
+        # stop; the window stops a mis-derived stroke authorising a large move.
+        jaw_start = start.get(JAW_MOTOR, 0.0)
         bounds = {
             TWIST_MOTOR: (twist_lo + LIMIT_MARGIN, twist_hi - LIMIT_MARGIN),
-            JAW_MOTOR: (start.get(JAW_MOTOR, 0.0) - args.jaw_window,
-                        start.get(JAW_MOTOR, 0.0) + args.jaw_window),
+            JAW_MOTOR: (
+                max(JAW_LIMITS[0] + LIMIT_MARGIN, jaw_start - args.jaw_window),
+                min(JAW_LIMITS[1] - LIMIT_MARGIN, jaw_start + args.jaw_window),
+            ),
         }
+        if JAW_MOTOR in start:
+            lo, hi = bounds[JAW_MOTOR]
+            print(f"  jaw travel available: {lo:+.3f} … {hi:+.3f} rad "
+                  f"(start {jaw_start:+.3f}, stroke {JAW_LIMITS[0]:+.2f}…{JAW_LIMITS[1]:+.2f})")
         print("\n⭐ Move the SpaceMouse. TWIST it to rotate the gripper"
               + ("" if args.no_jaws else ", PUSH DOWN / LIFT to work the jaws") + ".")
         print("   Release it and everything freezes. Ctrl-C to stop.\n")

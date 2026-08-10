@@ -294,6 +294,60 @@ def patch_dm_driver_for_gs_usb() -> None:
         original_init(self, *args, **kwargs)
 
     dm_driver.DMSingleMotorCanInterface.__init__ = __init__
+
+    # ⛔ Drain before every enable/disable, or one late reply cascades.
+    #
+    # `CanInterface._send_message_get_response` retries by sending the command
+    # AGAIN. So if a reply arrives a moment late and fails the arbitration-id
+    # check, the retry puts a second enable on the wire — and now two replies
+    # come back. One satisfies this call; the other is left in the buffer and is
+    # read as the NEXT motor's reply, which mismatches, which retries, which
+    # leaves another. A single hiccup snowballs down the chain.
+    #
+    # Measured 2026-08-10 bringing all seven motors up through
+    # `DMChainCanInterface._motor_on()`: three consecutive runs failed at motor
+    # 4, then motor 7, then succeeded. **The varying failure point is the
+    # signature** — a genuinely dead motor fails in the same place every time.
+    #
+    # I2RT's 3 ms spacing between motors is ample over SocketCAN, where the
+    # round trip happens in-kernel. Over libusb each transfer is ~0.45 ms and the
+    # margin is thin. Draining first makes each exchange start from an empty
+    # buffer, so stale frames cannot be mistaken for the current reply.
+    #
+    # ⚠️ Deliberately NOT applied to `set_control` — that runs in the 100 Hz
+    # control loop, where a drain would cost more than the problem. Enable and
+    # disable happen at init and teardown, where a few ms is free.
+    for name in ("motor_on", "motor_off"):
+        original = getattr(dm_driver.DMSingleMotorCanInterface, name)
+
+        def make(fn: Any) -> Any:
+            def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+                import time as _t
+
+                last: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        self._drain_bus(timeout_s=0.01 * (attempt + 1), idle_count=3)
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                    try:
+                        return fn(self, *args, **kwargs)
+                    except AssertionError as exc:
+                        # The vendor's own retry re-sends the command, which is what
+                        # creates the surplus reply in the first place. Retrying at
+                        # THIS level instead — after a full drain — starts the whole
+                        # exchange clean and contains the cascade rather than feeding
+                        # it. Only AssertionError: that is the vendor's "no matching
+                        # reply" signal. A real CAN fault is a different exception and
+                        # must not be swallowed.
+                        last = exc
+                        _t.sleep(0.02 * (attempt + 1))
+                raise last  # type: ignore[misc]
+
+            return wrapper
+
+        setattr(dm_driver.DMSingleMotorCanInterface, name, make(original))
+
     patch_gs_usb_for_macos()
     patch_gs_usb_echo_filter()
     _chain_patched = True
