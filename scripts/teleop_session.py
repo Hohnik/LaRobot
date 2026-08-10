@@ -112,8 +112,9 @@ PARK_FILE = REPO / "config" / "park_pose.json"
 
 HELP = """
   g GUIDE (weightless)   t TELEOP (spacemouse)   h HOLD   p PARK   s save park
-  x/y/z flip axis        +/- speed               ?  help   q QUIT (asks first)
-  o/c  open / close the gripper (TELEOP mode only)
+  x/y/z flip axis        +/- linear speed        ?  help   q QUIT (asks first)
+  o/c  open / close the gripper      [ / ]  gripper step slower / faster
+  r    wrist rotation on/off         R / T    rotation speed faster / slower
 """
 
 
@@ -148,21 +149,29 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
     ap.add_argument("--start-mode", default="guide", choices=["guide", "hold", "teleop"])
-    ap.add_argument("--rotation", action="store_true", help="map puck rotation to wrist rotation")
+    ap.add_argument("--no-rotation", action="store_true",
+                    help="start with wrist rotation disabled (toggle live with r)")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
     ap.add_argument("--box", type=float, default=WORKSPACE_BOX)
     args = ap.parse_args()
 
+    # Rotation is ON by default now. Julien: "the gripper cannot be tilted
+    # currently and cannot be twisted". It was off for the first hardware run
+    # because a wrong rotation sign swings the wrist while a wrong translation
+    # sign only nudges — that caution has served its purpose.
+    rotation = not args.no_rotation
     axis_map = load_json(MAP_FILE, {"sign": [1, 1, 1, 1, 1, 1]})
     sign = np.array(axis_map.get("sign", [1] * 6), dtype=float)
     park = load_json(PARK_FILE, {}).get(args.arm)
+    angular_scale = ANGULAR_SCALE
+    gripper_step = GRIPPER_STEP
 
     print("=== plan ===")
     print(f"  ARM         : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
     print(f"  jaw limits  : {load_gripper_limits(args.arm) or 'NONE — run calibrate_gripper.py first'}")
     print(f"  start mode  : {args.start_mode}")
     print(f"  speed       : {args.linear_scale} m/s linear, "
-          f"{ANGULAR_SCALE if args.rotation else 0} rad/s angular")
+          f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
     print(f"  axis signs  : {sign.astype(int).tolist()}  (x y z roll pitch yaw)")
     print(f"  park pose   : {np.round(park, 3).tolist() if park else 'none saved — press s to set one'}")
     print(f"  workspace   : ±{args.box} m box, re-centred whenever TELEOP is entered")
@@ -173,7 +182,7 @@ def main() -> int:  # noqa: PLR0915
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
 
-    info = pick_device_by_wiggle()
+    info = pick_device_by_wiggle(label=args.arm)
     if info is None:
         print("No SpaceMouse found (or none was moved).")
         return 1
@@ -196,6 +205,7 @@ def main() -> int:  # noqa: PLR0915
         robot, note = build_robot(args.arm, zero_gravity=(mode == "guide"))
         print(f"  {note}\n")
         chain = robot.motor_chain
+        prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
 
         # ⛔ Stale-limit check. A power cycle can shift the gripper motor's position
         # reference, which leaves config/gripper_limits.json describing a range the
@@ -220,8 +230,29 @@ def main() -> int:  # noqa: PLR0915
         def clamp_gripper(v: float) -> float:
             return float(np.clip(v, GRIPPER_MIN, GRIPPER_MAX))
 
+        def resync() -> None:
+            """⛔ Re-anchor EVERY cached variable to the measured pose.
+
+            This is the fix for the snap Julien saw going GUIDE → TELEOP. `prev_q`
+            was initialised once before the loop and only updated inside teleop,
+            so after hand-guiding the arm it still held the pose from minutes
+            earlier. The very first teleop cycle then computed
+            `clip(q_target - prev_q)` and commanded `prev_q + 0.015` — i.e. it
+            aimed the arm at where it USED to be, snapped there, and walked back
+            at 1.5 rad/s. Exactly what he described.
+
+            The general rule, and the reason this is its own function called from
+            every transition: **a mode change must re-read reality. Never carry
+            cached state across one.**
+            """
+            nonlocal prev_q
+            prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
+            if hasattr(robot, "resync"):
+                robot.resync()
+
         def enter_teleop() -> None:
             nonlocal teleop, home_ee, gripper_value
+            resync()
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
             gripper_value = clamp_gripper(float(q[N_ARM]) if len(q) > N_ARM else 0.5)
@@ -230,19 +261,25 @@ def main() -> int:  # noqa: PLR0915
             home_ee = teleop.ee_position().copy()
 
         def enter_hold() -> None:
+            resync()
             robot.command_joint_pos(np.asarray(robot.get_joint_pos(), dtype=float))
 
         def enter_guide() -> None:
-            # command_joint_pos put us in PD; this returns to weightless.
-            for name in ("enable_gravity_comp", "set_zero_gravity_mode", "zero_gravity"):
-                fn = getattr(robot, name, None)
-                if callable(fn):
-                    try:
-                        fn()
-                        return
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-            print("  ⚠️  could not re-enter zero gravity; staying in HOLD")
+            """Return to weightless after PD control.
+
+            ⛔ The method is `enter_gravity_comp_idle()`. My first attempt guessed
+            at `enable_gravity_comp` / `set_zero_gravity_mode` / `zero_gravity`,
+            none of which exist — so GUIDE silently never worked after the first
+            time, while the banner still announced "arm is weightless". Another
+            message that lied. Guessing an API name and reporting success on the
+            fallback path is exactly the failure mode this codebase specialises in.
+            """
+            resync()
+            fn = getattr(robot, "enter_gravity_comp_idle", None)
+            if callable(fn):
+                fn()
+                return
+            print("  ⚠️  enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)")
 
         if mode == "teleop":
             enter_teleop()
@@ -250,7 +287,6 @@ def main() -> int:  # noqa: PLR0915
             enter_hold()
 
         dt = 1.0 / CONTROL_HZ
-        prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
         t0 = time.perf_counter()
         next_report = 1.0
 
@@ -311,9 +347,24 @@ def main() -> int:  # noqa: PLR0915
                             enter_hold()
                             print("\n⭐ MODE: PARK — driving slowly to the saved pose. Any key stops.\n")
                     elif k == "o" and mode == "teleop":
-                        gripper_value = clamp_gripper(gripper_value + GRIPPER_STEP)
+                        gripper_value = clamp_gripper(gripper_value + gripper_step)
                     elif k == "c" and mode == "teleop":
-                        gripper_value = clamp_gripper(gripper_value - GRIPPER_STEP)
+                        gripper_value = clamp_gripper(gripper_value - gripper_step)
+                    elif k == "]":
+                        gripper_step = min(0.20, gripper_step * 1.5)
+                        print(f"\n  gripper step → {gripper_step:.3f} per press\n")
+                    elif k == "[":
+                        gripper_step = max(0.002, gripper_step / 1.5)
+                        print(f"\n  gripper step → {gripper_step:.3f} per press\n")
+                    elif k == "r":
+                        rotation = not rotation
+                        print(f"\n  wrist rotation {'ON' if rotation else 'OFF'}\n")
+                    elif k == "R":
+                        angular_scale *= 1.25
+                        print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
+                    elif k == "T":
+                        angular_scale /= 1.25
+                        print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
                     elif k in "xyz":
                         idx = "xyz".index(k)
                         sign[idx] *= -1
@@ -336,9 +387,9 @@ def main() -> int:  # noqa: PLR0915
                     axes = np.array(reader.read(), dtype=float) * sign
                     twist = np.array([
                         axes[0] * args.linear_scale, axes[1] * args.linear_scale, axes[2] * args.linear_scale,
-                        axes[3] * ANGULAR_SCALE if args.rotation else 0.0,
-                        axes[4] * ANGULAR_SCALE if args.rotation else 0.0,
-                        axes[5] * ANGULAR_SCALE if args.rotation else 0.0,
+                        axes[3] * angular_scale if rotation else 0.0,
+                        axes[4] * angular_scale if rotation else 0.0,
+                        axes[5] * angular_scale if rotation else 0.0,
                     ])
                     q_target = teleop.step(twist, dt)
 

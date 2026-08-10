@@ -162,7 +162,7 @@ def find_all_devices() -> list[dict]:
     ]
 
 
-def pick_device_by_wiggle(timeout: float = 20.0) -> dict | None:
+def pick_device_by_wiggle(label: str = "this arm", timeout: float = 30.0) -> dict | None:
     """Ask the operator to move the puck they want, and return that one.
 
     ⛔ WHY THIS EXISTS, rather than an index or a serial.
@@ -187,9 +187,14 @@ def pick_device_by_wiggle(timeout: float = 20.0) -> dict | None:
     if len(devices) == 1:
         return devices[0]
 
-    print(f"\n⭐ {len(devices)} SpaceMice attached, and they are indistinguishable to software")
-    print("   (both report an empty serial number).")
-    print("   → MOVE THE PUCK YOU WANT TO USE. Any direction. Waiting …")
+    print(f"\n⭐ {len(devices)} SpaceMice attached and they are indistinguishable to software:")
+    print("   both report an EMPTY serial number, so there is nothing to key an")
+    print("   assignment off. They differ only by USB port, which tells you nothing")
+    print("   about which puck is under which hand.")
+    print(f"\n   → MOVE THE PUCK YOU WANT TO ASSIGN TO **{label}**. Any direction.")
+    print("     This is an assignment, not a free-for-all: the other puck is then")
+    print("     ignored for the whole session, so it can be given to the other arm.")
+    print("     Waiting …")
 
     handles = []
     try:

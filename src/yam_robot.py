@@ -118,7 +118,99 @@ def build_robot(
             "  Run this once:  uv run scripts/calibrate_gripper.py --yes\n"
             "  It calibrates gently, saves the result, and every later start is silent."
         )
-    return get_yam_robot(**kwargs), note
+    robot = get_yam_robot(**kwargs)
+    # ⭐ Everything above this line is I2RT's; everything that touches the robot
+    # from here on goes through the rate limiter. See SafeRobot for why.
+    return SafeRobot(robot), note
+
+
+class SafeRobot:
+    """A rate limiter that sits BELOW all control logic. Wraps any I2RT robot.
+
+    ⭐ WHY THIS EXISTS — Julien, 2026-08-10, after the arm snapped:
+
+        *"maybe there should be some safety mode where specific high speed
+        movements just aren't possible… it would have to go over a more low
+        level control before the output actually gets sent, because I'm guessing
+        the actual snapping mistake wasn't an actual control that you sent, it
+        was a misprogramming. So any type of safety would have to go lower than
+        that."*
+
+    He is exactly right, and the diagnosis was correct: the snap was not a
+    commanded motion, it was a **stale cached variable** (`prev_q` was not reset
+    when TELEOP was re-entered, so the first command after hand-guiding aimed at
+    the pose from minutes earlier). No amount of care *inside* the teleop loop
+    protects against a bug *in* the teleop loop. The guard has to be somewhere
+    the buggy code cannot reach around.
+
+    So every command passes through two independent limits here:
+
+    1. **Rate limit on the command itself** — the commanded position may not move
+       more than `max_speed · dt` per call, whatever it is asked for. A caller
+       that suddenly demands a pose one radian away gets a ramp, not a jump.
+    2. **Following-error limit** — the command may never run more than
+       `max_lag` away from the *measured* position. This is the one that makes it
+       genuinely low-level: it is anchored to physical reality rather than to any
+       internal state, so it holds even if every variable above it is wrong.
+
+    ⚠️ Why not clamp against the measured position alone (which would be simpler
+    and stricter): the PD term is `kp · (command − measured)`, so a tight
+    following-error limit is also a torque limit. Squeeze it too hard and the arm
+    cannot overcome its own friction and goes sluggish. Two loose limits that
+    each catch a different failure beat one tight limit that also breaks normal
+    operation.
+
+    This cannot prevent a *slow* wrong motion — nothing at this level can know
+    that a direction is wrong. It bounds how fast anything can go wrong, which
+    is what turns "dangerous" into "catchable".
+    """
+
+    def __init__(self, robot: Any, max_speed: float = 1.0, max_lag: float = 0.25):
+        self._robot = robot
+        self.max_speed = max_speed   # rad/s, per joint
+        self.max_lag = max_lag       # rad, command vs measured
+        self._last_cmd: Any = None
+        self._last_t: float | None = None
+        self.limited_cycles = 0      # how often a limit actually bit
+
+    def __getattr__(self, name: str) -> Any:
+        # Everything not overridden passes straight through.
+        return getattr(self._robot, name)
+
+    def command_joint_pos(self, q: Any) -> None:
+        import numpy as np
+
+        q = np.asarray(q, dtype=float)
+        now = time.perf_counter()
+        # Cap dt so a stalled loop cannot buy itself a huge movement budget.
+        dt = 0.02 if self._last_t is None else min(0.05, max(1e-3, now - self._last_t))
+        self._last_t = now
+
+        measured = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        if self._last_cmd is None or len(self._last_cmd) != len(q):
+            self._last_cmd = measured.copy()
+
+        budget = self.max_speed * dt
+        limited = self._last_cmd + np.clip(q - self._last_cmd, -budget, budget)
+        limited = np.clip(limited, measured - self.max_lag, measured + self.max_lag)
+
+        if not np.allclose(limited, q, atol=1e-6):
+            self.limited_cycles += 1
+
+        self._last_cmd = limited
+        self._robot.command_joint_pos(limited)
+
+    def resync(self) -> None:
+        """Forget the command history and re-anchor to the measured position.
+
+        ⛔ Call this on EVERY mode transition. The rate limiter is stateful, and
+        stale state is exactly what caused the incident it exists to prevent —
+        it would be absurd for the guard to carry the same class of bug.
+        """
+        import numpy as np
+
+        self._last_cmd = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        self._last_t = None
 
 
 def shutdown_robot(robot: Any) -> list[int]:
@@ -138,6 +230,7 @@ def shutdown_robot(robot: Any) -> list[int]:
     this codebase has produced all day.
     """
     disabled: list[int] = []
+    robot = getattr(robot, "_robot", robot)   # unwrap SafeRobot if present
     chain = getattr(robot, "motor_chain", None)
 
     if chain is not None:
