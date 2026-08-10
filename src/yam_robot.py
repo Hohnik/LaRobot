@@ -137,6 +137,7 @@ def build_robot(
     *,
     zero_gravity: bool = False,
     allow_calibration: bool = False,
+    with_gripper: bool = False,
 ) -> tuple[Any, str]:
     """Construct the real robot. Returns `(robot, note)`.
 
@@ -157,6 +158,40 @@ def build_robot(
 
     from i2rt.robots.get_robot import get_yam_robot
     from i2rt.robots.utils import ArmType, GripperType
+
+    if not with_gripper:
+        # ⛔⭐ DEFAULT: DO NOT CONTROL THE GRIPPER. This is the only reliable fix
+        # for the failure that cooked motor 7 three separate times on 2026-08-10.
+        #
+        # The jaws end up PHYSICALLY OUTSIDE the calibrated range -- measured, the
+        # normalised position read **1.186**, i.e. 18.6% beyond "fully open".
+        # `command_joint_pos` clips that back to 1.0, which maps to the end stop,
+        # so the motor is commanded into a stop it is already past and pushes at
+        # 7.71 Nm indefinitely. Worse, it is self-reinforcing: 7.7 Nm shoves the
+        # jaws even further beyond the 0.3 Nm calibration's idea of the limit, so
+        # every cycle makes the next one worse.
+        #
+        # No clamp above this layer can help, because the vendor's clip happens
+        # BELOW it (`motor_chain_robot.py:390`). Releasing the command to the
+        # measured value does not help either -- 1.186 clips to 1.0 all the same.
+        #
+        # With NO_GRIPPER the motor is never enabled and never commanded. Its own
+        # 400 ms timeout leaves it damped and free. The six arm joints are
+        # entirely unaffected, so teleop works completely.
+        #
+        # Re-enabling gripper control needs the calibration reworked to measure
+        # limits at the torque the RUNTIME uses, not at 0.3 Nm. See docs/FINDINGS.md.
+        kwargs: dict = dict(
+            channel=chain_channel(arm),
+            arm_type=ArmType.YAM,
+            gripper_type=GripperType.NO_GRIPPER,
+            zero_gravity_mode=zero_gravity,
+            sim=False,
+        )
+        return SafeRobot(get_yam_robot(**kwargs)), (
+            "gripper NOT controlled (6 DoF) — motor 7 is left free. "
+            "Pass with_gripper=True only once the calibration is reworked."
+        )
 
     kwargs: dict = dict(
         channel=chain_channel(arm),

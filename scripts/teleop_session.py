@@ -162,6 +162,9 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
     ap.add_argument("--start-mode", default="guide", choices=["guide", "hold", "teleop"])
+    ap.add_argument("--gripper", action="store_true",
+                    help="⚠️ ALSO control the gripper. OFF by default — it cooked motor 7 three times "
+                         "on 2026-08-10; see docs/FINDINGS.md before enabling.")
     ap.add_argument("--no-rotation", action="store_true",
                     help="start with wrist rotation disabled (toggle live with r)")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
@@ -181,7 +184,7 @@ def main() -> int:  # noqa: PLR0915
 
     print("=== plan ===")
     print(f"  ARM         : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
-    print(f"  jaw limits  : {load_gripper_limits(args.arm) or 'NONE — run calibrate_gripper.py first'}")
+    print(f"  gripper     : {'CONTROLLED ⚠️  (see docs/FINDINGS.md)' if args.gripper else 'NOT controlled — motor 7 left free (default)'}")
     print(f"  start mode  : {args.start_mode}")
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
@@ -216,7 +219,8 @@ def main() -> int:  # noqa: PLR0915
 
     try:
         print("building robot — enables all 7 motors, starts the control loop …")
-        robot, note = build_robot(args.arm, zero_gravity=(mode == "guide"))
+        robot, note = build_robot(args.arm, zero_gravity=(mode == "guide"),
+                                  with_gripper=args.gripper)
         print(f"  {note}\n")
         chain = robot.motor_chain
         prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
@@ -337,7 +341,13 @@ def main() -> int:  # noqa: PLR0915
                         )
                         break
                     # ---- gripper stall guard ------------------------------
-                    jaw = states[N_ARM]
+                    # ⚠️ With NO_GRIPPER the chain has 6 motors, so states[6] would
+                    # IndexError -- and the surrounding try/except would swallow it,
+                    # silently killing temperature monitoring too. Guard explicitly.
+                    jaw = states[N_ARM] if len(states) > N_ARM else None
+                    if jaw is None:
+                        stall_since = None
+                        raise StopIteration
                     if (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
                             and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
                         if stall_since is None:
@@ -350,6 +360,8 @@ def main() -> int:  # noqa: PLR0915
                             stall_since = None
                     else:
                         stall_since = None
+                except StopIteration:
+                    pass          # no gripper in the chain; temperatures already read
                 except Exception:  # noqa: BLE001
                     temps, hottest = [], 0.0
 
