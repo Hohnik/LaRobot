@@ -156,13 +156,21 @@ def main() -> int:
     print(f"\n⭐ ARM VARIANT: {classify(sigs)}")
 
     timeouts = {rows[m].get("timeout") for m in rows}
-    print(f"\n⚠️  command timeout register reads {timeouts} on every motor.")
-    print(
-        "   I2RT's README calls the factory default 400 ms. If this value is milliseconds it is\n"
-        "   8 s, i.e. a far weaker safety net — a motor would hold its last command that long if\n"
-        "   the control loop died. CONFIRM THE UNIT before running any gravity-comp or control\n"
-        "   loop; do not assume it is already safe."
-    )
+    if timeouts == {8000}:
+        print("\n✓ SAFETY TIMEOUT: register reads 8000 on every motor — enabled, factory default.")
+        print(
+            "  8000 is the raw register value I2RT's own set_timeout.py writes to turn the timeout\n"
+            "  ON (it writes 0 to turn it OFF), and their README documents the resulting behaviour as\n"
+            "  400 ms — so the unit is 50 µs, not ms. A motor with no command for 400 ms enters\n"
+            "  damping mode by itself. This is the state you want; do not 'fix' it."
+        )
+    else:
+        print(f"\n⛔ SAFETY TIMEOUT reads {timeouts}, which is NOT the expected 8000.")
+        print(
+            "  0 means the timeout is DISABLED — I2RT warn that a failed gravity-compensation loop\n"
+            "  can then produce uncontrolled torque. Do not run any control loop until this is\n"
+            "  understood. Re-enable with i2rt/motor_config_tool/set_timeout.py --timeout"
+        )
 
     if GRIPPER_ID in sigs:
         ref = [sigs[i] for i in (5, 6) if i in sigs]

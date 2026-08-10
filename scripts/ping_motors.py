@@ -45,12 +45,21 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import YAM_BITRATE, open_motor_interface  # noqa: E402
+from yam_can import YAM_BITRATE, add_i2rt_to_path, open_motor_interface  # noqa: E402
 
 DEFAULT_IDS = [1, 2, 3, 4, 5, 6, 7]  # 6 arm joints + gripper
 
 
 def describe(info: object) -> str:
+    """Format a FeedbackFrameInfo.
+
+    ⚠️ Note the type. `motor_on()` returns a **FeedbackFrameInfo**
+    (position/velocity/torque/temperature_mos/temperature_rotor), NOT the
+    similarly-named `MotorInfo` (pos/vel/eff/voltage/temp_mos/temp_rotor) that
+    the module also defines. Reading the wrong field names does not raise — it
+    silently yields "?" for every value, which is what happened on 2026-08-10.
+    """
+
     def g(attr: str, fmt: str = "{:.4f}") -> str:
         val = getattr(info, attr, None)
         if val is None:
@@ -60,10 +69,12 @@ def describe(info: object) -> str:
         except (TypeError, ValueError):
             return str(val)
 
+    err = getattr(info, "error_code", "?")
+    err_txt = f"{err} ({getattr(info, 'error_message', '?')})"
     return (
-        f"pos={g('pos'):>9}  vel={g('vel'):>9}  eff={g('eff'):>9}  "
-        f"V={g('voltage', '{:.1f}'):>5}  T_mos={g('temp_mos', '{:.0f}'):>4}  "
-        f"T_rot={g('temp_rotor', '{:.0f}'):>4}  err={getattr(info, 'error_code', '?')}"
+        f"pos={g('position'):>9} rad  vel={g('velocity'):>8}  torque={g('torque'):>8}  "
+        f"T_mos={g('temperature_mos', '{:.0f}'):>3}°C  T_rot={g('temperature_rotor', '{:.0f}'):>3}°C  "
+        f"err={err_txt}"
     )
 
 
@@ -89,6 +100,9 @@ def main() -> int:
         print("DRY RUN — nothing was transmitted. Re-run with --yes to actually ping.")
         return 0
 
+    # add_i2rt_to_path() must run before this import: open_motor_interface() also
+    # calls it, but that happens later and the import would already have failed.
+    add_i2rt_to_path()
     from i2rt.motor_drivers.dm_driver import MotorType  # noqa: PLC0415
 
     motor_type = getattr(MotorType, args.motor_type)

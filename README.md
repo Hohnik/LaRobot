@@ -160,19 +160,31 @@ frame sent, no bitrate set. Reasons:
 
 **Opening the bus requires his explicit go-ahead**, ideally with the arm powered down or e-stopped first.
 
-**Updated 2026-08-10.** Reasons 1 and 3 have since been answered — the bitrate is documented at 1 Mbit/s and
-the protocol is I2RT's own (§6.1) — and the bus *has* now been opened, but only in **listen-only** mode,
-where the transceiver is electrically silent. **Still true: nothing has ever been transmitted.**
+**Updated 2026-08-10 — this section is now history plus a new boundary.** Reasons 1 and 3 were answered: the
+bitrate is documented at 1 Mbit/s and the protocol is I2RT's own (§6.1).
 
-Reason 2 stands and is the live boundary. The next step, `scripts/ping_motors.py --yes`, energises motors on
-a physical arm:
+**What has now happened, with Julien's go-ahead and the arm clear:**
 
-- It sends only enable/disable per motor and **never a torque, position or velocity setpoint**, so the arm
-  should stay limp — a disabled DM motor is already back-drivable, and enabling without a command adds no
-  torque.
-- **But it is a physical action.** Arm clear of people and obstructions, power reachable, and a motor holding
-  a stale setpoint from an earlier session could twitch.
-- It stays gated behind `--yes`, and behind Julien saying so.
+1. **Listen-only CAN** — transceiver electrically silent. 0 frames, as expected.
+2. **Register reads** (`0x7FF`/`0x33`) — transmits, but cannot command motion. Identified the whole arm.
+3. ⭐ **Motor 7 (gripper) enabled and immediately disabled.** First time a motor on this arm has ever been
+   energised from this repo. **It did not move**: `pos=-0.0040 rad, vel=-0.0220, torque=-0.0073, err=normal`,
+   `T_mos=33 °C / T_rot=30 °C`. Torque ≈ 0 confirms that enabling without a setpoint adds no force.
+
+**Nothing has ever been given a torque, position or velocity setpoint. The arm has never been commanded to
+move.** That is the boundary that still stands.
+
+⭐ **The safety timeout is ON and at the factory default** — the `timeout` register reads **8000** on every
+motor, which is exactly what I2RT's `set_timeout.py` writes to *enable* it (it writes `0` to disable), and the
+README documents the result as 400 ms. So the unit is 50 µs. A motor that stops receiving commands enters
+damping mode by itself after 400 ms. **Do not "fix" this value.**
+
+**The next boundary — actual motion.** Julien's instruction (2026-08-10): *move the gripper only, and only a
+twist, so we can see how fast things move and whether anything moves at all, before turning on any other
+motor.* That is the right instinct and is the plan. ⚠️ **But note before doing it:** `linear_4310.yml` has
+`gripper_limits: null` and `needs_calibration: true`, so **the gripper's travel limits are not known**, and a
+blind position command could drive it into a hard stop. Any first motion must be a small delta from the
+*measured current position*, with low gains — not an absolute target.
 
 ## 6. What is genuinely unknown — the honest gaps
 
@@ -184,15 +196,36 @@ a physical arm:
 | Does the YAM SDK run on macOS? | **The driver layer does.** Not the `get_yam_robot()` layer — §2.1 |
 | A YAM MJCF/URDF model | **Ships with the SDK**, `third_party/i2rt/i2rt/robot_models/arm/` — and `mink` is already an SDK dependency |
 | Bitrate | **1 Mbit/s, documented**, no longer a guess |
+| ⭐ **Is the arm powered and on the bus?** | **YES.** All 7 motors answered register reads; the gripper reported live state and `err=normal` |
+| ⭐ **Which YAM variant and gripper** | **Determined over CAN, without energising anything** — see below |
+| Is there a Linux machine? | **Not yet**, one is coming. Julien is on the MacBook for now — which is why §2.1 matters |
+
+### 6.0 The arm, as measured
+
+`uv run scripts/identify_arm.py --yes` reads each motor's `gear_ratio`, and the Damiao part number **is** the
+gear ratio — DM43**40** reports 40.0, DM43**10** reports 10.0. `sw_ver` partitions identically as a cross-check.
+
+| | motor | gear_ratio | sw_ver |
+|---|---|---|---|
+| joints 1-3 | **DM4340** | 40.0 | 925970741 |
+| joints 4-6 | **DM4310** | 10.0 | 925970485 |
+| gripper (id `0x07`) | **DM4310** | 10.0 | 925970485 |
+
+That is `yam_v1.yml`'s layout exactly → **`yam` / `yam_pro` / `yam_ultra_v1`**, and **not** `yam_ultra_v2`
+(which puts a DM4340 on joint 4). Those three share an identical motor layout and are **indistinguishable over
+CAN** — separating them needs the physical label or a mass check (4.292 / 4.349 / 4.521 kg). Gripper is the
+4310 family (`linear_4310` / `crank_4310` / `flexible_4310`).
+
+Motor IDs are 1-7, master IDs 17-23 (`0x11`-`0x17`).
 
 **Still open:**
 
 | Gap | Why it matters |
 |---|---|
-| ⭐ **Is the arm powered and on the bus?** | The only way to find out is to poll, which transmits — §5 |
-| **Which YAM variant and gripper** | `get_yam_robot()` needs `arm_type` + `gripper_type`; they change motor types and limits |
-| **Is there a Linux machine yet?** | The 100 Hz closed loop belongs there, and the plan's whole stack assumes Ubuntu 22.04 |
-| **gs_usb throughput on macOS** | Untested. Fine for bring-up; unknown at 7 motors × 2 frames × 100 Hz |
+| ⭐ **gs_usb throughput on macOS** | The question that decides whether the Mac is enough. Untested. 7 motors × 2 frames × 100 Hz is the target |
+| **Which of `yam` / `yam_pro` / `yam_ultra_v1`** | Not resolvable over CAN. Affects the URDF/MJCF chosen for IK |
+| **Gripper travel limits** | `gripper_limits: null`, `needs_calibration: true` — must be calibrated before any absolute position command |
+| **Joints 1-6 live state** | Only the gripper has been polled so far |
 
 ### 6.1 The SDK — what it gives us
 
@@ -250,26 +283,82 @@ rig, drivers and logs stay here.
 
 ## 7. Next steps, in order
 
-✅ Done 2026-08-10: hardware re-verified · protocol found (§6.1) · macOS CAN path proven (§2.1) ·
-listen-only probe written and green.
+✅ **Done 2026-08-10:** hardware re-verified · protocol found (§6.1) · macOS CAN path proven (§2.1) ·
+listen-only probe green · **SpaceMouse verified on all six axes** · **arm identified over CAN** (§6.0) ·
+**gripper polled live, healthy, did not move** (§5).
 
-1. **Julien runs `src/spacemouse_live.py` and moves the puck.** Confirms decode and reveals which of the two
-   report shapes this unit uses. *Zero risk, ~30 seconds.* **Still the one thing that has never been tested
-   against real motion**, and it has been the top of this list since Friday.
-2. ⭐ **`scripts/ping_motors.py --yes`** — the first transmission. Answers "is the arm alive, which motor IDs
-   exist, and what are their positions". **Needs his go-ahead and a clear arm** (§5).
-3. **Read joint positions continuously** — a small loop over the driver layer. Proves the full state pipeline
-   before any command is ever issued.
-4. **Gravity compensation / zero-gravity mode**, so the arm can be hand-guided. First time the arm actually
-   holds torque; treat it as its own gated step, not a continuation of 3.
+1. **Poll all seven motors** — `scripts/ping_motors.py --yes`. Only the gripper has been read so far. Gives
+   every joint's live position and confirms nothing is in an error state.
+2. ⭐ **Measure gs_usb round-trip throughput.** *This is the decision-grade question*, because there is no
+   Linux machine yet: can macOS sustain 7 motors × 2 frames at 100 Hz, or only at 20 Hz? Everything about
+   whether teleop can happen on the MacBook hangs on the answer, and it is cheap to measure.
+3. **Read joint positions continuously** — a small loop. Proves the state pipeline end to end and is the
+   natural harness for step 2.
+4. **First motion: the gripper only, small delta, low gains.** Julien's own instruction, and correct.
+   ⚠️ Calibrate or bound the travel first — `gripper_limits` is `null` (§5).
 5. **IK in simulation** — `mink` + the YAM MJCF from `third_party/i2rt/i2rt/robot_models/arm/`, driven by the
    real SpaceMouse, rendered on screen. **The whole teleop loop with no hardware risk.** Both pieces now
    exist, so this is no longer blocked on anything.
-6. **Webcam check** — trivial, and the plan needs it for data collection anyway.
-7. Only then: close the loop onto the physical arm — and by then, ideally on Linux.
+6. **Gravity compensation**, so the arm can be hand-guided. First time the arm genuinely holds torque —
+   its own gated step, and the one that most wants the 400 ms timeout intact.
+7. **Webcam check** — trivial, and the plan needs it for data collection anyway.
+8. Only then: close the loop onto the physical arm — and by then, ideally on Linux.
 
-*Step 5 remains the one to aim for. It makes the interesting half — twist → IK → joint targets — real and
-debuggable while the arm sits still. Steps 2–4 are what make it worth trusting when it is finally connected.*
+*Step 5 remains the one to aim for: it makes the interesting half — twist → IK → joint targets — real and
+debuggable while the arm sits still. Step 2 is the one that decides how much of this year happens on the
+MacBook rather than waiting for hardware.*
+
+## 7.5 Contributing this back to `Hohnik/LaRobot` — the plan
+
+Julien's ask (2026-08-10): this work should end up in his friend's repo,
+**[github.com/Hohnik/LaRobot](https://github.com/Hohnik/LaRobot)** — *"only once everything is cleaned up and
+clear… noted down and then done sensibly at the most sensible time."* So: **planned, deliberately not done yet.**
+
+**What LaRobot is today** (checked 2026-08-10): **public**, 2 commits, `src/robot/` + `tests/`, Python +
+`justfile`, README mostly `TODO`, requires **Ubuntu 24.04**, Hohnik the only contributor. It is an early-stage
+skeleton — *"an environment for recording, simulating and training robot arms"*.
+
+**Three things follow from that, and they shape the whole approach:**
+
+1. ⛔ **Never push to `main` of someone else's repo.** Fork → feature branch → pull request. That holds even
+   with write access: a PR is reviewable, a direct push is a fait accompli.
+2. ⚠️ **It is public.** This repo has no secrets today, but that must be *verified at push time*, not assumed —
+   and it is a standing reason never to put logs, camera frames or credentials here.
+3. ⭐ **Its architecture is still his to define.** Two commits means Hohnik has not settled the structure.
+   Dropping a parallel layout on him would be antisocial and would probably be rewritten anyway.
+   **Ask him what shape he wants before opening the PR** — this is a social step, not a technical one.
+
+**What is genuinely worth contributing** (roughly in descending value):
+
+| Piece | Why it is worth having |
+|---|---|
+| `src/yam_can.py` | The macOS/gs_usb path **and** the transmit-echo bug. That bug bites *any* non-SocketCAN transport, so it is useful to him even on Ubuntu if he ever uses a candleLight adapter |
+| `scripts/identify_arm.py` | Platform-agnostic, and **safer than I2RT's own `ping_motors.py`** — identifies the arm without energising a motor |
+| `scripts/probe_can.py` | Listen-only bring-up probe; platform-agnostic |
+| `src/spacemouse.py` + `spacemouse_live.py` | Teleop input, directly on LaRobot's stated path. The macOS seize behaviour is Mac-only, the decode is not |
+| README §2.1 / §6.1 findings | The protocol pointer and the SocketCAN-assumption analysis |
+
+⚠️ **Framing matters:** LaRobot targets Ubuntu, and `yam_can.py` is explicitly a macOS shim. It goes in as an
+**optional platform layer**, never as the main path — otherwise it reads as "here is my OS's problem, now it
+is yours."
+
+**Sequence, in order:**
+
+1. **Give this repo its own remote first** (still open — §4 of Mind Understanding's `NOW.md`). Julien's own
+   private backup should not depend on a collaborator's repo.
+2. Reach the "clean" bar below.
+3. Ask Hohnik what structure he wants.
+4. Fork `Hohnik/LaRobot` to Julien's account, add it as a second remote, push a feature branch, open a PR.
+5. **Julien reviews the diff and says go.** Nothing is pushed to a third party's repo without that.
+
+**The "cleaned up and clear" bar** — concretely, so it is not a matter of taste:
+
+- [ ] The teleop chain works end to end, or at minimum: arm state reads live **and** SpaceMouse decodes.
+- [ ] No dead code, no scratch scripts, no commented-out experiments.
+- [ ] Every script's docstring states what it transmits, if anything.
+- [ ] The safety boundary (§5) is accurate and nothing overstates what has been tested.
+- [ ] Secrets check actually run against the diff, not assumed.
+- [ ] The macOS-specific parts are clearly labelled as such.
 
 ## 8. Layout
 
