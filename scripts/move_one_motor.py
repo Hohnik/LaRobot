@@ -61,14 +61,31 @@ from yam_can import (  # noqa: E402
     open_motor_interface,
 )
 
-MAX_DELTA_RAD = 0.30      # hard ceiling, whatever --delta says
+# Per-motor ceilings, whatever --delta says. The big proximal joints swing the
+# whole arm through space, so they stay tight; the wrist and gripper only change
+# orientation, so they can travel far enough to actually be seen. Raised from a
+# flat 0.30 on 2026-08-10 once position feedback, joint limits and torque had all
+# been verified against the real arm — a 7.6° move proved invisible in practice.
+MAX_DELTA_BY_MOTOR = {
+    1: 0.20,  # base_yaw       — swings the entire arm
+    2: 0.20,  # shoulder_pitch — lifts the entire arm
+    3: 0.20,  # elbow_pitch
+    4: 0.30,  # forearm_pitch
+    5: 0.50,  # wrist_roll
+    6: 1.00,  # gripper_twist  — orientation only, cannot extend into anything
+    7: 0.30,  # gripper_jaws   — hard stops, limits uncalibrated
+}
+MAX_DELTA_FALLBACK = 0.20
 # 0.15 rad = 8.6°, chosen to be *visible* — the whole point is for Julien to see
 # it move. Still tiny: even if my reading of the position unit is wrong by 10x,
 # this is 1.5 rad on a wrist twist, which changes orientation and not reach, so
 # it cannot extend into anything.
 DEFAULT_DELTA_RAD = 0.15
 DEFAULT_RAMP_S = 2.5
-DEFAULT_KP = 5.0          # yam_v1.yml uses 10.0 for joints 4-6; half that
+DEFAULT_KP = 8.0          # yam_v1.yml uses 10.0 for joints 4-6. Started at 5.0;
+                          # measured peak torque was only 0.14 Nm and tracking
+                          # showed stick-slip (peak speed 3.6x the commanded
+                          # ramp), so the softer gain was hurting, not helping.
 DEFAULT_KD = 1.0          # yam_v1.yml uses 1.5
 DEFAULT_MAX_TORQUE = 1.5  # Nm. DM4310 peak is 10 Nm, so this is a small fraction
 CONTROL_HZ = 100.0        # measured feasible: bench_can.py sustains ~320 Hz
@@ -79,7 +96,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Move a single motor a small, ramped, bounded amount.")
     ap.add_argument("--yes", action="store_true", help="actually move (default: dry run)")
     ap.add_argument("--motor", type=int, default=6, help="6 = wrist twist (default), 7 = gripper")
-    ap.add_argument("--delta", type=float, default=DEFAULT_DELTA_RAD, help=f"rad, clamped to {MAX_DELTA_RAD}")
+    ap.add_argument("--delta", type=float, default=DEFAULT_DELTA_RAD, help="rad, clamped per motor")
+    ap.add_argument("--cycles", type=int, default=1, help="how many out-and-back sweeps — >1 makes it obvious")
     ap.add_argument("--ramp", type=float, default=DEFAULT_RAMP_S, help="seconds to travel the delta")
     ap.add_argument("--hold", type=float, default=1.0, help="seconds to hold at the far end")
     ap.add_argument("--kp", type=float, default=DEFAULT_KP)
@@ -89,7 +107,8 @@ def main() -> int:
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS), help="WHICH ARM MOVES. Selected by serial, never by index.")
     args = ap.parse_args()
 
-    delta = max(-MAX_DELTA_RAD, min(MAX_DELTA_RAD, args.delta))
+    cap = MAX_DELTA_BY_MOTOR.get(args.motor, MAX_DELTA_FALLBACK)
+    delta = max(-cap, min(cap, args.delta))
     clamped = delta != args.delta
     motor_type_name = YAM_MOTOR_TYPES.get(args.motor, "DM4310")
     joint_name, lo, hi = YAM_JOINTS.get(args.motor, ("unknown", None, None))
@@ -102,7 +121,8 @@ def main() -> int:
     else:
         print("  URDF limits  : none published for this motor — travel NOT enforced ⚠️")
     print(f"  delta        : {delta:+.4f} rad  ({delta * 57.2958:+.2f}°)"
-          + (f"   ⚠️ CLAMPED from {args.delta:+.4f}" if clamped else ""))
+          + (f"   ⚠️ CLAMPED from {args.delta:+.4f} (cap {cap} for this motor)" if clamped else ""))
+    print(f"  cycles       : {args.cycles} × (out, hold, back)")
     print(f"  ramp         : {args.ramp:.2f} s   → peak speed {abs(delta) / args.ramp:.4f} rad/s "
           f"({abs(delta) / args.ramp * 57.2958:.2f}°/s)")
     print(f"  hold         : {args.hold:.2f} s, then ramp back to the exact start position")
@@ -182,11 +202,14 @@ def main() -> int:
                     time.sleep(sleep)
             return True
 
-        ok = run_ramp(start_pos, start_pos + delta, args.ramp, "outward ramp")
-        if ok:
-            ok = run_ramp(start_pos + delta, start_pos + delta, args.hold, "hold")
-        if ok:
-            run_ramp(start_pos + delta, start_pos, args.ramp, "return ramp")
+        for cycle in range(args.cycles):
+            tag = f"cycle {cycle + 1}/{args.cycles}"
+            if not run_ramp(start_pos, start_pos + delta, args.ramp, f"{tag} out"):
+                break
+            if not run_ramp(start_pos + delta, start_pos + delta, args.hold, f"{tag} hold"):
+                break
+            if not run_ramp(start_pos + delta, start_pos, args.ramp, f"{tag} back"):
+                break
 
     except KeyboardInterrupt:
         abort_reason = "interrupted by Ctrl-C"
