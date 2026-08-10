@@ -38,9 +38,15 @@ each carries the full reasoning.
 | 11:16 | **Two arms proven distinct** — per-unit `inertia` fingerprint | Replaced a claim that its own evidence could not support |
 | 11:22 | ⭐ **Bimanual** — both arms, one 100 Hz loop, two CAN buses | Different amplitude, speed and direction per arm, verified by eye |
 | 11:30 | **`get_yam_robot(sim=True)` works on macOS** | Same API as hardware ⇒ the whole teleop stack can be built and debugged with zero risk |
+| 11:45 | **Cartesian IK teleop validated in simulation** | Scripted circle traced to spec: radius = speed/0.8, period 2π/0.8 |
+| 12:0x | ⭐ **Gravity compensation on hardware** | Arm held its own 4.3 kg for 12 s, worst drift **0.61°** |
+| 12:2x | **Gripper limits measured once and cached** | `+0.0704 … −5.0528` (78% of declared stroke). No more slamming at every startup |
+| 12:4x | ⭐⭐ **SpaceMouse drove the real arm** | Hand-posed, then EE moved 0.15 m under puck control. **The goal, reached** |
+| 12:4x | ⛔ **Motor 7 over-temperature; loop kept running blind** | See [docs/FINDINGS.md](docs/FINDINGS.md) §4 — the single most important incident of the day |
 
 > ### ⚠️ The pattern worth carrying forward: **this stack fails by lying, not by crashing.**
-> Six separate defects today produced *confident, plausible, wrong answers* rather than errors:
+> ⭐ **Full catalogue, with all nine, in [docs/FINDINGS.md](docs/FINDINGS.md) §0 — read that first.**
+> Six of the nine defects today produced *confident, plausible, wrong answers* rather than errors:
 > transmit echoes decoded as motor replies (a flawless set of zeros from all seven motors) · `inertia` in a
 > model signature making every joint look unique · `FeedbackFrameInfo` vs `MotorInfo` silently yielding `?`
 > for every field · `error_code` annotated `int` but holding the string `'0x1'` · adapter-by-index quietly
@@ -439,7 +445,8 @@ yam-robotics/
 ├── README.md                  # this file: state, findings, next steps
 ├── docs/
 │   ├── Setup-Plan.md          # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
-│   └── ROADMAP.md             # ⭐ the ordered plan and WHY each step comes where it does
+│   ├── ROADMAP.md             # ⭐ the ordered plan and WHY each step comes where it does
+│   └── FINDINGS.md            # ⭐⭐ the latent knowledge: every measurement, every trap, every rule
 ├── scripts/
 │   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only
 │   ├── probe_can.py           # listen-only CAN watch                          read-only

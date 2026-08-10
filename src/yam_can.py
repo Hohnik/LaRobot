@@ -385,9 +385,11 @@ def open_raw_can_interface(
     ``motor_on()``. Writing (``0x55``) and saving (``0xAA``) change motor
     configuration and are deliberately not wrapped here.
     """
-    patch_gs_usb_for_macos()
-    patch_gs_usb_echo_filter()
-    add_i2rt_to_path()
+    # patch_dm_driver_for_gs_usb() also installs the macOS + echo-filter patches
+    # AND the drain/retry hardening around motor_on/motor_off. Calling it here too
+    # means every path gets the same robustness -- ping_motors.py was still
+    # desyncing (motors 4, 6, 7 silent) purely because it took this route instead.
+    patch_dm_driver_for_gs_usb()
     index, serial = resolve_arm(arm)
 
     from i2rt.motor_config_tool.utils import RawCanInterface
@@ -415,9 +417,11 @@ def open_motor_interface(
     (``dm_driver.py``: ``if "can" in channel``), which is precisely the path
     that does not exist on macOS.
     """
-    patch_gs_usb_for_macos()
-    patch_gs_usb_echo_filter()
-    add_i2rt_to_path()
+    # patch_dm_driver_for_gs_usb() also installs the macOS + echo-filter patches
+    # AND the drain/retry hardening around motor_on/motor_off. Calling it here too
+    # means every path gets the same robustness -- ping_motors.py was still
+    # desyncing (motors 4, 6, 7 silent) purely because it took this route instead.
+    patch_dm_driver_for_gs_usb()
     index, serial = resolve_arm(arm)
 
     from i2rt.motor_drivers.dm_driver import ControlMode, DMSingleMotorCanInterface
