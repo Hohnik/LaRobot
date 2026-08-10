@@ -18,43 +18,15 @@ Both shapes are handled below; which one this unit uses is printed on first sigh
 
 from __future__ import annotations
 
+import argparse
 import struct
 import sys
 import time
 
-import hid
+from spacemouse import countdown_hands_off, describe, find_device, is_multi_axis, open_device
 
-SPACEMOUSE_VID = 0x256F  # 3Dconnexion's own
-LEGACY_VID = 0x046D      # Logitech — 3Dconnexion shipped under it for years
-VIDS = {SPACEMOUSE_VID, LEGACY_VID}
 FULL_SCALE = 350.0  # raw counts at full deflection; nominal, calibrate if it matters
 DEADZONE = 0.02
-
-
-def find_device() -> dict | None:
-    """Pick the SpaceMouse's motion interface.
-
-    The order matters, and the reason is specific to this dock. VID 0x046D is Logitech,
-    which older 3Dconnexion units shipped under — but it is *also* the C920 webcam on
-    this same hub, and a webcam presents HID interfaces too. So a Logitech device is
-    accepted only if it independently identifies as multi-axis; blind fallback is
-    allowed for 3Dconnexion's own VID and nothing else. Picking the webcam would open
-    cleanly, print a plausible product string, and then never report motion.
-    """
-    cands = [d for d in hid.enumerate() if d["vendor_id"] in VIDS]
-    multi = [d for d in cands if d.get("usage_page") == 0x01 and d.get("usage") == 0x08]
-    if multi:
-        return multi[0]
-    own = [d for d in cands if d["vendor_id"] == SPACEMOUSE_VID]
-    return own[0] if own else None
-
-
-def open_device(info: dict):
-    if hasattr(hid, "device"):
-        h = hid.device()
-        h.open_path(info["path"])
-        return h
-    return hid.Device(path=info["path"])
 
 
 def scale(raw: int) -> float:
@@ -72,17 +44,47 @@ def bar(v: float, width: int = 11) -> str:
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description="Live 6-DoF SpaceMouse readout (read-only).")
+    ap.add_argument(
+        "--seconds",
+        type=float,
+        default=None,
+        help="stop after N seconds instead of running until Ctrl-C (needed when run non-interactively)",
+    )
+    ap.add_argument(
+        "--raw",
+        type=int,
+        default=0,
+        metavar="N",
+        help="dump the first N raw HID reports as hex, to verify the decode against real bytes",
+    )
+    ap.add_argument(
+        "--until-complete",
+        action="store_true",
+        help="stop as soon as every axis has been deflected past --threshold, "
+        "so the operator does not have to match a countdown they cannot see",
+    )
+    ap.add_argument("--threshold", type=float, default=0.25, help="deflection counting as 'this axis moved'")
+    ap.add_argument("--countdown", type=int, default=3, help="seconds to let the puck centre before seizing")
+    ap.add_argument(
+        "--no-countdown",
+        action="store_true",
+        help="skip the hands-off countdown (only safe if the puck is already at rest)",
+    )
+    args = ap.parse_args()
+
     info = find_device()
     if info is None:
         print("No SpaceMouse found. Plugged in?")
         return 1
 
-    print(
-        f"Opening {info.get('product_string')} "
-        f"[{info['vendor_id']:#06x}:{info['product_id']:#06x}] …"
-    )
-    if not (info.get("usage_page") == 0x01 and info.get("usage") == 0x08):
+    print(f"Found {describe(info)}")
+    if not is_multi_axis(info):
         print("  ⚠️  this is NOT the multi-axis interface — if nothing moves, that is why.")
+
+    if not args.no_countdown:
+        countdown_hands_off(args.countdown)
+
     try:
         h = open_device(info)
     except OSError as exc:
@@ -90,46 +92,105 @@ def main() -> int:
         return 2
 
     h.set_nonblocking(True)
-    print("Move the SpaceMouse. Ctrl-C to stop.\n")
+    live = sys.stdout.isatty()
+    if args.seconds:
+        print(f"Move the SpaceMouse. Stopping automatically after {args.seconds:g} s.\n")
+    else:
+        print("Move the SpaceMouse. Ctrl-C to stop.\n")
 
     t = [0.0, 0.0, 0.0]      # x, y, z
     r = [0.0, 0.0, 0.0]      # roll, pitch, yaw
     buttons = 0
     shapes_seen: set[str] = set()
 
+    # Peak absolute deflection per axis, so a non-interactive run still reports
+    # something meaningful: the bar display is useless when stdout is captured.
+    peak = [0.0] * 6
+    reports = 0
+    buttons_seen: set[int] = set()
+    axis_names = ("x", "y", "z", "roll", "pitch", "yaw")
+
+    deadline = time.time() + args.seconds if args.seconds else None
+    next_tick = time.time() + 2.0
+    raw_shown = 0
+    read_errors = 0
+
     try:
-        while True:
-            data = h.read(64)
+        while deadline is None or time.time() < deadline:
+            try:
+                data = h.read(64)
+            except OSError as exc:
+                # hidapi surfaces a transient -1 read as OSError. Observed once on macOS
+                # mid-session with the device still perfectly healthy, so a single failure
+                # must not end the run — but a persistent one is a real fault, not noise.
+                read_errors += 1
+                if read_errors > 50:
+                    print(f"\n✗ giving up after {read_errors} consecutive read errors: {exc}")
+                    break
+                time.sleep(0.02)
+                continue
             if data:
+                read_errors = 0
+                if raw_shown < args.raw:
+                    raw_shown += 1
+                    print(f"  raw[{raw_shown:02d}] id={data[0]:#04x} len={len(data)} {bytes(data).hex(' ')}")
                 rid, payload = data[0], bytes(data[1:])
                 if rid == 0x01 and len(payload) >= 12:
                     vals = struct.unpack("<6h", payload[:12])
                     t = [scale(v) for v in vals[:3]]
                     r = [scale(v) for v in vals[3:]]
                     shapes_seen.add("combined 0x01 (translation+rotation)")
+                    reports += 1
                 elif rid == 0x01 and len(payload) >= 6:
                     t = [scale(v) for v in struct.unpack("<3h", payload[:6])]
                     shapes_seen.add("split 0x01/0x02")
+                    reports += 1
                 elif rid == 0x02 and len(payload) >= 6:
                     r = [scale(v) for v in struct.unpack("<3h", payload[:6])]
                     shapes_seen.add("split 0x01/0x02")
+                    reports += 1
                 elif rid == 0x03 and payload:
                     buttons = int.from_bytes(payload[:2], "little")
+                    if buttons:
+                        buttons_seen.add(buttons)
+                    reports += 1
 
-            sys.stdout.write(
-                f"\r x{bar(t[0])} y{bar(t[1])} z{bar(t[2])} │"
-                f" roll{bar(r[0])} pitch{bar(r[1])} yaw{bar(r[2])} │ btn {buttons:04b} "
-            )
-            sys.stdout.flush()
+                for i, v in enumerate((*t, *r)):
+                    peak[i] = max(peak[i], abs(v))
+
+                if args.until_complete and all(p >= args.threshold for p in peak):
+                    print("\n  ✓ all six axes seen — stopping early, nothing more is needed.")
+                    break
+
+            if live:
+                sys.stdout.write(
+                    f"\r x{bar(t[0])} y{bar(t[1])} z{bar(t[2])} │"
+                    f" roll{bar(r[0])} pitch{bar(r[1])} yaw{bar(r[2])} │ btn {buttons:04b} "
+                )
+                sys.stdout.flush()
+            elif time.time() >= next_tick:
+                next_tick = time.time() + 3.0
+                still_needed = [n for n, p in zip(axis_names, peak) if p < args.threshold]
+                print(
+                    f"  {reports:5d} reports   still needed: "
+                    + (", ".join(still_needed) if still_needed else "none")
+                )
             time.sleep(0.01)
     except KeyboardInterrupt:
-        print("\n\nstopped.")
-        if shapes_seen:
-            print("report shape(s) observed: " + ", ".join(sorted(shapes_seen)))
-        else:
-            print("no motion reports were received — the device was never moved.")
+        pass
     finally:
         h.close()
+
+    print(f"\n\nstopped — macOS has the SpaceMouse back. {reports} motion/button report(s).")
+    if shapes_seen:
+        print("report shape(s) observed: " + ", ".join(sorted(shapes_seen)))
+        print("peak deflection per axis (1.0 = full scale):")
+        for name, v in zip(axis_names, peak):
+            flag = "" if v > 0.05 else "   ← never moved"
+            print(f"  {name:<6} {v:.2f}{flag}")
+        print(f"buttons seen: {sorted(buttons_seen) if buttons_seen else 'none pressed'}")
+    else:
+        print("no motion reports were received — the device was never moved.")
     return 0
 
 

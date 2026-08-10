@@ -11,10 +11,18 @@ from __future__ import annotations
 
 import sys
 import time
+from pathlib import Path
 
 import hid
 
-SPACEMOUSE_VIDS = {0x256F, 0x046D}  # 3Dconnexion; older units shipped under Logitech
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from spacemouse import (  # noqa: E402
+    VIDS as SPACEMOUSE_VIDS,
+    countdown_hands_off,
+    find_device,
+    is_multi_axis,
+    open_device,
+)
 
 
 def enumerate_all() -> list[dict]:
@@ -51,24 +59,24 @@ def main() -> int:
         print("\nNo SpaceMouse interface. Is it plugged in?")
         return 1
 
-    # A SpaceMouse exposes several interfaces; the multi-axis controller is the one
-    # that streams motion. usage_page 0x01 (generic desktop) / usage 0x08 (multi-axis).
-    target = next(
-        (d for d in space if d.get("usage_page") == 0x01 and d.get("usage") == 0x08),
-        space[0],
-    )
+    # Device selection lives in src/spacemouse.py. It must NOT be reimplemented here:
+    # a blind `space[0]` fallback can select the C920 webcam, which shares Logitech's
+    # VID 0x046D with legacy 3Dconnexion units and sits on this very dock.
+    target = find_device()
+    if target is None:
+        print("\nNo multi-axis SpaceMouse interface. Is it plugged in?")
+        return 1
     print(f"\n=== opening: {target.get('product_string')} (path={target['path']!r}) ===")
+    if not is_multi_axis(target):
+        print("  ⚠️  not the multi-axis interface — motion will not appear.")
 
-    # The PyPI `hidapi` package (cython-hidapi) exposes hid.device()/open_path().
-    # The differently-named `hid` package exposes hid.Device(path=...). Support both,
-    # rather than guessing which is installed.
+    # hidapi seizes the device on macOS; opening it mid-deflection strands the OS
+    # with a latched pointer delta. See src/spacemouse.py.
+    countdown_hands_off(3)
+
     h = None
     try:
-        if hasattr(hid, "device"):
-            h = hid.device()
-            h.open_path(target["path"])
-        else:
-            h = hid.Device(path=target["path"])
+        h = open_device(target)
     except OSError as exc:
         # Only an OSError here is plausibly a permissions/claim problem.
         print(f"\n✗ COULD NOT OPEN (OSError): {exc}")
