@@ -72,7 +72,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 from keyboard import KeyReader  # noqa: E402
-from spacemouse import TwistReader, countdown_hands_off, find_device, open_device  # noqa: E402
+from spacemouse import (  # noqa: E402
+    TwistReader,
+    countdown_hands_off,
+    open_device,
+    pick_device_by_wiggle,
+)
 from teleop import CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
@@ -92,12 +97,23 @@ TEMP_WARN = 55.0
 TEMP_STOP = 65.0
 PARK_SPEED = 0.25          # rad/s per joint when driving to the park pose
 
+# ⛔ NEVER command the gripper to 0.0 or 1.0. Those are the mechanical stops, and
+# holding a position AT a stop is stall torque: full current, no motion, no
+# cooling. That is what cooked motor 7 twice on 2026-08-10 -- the arm was simply
+# told to "hold where you are" while the jaws happened to be resting on a stop.
+# Keeping the command inside this band means the jaws are always free to move,
+# so a hold command costs almost no torque.
+GRIPPER_MIN = 0.15
+GRIPPER_MAX = 0.85
+GRIPPER_STEP = 0.02        # per keypress
+
 MAP_FILE = REPO / "config" / "spacemouse_map.json"
 PARK_FILE = REPO / "config" / "park_pose.json"
 
 HELP = """
   g GUIDE (weightless)   t TELEOP (spacemouse)   h HOLD   p PARK   s save park
   x/y/z flip axis        +/- speed               ?  help   q QUIT (asks first)
+  o/c  open / close the gripper (TELEOP mode only)
 """
 
 
@@ -157,9 +173,9 @@ def main() -> int:  # noqa: PLR0915
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
 
-    info = find_device()
+    info = pick_device_by_wiggle()
     if info is None:
-        print("No SpaceMouse found.")
+        print("No SpaceMouse found (or none was moved).")
         return 1
     countdown_hands_off(3)
     handle = open_device(info)
@@ -181,11 +197,34 @@ def main() -> int:  # noqa: PLR0915
         print(f"  {note}\n")
         chain = robot.motor_chain
 
+        # ⛔ Stale-limit check. A power cycle can shift the gripper motor's position
+        # reference, which leaves config/gripper_limits.json describing a range the
+        # jaws are no longer inside. The normalised value then falls outside [0,1],
+        # every hold command pushes toward a stop, and the motor stalls and cooks.
+        # Measured after the 2026-08-10 power cycle: raw jaw position +1.6691 rad
+        # against saved limits +0.0704 … -5.0528. Outside, by a lot.
+        try:
+            raw_jaw = chain.read_states()[N_ARM].pos
+            lims = load_gripper_limits(args.arm)
+            if lims is not None:
+                lo_r, hi_r = min(lims), max(lims)
+                if not (lo_r - 0.2 <= raw_jaw <= hi_r + 0.2):
+                    print(f"⚠️  STALE GRIPPER LIMITS: jaws read {raw_jaw:+.3f} rad but the saved range is "
+                          f"[{lo_r:+.3f}, {hi_r:+.3f}].")
+                    print("   A power cycle shifts the position reference. Re-run:")
+                    print("     uv run scripts/calibrate_gripper.py --yes")
+                    print("   Continuing, but the gripper command is clamped so it cannot stall.\n")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+        def clamp_gripper(v: float) -> float:
+            return float(np.clip(v, GRIPPER_MIN, GRIPPER_MAX))
+
         def enter_teleop() -> None:
             nonlocal teleop, home_ee, gripper_value
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
-            gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.0
+            gripper_value = clamp_gripper(float(q[N_ARM]) if len(q) > N_ARM else 0.5)
             teleop = CartesianTeleop()
             teleop.reset(q[:N_ARM])
             home_ee = teleop.ee_position().copy()
@@ -271,6 +310,10 @@ def main() -> int:  # noqa: PLR0915
                             park_target = np.asarray(park, dtype=float)
                             enter_hold()
                             print("\n⭐ MODE: PARK — driving slowly to the saved pose. Any key stops.\n")
+                    elif k == "o" and mode == "teleop":
+                        gripper_value = clamp_gripper(gripper_value + GRIPPER_STEP)
+                    elif k == "c" and mode == "teleop":
+                        gripper_value = clamp_gripper(gripper_value - GRIPPER_STEP)
                     elif k in "xyz":
                         idx = "xyz".index(k)
                         sign[idx] *= -1
@@ -317,7 +360,7 @@ def main() -> int:  # noqa: PLR0915
                     full = np.zeros(robot.num_dofs())
                     full[:N_ARM] = q_target
                     if robot.num_dofs() > N_ARM:
-                        full[N_ARM] = gripper_value
+                        full[N_ARM] = clamp_gripper(gripper_value)
                     robot.command_joint_pos(full)
                     prev_q = q_target.copy()
 

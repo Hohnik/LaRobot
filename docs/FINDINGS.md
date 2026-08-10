@@ -148,6 +148,14 @@ the loop once cameras and inference compete for CPU — but the specific claim i
 - There is **no speed parameter**. The routine is torque-controlled, so torque *is* the speed; lowering it
   lowers both. Ours uses 0.3 Nm vs I2RT's 0.5.
 - After calibration the gripper is exposed as a **normalised 0…1 value**, not raw radians.
+- ⛔ **A POWER CYCLE INVALIDATES THE SAVED LIMITS.** Measured 2026-08-10: before the power cycle the jaws
+  calibrated to `+0.0704 … −5.0528`; afterwards they read **+1.6691 rad**, outside that range entirely. The
+  motor's position reference shifts across power. A stale range makes the normalised value fall outside
+  `[0,1]`, so every hold command pushes toward a stop — **which is precisely how motor 7 cooked, twice.**
+  **Re-run `calibrate_gripper.py` after every power cycle.** `teleop_session.py` detects the mismatch and
+  says so.
+- ⛔ **Never command the gripper to 0.0 or 1.0.** Those *are* the mechanical stops, and holding a position at
+  a stop is stall torque: full current, no motion, no cooling. Commands are clamped to **[0.15, 0.85]**.
 
 ---
 
@@ -231,16 +239,18 @@ PARK mode does exactly that at 0.25 rad/s.
 from one loop over two buses · 100 Hz proven with 3× headroom · gravity compensation holding to **0.61°** ·
 hand-guiding · **cartesian SpaceMouse teleop on the real arm** (EE moved 0.15 m under puck control).
 
-**⛔ OPEN AT SESSION END — hardware, not software.** After the over-temperature fault, **both arms stopped
-responding on both buses**: register-read scans return 0 devices, listen-only sees 0 frames, while both USB
-adapters still enumerate correctly. Two independent arms on two independent buses failing together points at
-**the one thing they share — wall power.** A power cycle is also the standard recovery from a latched motor
-over-temperature fault. **This must be confirmed before any further hardware work.**
+**✅ RESOLVED — it was the wall power, exactly as the shared-cause reasoning predicted.** Julien
+disconnected and reconnected the arms at the socket and both came straight back: all 7 motors on each bus,
+every temperature 31-36 °C, no latched faults. **A power cycle is the recovery for a latched motor
+over-temperature.** The diagnosis held because two independent arms on two independent buses cannot fail
+together for independent reasons — the only shared thing was mains.
 
 **Known-imperfect, deliberately deferred:**
 - **SpaceMouse axis directions are wrong/unintuitive.** Not yet mapped to Julien's expectation; the session
   script lets him flip x/y/z live and saves the result to `config/spacemouse_map.json`.
-- The second SpaceMouse **must not be connected yet**: it reports an **empty serial number**, so the
-  select-by-serial trick does not transfer and two pucks would be indistinguishable except by a macOS registry
-  path that changes on replug. Fix selection by USB topology first.
+- **Two SpaceMice are now connected, and the ambiguity is SOLVED — by asking the hardware.** Both report an
+  empty serial, so select-by-serial does not transfer from the CAN adapters. They differ only in USB
+  `port_numbers` — `(1,3)` and `(1,4)` — which hidapi does not expose, and which tell a human nothing about
+  which puck is under which hand. So `pick_device_by_wiggle()` opens all of them and uses **whichever one the
+  operator moves.** Unambiguous, needs no config, survives replugging into any port, and costs five seconds.
 - No git remote. Everything exists only on this Mac.

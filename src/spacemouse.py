@@ -153,6 +153,81 @@ class TwistReader:
         return [*self._t, *self._r]
 
 
+def find_all_devices() -> list[dict]:
+    """Every multi-axis SpaceMouse interface currently attached."""
+    return [
+        d
+        for d in hid.enumerate()
+        if d["vendor_id"] in VIDS and is_multi_axis(d)
+    ]
+
+
+def pick_device_by_wiggle(timeout: float = 20.0) -> dict | None:
+    """Ask the operator to move the puck they want, and return that one.
+
+    ⛔ WHY THIS EXISTS, rather than an index or a serial.
+
+    Two SpaceMice are attached and **both report an empty serial number**
+    (measured 2026-08-10). The trick that made the CAN adapters unambiguous —
+    select by serial, never by position — simply does not transfer. They differ
+    only in USB port numbers, `(1,3)` and `(1,4)`, which hidapi does not expose
+    and which mean nothing to a human anyway: neither tells you which physical
+    puck is under which hand.
+
+    So the device identifies *itself*, by being moved. That is unambiguous, needs
+    no configuration, and survives replugging into any port. It costs five
+    seconds and removes an entire class of "which puck drives which arm" bug —
+    the same class that silently retargeted the wrong robot earlier today.
+
+    Returns the chosen device info, or None on timeout / no devices.
+    """
+    devices = find_all_devices()
+    if not devices:
+        return None
+    if len(devices) == 1:
+        return devices[0]
+
+    print(f"\n⭐ {len(devices)} SpaceMice attached, and they are indistinguishable to software")
+    print("   (both report an empty serial number).")
+    print("   → MOVE THE PUCK YOU WANT TO USE. Any direction. Waiting …")
+
+    handles = []
+    try:
+        for info in devices:
+            try:
+                h = open_device(info)
+                h.set_nonblocking(True)
+                handles.append((info, h))
+            except Exception:  # noqa: BLE001
+                pass
+
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for info, h in handles:
+                try:
+                    data = h.read(64)
+                except OSError:
+                    continue
+                if not data:
+                    continue
+                # Any non-zero motion payload counts. Report 0x03 is buttons,
+                # which also identifies the device the operator is touching.
+                payload = bytes(data[1:])
+                if any(payload[:6]):
+                    print(f"   ✓ got it — using the puck on {info['path']!r}\n")
+                    return info
+            time.sleep(0.01)
+    finally:
+        for _, h in handles:
+            try:
+                h.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
+
+    print("   ✗ nothing moved within the timeout.\n")
+    return None
+
+
 def describe(info: dict) -> str:
     return (
         f"{info.get('product_string')} "
