@@ -72,7 +72,9 @@ MAX_DELTA_BY_MOTOR = {
     3: 0.20,  # elbow_pitch
     4: 0.30,  # forearm_pitch
     5: 0.50,  # wrist_roll
-    6: 1.00,  # gripper_twist  — orientation only, cannot extend into anything
+    6: 1.90,  # gripper_twist  — orientation only, cannot extend into anything.
+              # Julien, 2026-08-10: "twisting the gripper by ninety degrees,
+              # then nothing can happen. It couldn't harm anything."
     7: 0.30,  # gripper_jaws   — hard stops, limits uncalibrated
 }
 MAX_DELTA_FALLBACK = 0.20
@@ -159,15 +161,25 @@ def main() -> int:
         # command a target the vendor model says the joint cannot reach. Checked
         # AFTER enabling, because it needs the measured start position.
         if lo is not None:
+            MARGIN = 0.05  # rad of headroom kept from each mechanical limit
             target_end = start_pos + delta
-            if not (lo <= target_end <= hi):
-                abort_reason = (
-                    f"target {target_end:+.4f} rad is outside {joint_name} limits "
-                    f"[{lo:+.4f}, {hi:+.4f}] — refusing to move"
+            safe_end = max(lo + MARGIN, min(hi - MARGIN, target_end))
+            if safe_end != target_end:
+                print(
+                    f"⚠️  target {target_end:+.4f} rad would come within {MARGIN} rad of the "
+                    f"{joint_name} limit [{lo:+.4f}, {hi:+.4f}] — shortening the move."
                 )
-                raise RuntimeError(abort_reason)
-            margin = min(target_end - lo, hi - target_end)
-            print(f"limit check ok: target {target_end:+.4f} rad, {margin:.3f} rad of margin")
+                delta = safe_end - start_pos
+                if abs(delta) < 0.02:
+                    abort_reason = (
+                        f"{joint_name} is already at its limit ({start_pos:+.4f} rad); "
+                        "no room to move. Twist it back toward centre by hand first."
+                    )
+                    raise RuntimeError(abort_reason)
+            print(
+                f"limit check ok: {start_pos:+.4f} → {start_pos + delta:+.4f} rad "
+                f"({delta * 57.2958:+.1f}°), limits [{lo:+.4f}, {hi:+.4f}]"
+            )
         print()
 
         def run_ramp(from_pos: float, to_pos: float, seconds: float, label: str) -> bool:
