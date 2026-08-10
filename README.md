@@ -446,6 +446,7 @@ yam-robotics/
 ├── docs/
 │   ├── Setup-Plan.md          # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
 │   ├── ROADMAP.md             # ⭐ the ordered plan and WHY each step comes where it does
+│   ├── COMMANDS.md            # ⭐ every command, grouped by how much it can move
 │   └── FINDINGS.md            # ⭐⭐ the latent knowledge: every measurement, every trap, every rule
 ├── scripts/
 │   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only
