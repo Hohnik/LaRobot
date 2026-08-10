@@ -3,7 +3,7 @@
 
     uv run scripts/hold_pose.py                       # dry run: explains the plan
     uv run scripts/hold_pose.py --yes                 # LIVE — the arm holds itself
-    uv run scripts/hold_pose.py --yes --no-gripper-cal   # skip the jaw calibration
+    uv run scripts/hold_pose.py --yes --zero-gravity  # LIVE — back-drivable, push it by hand
 
 ⛔ FIRST TIME ALL SIX ARM JOINTS HOLD REAL TORQUE.
 
@@ -65,14 +65,8 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
-from yam_can import (  # noqa: E402
-    ARM_SERIALS,
-    DEFAULT_ARM,
-    YAM_JOINTS,
-    add_i2rt_to_path,
-    chain_channel,
-    patch_dm_driver_for_gs_usb,
-)
+from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
+from yam_robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
 
 MOTOR_IDS = [1, 2, 3, 4, 5, 6, 7]
 DRIFT_WARN = 0.05   # rad — worth reporting
@@ -84,48 +78,37 @@ def main() -> int:
     ap.add_argument("--yes", action="store_true", help="actually energise the arm (default: dry run)")
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
     ap.add_argument("--seconds", type=float, default=12.0)
-    ap.add_argument("--no-gripper-cal", action="store_true",
-                    help="skip the automatic jaw-limit detection, so the gripper does not move")
+    ap.add_argument("--zero-gravity", action="store_true",
+                    help="back-drivable hand-guiding instead of holding the pose")
     args = ap.parse_args()
 
-    add_i2rt_to_path()
-    patch_dm_driver_for_gs_usb()
-    channel = chain_channel(args.arm)
-
+    saved = load_gripper_limits(args.arm)
     print("=== plan ===")
-    print(f"  ARM        : {args.arm}  (serial {ARM_SERIALS[args.arm]})  channel {channel!r}")
-    print("  mode       : zero_gravity_mode=False → hold the CURRENT pose, PD + gravity comp")
+    print(f"  ARM        : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
+    if args.zero_gravity:
+        print("  mode       : zero_gravity_mode=True → BACK-DRIVABLE. Gravity is cancelled and the")
+        print("               arm goes limp-but-weightless, so you can push it around by hand.")
+        print("               ⚠️ Expect it to move — under your hand, and possibly a little on its own.")
+    else:
+        print("  mode       : zero_gravity_mode=False → hold the CURRENT pose, PD + gravity comp")
+        print("  success is : NOTHING MOVES. The arm holds its own weight and stays put.")
     print(f"  duration   : {args.seconds:.0f} s, then disable")
-    print(f"  jaw cal    : {'SKIPPED' if args.no_gripper_cal else 'ON — the JAWS WILL MOVE at 0.5 Nm to find both stops'}")
-    print(f"  abort if   : any joint drifts more than {DRIFT_ABORT} rad from where it started")
-    print("  success is : NOTHING MOVES. The arm holds its own weight and stays put.\n")
+    print(f"  jaw limits : {saved if saved else 'NONE SAVED — run scripts/calibrate_gripper.py --yes first'}")
+    if not args.zero_gravity:
+        print(f"  abort if   : any joint drifts more than {DRIFT_ABORT} rad from where it started")
+    print()
 
     if not args.yes:
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
-
-    from i2rt.robots.get_robot import get_yam_robot  # noqa: PLC0415
-    from i2rt.robots.utils import ArmType, GripperType  # noqa: PLC0415
-
-    kwargs: dict = dict(
-        channel=channel,
-        arm_type=ArmType.YAM,
-        gripper_type=GripperType.LINEAR_4310,
-        zero_gravity_mode=False,   # ⭐ hold the pose; do NOT go back-drivable
-        sim=False,
-    )
-    if args.no_gripper_cal:
-        # Supplying limits is what turns the auto-calibration off — get_robot.py:223-225
-        # sets gripper_needs_cal = False whenever an override is given.
-        kwargs["gripper_limits_override"] = [-6.4, -0.2]
-        print("jaw calibration skipped; using conservative guessed limits [-6.4, -0.2]\n")
 
     robot = None
     start: np.ndarray | None = None
     worst = np.zeros(len(MOTOR_IDS))
     try:
         print("building robot — this enables all 7 motors and starts the control loop …")
-        robot = get_yam_robot(**kwargs)
+        robot, note = build_robot(args.arm, zero_gravity=args.zero_gravity)
+        print(f"  {note}")
         start = np.asarray(robot.get_joint_pos(), dtype=float)
         print(f"\n✓ holding. start pose = {np.round(start, 4)}\n")
 
@@ -139,7 +122,7 @@ def main() -> int:
             drift = np.abs(pos - start)
             worst = np.maximum(worst, drift)
 
-            if drift.max() > DRIFT_ABORT:
+            if not args.zero_gravity and drift.max() > DRIFT_ABORT:
                 j = int(np.argmax(drift))
                 raise RuntimeError(
                     f"joint {MOTOR_IDS[j]} ({YAM_JOINTS[MOTOR_IDS[j]][0]}) drifted "
@@ -158,23 +141,13 @@ def main() -> int:
         print(f"\n⛔ {type(exc).__name__}: {exc}")
     finally:
         if robot is not None:
-            try:
-                robot.close()
-            except Exception as exc:  # noqa: BLE001
-                print(f"  ⚠️  robot.close() raised {type(exc).__name__}")
-            # ⛔ close() prints "all torques set to zero" but only calls
-            # motor_chain.close(), which does NOT disable the motors. Leaving them
-            # enabled is exactly what broke consecutive runs of read_arm_state.py.
-            try:
-                chain = robot.motor_chain
-                for mid in MOTOR_IDS:
-                    try:
-                        chain.motor_interface.motor_off(mid)
-                    except Exception:  # noqa: BLE001, S110
-                        pass
-                print("all 7 motors explicitly disabled.")
-            except Exception:  # noqa: BLE001, S110
-                pass
+            # Stop the control thread, THEN disable, THEN close — see yam_robot.py.
+            # The returned list is what actually succeeded, not a hopeful constant.
+            disabled = shutdown_robot(robot)
+            print(f"motors confirmed disabled: {disabled}")
+            missing = [m for m in MOTOR_IDS if m not in disabled]
+            if missing:
+                print(f"⚠️  NOT confirmed disabled: {missing} — their 400 ms timeout will damp them")
 
     print("\n=== what actually happened ===")
     if start is None:
@@ -184,6 +157,10 @@ def main() -> int:
         flag = "  ← moved" if d > DRIFT_WARN else ""
         print(f"  {mid} {YAM_JOINTS[mid][0]:<15} max drift {d:.4f} rad ({d * 57.2958:5.2f}°){flag}")
 
+    if args.zero_gravity:
+        print(f"\n✅ Hand-guiding ran. Total movement seen: {worst.max() * 57.2958:.1f}° "
+              "(that is you pushing it, not a fault).")
+        return 0
     if worst.max() <= DRIFT_WARN:
         print(f"\n✅ The arm held itself. Max drift {worst.max() * 57.2958:.2f}° across all joints.")
         print("   Gravity compensation works. Next: zero-gravity mode for hand-guiding.")
