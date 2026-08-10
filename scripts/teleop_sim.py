@@ -35,6 +35,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
+from axis_map import AxisMap  # noqa: E402
 from teleop import CartesianTeleop, scripted_twist  # noqa: E402
 
 CONTROL_HZ = 100.0
@@ -44,17 +45,28 @@ CONTROL_HZ = 100.0
 LINEAR_SCALE = 0.08   # m/s at full deflection
 ANGULAR_SCALE = 0.40  # rad/s at full deflection
 
+MAP_FILE = REPO / "config" / "spacemouse_map.json"
 
-def twist_from_axes(axes: list[float]) -> np.ndarray:
+
+def twist_from_axes(axes: list[float], axis_map: AxisMap) -> np.ndarray:
     """Scale six normalised SpaceMouse axes into a physical twist.
 
     Decoding lives in `src/spacemouse.py:TwistReader` — one copy, shared with
     `scripts/teleop_gripper.py`. Only the scaling is a teleop concern.
+
+    ⛔ THIS USED TO IGNORE THE AXIS MAP ENTIRELY, and that was the worst possible
+    place for the omission. This script's whole claim is that *"every axis
+    convention, frame, sign and singularity gets found here, where being wrong
+    costs a reprinted number instead of a joint slamming into its stop"* — and it
+    was the one consumer that could not reproduce the mapping the real session
+    uses, so an axis convention was the single thing it could NOT test. Exactly the
+    duplication trap that `src/spacemouse.py` was created to close.
     """
+    mapped = axis_map.apply(axes)
     return np.array(
         [
-            axes[0] * LINEAR_SCALE, axes[1] * LINEAR_SCALE, axes[2] * LINEAR_SCALE,
-            axes[3] * ANGULAR_SCALE, axes[4] * ANGULAR_SCALE, axes[5] * ANGULAR_SCALE,
+            mapped[0] * LINEAR_SCALE, mapped[1] * LINEAR_SCALE, mapped[2] * LINEAR_SCALE,
+            mapped[3] * ANGULAR_SCALE, mapped[4] * ANGULAR_SCALE, mapped[5] * ANGULAR_SCALE,
         ]
     )
 
@@ -73,6 +85,12 @@ def main() -> int:
 
     robot = get_yam_robot(arm_type=ArmType.YAM, gripper_type=GripperType.LINEAR_4310, sim=True)
     print(f"simulated robot: {type(robot).__name__}, {robot.num_dofs()} dofs")
+
+    # The same map the real session uses, so a mapping can be verified here first.
+    axis_map = AxisMap.load(MAP_FILE)
+    if not args.demo:
+        print(f"axis map: {axis_map.one_line()}")
+        print(axis_map.describe())
 
     teleop = CartesianTeleop(
         position_cost=args.position_cost,
@@ -134,7 +152,7 @@ def main() -> int:
                 break
             loop_start = time.perf_counter()
 
-            twist = scripted_twist(t) if args.demo else twist_from_axes(reader.read())
+            twist = scripted_twist(t) if args.demo else twist_from_axes(reader.read(), axis_map)
             q_arm = teleop.step(twist, dt)
 
             # Per-cycle joint step. This is the number that matters for hardware:
