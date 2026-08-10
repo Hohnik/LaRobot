@@ -34,10 +34,12 @@ learning programme, this is an engineering build with hardware and deadlines. It
 
 **⛔ Known broken / deliberately disabled:**
 
-- **The gripper is not under control** — `NO_GRIPPER` is the default. This is the top open item.
-  **[FINDINGS §3.5](FINDINGS.md) explains exactly why and how to fix it.** Motor 7 was cooked three times.
-- **SpaceMouse axis directions** are still being dialled in. `x`/`y`/`z` flip them live and persist to
-  `config/spacemouse_map.json`; current state is `[1, -1, -1, 1, 1, 1]`.
+- **The gripper is controlled again**, after the 2π frame fix ([FINDINGS §3.5](FINDINGS.md)) — but that fix
+  is **verified numerically, not yet on hardware.** Motor 7 was cooked three times before it. `--no-gripper`
+  is the escape hatch, and a startup check refuses to run if the frame is wrong.
+- **SpaceMouse axis directions** are still being dialled in. `x`/`y`/`z` flip translation and `1`/`2`/`3` flip
+  rotation, live, persisting to `config/spacemouse_map.json`; current state `[1, -1, -1, 1, 1, 1]`.
+- **PARK is fixed but untested on hardware** — it was being cancelled by any unrecognised key, Enter included.
 - **No git remote.** Everything exists only on Julien's Mac. See §6.
 
 ## 3. The one command
@@ -46,8 +48,15 @@ learning programme, this is an engineering build with hardware and deadlines. It
 cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes --arm arm1
 ```
 
-`g` guide · `t` teleop · `h` hold · `p` park · `s` save park · `x`/`y`/`z` flip an axis · `+`/`-` speed ·
-`r` rotation · `q` quit (asks first). Full inventory in [COMMANDS.md](COMMANDS.md).
+```
+MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
+DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
+SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
+GRIPPER   o open   c close          r  wrist rotation on/off
+OTHER     ?  help                   q  QUIT (asks before releasing the arm)
+```
+
+No shift keys, and unrecognised keys do nothing. Full inventory in [COMMANDS.md](COMMANDS.md).
 
 ## 4. ⭐ How to work on this, and why
 
@@ -103,8 +112,7 @@ Treat the first run as a test, not a demonstration.
 1. ⭐ **Give this repo a git remote.** ~30 commits exist only on one Mac, including everything above.
    Julien's own private GitHub first; `Hohnik/LaRobot` is planned separately — see README §7.5 for the
    fork-and-PR approach and the "clean" checklist. **Do not push to a collaborator's `main`.**
-2. **Fix the gripper** — [FINDINGS §3.5](FINDINGS.md) has the mechanism and three ranked options.
-3. **Finish the axis directions.** 10 minutes of driving with `x`/`y`/`z`.
+2. **Work the §5.5 task list** — axis directions first, then verify PARK and the gripper on hardware.
 
 **Then, in roadmap order:** simultaneous bimanual teleop (the hard half is proven) → **recorder → MCAP in
 ABC's exact schema** (get this right and the whole training half works unmodified; get it wrong and every

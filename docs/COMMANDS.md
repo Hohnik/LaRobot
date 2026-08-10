@@ -28,7 +28,7 @@ uv run scripts/read_arm_state.py --yes --arm arm1
 | `g` | **GUIDE** — zero gravity, the arm is weightless, push it by hand |
 | `t` | **TELEOP** — the SpaceMouse drives the end effector |
 | `h` | **HOLD** — the arm holds its pose. The safe idle |
-| `p` | **PARK** — drive slowly back to the saved pose. Any key aborts |
+| `p` | **PARK** — drive back to the saved pose at 0.4 rad/s. Press `h` or `t` to stop |
 | `s` | save the current pose as the park pose |
 | `o` / `c` | open / close the gripper |
 | `[` / `]` | gripper step slower / faster |
