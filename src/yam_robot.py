@@ -72,6 +72,66 @@ def load_gripper_limits(arm: str) -> list[float] | None:
         return None
 
 
+TWO_PI = 6.283185307179586
+
+
+def reconcile_gripper_limits(saved: list[float], raw_pos: float, margin: float = 0.3) -> list[float] | None:
+    """Shift saved jaw limits into the frame the jaws are actually in, or give up.
+
+    ⛔ THIS IS THE FIX FOR THE WORST BUG OF 2026-08-10, and the mechanism is worth
+    understanding because it will recur anywhere raw motor positions are cached.
+
+    `get_yam_robot()` applies a **±2π wrap correction at every construction**,
+    chosen from wherever the motor happens to be sitting at that instant
+    (`get_robot.py:268-274`). `calibrate_gripper.py` builds a `DMChainCanInterface`
+    directly and gets **no** such correction. So the limits are written in one
+    coordinate frame and read in another, and whether they happen to agree depends
+    on the jaws' position when each ran.
+
+    When they disagree, the consequence is not a wrong number — it is a cooked
+    motor. `motor_chain_robot.py:390` force-clips every gripper command into
+    `[min(limits), max(limits)]` **regardless of where the jaws are**. With the
+    jaws at −1.380 and the range at [+1.231, +6.481], the gripper was commanded
+    2.6 rad away and held there against a mechanical stop. 43 °C → 65 °C in five
+    seconds.
+
+    So: try the saved range shifted by 0, +2π and −2π. If one brackets the
+    measured position, that is the same physical range expressed in this session's
+    frame — return it, and nothing needs to move. If none does, the limits are
+    genuinely stale and **None** is returned so the caller re-measures.
+
+    ⚠️ Never "warn and continue" here. That is precisely what was done, and it is
+    what burned the motor.
+    """
+    lo, hi = min(saved), max(saved)
+    for shift in (0.0, TWO_PI, -TWO_PI):
+        if lo + shift - margin <= raw_pos <= hi + shift + margin:
+            return [saved[0] + shift, saved[1] + shift]
+    return None
+
+
+def read_raw_gripper_position(arm: str) -> float | None:
+    """Raw jaw motor position, read the same way the robot will read it."""
+    add_i2rt_to_path()
+    patch_dm_driver_for_gs_usb()
+    from i2rt.motor_drivers.dm_driver import ControlMode, DMSingleMotorCanInterface, MotorType
+
+    iface = DMSingleMotorCanInterface(
+        control_mode=ControlMode.MIT, channel=chain_channel(arm), name="jawread"
+    )
+    try:
+        info = iface.motor_on(7, MotorType.DM4310)
+        return float(info.position)
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        try:
+            iface.motor_off(7)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        iface.close()
+
+
 def build_robot(
     arm: str = DEFAULT_ARM,
     *,
@@ -108,8 +168,31 @@ def build_robot(
 
     saved = load_gripper_limits(arm)
     if saved is not None:
+        # ⛔ Verify the saved limits describe the frame the jaws are ACTUALLY in
+        # before handing them to a layer that will force-clip every command into
+        # them. See reconcile_gripper_limits() for why this is not optional.
+        raw = read_raw_gripper_position(arm)
+        if raw is not None:
+            fixed = reconcile_gripper_limits(saved, raw)
+            if fixed is None:
+                raise RuntimeError(
+                    f"⛔ STALE GRIPPER LIMITS — refusing to start.\n"
+                    f"   The jaws are at {raw:+.3f} rad; the saved range is "
+                    f"[{min(saved):+.3f}, {max(saved):+.3f}], and no ±2π shift reconciles them.\n"
+                    f"   MotorChainRobot force-clips every gripper command into that range whatever\n"
+                    f"   the jaws are doing, so continuing would drive the gripper into a stop and\n"
+                    f"   cook it -- which is exactly what happened on 2026-08-10.\n"
+                    f"   Re-measure:  uv run scripts/calibrate_gripper.py --yes --arm {arm}"
+                )
+            if fixed != saved:
+                note_shift = f" (shifted by {fixed[0] - saved[0]:+.3f} rad to match this session's frame)"
+                saved = fixed
+            else:
+                note_shift = ""
+        else:
+            note_shift = " (could not verify against the jaws — read failed)"
         kwargs["gripper_limits_override"] = saved
-        note = f"using saved jaw limits {saved} — no calibration, jaws will not move"
+        note = f"jaw limits {[round(v, 3) for v in saved]} verified against the jaws{note_shift}"
     elif allow_calibration:
         note = "⚠️ NO saved jaw limits — the jaws WILL be driven into both stops to find them"
     else:

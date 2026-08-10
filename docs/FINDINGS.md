@@ -148,7 +148,21 @@ the loop once cameras and inference compete for CPU — but the specific claim i
 - There is **no speed parameter**. The routine is torque-controlled, so torque *is* the speed; lowering it
   lowers both. Ours uses 0.3 Nm vs I2RT's 0.5.
 - After calibration the gripper is exposed as a **normalised 0…1 value**, not raw radians.
-- ⛔ **A POWER CYCLE INVALIDATES THE SAVED LIMITS.** Measured 2026-08-10: before the power cycle the jaws
+- ⛔⭐ **THE WORST BUG OF THE DAY: the limits are stored in one coordinate frame and used in another.**
+  `get_yam_robot()` applies a **±2π wrap correction at every construction**, chosen from wherever the motor
+  happens to be sitting at that instant (`get_robot.py:268-274`). `calibrate_gripper.py` builds a
+  `DMChainCanInterface` directly and gets **no** such correction. So whether the saved numbers mean anything
+  depends on the jaws' position when each ran.
+  **The consequence is not a wrong number, it is a cooked motor:** `motor_chain_robot.py:390` force-clips
+  every gripper command into `[min(limits), max(limits)]` *regardless of where the jaws are*. Measured: jaws
+  at **−1.380** with a saved range of **[+1.231, +6.481]** → the gripper was commanded 2.6 rad away and held
+  there against a mechanical stop → **43 °C → 65 °C in five seconds.**
+  **Fix:** `reconcile_gripper_limits()` tries the saved range shifted by 0, +2π and −2π and returns whichever
+  brackets the measured position; if none does, `build_robot` **refuses to start**. Verified: reconciling the
+  failure case yields `[0.1979, −5.0524]` against the morning's independent calibration of
+  `[0.0704, −5.0528]` — **the lower bound agrees to 0.0004 rad.**
+  ⚠️ **Never "warn and continue" on this.** That is exactly what was done, and it is what burned the motor.
+- ⛔ **A power cycle also invalidates the saved limits.** Measured 2026-08-10: before the power cycle the jaws
   calibrated to `+0.0704 … −5.0528`; afterwards they read **+1.6691 rad**, outside that range entirely. The
   motor's position reference shifts across power. A stale range makes the normalised value fall outside
   `[0,1]`, so every hold command pushes toward a stop — **which is precisely how motor 7 cooked, twice.**

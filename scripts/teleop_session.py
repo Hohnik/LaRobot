@@ -103,9 +103,22 @@ PARK_SPEED = 0.25          # rad/s per joint when driving to the park pose
 # told to "hold where you are" while the jaws happened to be resting on a stop.
 # Keeping the command inside this band means the jaws are always free to move,
 # so a hold command costs almost no torque.
-GRIPPER_MIN = 0.15
-GRIPPER_MAX = 0.85
+# ⛔ These are only applied to values the OPERATOR asks for. The gripper is never
+# forced away from where it already is. The earlier [0.15, 0.85] clamp was applied
+# on entering TELEOP, which meant that if the jaws happened to sit outside the band
+# the session COMMANDED THEM TO MOVE the moment teleop began -- a motion nobody
+# asked for, into a mechanical stop when the limits were also mis-framed.
+GRIPPER_MIN = 0.02
+GRIPPER_MAX = 0.98
 GRIPPER_STEP = 0.02        # per keypress
+
+# Gripper stall guard. Catches the CAUSE (jaws pushing against something they
+# cannot move) rather than the symptom (temperature). Torque high while velocity
+# is ~0 is the definition of a stall, and stall is the worst thermal case there
+# is: full current, no motion, no cooling.
+GRIPPER_STALL_TORQUE = 1.0   # Nm
+GRIPPER_STALL_VEL = 0.05     # rad/s
+GRIPPER_STALL_SECONDS = 0.4
 
 MAP_FILE = REPO / "config" / "spacemouse_map.json"
 PARK_FILE = REPO / "config" / "park_pose.json"
@@ -199,6 +212,7 @@ def main() -> int:  # noqa: PLR0915
     gripper_value = 0.0
     park_target = None
     max_temp_seen = 0.0
+    stall_since = None
 
     try:
         print("building robot — enables all 7 motors, starts the control loop …")
@@ -255,7 +269,9 @@ def main() -> int:  # noqa: PLR0915
             resync()
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
-            gripper_value = clamp_gripper(float(q[N_ARM]) if len(q) > N_ARM else 0.5)
+            # Take the jaws exactly where they are. Do NOT clamp here: clamping on
+            # entry is a command to move, and nobody asked for that.
+            gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
             teleop = CartesianTeleop()
             teleop.reset(q[:N_ARM])
             home_ee = teleop.ee_position().copy()
@@ -320,6 +336,20 @@ def main() -> int:  # noqa: PLR0915
                             f"(limit {TEMP_STOP}°C) — stopping before the firmware trips"
                         )
                         break
+                    # ---- gripper stall guard ------------------------------
+                    jaw = states[N_ARM]
+                    if (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
+                            and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
+                        if stall_since is None:
+                            stall_since = loop_start
+                        elif loop_start - stall_since > GRIPPER_STALL_SECONDS:
+                            measured_jaw = float(np.asarray(robot.get_joint_pos(), dtype=float)[N_ARM])
+                            print(f"\n⚠️  GRIPPER STALLED ({jaw.eff:+.2f} Nm, not moving) — releasing it to "
+                                  f"{measured_jaw:.3f} so it stops pushing.\n")
+                            gripper_value = measured_jaw
+                            stall_since = None
+                    else:
+                        stall_since = None
                 except Exception:  # noqa: BLE001
                     temps, hottest = [], 0.0
 
