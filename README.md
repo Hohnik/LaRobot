@@ -1,7 +1,10 @@
 # yam-robotics — SpaceMouse teleop for a YAM arm
 
-> **Status: session 2, Monday 2026-08-10 — in progress. Hardware is reconnected and re-verified.**
-> Arm **not yet commanded**. Nothing here has ever transmitted on the CAN bus.
+> **Status: session 2, Monday 2026-08-10 — in progress.**
+> ⭐ **Both arms are alive and under control.** Motor 6 (`gripper_twist`) has been driven on each arm
+> individually and on **both simultaneously**, from a single 100 Hz loop across two independent CAN buses.
+> The arms have **only ever been commanded on that one joint** — no multi-joint motion yet, by choice.
+> Full log: **§0**. Ordered plan with reasoning: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 >
 > ## ⭐ The two blockers from session 1 are gone
 >
@@ -15,6 +18,37 @@
 > **Verified live on 2026-08-10** (`ioreg`, `hid.enumerate()`, `GsUsb.scan()`): SpaceMouse Compact, CANable
 > 2.5 Candlelight, C920 and the AX88179A all enumerate; the SpaceMouse **opens**; the CAN adapter **opens in
 > listen-only mode at 1 Mbit/s**. Nothing was left in a broken state and no device configuration was changed.
+
+## 0. Session log
+
+**Session 2 — Monday 2026-08-10, 09:30-11:30 CEST (~2 h).** Both arms went from "we have never transmitted a
+CAN frame" to "both arms driven simultaneously from one control loop". Ordered as it happened; the commit for
+each carries the full reasoning.
+
+| time | what | why it mattered |
+|---|---|---|
+| 09:48 | **YAM protocol found** — I2RT's SDK, vendored | Session 1 called this "the single biggest blocker". It was named in `docs/Setup-Plan.md` §5 all along |
+| 09:48 | **macOS drives CAN** — `bustype="gs_usb"` over libusb | The SocketCAN assumption was one argument deep, not architectural |
+| 10:22 | **SpaceMouse verified, all 6 axes** | Open since Friday. Also fixed the HID seize that cost Julien control of his cursor |
+| 10:27 | **All 7 motors identified** — without energising any | `gear_ratio` register: DM43**40**→40.0, DM43**10**→10.0 |
+| 10:33 | **First motor energised** (gripper) — and stayed still | torque ≈ 0 confirmed that enabling adds no force |
+| 10:48 | ⭐ **100 Hz measured, 3× headroom** | Refuted session 1's "do not fight macOS for the control loop". Teleop need not wait for Linux |
+| 10:58 | ⛔ **Adapter selection by serial** | Arm 2 was plugged in and became index 0. Index selection would have moved the **wrong arm** |
+| 11:07 | ⭐ **First visible commanded motion** — ±86°, 3 cycles | The earlier 7.6° move was real but too small to see |
+| 11:16 | **Two arms proven distinct** — per-unit `inertia` fingerprint | Replaced a claim that its own evidence could not support |
+| 11:22 | ⭐ **Bimanual** — both arms, one 100 Hz loop, two CAN buses | Different amplitude, speed and direction per arm, verified by eye |
+| 11:30 | **`get_yam_robot(sim=True)` works on macOS** | Same API as hardware ⇒ the whole teleop stack can be built and debugged with zero risk |
+
+> ### ⚠️ The pattern worth carrying forward: **this stack fails by lying, not by crashing.**
+> Six separate defects today produced *confident, plausible, wrong answers* rather than errors:
+> transmit echoes decoded as motor replies (a flawless set of zeros from all seven motors) · `inertia` in a
+> model signature making every joint look unique · `FeedbackFrameInfo` vs `MotorInfo` silently yielding `?`
+> for every field · `error_code` annotated `int` but holding the string `'0x1'` · adapter-by-index quietly
+> retargeting the other robot · two arms "verified" by evidence that could not distinguish them from one arm
+> read twice. **None raised an exception.** Check values for plausibility, not merely for absence of errors,
+> and prefer a test that could falsify the claim over one that merely agrees with it.
+
+---
 
 **Goal (Julien, 2026-08-07):** *"at best, I'm able to control the robot arm with the space mouse."*
 This session's honest scope: find out what is actually connected, what the toolchain must be, get the
@@ -195,8 +229,18 @@ bitrate is documented at 1 Mbit/s and the protocol is I2RT's own (§6.1).
    energised from this repo. **It did not move**: `pos=-0.0040 rad, vel=-0.0220, torque=-0.0073, err=normal`,
    `T_mos=33 °C / T_rot=30 °C`. Torque ≈ 0 confirms that enabling without a setpoint adds no force.
 
-**Nothing has ever been given a torque, position or velocity setpoint. The arm has never been commanded to
-move.** That is the boundary that still stands.
+4. ⭐ **Motor 6 (`gripper_twist`) commanded, on both arms, together and separately.** ±86° ramped, and a
+   bimanual sine at different amplitudes, speeds and directions. Peak torque measured at 0.14 Nm against a
+   1.5 Nm abort limit. Both arms returned to their start positions and disabled cleanly every time.
+
+**The boundary as it stands now: only motor 6 has ever been commanded.** `gripper_twist` changes the
+gripper's orientation and never the arm's reach, so no commanded motion so far has been able to move any part
+of either arm through space. **Motors 1-5 and 7 have been enabled and read, never commanded.**
+
+⚠️ **The next boundary is the significant one: multi-joint motion.** Steps 3-4 of
+[ROADMAP.md](docs/ROADMAP.md) move the *whole arm* through space for the first time — a shoulder or elbow can
+reach things a gripper twist never could. That step needs a workspace check with Julien before it runs, not
+just a script review.
 
 ⭐ **The safety timeout is ON and at the factory default** — the `timeout` register reads **8000** on every
 motor, which is exactly what I2RT's `set_timeout.py` writes to *enable* it (it writes `0` to disable), and the
@@ -311,24 +355,25 @@ rig, drivers and logs stay here.
 listen-only probe green · **SpaceMouse verified on all six axes** · **arm identified over CAN** (§6.0) ·
 **gripper polled live, healthy, did not move** (§5).
 
-✅ Also done: **all 7 motors polled** (all `err=normal`, all within ±0.05 rad of zero, ~30 °C) ·
-**throughput measured — macOS clears 100 Hz with 3× headroom** (§2) · **first-motion script written**.
+# ⭐ The ordered plan, with the reasoning for each step, is **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
-1. ⭐ **`scripts/move_one_motor.py --yes` — the first commanded motion.** Motor 6, the wrist twist, +0.15 rad
-   (8.6°) ramped over 2.5 s. **Julien runs this, not the agent.** Five independent safety mechanisms, see the
-   script docstring.
-2. **Continuous state read at 100 Hz** — the harness the teleop loop is built on. Now known to be feasible.
-3. **IK in simulation** — `mink` + the YAM MJCF from `third_party/i2rt/i2rt/robot_models/arm/`, driven by the
-   real SpaceMouse, rendered on screen. **The whole teleop loop with no hardware risk.** Both pieces exist, so
-   nothing blocks it, and it is the biggest single step toward the actual goal.
-4. **Gravity compensation**, so the arm can be hand-guided. First time the arm genuinely holds torque against
-   gravity — its own gated step, and the one that most wants the 400 ms timeout intact.
-5. **Gripper calibration** — needed before any absolute gripper command (`gripper_limits: null`).
-6. **Webcam check** — trivial, and the plan needs it for data collection anyway.
-7. **Close the teleop loop onto the physical arm**: SpaceMouse twist → IK → joint targets → arm.
+Short form — the target is Julien's: *one arm, one SpaceMouse.*
 
-*Step 3 is the one to aim for: it makes the interesting half — twist → IK → joint targets — real and
-debuggable while the arm sits still.*
+1. **Teleop in simulation, end to end.** `get_yam_robot(sim=True)` exposes the *same API* as the hardware, so
+   the whole SpaceMouse → IK → joint-targets chain is built and debugged at zero risk, then moved to hardware
+   by changing one flag. First-attempt IK is always wrong; debugging it against a physical arm is how
+   equipment gets damaged. **Needs no hardware.**
+2. **Full-arm chain over gs_usb.** `DMChainCanInterface` hardcodes SocketCAN — the same wall as §2.1, one
+   layer up. Unlocks all 7 motors at once, gravity compensation, and the gripper force limiter.
+3. **Gravity compensation → hand-guiding.** Without it a 4.3 kg arm sags at gentle gains and every symptom
+   reads as "the IK is wrong". Also the safest whole-arm test there is: it holds a pose, follows no trajectory.
+4. ⭐ **SpaceMouse → the real arm.** With 1-3 done this is a flag plus a safety envelope, not new logic.
+5. **Recorder → MCAP** in ABC's exact schema — get it right and the whole data→training half works unmodified.
+6. **Second SpaceMouse → bimanual.** The hard half is already proven (`move_both_grippers.py`).
+7. **Cameras.** Needed for data collection, not for teleop; nothing else depends on it.
+
+*Why not joint-space jogging as a shortcut, and everything else deliberately excluded:
+[ROADMAP §Deliberately NOT doing](docs/ROADMAP.md).*
 
 > ### ⛔ Standing rule (Julien, 2026-08-10)
 > **The agent never runs a command that physically moves the robot.** Those are handed over for him to run.
@@ -392,11 +437,17 @@ is yours."
 ```
 yam-robotics/
 ├── README.md                  # this file: state, findings, next steps
-├── docs/Setup-Plan.md         # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
+├── docs/
+│   ├── Setup-Plan.md          # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
+│   └── ROADMAP.md             # ⭐ the ordered plan and WHY each step comes where it does
 ├── scripts/
 │   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only
 │   ├── probe_can.py           # listen-only CAN watch                          read-only
-│   └── ping_motors.py         # ⚠️ the only script that can transmit (--yes)
+│   ├── ping_motors.py         # ⚠️ enables motors (--yes); sends no setpoint
+│   ├── identify_arm.py        # reads registers; identifies the arm without energising it
+│   ├── bench_can.py           # CAN round-trip / control-rate measurement    read-only
+│   ├── move_one_motor.py      # ⚠️ MOVES one motor on one arm (--yes)
+│   └── move_both_grippers.py  # ⚠️ MOVES motor 6 on BOTH arms (--yes)
 ├── src/
 │   ├── spacemouse_live.py     # live 6-DoF readout                             read-only
 │   └── yam_can.py             # the macOS CAN layer (§2.1)
