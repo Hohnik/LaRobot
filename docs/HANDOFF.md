@@ -77,6 +77,25 @@ These are not preferences, they were arrived at by things going wrong.
 3. **Teardown order is not optional.** Stop the control thread → disable the motors → close the bus. Both
    vendor `close()` methods get this wrong, and one of them announces success it did not achieve.
 
+## 5.5 ⭐ THE TASK LIST FOR THE NEXT SESSION — start here
+
+Julien's own words, 2026-08-10 ~14:15, at the end of a working session. **Everything below is small; the
+system works.** He said: *"as soon as I will have the axes as I want them, it might already work quite well
+to be able to control one of the arms."*
+
+| # | task | why / detail |
+|---|---|---|
+| 1 | ⭐ **Dial in the SpaceMouse axis directions** | The one thing standing between here and comfortable one-arm teleop. Drive, and flip whatever feels backwards: `x` `y` `z` for translation, `1` `2` `3` for roll/pitch/yaw. Persists to `config/spacemouse_map.json`. Current state `[1, -1, -1, 1, 1, 1]` |
+| 2 | **Verify PARK now works** | It was cancelled instantly by any unrecognised key — including Enter. Fixed but **not yet tested on hardware.** `s` to save a pose, move away, `p` to return |
+| 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** Watch `hottest` for ~30 s in TELEOP: a **plateau** is the pass, a steady climb means quit and use `--no-gripper` |
+| 4 | **Axis *remapping*, if flipping is not enough** | Only sign flips exist. If Julien wants puck-Y to drive robot-X, that is a permutation and needs building |
+| 5 | **Simultaneous bimanual teleop** | Hard half proven (`move_both_grippers.py`). Needs one process, two robots, two `CartesianTeleop`s, two pucks assigned up front. ~6.2 ms/cycle against a 10 ms budget |
+| 6 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
+
+⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile and item 3 is
+verified numerically against two independent failures, but *"verified in principle"* is not *"verified"*.
+Treat the first run as a test, not a demonstration.
+
 ## 6. What to do next
 
 **Immediately:**

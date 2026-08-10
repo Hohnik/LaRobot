@@ -95,7 +95,7 @@ MAX_JOINT_STEP = 0.015     # rad/cycle ≈ 1.5 rad/s at 100 Hz
 JOINT_LIMIT_MARGIN = 0.08
 TEMP_WARN = 55.0
 TEMP_STOP = 65.0
-PARK_SPEED = 0.25          # rad/s per joint when driving to the park pose
+PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
 
 # ⛔ NEVER command the gripper to 0.0 or 1.0. Those are the mechanical stops, and
 # holding a position AT a stop is stall torque: full current, no motion, no
@@ -124,10 +124,11 @@ MAP_FILE = REPO / "config" / "spacemouse_map.json"
 PARK_FILE = REPO / "config" / "park_pose.json"
 
 HELP = """
-  g GUIDE (weightless)   t TELEOP (spacemouse)   h HOLD   p PARK   s save park
-  x/y/z flip axis        +/- linear speed        ?  help   q QUIT (asks first)
-  o/c  open / close the gripper      [ / ]  gripper step slower / faster
-  r    wrist rotation on/off         R / T    rotation speed faster / slower
+  MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
+  DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
+  SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
+  GRIPPER   o open   c close          r  wrist rotation on/off
+  OTHER     ?  this help              q  QUIT (asks before releasing the arm)
 """
 
 
@@ -216,6 +217,7 @@ def main() -> int:  # noqa: PLR0915
     park_target = None
     max_temp_seen = 0.0
     stall_since = None
+    next_park_report = 0.0
 
     try:
         print("building robot — enables all 7 motors, starts the control loop …")
@@ -367,6 +369,11 @@ def main() -> int:  # noqa: PLR0915
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
+                    # ⛔ Unrecognised keys are IGNORED. They used to fall through to a
+                    # catch-all that cancelled PARK, so pressing Enter out of habit
+                    # right after `p` killed the move in the same keyboard batch --
+                    # which looked exactly like "park just went to hold". A control
+                    # character must never be an action.
                     if k == "q":
                         stop_reason = "quit requested"
                     elif k == "g" and mode != "guide":
@@ -387,7 +394,8 @@ def main() -> int:  # noqa: PLR0915
                             mode = "park"
                             park_target = np.asarray(park, dtype=float)
                             enter_hold()
-                            print("\n⭐ MODE: PARK — driving slowly to the saved pose. Any key stops.\n")
+                            print(f"\n⭐ MODE: PARK — driving to {np.round(park_target[:N_ARM], 2)} "
+                                  f"at {PARK_SPEED} rad/s. Press h or t to stop.\n")
                     elif k == "o" and mode == "teleop":
                         gripper_value = clamp_gripper(gripper_value + gripper_step)
                     elif k == "c" and mode == "teleop":
@@ -401,26 +409,35 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "r":
                         rotation = not rotation
                         print(f"\n  wrist rotation {'ON' if rotation else 'OFF'}\n")
-                    elif k == "R":
+                    elif k == ".":
                         angular_scale *= 1.25
                         print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
-                    elif k == "T":
+                    elif k == ",":
                         angular_scale /= 1.25
                         print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
                     elif k in "xyz":
+                        # Translation axes: puck x/y/z -> end-effector x/y/z
                         idx = "xyz".index(k)
                         sign[idx] *= -1
-                        print(f"\n  axis {k} flipped → signs {sign.astype(int).tolist()}\n")
-                    elif k == "+":
+                        print(f"\n  TRANSLATION {k} flipped → signs {sign.astype(int).tolist()}\n")
+                    elif k in "123":
+                        # Rotation axes: 1 roll, 2 pitch, 3 yaw. Digits because every
+                        # sensible letter was taken, and because they read as an
+                        # ordered triple the way x/y/z do.
+                        idx = 3 + "123".index(k)
+                        sign[idx] *= -1
+                        names = ("roll", "pitch", "yaw")
+                        print(f"\n  ROTATION {names[idx - 3]} flipped → signs {sign.astype(int).tolist()}\n")
+                    elif k == "+" or k == "=":
                         args.linear_scale *= 1.25
-                        print(f"\n  speed → {args.linear_scale:.3f} m/s\n")
+                        print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
                     elif k == "-":
                         args.linear_scale /= 1.25
-                        print(f"\n  speed → {args.linear_scale:.3f} m/s\n")
+                        print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
                     elif k == "?":
                         print(HELP)
-                    elif mode == "park":
-                        mode = "hold"; enter_hold(); print("\n⭐ PARK cancelled → HOLD\n")
+                    elif k.isprintable() and k.strip():
+                        print(f"\n  (key {k!r} does nothing — press ? for the list)\n")
                 if stop_reason:
                     break
 
@@ -464,6 +481,9 @@ def main() -> int:  # noqa: PLR0915
                     if np.max(np.abs(delta)) < 0.01:
                         mode = "hold"; enter_hold()
                         print("\n⭐ PARK reached → HOLD\n")
+                    elif t >= next_park_report:
+                        next_park_report = t + 1.0
+                        print(f"\r  parking… {np.max(np.abs(delta)):.3f} rad to go   ", end="", flush=True)
                     else:
                         robot.command_joint_pos(q + np.clip(delta, -stepmax, stepmax))
 

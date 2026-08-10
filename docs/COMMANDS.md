@@ -33,13 +33,17 @@ uv run scripts/read_arm_state.py --yes --arm arm1
 | `o` / `c` | open / close the gripper |
 | `[` / `]` | gripper step slower / faster |
 | `r` | wrist rotation on / off *(on by default)* |
-| `R` / `T` | rotation speed faster / slower |
-| `x` `y` `z` | flip that axis when a direction feels backwards — **saved to `config/spacemouse_map.json`** |
-| `+` / `-` | linear speed faster / slower |
+| `,` / `.` | rotation speed slower / faster |
+| **`x` `y` `z`** | flip a **translation** axis — **saved to `config/spacemouse_map.json`** |
+| **`1` `2` `3`** | flip a **rotation** axis (roll / pitch / yaw) — same file |
+| `-` / `+` | linear speed slower / faster |
 | `?` | reprint the key list |
 | `q` | **QUIT** — goes to HOLD and *asks*. Then `g` to go weightless and park by hand, `d` to disable |
 
-Useful flags: `--start-mode hold|guide|teleop` · `--no-rotation` · `--linear-scale 0.2` · `--box 0.4`
+Useful flags: `--start-mode hold|guide|teleop` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--box 0.4`
+
+⚠️ **No shift keys anywhere, and unrecognised keys do nothing.** Both were bugs: rotation speed used `R`/`T`,
+and any unknown key — *including Enter* — used to cancel PARK.
 
 ⚠️ With two SpaceMice attached it asks you to **move the puck you want to assign to this arm**. They both
 report an empty serial number, so there is nothing else to key an assignment off.
