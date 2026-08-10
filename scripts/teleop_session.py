@@ -162,9 +162,9 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
     ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
     ap.add_argument("--start-mode", default="guide", choices=["guide", "hold", "teleop"])
-    ap.add_argument("--gripper", action="store_true",
-                    help="⚠️ ALSO control the gripper. OFF by default — it cooked motor 7 three times "
-                         "on 2026-08-10; see docs/FINDINGS.md before enabling.")
+    ap.add_argument("--no-gripper", action="store_true",
+                    help="run the 6 arm joints only and leave motor 7 free — the escape hatch if the "
+                         "gripper misbehaves again")
     ap.add_argument("--no-rotation", action="store_true",
                     help="start with wrist rotation disabled (toggle live with r)")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
@@ -184,7 +184,7 @@ def main() -> int:  # noqa: PLR0915
 
     print("=== plan ===")
     print(f"  ARM         : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
-    print(f"  gripper     : {'CONTROLLED ⚠️  (see docs/FINDINGS.md)' if args.gripper else 'NOT controlled — motor 7 left free (default)'}")
+    print(f"  gripper     : {'NOT controlled — motor 7 left free' if args.no_gripper else 'controlled (o/c), frame-checked at startup'}")
     print(f"  start mode  : {args.start_mode}")
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
@@ -220,7 +220,7 @@ def main() -> int:  # noqa: PLR0915
     try:
         print("building robot — enables all 7 motors, starts the control loop …")
         robot, note = build_robot(args.arm, zero_gravity=(mode == "guide"),
-                                  with_gripper=args.gripper)
+                                  with_gripper=not args.no_gripper)
         print(f"  {note}\n")
         chain = robot.motor_chain
         prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]

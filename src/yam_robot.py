@@ -75,6 +75,62 @@ def load_gripper_limits(arm: str) -> list[float] | None:
 TWO_PI = 6.283185307179586
 
 
+def frame_correct_gripper_limits(saved: list[float], raw_pos: float, margin: float = 0.3) -> list[float] | None:
+    """Express saved jaw limits in the frame `get_yam_robot()` will actually use.
+
+    ⭐ THIS IS THE REAL FIX. An earlier version compared the saved limits against
+    the RAW motor position and, finding them consistent, passed them through
+    unchanged — which was wrong, because the robot does not use the raw position.
+
+    Two shifts are involved and they are easy to conflate:
+
+    **(a) The calibration frame.** `calibrate_gripper.py` records limits through a
+    bare `DMChainCanInterface`, which applies no wrap correction. If the jaws were
+    somewhere different when it ran, the recorded numbers can be a whole 2π out.
+
+    **(b) The runtime frame.** `get_yam_robot()` adds ±2π to `motor_offset` at
+    every construction, chosen from the motor's momentary position
+    (`get_robot.py:268-274`), and every reported position is then `raw − offset`.
+    **The limits are NOT given the same treatment**, so unless we apply it here,
+    positions and limits live in frames 2π apart.
+
+    Worked example, measured 2026-08-10:
+
+        jaws raw                6.3235
+        6.3235 > π  ⇒ runtime reports  6.3235 − 2π = 0.0403
+        saved limits            [6.481, 1.231]        (un-shifted)
+        normalised = (0.0403 − 6.481) / (1.231 − 6.481) = 1.227   ← outside [0,1]
+
+    A normalised position outside [0,1] is clipped back to the nearest limit by
+    `motor_chain_robot.py:390`, which commands the motor into a stop it is already
+    past. That is what cooked motor 7 three times.
+
+    With the runtime shift applied the limits become [0.198, −5.052] and the same
+    position normalises to **0.030** — comfortably inside. As a cross-check, that
+    range is what the very first calibration of the day measured independently:
+    [0.0704, −5.0528].
+
+    Returns None only if no ±2π placement brackets the jaws at all, which means
+    the jaws really are outside their measured travel and a re-calibration is due.
+    """
+    import math
+
+    lo, hi = min(saved), max(saved)
+
+    # (a) put the recorded range in the same wrap frame as the raw reading
+    base = None
+    for k in (0.0, TWO_PI, -TWO_PI):
+        if lo + k - margin <= raw_pos <= hi + k + margin:
+            base = [v + k for v in saved]
+            break
+    if base is None:
+        return None
+
+    # (b) apply the wrap correction the runtime is about to apply to the position
+    shift = -TWO_PI if raw_pos > math.pi else (TWO_PI if raw_pos < -math.pi else 0.0)
+    return [v + shift for v in base]
+
+
 def reconcile_gripper_limits(saved: list[float], raw_pos: float, margin: float = 0.3) -> list[float] | None:
     """Shift saved jaw limits into the frame the jaws are actually in, or give up.
 
@@ -137,7 +193,7 @@ def build_robot(
     *,
     zero_gravity: bool = False,
     allow_calibration: bool = False,
-    with_gripper: bool = False,
+    with_gripper: bool = True,
 ) -> tuple[Any, str]:
     """Construct the real robot. Returns `(robot, note)`.
 
@@ -208,7 +264,7 @@ def build_robot(
         # them. See reconcile_gripper_limits() for why this is not optional.
         raw = read_raw_gripper_position(arm)
         if raw is not None:
-            fixed = reconcile_gripper_limits(saved, raw)
+            fixed = frame_correct_gripper_limits(saved, raw)
             if fixed is None:
                 raise RuntimeError(
                     f"⛔ STALE GRIPPER LIMITS — refusing to start.\n"
@@ -237,6 +293,39 @@ def build_robot(
             "  It calibrates gently, saves the result, and every later start is silent."
         )
     robot = get_yam_robot(**kwargs)
+
+    # ⛔ VERIFY, do not trust. frame_correct_gripper_limits() predicts the wrap the
+    # runtime will apply; this checks the prediction against what the runtime
+    # actually reports, BEFORE any control loop starts. A normalised gripper
+    # position outside [0,1] gets clipped onto a limit by motor_chain_robot.py:390
+    # and the motor then pushes into a stop indefinitely — the failure that cooked
+    # motor 7 three times. Better to refuse to start than to discover it thermally.
+    try:
+        norm = float(robot.get_joint_pos()[6])
+        if not (-0.02 <= norm <= 1.02):
+            for mid in (1, 2, 3, 4, 5, 6, 7):
+                try:
+                    robot.motor_chain.motor_interface.motor_off(mid)
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            try:
+                robot.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            raise RuntimeError(
+                f"⛔ GRIPPER FRAME CHECK FAILED — shut down before the control loop ran.\n"
+                f"   The runtime reports a normalised jaw position of {norm:.3f}; it must be within [0,1].\n"
+                f"   Anything outside is clipped onto a mechanical stop and held there, which is what\n"
+                f"   cooked motor 7 on 2026-08-10. Limits passed were {[round(v, 3) for v in saved]}.\n"
+                f"   Re-measure:  uv run scripts/calibrate_gripper.py --yes --arm {arm}\n"
+                f"   Or run without it:  add --no-gripper to the session."
+            )
+        note += f"; jaws normalise to {norm:.3f} ✓"
+    except RuntimeError:
+        raise
+    except Exception:  # noqa: BLE001, S110
+        pass
+
     # ⭐ Everything above this line is I2RT's; everything that touches the robot
     # from here on goes through the rate limiter. See SafeRobot for why.
     return SafeRobot(robot), note

@@ -173,7 +173,61 @@ the loop once cameras and inference compete for CPU — but the specific claim i
 
 ---
 
-## 3.5 ⛔⭐ THE GRIPPER IS NOT UNDER CONTROL, AND THAT IS DELIBERATE — read this first
+## 3.5 ⭐ The gripper: two 2π frame errors, not a broken mechanism
+
+**Motor 7 was cooked three times on 2026-08-10 and the first three explanations were all wrong.** The real
+cause is a coordinate-frame mismatch, and Julien is the one who pushed back on giving up — correctly.
+
+**Two separate 2π shifts are involved, and conflating them is what cost three attempts:**
+
+| | shift | source |
+|---|---|---|
+| **(a) calibration frame** | ±2π | `calibrate_gripper.py` records limits through a bare `DMChainCanInterface`, which applies **no** wrap correction |
+| **(b) runtime frame** | ±2π | `get_yam_robot()` adds ±2π to `motor_offset` at **every** construction, from the motor's momentary position (`get_robot.py:268-274`), and reports `raw − offset`. **The limits get no such treatment.** |
+
+Fixing only (a) — which is what a first attempt did — leaves (b) intact, and the failure looks identical.
+
+**The worked example, measured:**
+
+```
+jaws raw                       6.3235
+6.3235 > π  ⇒ runtime reports  6.3235 − 2π = 0.0403
+saved limits                   [6.481, 1.231]     (un-shifted)
+normalised = (0.0403 − 6.481) / (1.231 − 6.481) = 1.227     ← outside [0,1]
+```
+
+A normalised position outside `[0,1]` is clipped onto the nearest limit by `motor_chain_robot.py:390`, so the
+motor is commanded into **a stop it is already past** and pushes at 7.71 Nm indefinitely. Self-reinforcing:
+7.7 Nm shoves the jaws further beyond what a 0.3 Nm calibration called the limit.
+
+**`frame_correct_gripper_limits()` applies both shifts.** Verified on the two independent failures:
+
+```
+raw +6.3235  →  limits [0.1979, −5.0524]  normalised 0.0300  ✓
+raw −1.3800  →  limits [0.1979, −5.0524]  normalised 0.3005  ✓
+first calibration of the day, independently:  [0.0704, −5.0528]
+```
+
+Two different positions hours apart converging on one range, matching an independent measurement.
+
+⛔ **And it is verified rather than trusted:** `build_robot` reads the normalised jaw position back from the
+runtime after construction and **shuts everything down before the control loop starts** if it is outside
+`[0,1]`. A prediction about a frame is exactly the kind of thing that should not be believed on argument.
+
+**Escape hatch:** `--no-gripper` runs the six arm joints only and leaves motor 7 free.
+
+### Lessons that generalise beyond the gripper
+
+- **Two bugs with identical symptoms hide each other.** Fixing one and seeing no improvement is weak evidence
+  that you fixed nothing — it may be evidence that there are two.
+- ⛔ **A guard that cannot express a safe command is not a guard.** The stall guard "released" the command to
+  the measured value — which clipped straight back onto the stop. It fired every cycle and changed nothing.
+- **Cached raw motor positions are frame-dependent.** Anywhere a position is stored and re-used across
+  process boundaries, ask which wrap correction was in force at each end.
+
+---
+
+## 3.6 (historical) The interim decision to disable the gripper
 
 **Motor 7 was cooked three separate times on 2026-08-10.** Three different fixes were attempted and the first
 two addressed the wrong layer. This is the true mechanism, and it is the single most important open item.
