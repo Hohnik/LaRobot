@@ -196,6 +196,44 @@ def reconcile_gripper_limits(saved: list[float], raw_pos: float, margin: float =
     return None
 
 
+def advance_park_command(command: Any, target: Any, step: float) -> Any:
+    """One cycle of a park trajectory: move the COMMAND toward the target.
+
+    ⛔⭐ THE BUG THIS FIXES, and it matters because it is completely invisible.
+
+    PARK used to command `measured + clip(target - measured, ±step)` — it
+    re-anchored to where the arm actually was, every single cycle. The commanded
+    position was therefore never more than **one step** ahead of reality:
+    `0.4 rad/s × 0.01 s = 0.004 rad`, about **0.23°**.
+
+    A position controller makes torque from the *error* between command and
+    measurement. Capping that error at 0.23° caps the torque at `kp × 0.004`, which
+    does not overcome static friction plus 4.3 kg of arm. So the arm does not move;
+    because it does not move the measurement does not change; and because the
+    measurement does not change the next cycle commands the same 0.23° offset.
+    **A treadmill.** It printed "parking… 1.2 rad to go" indefinitely while the
+    number barely moved, raised nothing, and read as a controller that was merely
+    slow. Julien reported PARK broken twice before this was found.
+
+    TELEOP never had the bug, and that contrast is the proof: it integrates from
+    `prev_q`, the **previously commanded** target, never from the measurement. When
+    the arm lags, its command keeps advancing, the error grows, and the torque grows
+    with it until the joint moves.
+
+    This does the same. The command runs ahead of the arm as far as it needs to, and
+    `SafeRobot.max_lag` (0.25 rad) is what stops it running away — exactly the right
+    place for that guard, and already there.
+
+    ⚠️ Completion must therefore be judged from the **measured** position, not from
+    this command. The command arrives first, always.
+    """
+    import numpy as np
+
+    command = np.asarray(command, dtype=float)
+    target = np.asarray(target, dtype=float)
+    return command + np.clip(target - command, -step, step)
+
+
 def park_target_from(
     measured: Any,
     saved: Any,
@@ -380,10 +418,18 @@ def build_robot(
     elif allow_calibration:
         note = "⚠️ NO saved jaw limits — the jaws WILL be driven into both stops to find them"
     else:
+        # ⛔ THE ARM NAME MUST BE IN THE COMMAND. This message used to read
+        # "uv run scripts/calibrate_gripper.py --yes" with no --arm, so following it
+        # literally would re-calibrate arm1 — driving the WRONG arm's jaws into both
+        # mechanical stops — while the arm you were actually trying to start stayed
+        # uncalibrated and the same refusal came back. Julien hit exactly this on
+        # arm2's first run. A remediation message that names the wrong target is
+        # worse than no message: it converts a clean refusal into a wrong action.
         raise RuntimeError(
             f"No saved gripper limits for {arm!r} and calibration is not allowed.\n"
-            "  Run this once:  uv run scripts/calibrate_gripper.py --yes\n"
-            "  It calibrates gently, saves the result, and every later start is silent."
+            f"  Run this once:  uv run scripts/calibrate_gripper.py --yes --arm {arm}\n"
+            f"  It calibrates gently, saves the result, and every later start is silent.\n"
+            f"  Or start without the gripper:  --no-gripper"
         )
     robot = get_yam_robot(**kwargs)
 

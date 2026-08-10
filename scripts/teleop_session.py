@@ -11,16 +11,21 @@
     t     TELEOP  — the SpaceMouse drives the end effector.
     h     HOLD    — the arm holds its current pose. The safe idle.
     p     PARK    — slowly drive back to the saved park pose.
-    m     MAP     — choose WHICH puck axis drives WHICH motion. The arm holds still.
+    m     CONTROLS — set up the mouse. The arm MOVES, one isolated axis, half speed.
     s     save the current pose as the park pose.
     x/y/z flip that motion of the SpaceMouse mapping (saved on exit).
     +/-   faster / slower.
     ?     print this again.
     q     QUIT — goes to HOLD first and asks; it never just releases the arm.
 
-⭐ For the FIRST dial-in of the axis map, prefer `scripts/map_axes.py` — it needs no
-hardware at all, so the mapping can be decided and verified with the arms unplugged.
-MAP mode here is for touch-ups once you are already driving.
+⛔ CONTROLS mode is where the axis map gets set up, ON THE ARM, and that is not a
+convenience. An earlier version held the arm still and this docstring recommended
+`scripts/map_axes.py` for the "first dial-in… with the arms unplugged". Julien
+showed that was wrong: **you cannot decide a direction is wrong until you have
+watched the arm go that way.** The map is not a property of the input device — it
+is a property of the device *and* how the arm is turned on the desk, and only one
+of those is in a file. `map_axes.py` remains useful for sign tweaks away from the
+bench; it cannot tell you what a direction *is*.
 
 WHY IT IS ONE SESSION AND NOT A SEQUENCE OF SCRIPTS
 ---------------------------------------------------
@@ -97,7 +102,12 @@ from spacemouse import (  # noqa: E402
 )
 from teleop import CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
-from yam_robot import build_robot, park_target_from, shutdown_robot  # noqa: E402
+from yam_robot import (  # noqa: E402
+    advance_park_command,
+    build_robot,
+    park_target_from,
+    shutdown_robot,
+)
 
 CONTROL_HZ = 100.0
 N_ARM = 6
@@ -116,6 +126,14 @@ JOINT_LIMIT_MARGIN = 0.08
 TEMP_WARN = 55.0
 TEMP_STOP = 65.0
 PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
+# Judged on the MEASURED pose, so it must allow for a position controller's
+# steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
+PARK_TOLERANCE = 0.02
+# If the measured error stops improving for this long, PARK says so and holds,
+# rather than printing a number that is not changing. That silence is precisely how
+# the treadmill bug survived two sessions.
+PARK_STALL_SECONDS = 4.0
+PARK_PROGRESS_EPS = 0.003  # rad of improvement that counts as "still making progress"
 
 # CONTROLS mode drives the arm at this fraction of the teleop speed. It is the mode
 # you experiment in, with a mapping you have not yet confirmed, so a wrong direction
@@ -136,6 +154,11 @@ CONTROLS_SCALE = 0.5
 GRIPPER_MIN = 0.02
 GRIPPER_MAX = 0.98
 GRIPPER_STEP = 0.02        # per keypress
+# Hold-to-move rate for the puck buttons. A gripper wants squeeze-and-hold, not a
+# staircase of keypresses. 0.6/s crosses the whole normalised stroke in ~1.6 s,
+# which is deliberate and slow: the jaws close on real objects, and the stall guard
+# should be a backstop rather than the thing that routinely stops you.
+GRIPPER_BUTTON_RATE = 0.6  # normalised units per second while a button is held
 
 # Gripper stall guard. Catches the CAUSE (jaws pushing against something they
 # cannot move) rather than the symptom (temperature). Torque high while velocity
@@ -167,6 +190,8 @@ MAP_HELP = """
                           (1=X 2=Y 3=UP 4=ROLL 5=PITCH 6=YAW). Both move, so nothing
                           is left unbound — and the same key again swaps back
   UNBIND    u   the control you just used drives nothing
+  BUTTONS   b   assign the two puck buttons to gripper OPEN / CLOSE (press them)
+                then f swaps them, same as it reverses an axis. Hold to move
   SPEED     - / +  linear          , / .  rotation          r  rotation on/off
   UNDO      0   revert the whole map to how it was when this session started
   LEAVE     t TELEOP   g GUIDE   h HOLD   m HOLD        ?  this help
@@ -253,6 +278,11 @@ def main() -> int:  # noqa: PLR0915
     # remembered after the puck has sprung back to centre and his hand has left it.
     last_active_axis: int | None = None
     last_active_value = 0.0
+    # "The control you just used" can be an axis OR a puck button, and `f` reverses
+    # whichever it was. One key, one meaning.
+    last_input_kind: str | None = None      # None | "axis" | "button"
+    learn_button: str | None = None         # None | "open" | "close"
+    buttons_prev = 0
 
     print("=== plan ===")
     print(f"  ARM         : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
@@ -302,6 +332,9 @@ def main() -> int:  # noqa: PLR0915
     jaw_temp = None
     stall_since = None
     next_park_report = 0.0
+    park_cmd: np.ndarray | None = None      # the park TRAJECTORY, not the measurement
+    park_best_err = float("inf")
+    park_progress_t = 0.0
     guide_ref: np.ndarray | None = None
 
     try:
@@ -511,6 +544,17 @@ def main() -> int:  # noqa: PLR0915
                             else:
                                 mode = "hold"; enter_hold()
                                 print("\n⭐ MODE: HOLD\n")
+                        elif k == "b":
+                            learn_button = "open"
+                            print("\n⭐ LEARNING THE GRIPPER BUTTONS.")
+                            print("   Press the puck button you want for OPEN …")
+                            print("   (the masks are learned by pressing, never assumed — which")
+                            print("    physical button sets which bit has never been measured)\n")
+                        elif k == "f" and last_input_kind == "button":
+                            # ⭐ Same key, same meaning: reverse the control just used.
+                            axis_map.swap_buttons()
+                            print("\n  ↔ SWAPPED the gripper buttons")
+                            print(axis_map.buttons_row() + "\n")
                         elif k == "f":
                             if active is None:
                                 print("\n  push the puck first — f reverses the control you just used.\n")
@@ -659,6 +703,12 @@ def main() -> int:  # noqa: PLR0915
                                 print(f"\n  ⚠️  {warn}.")
                             mode = "park"
                             enter_hold()
+                            # Seed the trajectory at the arm's real pose, then let it run
+                            # ahead. enter_hold() has just resynced SafeRobot, so the
+                            # rate limiter starts anchored here too.
+                            park_cmd = np.asarray(robot.get_joint_pos(), dtype=float)
+                            park_best_err = float(np.max(np.abs(park_target - park_cmd)))
+                            park_progress_t = t
                             print(f"\n⭐ MODE: PARK — driving to {np.round(park_target[:N_ARM], 2)} "
                                   f"at {PARK_SPEED} rad/s. Press h or t to stop.\n")
                     elif k == "o" and mode == "teleop":
@@ -716,6 +766,43 @@ def main() -> int:  # noqa: PLR0915
                 if mode in ("teleop", "map") and teleop is not None:
                     raw_axes = reader.read()
 
+                    # ---- puck buttons ------------------------------------
+                    # ⚠️ reader.read() must be called first: it is what drains the
+                    # HID reports, and the button state arrives on report 0x03
+                    # inside that same drain.
+                    buttons = getattr(reader, "buttons", 0)
+                    pressed = buttons & ~buttons_prev          # rising edge only
+                    buttons_prev = buttons
+
+                    if learn_button is not None and pressed:
+                        warn = axis_map.learn_button(learn_button, pressed)
+                        if warn:
+                            print(f"\n  ⚠️  {warn}\n")
+                        elif learn_button == "open":
+                            learn_button = "close"
+                            print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
+                            print("   Now press the button you want for CLOSE …\n")
+                        else:
+                            learn_button = None
+                            print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
+                            print(axis_map.buttons_row())
+                            print("   (f swaps them if they are the wrong way round)\n")
+                    elif pressed:
+                        # A button press counts as "the control you just used", so f
+                        # reverses it — but ONLY the keys edit the map, exactly as
+                        # for the axes. Pressing a button never rebinds anything.
+                        last_input_kind = "button"
+                        if axis_map.button_action(pressed) is None:
+                            print(f"\n  button 0x{pressed:02x} is not assigned — press b to "
+                                  f"set the gripper buttons\n")
+
+                    if learn_button is None and robot.num_dofs() > N_ARM:
+                        action = axis_map.button_action(buttons)
+                        if action == "open":
+                            gripper_value = clamp_gripper(gripper_value + GRIPPER_BUTTON_RATE * dt)
+                        elif action == "close":
+                            gripper_value = clamp_gripper(gripper_value - GRIPPER_BUTTON_RATE * dt)
+
                     if mode == "map":
                         # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
                         # direction is applied, so the arm performs exactly one motion and
@@ -728,6 +815,7 @@ def main() -> int:  # noqa: PLR0915
                         keep, value = isolate(raw_axes, last_active_axis)
                         if keep is not None:
                             last_active_axis, last_active_value = keep, value
+                            last_input_kind = "axis"
                         drive_axes = isolated_axes(raw_axes, keep)
                         scale_l = args.linear_scale * CONTROLS_SCALE
                         scale_a = angular_scale * CONTROLS_SCALE
@@ -766,23 +854,37 @@ def main() -> int:  # noqa: PLR0915
                     robot.command_joint_pos(full)
                     prev_q = q_target.copy()
 
-                elif mode == "park" and park_target is not None:
+                elif mode == "park" and park_target is not None and park_cmd is not None:
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
-                    delta = park_target - q
-                    stepmax = PARK_SPEED * dt
-                    if np.max(np.abs(delta)) < 0.01:
+                    # ⭐ Completion is judged from the MEASURED pose, never from the
+                    # command — the command always arrives first, so testing it would
+                    # declare success while the arm was still travelling.
+                    err = float(np.max(np.abs(park_target - q)))
+                    if err < PARK_TOLERANCE:
                         mode = "hold"; enter_hold()
-                        print("\n⭐ PARK reached → HOLD\n")
+                        print(f"\n⭐ PARK reached ({err:.3f} rad off) → HOLD\n")
+                    elif t - park_progress_t > PARK_STALL_SECONDS:
+                        # ⛔ Never spin silently. If the arm has stopped closing the gap
+                        # the honest thing is to say so and hold, not to keep printing a
+                        # number that is not changing — which is exactly how the old
+                        # treadmill bug hid for two sessions.
+                        mode = "hold"; enter_hold()
+                        print(f"\n⛔ PARK STALLED — {err:.3f} rad still to go and no progress "
+                              f"for {PARK_STALL_SECONDS:.0f}s.")
+                        print(f"   The command ran {float(np.max(np.abs(park_cmd - q))):.3f} rad ahead of "
+                              f"the arm; SafeRobot limited {getattr(robot, 'limited_cycles', 0)} cycles.")
+                        print("   Something is blocking it, or the pose is unreachable. Now HOLDING.\n")
                     else:
-                        # ⚠️ The progress report used to be an `elif` on this branch, so
-                        # one cycle in every hundred sent no command at all. Benign — the
-                        # chain's own 250 Hz thread keeps holding the last target — but
-                        # it is not what the code claims to do, and PARK is the one mode
-                        # a human watches rather than steers. Command first, then report.
-                        robot.command_joint_pos(q + np.clip(delta, -stepmax, stepmax))
+                        # ⛔ Advance the COMMAND, not the measurement. See
+                        # yam_robot.advance_park_command() for why this is the whole bug.
+                        park_cmd = advance_park_command(park_cmd, park_target, PARK_SPEED * dt)
+                        robot.command_joint_pos(park_cmd)
+                        if err < park_best_err - PARK_PROGRESS_EPS:
+                            park_best_err, park_progress_t = err, t
                         if t >= next_park_report:
                             next_park_report = t + 1.0
-                            print(f"\r  parking… {np.max(np.abs(delta)):.3f} rad to go   ",
+                            lead = float(np.max(np.abs(park_cmd - q)))
+                            print(f"\r  parking… {err:.3f} rad to go, command {lead:.3f} ahead   ",
                                   end="", flush=True)
 
                 # ---- 5. report --------------------------------------------

@@ -666,3 +666,90 @@ pinned fixture string, and a separate test checks that the live config loads, is
 
 ⭐ **Generalises: a test whose subject is a file the user edits has a moving target.** Pin the fixture; test
 the live artefact only for properties that must hold *whatever* it contains.
+
+---
+
+## 15. ⛔⭐ PARK was a treadmill — it commanded the measurement
+
+**Julien reported PARK broken twice**, after it had been "fixed" once. The first round of fixes was real (a
+7-vs-6 length crash, a bypassed gripper clamp, a skipped command cycle) but **none of them was why it did
+not move**. This is.
+
+```python
+robot.command_joint_pos(q + np.clip(park_target - q, -stepmax, stepmax))   # q = MEASURED
+```
+
+It re-anchored to where the arm actually was, **every cycle**. So the commanded position was never more than
+one step ahead of reality: `PARK_SPEED × dt = 0.40 × 0.01 =` **0.004 rad, about 0.23°.**
+
+A position controller makes torque from the *error* between command and measurement. Capping that error at
+0.23° caps the torque at `kp × 0.004` — not enough to overcome static friction plus 4.3 kg of arm. So the arm
+does not move; because it does not move the measurement does not change; and because the measurement does not
+change, the next cycle commands the same 0.23° offset. **A treadmill.**
+
+⛔ **And it fails in this stack's signature style: it printed `parking… 1.2 rad to go` indefinitely, raised
+nothing, and read as a controller that was merely slow.**
+
+**TELEOP never had the bug, and that contrast is the proof:**
+
+```python
+step = q_target - prev_q                                   # prev_q = last COMMAND
+q_target = prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
+```
+
+It integrates from the **command**, never from the measurement, so when the arm lags its command keeps
+advancing, the error grows, and the torque grows with it until the joint moves. PARK was the odd one out.
+
+**Fix:** `advance_park_command()` — a trajectory that runs ahead of the arm as far as it needs to.
+`SafeRobot.max_lag` (0.25 rad) is what stops it running away, which is exactly the right place for that guard
+and was already there. Completion is judged on the **measured** pose, never the command, because the command
+always arrives first. A **stall detector** now says so and holds if the measured error stops improving for
+4 s — the silence is precisely how this survived two sessions.
+
+`scripts/test_park_target.py` includes `test_the_old_formula_provably_could_not_converge`, which reproduces
+the old expression and asserts that after 20 simulated seconds the command is still 0.004 rad from a stuck
+arm. **The diagnosis is mechanical, not a story.**
+
+> ⭐ **The generalisation, and it is the deepest one this project has produced so far:**
+> **a controller must command a trajectory, not the thing it is measuring.** Feeding the measurement back
+> into the command caps the error, and the error *is* the actuation. Anywhere you see
+> `command = measured + something_small`, ask what makes it converge — often nothing does.
+
+---
+
+## 16. A refusal that named the wrong arm
+
+arm2's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json`
+holds `arm1` only — and then printed:
+
+```
+Run this once:  uv run scripts/calibrate_gripper.py --yes
+```
+
+**No `--arm arm2`.** Following that literally drives **arm1's** jaws into both mechanical stops, while the arm
+you were trying to start stays uncalibrated and the same refusal comes back. The other two refusals in
+`yam_robot.py` both interpolate `--arm {arm}`; this one did not.
+
+⛔ **A remediation message that names the wrong target is worse than no message: it converts a clean refusal
+into a wrong action.** Now fixed, and it also offers `--no-gripper` as the alternative.
+
+---
+
+## 17. The puck buttons drive the gripper
+
+Julien: *"there are two buttons on the left and the right. One could be open, one could be closed… and then
+pressing whatever the switch button was, I think f, could then switch it back."*
+
+⛔ **The masks are learned by pressing, never assumed.** Which physical button sets which HID bit has never
+been measured on this unit, and "assumed an identity that was never checked" is the single most repeated
+failure in this file — the CAN adapter by index, the puck by index, the gripper limits in the wrong frame.
+`b` in CONTROLS mode asks for OPEN, then CLOSE, and refuses to give one button both jobs (a button that both
+opens and closes is a coin flip, not a control).
+
+⭐ **`f` reverses the buttons, because `f` already means "reverse the control I just used".** If that was an
+axis it flips the sign; if it was a button it swaps open and close. One rule, no new vocabulary — Julien
+reached for `f` unprompted, which is the sign the rule is the right one. Like `swap()`, it is an involution.
+
+Buttons are **hold-to-move** at 0.6 normalised units/s (~1.6 s for the full stroke), not step-per-press: a
+gripper wants squeeze-and-hold. `o`/`c` remain as keyboard steps. The assignment lives in the axis map, so it
+is **per-arm** for free, and an unset button writes no key at all rather than a `null`.

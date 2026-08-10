@@ -17,8 +17,13 @@ uv run scripts/map_axes.py
 # 2. Everyday driving: guide by hand, teleop with the SpaceMouse, park. All in one session.
 uv run scripts/teleop_session.py --yes --arm arm1
 
-# 3. After ANY power cycle: the jaw limits shift and must be re-measured. ~10 s, jaws only.
+# 3. After ANY power cycle, AND once per arm before its very first run. ~10 s, jaws only.
+#    ⛔ --arm is NOT optional here: without it this calibrates arm1 whatever you meant,
+#    driving the wrong arm's jaws into both stops. arm2 needs its own run — as of
+#    2026-08-10 config/gripper_limits.json holds arm1 only, which is why arm2 refuses
+#    to start with the gripper enabled.
 uv run scripts/calibrate_gripper.py --yes --arm arm1
+uv run scripts/calibrate_gripper.py --yes --arm arm2
 
 # 4. Is the arm alive? Enables all 7, reads, disables. Nothing moves.
 uv run scripts/read_arm_state.py --yes --arm arm1
@@ -65,6 +70,7 @@ version, and exploring destroyed a hand-dialled map — FINDINGS §11.2.)
 | **`f`** | **reverse the direction of the control you just used** — the main one |
 | `1`…`6` | **SWAP** that control with another motion's — **1**=X **2**=Y **3**=UP **4**=ROLL **5**=PITCH **6**=YAW. Both move, so nothing is orphaned, and **the same key again swaps back** |
 | `u` | that control drives nothing |
+| **`b`** | **assign the two puck buttons** to gripper OPEN / CLOSE — it asks you to press each one. Then `f` swaps them, exactly as it reverses an axis |
 | `0` | revert the whole map to how it was when the session started |
 | `-` / `+` | linear speed | 
 | `,` / `.` | rotation speed |

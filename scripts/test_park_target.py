@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from yam_robot import park_target_from  # noqa: E402
+from yam_robot import advance_park_command, park_target_from  # noqa: E402
 
 N_ARM = 6
 GRIPPER_MIN, GRIPPER_MAX = 0.02, 0.98
@@ -116,6 +116,68 @@ def test_park_speed_step_is_finite_for_every_shape() -> None:
         step = np.clip(target - measured, -0.004, 0.004)
         assert step.shape == (n,)
         assert np.all(np.isfinite(step))
+
+
+# --------------------------------------------------- the park trajectory ----
+
+
+def test_advance_moves_the_command_toward_the_target() -> None:
+    cmd = advance_park_command([0.0, 0.0], [1.0, -1.0], 0.1)
+    assert np.allclose(cmd, [0.1, -0.1]), cmd
+
+
+def test_advance_never_overshoots() -> None:
+    cmd = advance_park_command([0.95, -0.95], [1.0, -1.0], 0.1)
+    assert np.allclose(cmd, [1.0, -1.0]), cmd
+
+
+def test_advance_converges_even_when_the_arm_is_stuck() -> None:
+    """⭐ THE REGRESSION, stated as a test.
+
+    Old PARK re-anchored to the MEASURED pose every cycle, so if the arm did not
+    move the command never got more than ONE step ahead — 0.004 rad — and the
+    controller's error term, and therefore its torque, stayed at that forever.
+    A trajectory must be able to run ahead of an arm that has not started yet.
+    """
+    target = np.array([1.2, -0.8, 0.5])
+    cmd = np.zeros(3)
+    stuck = np.zeros(3)                      # the arm never moves at all
+    step = 0.40 * 0.01                       # PARK_SPEED * dt
+    for _ in range(2000):                    # 20 s at 100 Hz
+        cmd = advance_park_command(cmd, target, step)
+    assert np.allclose(cmd, target, atol=1e-9), cmd
+    assert float(np.max(np.abs(cmd - stuck))) > 1.0, "must run ahead of a stuck arm"
+
+
+def test_the_old_formula_provably_could_not_converge() -> None:
+    """Proof the diagnosis is mechanical, not a story. Reproduces the old code."""
+    target = np.array([1.2, -0.8, 0.5])
+    measured = np.zeros(3)                   # a stuck arm
+    step = 0.40 * 0.01
+    commanded = measured
+    for _ in range(2000):
+        commanded = measured + np.clip(target - measured, -step, step)
+    lead = float(np.max(np.abs(commanded - measured)))
+    assert np.isclose(lead, step), lead
+    assert lead < 0.005, (
+        f"after 20 s the old command was still only {lead:.4f} rad ahead of the arm "
+        "— that is the entire bug"
+    )
+
+
+def test_advance_does_not_run_away_from_an_arm_that_follows() -> None:
+    target = np.array([1.0])
+    cmd = np.zeros(1)
+    measured = np.zeros(1)
+    for _ in range(400):
+        cmd = advance_park_command(cmd, target, 0.004)
+        measured = measured + (cmd - measured) * 0.5      # a well-behaved follower
+    assert np.allclose(cmd, target, atol=1e-9)
+    assert float(np.max(np.abs(cmd - measured))) < 0.01
+
+
+def test_advance_handles_an_already_reached_target() -> None:
+    assert np.allclose(advance_park_command([1.0, 2.0], [1.0, 2.0], 0.1), [1.0, 2.0])
 
 
 def main() -> int:

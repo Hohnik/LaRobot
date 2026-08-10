@@ -360,6 +360,104 @@ def test_readout_shows_every_axis() -> None:
 # ------------------------------------------------- CONTROLS mode primitives ----
 
 
+# ------------------------------------------------------ gripper buttons ----
+
+
+def test_buttons_are_unset_by_default() -> None:
+    m = AxisMap()
+    assert m.button_open is None and m.button_close is None
+    assert m.button_action(0x01) is None, "an unassigned button must do nothing"
+    assert "not set" in m.buttons_row()
+
+
+def test_learning_assigns_the_pressed_mask() -> None:
+    m = AxisMap()
+    assert m.learn_button("open", 0x01) is None
+    assert m.learn_button("close", 0x02) is None
+    assert m.button_open == 0x01 and m.button_close == 0x02
+    assert m.button_action(0x01) == "open"
+    assert m.button_action(0x02) == "close"
+
+
+def test_learning_refuses_to_give_one_button_both_jobs() -> None:
+    """A button that both opens and closes is a coin flip, not a control."""
+    m = AxisMap()
+    m.learn_button("open", 0x01)
+    warn = m.learn_button("close", 0x01)
+    assert warn is not None and "OTHER" in warn, warn
+    assert m.button_close is None, "the bad assignment must not have been stored"
+
+
+def test_learning_refuses_an_empty_press() -> None:
+    m = AxisMap()
+    assert m.learn_button("open", 0) is not None
+    assert m.button_open is None
+
+
+def test_swap_buttons_exchanges_them_and_is_an_involution() -> None:
+    m = AxisMap()
+    m.learn_button("open", 0x01)
+    m.learn_button("close", 0x02)
+    m.swap_buttons()
+    assert m.button_open == 0x02 and m.button_close == 0x01
+    assert m.button_action(0x02) == "open"
+    m.swap_buttons()
+    assert m.button_open == 0x01 and m.button_close == 0x02
+
+
+def test_swap_buttons_works_when_only_one_is_set() -> None:
+    m = AxisMap()
+    m.learn_button("open", 0x04)
+    m.swap_buttons()
+    assert m.button_open is None and m.button_close == 0x04
+    assert m.button_action(0x04) == "close"
+
+
+def test_button_action_matches_a_bit_within_a_combined_mask() -> None:
+    """Both buttons held at once: open wins, deterministically, not randomly."""
+    m = AxisMap(button_open=0x01, button_close=0x02)
+    assert m.button_action(0x03) == "open"
+    assert m.button_action(0x00) is None
+    assert m.button_action(0x08) is None, "an unknown bit must not trigger anything"
+
+
+def test_buttons_survive_save_and_load() -> None:
+    m = AxisMap(source=[1, 0, 2, 4, 3, 5], sign=[1, 1, -1, 1, 1, -1],
+                button_open=0x01, button_close=0x02)
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        m.save(p)
+        assert AxisMap.load(p) == m
+
+
+def test_a_map_without_buttons_writes_no_button_keys() -> None:
+    """⛔ The legacy shape must not grow noise: an unset button is absent, not null."""
+    m = AxisMap()
+    assert "button_open" not in m.as_dict()
+    assert "button_close" not in m.as_dict()
+
+
+def test_buttons_are_per_arm_like_everything_else() -> None:
+    s = AxisMapStore()
+    s.fork("arm2")
+    a2 = s.for_arm("arm2")
+    a2.learn_button("open", 0x01)
+    s.set("arm2", a2)
+    assert s.for_arm("arm2").button_open == 0x01
+    assert s.for_arm("arm1").button_open is None
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        s.save(p)
+        assert AxisMapStore.load(p) == s
+
+
+def test_buttons_do_not_affect_the_axis_mapping() -> None:
+    a = AxisMap(source=[1, 0, 2, 3, 4, 5], sign=[1] * N)
+    b = AxisMap(source=[1, 0, 2, 3, 4, 5], sign=[1] * N, button_open=0x01, button_close=0x02)
+    axes = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    assert np.allclose(a.apply(axes), b.apply(axes))
+
+
 # ---------------------------------------------------- per-arm map store ----
 
 

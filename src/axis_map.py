@@ -102,9 +102,27 @@ class AxisMap:
     hours of debugging the IK for a config-file problem.
     """
 
-    def __init__(self, source: list[int] | None = None, sign: list[int] | None = None):
+    def __init__(
+        self,
+        source: list[int] | None = None,
+        sign: list[int] | None = None,
+        button_open: int | None = None,
+        button_close: int | None = None,
+    ):
         self.source = list(source) if source is not None else list(range(N))
         self.sign = list(sign) if sign is not None else [1] * N
+        # ⭐ The two puck buttons, as raw HID bitmasks. Julien: *"there are two
+        # buttons on the left and the right. One could be open, one could be
+        # closed."*
+        # ⛔ Stored as MASKS LEARNED BY PRESSING, never as "bit 0" and "bit 1".
+        # Which physical button sets which bit has never been measured on this
+        # unit, and the whole family of bugs this repo keeps hitting — the CAN
+        # adapter by index, the puck by index, the gripper limits in the wrong
+        # frame — is "assumed an identity that was never checked". Asking the
+        # operator to press the button they mean costs two seconds and cannot be
+        # wrong. Same idiom as pick_device_by_wiggle().
+        self.button_open = int(button_open) if button_open else None
+        self.button_close = int(button_close) if button_close else None
         self._validate()
 
     def _validate(self) -> None:
@@ -134,22 +152,36 @@ class AxisMap:
         if not isinstance(raw, dict):
             return cls()
         try:
-            return cls(source=raw.get("source"), sign=raw.get("sign"))
+            return cls(
+                source=raw.get("source"), sign=raw.get("sign"),
+                button_open=raw.get("button_open"), button_close=raw.get("button_close"),
+            )
         except Exception:  # noqa: BLE001
             return cls()
 
+    def as_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"source": self.source, "sign": self.sign}
+        if self.button_open is not None:
+            d["button_open"] = self.button_open
+        if self.button_close is not None:
+            d["button_close"] = self.button_close
+        return d
+
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"source": self.source, "sign": self.sign}, indent=2) + "\n")
+        path.write_text(json.dumps(self.as_dict(), indent=2) + "\n")
 
     def copy(self) -> AxisMap:
-        return AxisMap(source=self.source, sign=self.sign)
+        return AxisMap(source=self.source, sign=self.sign,
+                       button_open=self.button_open, button_close=self.button_close)
 
     def __eq__(self, other: object) -> bool:
         return (
             isinstance(other, AxisMap)
             and self.source == other.source
             and self.sign == other.sign
+            and self.button_open == other.button_open
+            and self.button_close == other.button_close
         )
 
     # ---- the mapping itself ------------------------------------------------
@@ -215,6 +247,51 @@ class AxisMap:
         """
         self.source[motion_a], self.source[motion_b] = self.source[motion_b], self.source[motion_a]
         self.sign[motion_a], self.sign[motion_b] = self.sign[motion_b], self.sign[motion_a]
+
+    def swap_buttons(self) -> None:
+        """Exchange which puck button opens and which closes.
+
+        ⭐ Reached by the SAME `f` key that reverses an axis, and that is not a
+        coincidence. Julien described it as *"pressing whatever the switch button
+        was, I think f, could then switch it back"* — so `f` means one thing
+        throughout: **reverse the control I just used.** If the last control was an
+        axis, reversing it flips its sign; if it was a button, reversing it swaps
+        open and close. One rule, no new vocabulary to remember.
+
+        Also an involution, like `swap()`, so a wrong guess costs one keypress.
+        """
+        self.button_open, self.button_close = self.button_close, self.button_open
+
+    def learn_button(self, action: str, mask: int) -> str | None:
+        """Assign a pressed button to 'open' or 'close'. Returns a warning, or None.
+
+        ⚠️ Refuses to give one physical button both jobs. A single button that both
+        opens and closes is not a control, it is a coin flip, and the resulting
+        "the gripper does random things" would be debugged in the gripper code.
+        """
+        if not mask:
+            return "no button was pressed"
+        other = self.button_close if action == "open" else self.button_open
+        if other is not None and other == mask:
+            return "that is already the other button — press the OTHER one"
+        if action == "open":
+            self.button_open = mask
+        else:
+            self.button_close = mask
+        return None
+
+    def button_action(self, buttons: int) -> str | None:
+        """Which gripper action the currently-held buttons mean, if any."""
+        if self.button_open and (buttons & self.button_open):
+            return "open"
+        if self.button_close and (buttons & self.button_close):
+            return "close"
+        return None
+
+    def buttons_row(self) -> str:
+        def fmt(mask: int | None) -> str:
+            return "—— not set ——" if not mask else f"button 0x{mask:02x}"
+        return f"  GRIPPER  open ← {fmt(self.button_open)}   close ← {fmt(self.button_close)}"
 
     def flip(self, motion: int) -> None:
         self.sign[motion] *= -1
@@ -444,7 +521,8 @@ class AxisMapStore:
         if isinstance(raw.get(cls.SHARED), dict):
             s = raw[cls.SHARED]
             try:
-                shared = AxisMap(source=s.get("source"), sign=s.get("sign"))
+                shared = AxisMap(source=s.get("source"), sign=s.get("sign"),
+                                 button_open=s.get("button_open"), button_close=s.get("button_close"))
             except Exception:  # noqa: BLE001
                 shared = AxisMap()
         per_arm: dict[str, AxisMap] = {}
@@ -452,15 +530,17 @@ class AxisMapStore:
             if key == cls.SHARED or not isinstance(val, dict):
                 continue
             try:
-                per_arm[key] = AxisMap(source=val.get("source"), sign=val.get("sign"))
+                per_arm[key] = AxisMap(source=val.get("source"), sign=val.get("sign"),
+                                       button_open=val.get("button_open"),
+                                       button_close=val.get("button_close"))
             except Exception:  # noqa: BLE001
                 continue
         return cls(shared=shared, per_arm=per_arm)
 
     def save(self, path: Path) -> None:
-        data: dict[str, Any] = {self.SHARED: {"source": self.shared.source, "sign": self.shared.sign}}
+        data: dict[str, Any] = {self.SHARED: self.shared.as_dict()}
         for arm, m in sorted(self.per_arm.items()):
-            data[arm] = {"source": m.source, "sign": m.sign}
+            data[arm] = m.as_dict()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n")
 
