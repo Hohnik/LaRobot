@@ -5,7 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "crcmod-plus>=2.3.1",
     "gs-usb>=0.3.1",
     "hidapi>=0.15.0",
+    "numpy>=2.5.2",
+    "packaging>=26.3",
+    "pydantic>=2.13.4",
     "python-can>=4.6.1",
+    "tyro>=1.0.15",
 ]

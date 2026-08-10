@@ -1,20 +1,20 @@
 # yam-robotics — SpaceMouse teleop for a YAM arm
 
-> **Status: session 1 closed, Friday 2026-08-07. Resuming Monday 2026-08-10.**
-> Input device **proven readable**. Arm **not yet commanded, by choice**. Nothing here has ever transmitted
-> on the CAN bus.
+> **Status: session 2, Monday 2026-08-10 — in progress. Hardware is reconnected and re-verified.**
+> Arm **not yet commanded**. Nothing here has ever transmitted on the CAN bus.
 >
-> ## ⛔ THE HARDWARE IS UNPLUGGED — read this before you debug anything
+> ## ⭐ The two blockers from session 1 are gone
 >
-> Julien's time at the location ran out on Friday 2026-08-07 and **every device was disconnected**, dock
-> included. Verified: `ioreg -p IOUSB` now enumerates **nothing at all**.
+> 1. **The YAM CAN protocol is not unknown — it is published.** I2RT ship a full Python SDK at
+>    **[github.com/i2rt-robotics/i2rt](https://github.com/i2rt-robotics/i2rt)**, vendored here at
+>    `third_party/i2rt`. §5 of `docs/Setup-Plan.md` had named it all along. See **§6.1**.
+> 2. **macOS can drive the CAN bus after all.** The SDK assumes SocketCAN, which does not exist here — but
+>    its driver layer takes a `bustype` argument, and the CANable works through python-can's `gs_usb`
+>    backend over libusb. **Proven today, not theorised.** See **§2.1**.
 >
-> **So `scripts/probe_hardware.py` will report "No SpaceMouse found", and that is correct, not a
-> regression.** Everything in §1 below was measured on Friday while the hardware was attached; it is a
-> **snapshot**, not a live reading. Do not "fix" code in response to an empty enumeration — plug the dock in
-> first, re-run the probe, and only then believe a failure.
->
-> Nothing was left in a broken state. No configuration was changed on any device.
+> **Verified live on 2026-08-10** (`ioreg`, `hid.enumerate()`, `GsUsb.scan()`): SpaceMouse Compact, CANable
+> 2.5 Candlelight, C920 and the AX88179A all enumerate; the SpaceMouse **opens**; the CAN adapter **opens in
+> listen-only mode at 1 Mbit/s**. Nothing was left in a broken state and no device configuration was changed.
 
 **Goal (Julien, 2026-08-07):** *"at best, I'm able to control the robot arm with the space mouse."*
 This session's honest scope: find out what is actually connected, what the toolchain must be, get the
@@ -62,6 +62,35 @@ experimentation*, while Linux remains right for the real rig.
 > visualisation) and plan on a Linux box for the **closed loop with the arm**. Do not fight macOS for the
 > 100 Hz control loop — that is a fight the plan already tells you not to pick.
 
+### 2.1 …but first contact from macOS is solved — measured 2026-08-10
+
+The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three facts, each verified in source
+or on the wire rather than inferred:
+
+| Fact | Where |
+|---|---|
+| `CanInterface.__init__(channel, bustype="socketcan", bitrate=1_000_000, …)` builds `can.interface.Bus(bustype=bustype, …)` — **`bustype` is a plain argument, not a hardcoded string** | `third_party/i2rt/i2rt/motor_drivers/can_interface.py:14,21` |
+| `DMSingleMotorCanInterface` passes `bustype` straight through, so **`bustype="gs_usb"` reaches python-can untouched** | `dm_driver.py:135,142` |
+| The adapter **opens listen-only at 1 Mbit/s** on this Mac: `fclk=160 MHz`, timings computed by python-can, `listen_only_granted=True` | `uv run scripts/probe_can.py` |
+
+⚠️ **The one layer that does NOT work is the one the docs tell you to use.** `get_yam_robot()` → 
+`DMChainCanInterface` selects the bus with `if "can" in channel:` and then **hardcodes `bustype="socketcan"`**
+(`dm_driver.py:409-417`). There is no argument that overrides it. So the high-level robot object is Linux-only
+as shipped; the motor-driver layer beneath it is not. Everything here goes through that lower layer, via
+[`src/yam_can.py`](src/yam_can.py).
+
+**Two macOS specifics worth knowing before they cost an hour:**
+- python-can's gs_usb backend takes an **adapter index (an int)**, not a `"can0"` string. Passing a name
+  containing `"can"` is also exactly what routes I2RT's own code down the SocketCAN branch above.
+- `GsUsb.start()` calls `detach_kernel_driver(0)`, which on macOS fails with `USBError errno=13` even though
+  nothing holds the device (measured: `is_kernel_driver_active(0)` is `False` and `claim_interface(0)`
+  succeeds). `src/yam_can.py` suppresses only that error, on any platform where the detach genuinely matters
+  it still runs.
+
+**This does not overturn §2's recommendation.** It makes the Mac enough for bring-up, reading state and
+hand-guiding. The 100 Hz closed loop still belongs on Linux — gs_usb over libusb has not been throughput-tested
+here, and 7 motors × 2 frames × 100 Hz is a real load.
+
 ## 3. What the plan says about the SpaceMouse — the key section
 
 `docs/Setup-Plan.md` **§4** is directly about this, and it is the most important thing in the document:
@@ -83,6 +112,8 @@ experimentation*, while Linux remains right for the real rig.
 ```bash
 uv run scripts/probe_hardware.py    # enumerate everything, open the SpaceMouse, listen 5 s
 uv run src/spacemouse_live.py       # live 6-DoF bar readout — move the device and watch
+uv run scripts/probe_can.py         # listen-only CAN watch — silent transceiver, cannot even ACK
+uv run scripts/ping_motors.py       # DRY RUN by default; --yes transmits (see §5)
 ```
 
 - `scripts/probe_hardware.py` — enumerates all 26 HID interfaces, isolates the 3Dconnexion ones, opens the
@@ -101,7 +132,20 @@ uv run src/spacemouse_live.py       # live 6-DoF bar readout — move the device
     **Verified against four stubbed enumerations** (both present · webcam only · axis interface hidden ·
     nothing at all) — the webcam is never selected, and "webcam only" now correctly reports no device.
 
-**Both are strictly read-only. Neither can move anything.**
+- `scripts/probe_can.py` — **new 2026-08-10.** Watches the bus in `GS_CAN_MODE_LISTEN_ONLY`, so the
+  transceiver drives no dominant bits at all and cannot even acknowledge a frame. It *verifies* the mode was
+  granted and refuses to listen otherwise, rather than silently falling back to a mode that talks.
+  **Verified: opens at 1 Mbit/s and reads 0 frames** — see the expectation note below.
+- `scripts/ping_motors.py` — **new 2026-08-10, and the only script here that can transmit.** Dry run unless
+  given `--yes`. macOS port of I2RT's own `motor_config_tool/ping_motors.py`; the CAN traffic is identical.
+- `src/yam_can.py` — the macOS CAN layer (§2.1). Imported by both of the above.
+
+**The first three are strictly read-only. `ping_motors.py --yes` is not — see §5.**
+
+> ⚠️ **A quiet bus is the expected reading, not a fault.** DM motors are request/response: they answer when
+> polled and say nothing otherwise. With nothing driving the bus, **zero frames is what a healthy, idle,
+> correctly-wired arm looks like.** Passive listening therefore cannot confirm the arm is alive; only a poll
+> can, and a poll transmits. Do not read silence as a wiring problem.
 
 ## 5. ⛔ Safety boundary held this session
 
@@ -116,15 +160,57 @@ frame sent, no bitrate set. Reasons:
 
 **Opening the bus requires his explicit go-ahead**, ideally with the arm powered down or e-stopped first.
 
+**Updated 2026-08-10.** Reasons 1 and 3 have since been answered — the bitrate is documented at 1 Mbit/s and
+the protocol is I2RT's own (§6.1) — and the bus *has* now been opened, but only in **listen-only** mode,
+where the transceiver is electrically silent. **Still true: nothing has ever been transmitted.**
+
+Reason 2 stands and is the live boundary. The next step, `scripts/ping_motors.py --yes`, energises motors on
+a physical arm:
+
+- It sends only enable/disable per motor and **never a torque, position or velocity setpoint**, so the arm
+  should stay limp — a disabled DM motor is already back-drivable, and enabling without a command adds no
+  torque.
+- **But it is a physical action.** Arm clear of people and obstructions, power reachable, and a motor holding
+  a stale setpoint from an earlier session could twitch.
+- It stays gated behind `--yes`, and behind Julien saying so.
+
 ## 6. What is genuinely unknown — the honest gaps
+
+**Resolved on 2026-08-10** (kept visible, because "we already looked into that" is the cheapest thing to lose):
+
+| Was a gap | Answer |
+|---|---|
+| ⭐ The YAM CAN protocol | **Published.** I2RT's SDK — §6.1 |
+| Does the YAM SDK run on macOS? | **The driver layer does.** Not the `get_yam_robot()` layer — §2.1 |
+| A YAM MJCF/URDF model | **Ships with the SDK**, `third_party/i2rt/i2rt/robot_models/arm/` — and `mink` is already an SDK dependency |
+| Bitrate | **1 Mbit/s, documented**, no longer a guess |
+
+**Still open:**
 
 | Gap | Why it matters |
 |---|---|
-| ⭐ **The YAM CAN protocol** | Nothing can command the arm without it. Need the vendor SDK / I2RT docs. **The single biggest blocker.** |
-| **Is the arm even powered and on the bus?** | Untested — would need a listen-only channel at the right bitrate |
-| **Does the YAM SDK run on macOS?** | Almost certainly assumes SocketCAN → probably not |
-| **A YAM MJCF/URDF model** | `mink` IK needs one. Unknown whether one is published |
-| **Bitrate** | Typically 1 Mbit/s for arms, but that is a guess until documented |
+| ⭐ **Is the arm powered and on the bus?** | The only way to find out is to poll, which transmits — §5 |
+| **Which YAM variant and gripper** | `get_yam_robot()` needs `arm_type` + `gripper_type`; they change motor types and limits |
+| **Is there a Linux machine yet?** | The 100 Hz closed loop belongs there, and the plan's whole stack assumes Ubuntu 22.04 |
+| **gs_usb throughput on macOS** | Untested. Fine for bring-up; unknown at 7 motors × 2 frames × 100 Hz |
+
+### 6.1 The SDK — what it gives us
+
+`third_party/i2rt` (vendored, `git clone --depth 1`, **gitignored**). It is far more than a protocol spec:
+
+- **`i2rt/motor_drivers/`** — the DM motor protocol: enable `…FC`, disable `…FD`, clear-error `…FB`,
+  save-zero `…FE`; MIT and position/velocity control modes; feedback decoding.
+- **`i2rt/robot_models/arm/`** — URDF/MJCF for `yam`, `yam_pro`, `yam_ultra`, `yam_ultra_2`, `big_yam`.
+  **This is the model `mink` needs**, so plan step 5 (IK in sim) has its missing piece.
+- **`examples/`** — `minimum_gello`, `control_with_mujoco`, `control_with_viser`, `record_replay_trajectory`.
+- **Safety-relevant:** motors ship with a **400 ms command timeout**. I2RT's own warning is that without it a
+  failed gravity-compensation loop can produce uncontrolled torque. **Leave it at the factory default.**
+
+**Do not `uv pip install -e third_party/i2rt`** — it pulls mujoco, viser, rerun and `ruckig` (sdist-only,
+compiles from source) for a motor poll that needs none of them. `src/yam_can.py` puts it on `sys.path`
+instead; the driver layer imports with just numpy, python-can, tyro, pydantic, packaging and crcmod.
+**Verified: it imports cleanly on macOS under Python 3.12**, despite the SDK's README saying 3.11
+(`requires-python = ">=3.10"`).
 
 ## 6.5 Why this is its own repo and not part of Mind Understanding
 
@@ -164,30 +250,40 @@ rig, drivers and logs stay here.
 
 ## 7. Next steps, in order
 
-**Monday 2026-08-10, first thing — plug the dock back in and re-run `scripts/probe_hardware.py`.**
-Expect the same three 3Dconnexion interfaces, the C920 and the CANable. That single command re-establishes
-that the world matches §1 before anything else is attempted.
+✅ Done 2026-08-10: hardware re-verified · protocol found (§6.1) · macOS CAN path proven (§2.1) ·
+listen-only probe written and green.
 
-1. **Julien runs `src/spacemouse_live.py` and moves the puck.** Confirms decode and reveals the report shape.
-   *Zero risk.* **This is the one thing that was ready to test when the time ran out.**
-2. **Find the YAM SDK / CAN protocol** — vendor docs, I2RT GitHub, or whatever the friend used. Until this
-   exists, step 4 cannot start.
-3. **Webcam check** — trivial, and the plan needs it for data collection anyway.
-4. **Listen-only CAN**, arm powered, *with his go-ahead*: confirm the arm chatters and at what bitrate.
-5. **IK in simulation first** — `mink` + a YAM model, driven by the real SpaceMouse, rendered on screen.
-   **This is the whole teleop loop with no hardware risk**, and it is the right next big step.
-6. Only then: close the loop onto the physical arm, on Linux.
+1. **Julien runs `src/spacemouse_live.py` and moves the puck.** Confirms decode and reveals which of the two
+   report shapes this unit uses. *Zero risk, ~30 seconds.* **Still the one thing that has never been tested
+   against real motion**, and it has been the top of this list since Friday.
+2. ⭐ **`scripts/ping_motors.py --yes`** — the first transmission. Answers "is the arm alive, which motor IDs
+   exist, and what are their positions". **Needs his go-ahead and a clear arm** (§5).
+3. **Read joint positions continuously** — a small loop over the driver layer. Proves the full state pipeline
+   before any command is ever issued.
+4. **Gravity compensation / zero-gravity mode**, so the arm can be hand-guided. First time the arm actually
+   holds torque; treat it as its own gated step, not a continuation of 3.
+5. **IK in simulation** — `mink` + the YAM MJCF from `third_party/i2rt/i2rt/robot_models/arm/`, driven by the
+   real SpaceMouse, rendered on screen. **The whole teleop loop with no hardware risk.** Both pieces now
+   exist, so this is no longer blocked on anything.
+6. **Webcam check** — trivial, and the plan needs it for data collection anyway.
+7. Only then: close the loop onto the physical arm — and by then, ideally on Linux.
 
-*Step 5 is the one to aim for. It makes the interesting half — twist → IK → joint targets — real and
-debuggable while the arm sits still.*
+*Step 5 remains the one to aim for. It makes the interesting half — twist → IK → joint targets — real and
+debuggable while the arm sits still. Steps 2–4 are what make it worth trusting when it is finally connected.*
 
 ## 8. Layout
 
 ```
 yam-robotics/
-├── README.md              # this file: state, findings, next steps
-├── docs/Setup-Plan.md     # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
-├── scripts/probe_hardware.py
-├── src/spacemouse_live.py
-└── pyproject.toml         # uv; hidapi · python-can · gs-usb
+├── README.md                  # this file: state, findings, next steps
+├── docs/Setup-Plan.md         # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
+├── scripts/
+│   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only
+│   ├── probe_can.py           # listen-only CAN watch                          read-only
+│   └── ping_motors.py         # ⚠️ the only script that can transmit (--yes)
+├── src/
+│   ├── spacemouse_live.py     # live 6-DoF readout                             read-only
+│   └── yam_can.py             # the macOS CAN layer (§2.1)
+├── third_party/i2rt/          # vendored I2RT SDK — GITIGNORED, clone with the command in §6.1
+└── pyproject.toml             # uv; hidapi · python-can · gs-usb · numpy · tyro · pydantic · crcmod-plus
 ```
