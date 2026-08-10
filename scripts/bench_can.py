@@ -41,7 +41,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import YAM_BITRATE, open_raw_can_interface  # noqa: E402
+from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_BITRATE, open_raw_can_interface  # noqa: E402
 
 REG_GEAR_RATIO = 20  # from i2rt register_addr_map; any read-only register works
 N_MOTORS = 7
@@ -70,6 +70,7 @@ def main() -> int:
     )
     ap.add_argument("--motors", type=int, nargs="+", default=[1, 2, 3, 4, 5, 6, 7])
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
+    ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS), help="WHICH ARM. Selected by serial, never by index.")
     ap.add_argument("--timeout", type=float, default=0.05, help="per-response timeout, seconds")
     args = ap.parse_args()
 
@@ -81,7 +82,7 @@ def main() -> int:
 
     import can  # noqa: PLC0415
 
-    iface = open_raw_can_interface(bitrate=args.bitrate)
+    iface = open_raw_can_interface(bitrate=args.bitrate, arm=args.arm)
     bus = iface.bus
 
     def make_request(motor_id: int) -> can.Message:

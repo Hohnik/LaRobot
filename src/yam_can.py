@@ -27,7 +27,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 I2RT_PATH = REPO_ROOT / "third_party" / "i2rt"
 
 YAM_BITRATE = 1_000_000  # I2RT documents 1 Mbit/s; see third_party/i2rt README
-GS_USB_INDEX = 0  # python-can's gs_usb backend indexes adapters, it has no "can0"
+
+# ⛔ NEVER SELECT THE ADAPTER BY INDEX. Each arm has its own CANable, so as soon
+# as the second one is plugged in, "adapter 0" silently becomes a different arm.
+#
+# That is not hypothetical: on 2026-08-10 every measurement was taken against
+# serial 2081337C… as the only adapter present. Julien then plugged in the second
+# arm, and its adapter enumerated *first*. Selecting by index at that moment would
+# have commanded the wrong arm — with a motion script already written.
+#
+# Serial numbers are stable across replug; bus/address are not.
+ARM_SERIALS = {
+    "arm1": "2081337C594E5018",  # every measurement of 2026-08-10 was this one
+    "arm2": "20593383594E5018",  # plugged in 2026-08-10, not yet talked to
+}
+DEFAULT_ARM = "arm1"
 
 # ⭐ MEASURED on this arm, 2026-08-10, not copied from a config file.
 # Re-derive at any time with:  uv run scripts/identify_arm.py --yes
@@ -39,6 +53,30 @@ GS_USB_INDEX = 0  # python-can's gs_usb backend indexes adapters, it has no "can
 #     torque    DM4310 ±10  vs  DM4340 ±28   -> 2.8x under-read
 # Under-reading torque on the three heaviest joints is the dangerous direction,
 # so never let a control loop assume a uniform motor type.
+# Joint names and limits, READ OUT of the vendor model rather than invented:
+#   third_party/i2rt/i2rt/robot_models/arm/yam/v1/yam.urdf
+# The URDF names them joint1..joint8 with no semantics; the descriptions below are
+# derived from each joint's rotation axis and its parent/child links. Julien's own
+# words map onto two of them exactly: "base spin" = motor 1, "gripper's spin" = motor 6
+# (its child link is literally `gripper`).
+#
+# ⚠️ Limits are in URDF joint coordinates. They are usable directly against raw motor
+# positions ONLY because get_robot.py sets `motor_offsets = [0.0] * n` and yam_v1.yml
+# sets every direction to +1 — so the two frames coincide on this arm, apart from a
+# ±2π wrap correction applied at init. Re-check this if either ever changes.
+YAM_JOINTS = {
+    1: ("base_yaw", -2.61799, 3.14159),
+    2: ("shoulder_pitch", 0.0, 3.66519),
+    3: ("elbow_pitch", 0.0, 3.14159),
+    4: ("forearm_pitch", -1.69297, 1.5708),
+    5: ("wrist_roll", -1.5708, 1.5708),
+    6: ("gripper_twist", -2.0944, 2.0944),
+    # Motor 7 drives URDF joint7+joint8, two PRISMATIC finger tips (0…0.047 m).
+    # Its rotational travel is not expressed in the URDF and `gripper_limits` is
+    # null in linear_4310.yml, so there is no trustworthy limit to enforce here.
+    7: ("gripper_jaws", None, None),
+}
+
 YAM_MOTOR_TYPES = {
     1: "DM4340",
     2: "DM4340",
@@ -141,6 +179,54 @@ def patch_gs_usb_echo_filter() -> None:
     _echo_patched = True
 
 
+def resolve_arm(arm: str = DEFAULT_ARM) -> tuple[int, str]:
+    """Map an arm name to the gs_usb adapter *index* carrying its serial.
+
+    Returns ``(index, serial)``. Raises rather than guessing: with two identical
+    adapters attached, a wrong guess drives the wrong robot.
+
+    The index is only used because I2RT's ``CanInterface`` calls
+    ``can.interface.Bus(bustype=..., channel=..., bitrate=...)`` and gives us no
+    way to pass gs_usb's ``bus``/``address`` selectors through. So we resolve the
+    index here and then **verify the serial after opening** — see
+    ``_verify_serial``. Never trust the index alone.
+    """
+    patch_gs_usb_for_macos()
+    from gs_usb.gs_usb import GsUsb
+
+    serial = ARM_SERIALS.get(arm, arm)  # allow passing a raw serial too
+    devs = GsUsb.scan()
+    if not devs:
+        raise RuntimeError("No candleLight CAN adapter found. Is the arm's CANable plugged in?")
+
+    serials = [d.serial_number for d in devs]
+    if serial not in serials:
+        known = {v: k for k, v in ARM_SERIALS.items()}
+        listing = "\n".join(f"    [{i}] {s}  ({known.get(s, 'unknown adapter')})" for i, s in enumerate(serials))
+        raise RuntimeError(
+            f"Adapter for {arm!r} (serial {serial}) is not attached.\n"
+            f"  {len(devs)} adapter(s) present:\n{listing}"
+        )
+    return serials.index(serial), serial
+
+
+def _verify_serial(iface: Any, expected: str, arm: str) -> None:
+    """Abort unless the bus we just opened really is the arm we asked for.
+
+    The index resolved by :func:`resolve_arm` could in principle go stale between
+    our scan and python-can's own scan inside ``GsUsbBus.__init__``. This closes
+    that window: a mismatch shuts the bus and raises instead of quietly talking
+    to the other robot.
+    """
+    actual = getattr(getattr(iface.bus, "gs_usb", None), "serial_number", None)
+    if actual != expected:
+        iface.close()
+        raise RuntimeError(
+            f"⛔ WRONG ADAPTER: asked for {arm} (serial {expected}) but opened serial {actual}. "
+            "Bus closed without transmitting. Do not retry blindly — re-check which arm is which."
+        )
+
+
 def add_i2rt_to_path() -> Path:
     """Make the vendored I2RT SDK importable without installing it.
 
@@ -162,7 +248,7 @@ def add_i2rt_to_path() -> Path:
 def open_raw_can_interface(
     *,
     bitrate: int = YAM_BITRATE,
-    index: int = GS_USB_INDEX,
+    arm: str = DEFAULT_ARM,
     name: str = "yam_macos_raw",
 ) -> Any:
     """Return an I2RT ``RawCanInterface`` bound to the CANable.
@@ -176,16 +262,19 @@ def open_raw_can_interface(
     patch_gs_usb_for_macos()
     patch_gs_usb_echo_filter()
     add_i2rt_to_path()
+    index, serial = resolve_arm(arm)
 
     from i2rt.motor_config_tool.utils import RawCanInterface
 
-    return RawCanInterface(channel=index, bustype="gs_usb", bitrate=bitrate, name=name)
+    iface = RawCanInterface(channel=index, bustype="gs_usb", bitrate=bitrate, name=name)
+    _verify_serial(iface, serial, arm)
+    return iface
 
 
 def open_motor_interface(
     *,
     bitrate: int = YAM_BITRATE,
-    index: int = GS_USB_INDEX,
+    arm: str = DEFAULT_ARM,
     name: str = "yam_macos",
 ) -> Any:
     """Return an I2RT ``DMSingleMotorCanInterface`` bound to the CANable.
@@ -203,13 +292,16 @@ def open_motor_interface(
     patch_gs_usb_for_macos()
     patch_gs_usb_echo_filter()
     add_i2rt_to_path()
+    index, serial = resolve_arm(arm)
 
     from i2rt.motor_drivers.dm_driver import ControlMode, DMSingleMotorCanInterface
 
-    return DMSingleMotorCanInterface(
+    iface = DMSingleMotorCanInterface(
         control_mode=ControlMode.MIT,
         channel=index,
         bustype="gs_usb",
         bitrate=bitrate,
         name=name,
     )
+    _verify_serial(iface, serial, arm)
+    return iface

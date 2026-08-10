@@ -38,11 +38,18 @@ needs the physical label or a mass measurement (4.292 / 4.349 / 4.521 kg).
 from __future__ import annotations
 
 import argparse
+import struct
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import YAM_BITRATE, add_i2rt_to_path, open_raw_can_interface  # noqa: E402
+from yam_can import (  # noqa: E402
+    ARM_SERIALS,
+    DEFAULT_ARM,
+    YAM_BITRATE,
+    add_i2rt_to_path,
+    open_raw_can_interface,
+)
 
 ARM_IDS = [1, 2, 3, 4, 5, 6]
 GRIPPER_ID = 0x07
@@ -89,12 +96,83 @@ def classify(sigs: dict[int, tuple]) -> str:
     return f"unexpected layout — joints matching joint 1: {alike}"
 
 
+REG_ID = 8          # the "id" register — every DM motor has one
+REG_GEAR_RATIO = 20
+
+
+def scan(low: int, high: int, bitrate: int, confirmed: bool, arm: str = DEFAULT_ARM) -> int:
+    """Sweep CAN IDs for anything that answers a register read.
+
+    Bypasses I2RT's retry wrapper deliberately: a non-existent motor costs 20
+    retries × 3 attempts there, which makes a 32-ID sweep take minutes. One
+    request and a short timeout per ID is all a presence check needs.
+
+    Still register reads only — this cannot enable or move anything.
+    """
+    print(f"scanning CAN motor IDs {low}..{high} — one register read each, no retries")
+    print("traffic: 0x7FF sub-command 0x33 (READ). No enable, no setpoint.\n")
+    if not confirmed:
+        print("DRY RUN — nothing transmitted. Re-run with --yes.")
+        return 0
+
+    import can  # noqa: PLC0415
+
+    iface = open_raw_can_interface(bitrate=bitrate, arm=arm)
+    bus = iface.bus
+    found: list[tuple[int, float]] = []
+    try:
+        for motor_id in range(low, high + 1):
+            for reg in (REG_ID, REG_GEAR_RATIO):
+                bus.send(
+                    can.Message(
+                        arbitration_id=0x7FF,
+                        data=[motor_id, 0x00, 0x33, reg, 0x00, 0x00, 0x00, 0x00],
+                        is_extended_id=False,
+                    )
+                )
+                reply = bus.recv(timeout=0.02)
+                if reply is not None and reg == REG_GEAR_RATIO:
+                    ratio = struct.unpack("<f", bytes(reply.data)[4:8])[0]
+                    found.append((motor_id, ratio))
+                    print(f"  ✓ id {motor_id:>3} responded   gear_ratio={ratio}")
+                    break
+                if reply is None:
+                    break
+    finally:
+        iface.close()
+
+    print(f"\n{len(found)} device(s) on the bus: {[m for m, _ in found]}")
+    print("No motor was enabled; nothing was commanded.")
+    if len(found) <= 7:
+        print(
+            "\n→ One arm's worth of motors on this bus. Confirmed 2026-08-10: each YAM has its OWN\n"
+            "  CANable and its own bus, and BOTH arms use the identical motor IDs 1-7. Nothing in a\n"
+            "  CAN frame distinguishes the arms — only the adapter serial does. That is why every\n"
+            "  script here selects by serial and never by index (src/yam_can.py)."
+        )
+    else:
+        print("\n→ More than 7 devices: something else shares this bus. Investigate before commanding.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Identify the YAM variant over CAN, without enabling motors.")
     ap.add_argument("--yes", action="store_true", help="actually transmit register reads (default: dry run)")
     ap.add_argument("--ids", type=int, nargs="+", default=[*ARM_IDS, GRIPPER_ID])
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
+    ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS), help="WHICH ARM. Selected by serial, never by index.")
+    ap.add_argument(
+        "--scan",
+        nargs=2,
+        type=int,
+        metavar=("LOW", "HIGH"),
+        help="sweep a CAN ID range for ANY responding motor and exit. Answers 'what else is on "
+        "this bus' — e.g. whether the second arm shares it. One read per ID, no retries.",
+    )
     args = ap.parse_args()
+
+    if args.scan:
+        return scan(args.scan[0], args.scan[1], args.bitrate, args.yes, args.arm)
 
     print(f"motor IDs to query : {args.ids}")
     print(f"registers          : {', '.join(REGISTERS)}")
@@ -107,7 +185,7 @@ def main() -> int:
     add_i2rt_to_path()
     from i2rt.motor_config_tool.utils import get_special_message_response  # noqa: PLC0415
 
-    iface = open_raw_can_interface(bitrate=args.bitrate)
+    iface = open_raw_can_interface(bitrate=args.bitrate, arm=args.arm)
     print("bus open (normal mode — adapter is an active CAN node, but sends only reads)\n")
 
     rows: dict[int, dict] = {}

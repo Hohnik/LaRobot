@@ -46,6 +46,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from yam_can import (  # noqa: E402
+    ARM_SERIALS,
+    DEFAULT_ARM,
     YAM_BITRATE,
     YAM_MOTOR_TYPES,
     add_i2rt_to_path,
@@ -88,6 +90,7 @@ def main() -> int:
     ap.add_argument("--yes", action="store_true", help="actually transmit (default: dry run)")
     ap.add_argument("--ids", type=int, nargs="+", default=DEFAULT_IDS)
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
+    ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS), help="WHICH ARM. Selected by serial, never by index.")
     ap.add_argument(
         "--motor-type",
         default=None,
@@ -103,6 +106,7 @@ def main() -> int:
 
     types = {mid: (args.motor_type or YAM_MOTOR_TYPES.get(mid, "DM4310")) for mid in args.ids}
 
+    print(f"ARM              : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
     print(f"motor IDs to ping : {args.ids}")
     print(f"bitrate           : {args.bitrate}")
     print(f"decode as         : {types}")
@@ -119,7 +123,7 @@ def main() -> int:
 
     motor_types = {mid: getattr(MotorType, name) for mid, name in types.items()}
 
-    iface = open_motor_interface(bitrate=args.bitrate)
+    iface = open_motor_interface(bitrate=args.bitrate, arm=args.arm)
     print("bus open (normal mode — the adapter is now an active CAN node)\n")
 
     alive: list[int] = []

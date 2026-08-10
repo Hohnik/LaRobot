@@ -52,7 +52,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from yam_can import (  # noqa: E402
+    ARM_SERIALS,
+    DEFAULT_ARM,
     YAM_BITRATE,
+    YAM_JOINTS,
     YAM_MOTOR_TYPES,
     add_i2rt_to_path,
     open_motor_interface,
@@ -83,15 +86,21 @@ def main() -> int:
     ap.add_argument("--kd", type=float, default=DEFAULT_KD)
     ap.add_argument("--max-torque", type=float, default=DEFAULT_MAX_TORQUE)
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
+    ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS), help="WHICH ARM MOVES. Selected by serial, never by index.")
     args = ap.parse_args()
 
     delta = max(-MAX_DELTA_RAD, min(MAX_DELTA_RAD, args.delta))
     clamped = delta != args.delta
     motor_type_name = YAM_MOTOR_TYPES.get(args.motor, "DM4310")
+    joint_name, lo, hi = YAM_JOINTS.get(args.motor, ("unknown", None, None))
 
     print("=== plan ===")
-    print(f"  motor        : {args.motor} ({motor_type_name})"
-          + ("  ← wrist twist" if args.motor == 6 else "  ← GRIPPER: limits uncalibrated" if args.motor == 7 else ""))
+    print(f"  ARM          : {args.arm}  (serial {ARM_SERIALS[args.arm]})  ← verified after opening")
+    print(f"  motor        : {args.motor} = {joint_name} ({motor_type_name})")
+    if lo is not None:
+        print(f"  URDF limits  : {lo:+.4f} … {hi:+.4f} rad   (from yam.urdf, enforced below)")
+    else:
+        print("  URDF limits  : none published for this motor — travel NOT enforced ⚠️")
     print(f"  delta        : {delta:+.4f} rad  ({delta * 57.2958:+.2f}°)"
           + (f"   ⚠️ CLAMPED from {args.delta:+.4f}" if clamped else ""))
     print(f"  ramp         : {args.ramp:.2f} s   → peak speed {abs(delta) / args.ramp:.4f} rad/s "
@@ -112,7 +121,7 @@ def main() -> int:
 
     motor_type = getattr(MotorType, motor_type_name)
 
-    iface = open_motor_interface(bitrate=args.bitrate)
+    iface = open_motor_interface(bitrate=args.bitrate, arm=args.arm)
     period = 1.0 / CONTROL_HZ
     start_pos: float | None = None
     samples: list[tuple[float, float, float, float]] = []  # t, target, actual, torque
@@ -124,7 +133,22 @@ def main() -> int:
     try:
         info = iface.motor_on(args.motor, motor_type)
         start_pos = info.position
-        print(f"enabled. start position = {start_pos:+.4f} rad, error = {info.error_message}\n")
+        print(f"enabled. start position = {start_pos:+.4f} rad, error = {info.error_message}")
+
+        # Sixth safety mechanism, added once the URDF limits were known: refuse to
+        # command a target the vendor model says the joint cannot reach. Checked
+        # AFTER enabling, because it needs the measured start position.
+        if lo is not None:
+            target_end = start_pos + delta
+            if not (lo <= target_end <= hi):
+                abort_reason = (
+                    f"target {target_end:+.4f} rad is outside {joint_name} limits "
+                    f"[{lo:+.4f}, {hi:+.4f}] — refusing to move"
+                )
+                raise RuntimeError(abort_reason)
+            margin = min(target_end - lo, hi - target_end)
+            print(f"limit check ok: target {target_end:+.4f} rad, {margin:.3f} rad of margin")
+        print()
 
         def run_ramp(from_pos: float, to_pos: float, seconds: float, label: str) -> bool:
             """Interpolate the target. Returns False if an abort condition fired."""
