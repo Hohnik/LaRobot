@@ -29,6 +29,26 @@ I2RT_PATH = REPO_ROOT / "third_party" / "i2rt"
 YAM_BITRATE = 1_000_000  # I2RT documents 1 Mbit/s; see third_party/i2rt README
 GS_USB_INDEX = 0  # python-can's gs_usb backend indexes adapters, it has no "can0"
 
+# ⭐ MEASURED on this arm, 2026-08-10, not copied from a config file.
+# Re-derive at any time with:  uv run scripts/identify_arm.py --yes
+# (each motor's gear_ratio register: DM43**40** reports 40.0, DM43**10** reports 10.0)
+#
+# ⛔ Decoding a motor with the wrong type does NOT raise — it silently mis-scales.
+# Position happens to be safe (±12.5 rad on both), but:
+#     velocity  DM4310 ±30  vs  DM4340 ±10   -> 3.0x over-read
+#     torque    DM4310 ±10  vs  DM4340 ±28   -> 2.8x under-read
+# Under-reading torque on the three heaviest joints is the dangerous direction,
+# so never let a control loop assume a uniform motor type.
+YAM_MOTOR_TYPES = {
+    1: "DM4340",
+    2: "DM4340",
+    3: "DM4340",
+    4: "DM4310",
+    5: "DM4310",
+    6: "DM4310",
+    7: "DM4310",  # gripper
+}
+
 _patched = False
 
 

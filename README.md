@@ -62,6 +62,30 @@ experimentation*, while Linux remains right for the real rig.
 > visualisation) and plan on a Linux box for the **closed loop with the arm**. Do not fight macOS for the
 > 100 Hz control loop — that is a fight the plan already tells you not to pick.
 
+> ### ⭐ That recommendation was WRONG, and now it is measured rather than argued. 2026-08-10.
+>
+> `uv run scripts/bench_can.py --yes --cycle --samples 8000` — real 7-motor cycles against the real arm,
+> sustained for 25 s:
+>
+> ```
+> 8000/8000 cycles complete, 0 missed replies
+> cycle latency (ms): mean 3.121  p50 3.116  p95 3.231  p99 3.318  p99.9 3.576  max 17.771
+> sustained 320 cycles/s
+> cycles that would miss a 100 Hz deadline (10 ms): 2/8000  (0.03%)
+> ```
+>
+> **macOS clears the 100 Hz target with roughly 3× headroom.** The tail is what settles it — p99.9 is 3.58 ms
+> against a 10 ms budget. The two 17 ms outliers are OS scheduling jitter, and the motors' own 400 ms firmware
+> timeout makes a stall that size a non-event.
+>
+> **Consequence: teleop does not have to wait for the Linux machine.** Linux is still right for the final rig
+> — the plan's whole stack (RealSense, cuRobo, ABC training) is Linux-first, and this measurement says nothing
+> about the loop once IK, three cameras and policy inference compete for CPU. But *"macOS cannot do the control
+> loop"* is refuted, not merely doubted.
+>
+> ⚠️ Honest caveat: measured with **register reads**, not MIT control frames. Both are one request plus one
+> response, so the transport cost is identical, but firmware service time may differ. Treat it as a lower bound.
+
 ### 2.1 …but first contact from macOS is solved — measured 2026-08-10
 
 The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three facts, each verified in source
@@ -287,26 +311,29 @@ rig, drivers and logs stay here.
 listen-only probe green · **SpaceMouse verified on all six axes** · **arm identified over CAN** (§6.0) ·
 **gripper polled live, healthy, did not move** (§5).
 
-1. **Poll all seven motors** — `scripts/ping_motors.py --yes`. Only the gripper has been read so far. Gives
-   every joint's live position and confirms nothing is in an error state.
-2. ⭐ **Measure gs_usb round-trip throughput.** *This is the decision-grade question*, because there is no
-   Linux machine yet: can macOS sustain 7 motors × 2 frames at 100 Hz, or only at 20 Hz? Everything about
-   whether teleop can happen on the MacBook hangs on the answer, and it is cheap to measure.
-3. **Read joint positions continuously** — a small loop. Proves the state pipeline end to end and is the
-   natural harness for step 2.
-4. **First motion: the gripper only, small delta, low gains.** Julien's own instruction, and correct.
-   ⚠️ Calibrate or bound the travel first — `gripper_limits` is `null` (§5).
-5. **IK in simulation** — `mink` + the YAM MJCF from `third_party/i2rt/i2rt/robot_models/arm/`, driven by the
-   real SpaceMouse, rendered on screen. **The whole teleop loop with no hardware risk.** Both pieces now
-   exist, so this is no longer blocked on anything.
-6. **Gravity compensation**, so the arm can be hand-guided. First time the arm genuinely holds torque —
-   its own gated step, and the one that most wants the 400 ms timeout intact.
-7. **Webcam check** — trivial, and the plan needs it for data collection anyway.
-8. Only then: close the loop onto the physical arm — and by then, ideally on Linux.
+✅ Also done: **all 7 motors polled** (all `err=normal`, all within ±0.05 rad of zero, ~30 °C) ·
+**throughput measured — macOS clears 100 Hz with 3× headroom** (§2) · **first-motion script written**.
 
-*Step 5 remains the one to aim for: it makes the interesting half — twist → IK → joint targets — real and
-debuggable while the arm sits still. Step 2 is the one that decides how much of this year happens on the
-MacBook rather than waiting for hardware.*
+1. ⭐ **`scripts/move_one_motor.py --yes` — the first commanded motion.** Motor 6, the wrist twist, +0.15 rad
+   (8.6°) ramped over 2.5 s. **Julien runs this, not the agent.** Five independent safety mechanisms, see the
+   script docstring.
+2. **Continuous state read at 100 Hz** — the harness the teleop loop is built on. Now known to be feasible.
+3. **IK in simulation** — `mink` + the YAM MJCF from `third_party/i2rt/i2rt/robot_models/arm/`, driven by the
+   real SpaceMouse, rendered on screen. **The whole teleop loop with no hardware risk.** Both pieces exist, so
+   nothing blocks it, and it is the biggest single step toward the actual goal.
+4. **Gravity compensation**, so the arm can be hand-guided. First time the arm genuinely holds torque against
+   gravity — its own gated step, and the one that most wants the 400 ms timeout intact.
+5. **Gripper calibration** — needed before any absolute gripper command (`gripper_limits: null`).
+6. **Webcam check** — trivial, and the plan needs it for data collection anyway.
+7. **Close the teleop loop onto the physical arm**: SpaceMouse twist → IK → joint targets → arm.
+
+*Step 3 is the one to aim for: it makes the interesting half — twist → IK → joint targets — real and
+debuggable while the arm sits still.*
+
+> ### ⛔ Standing rule (Julien, 2026-08-10)
+> **The agent never runs a command that physically moves the robot.** Those are handed over for him to run.
+> The agent freely runs anything that cannot move it. The working line: **register reads and listen-only are
+> the agent's; anything that enables a motor or sends a setpoint is Julien's.**
 
 ## 7.5 Contributing this back to `Hohnik/LaRobot` — the plan
 

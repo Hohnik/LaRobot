@@ -45,7 +45,12 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import YAM_BITRATE, add_i2rt_to_path, open_motor_interface  # noqa: E402
+from yam_can import (  # noqa: E402
+    YAM_BITRATE,
+    YAM_MOTOR_TYPES,
+    add_i2rt_to_path,
+    open_motor_interface,
+)
 
 DEFAULT_IDS = [1, 2, 3, 4, 5, 6, 7]  # 6 arm joints + gripper
 
@@ -83,7 +88,12 @@ def main() -> int:
     ap.add_argument("--yes", action="store_true", help="actually transmit (default: dry run)")
     ap.add_argument("--ids", type=int, nargs="+", default=DEFAULT_IDS)
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
-    ap.add_argument("--motor-type", default="DM4310", help="affects reply DECODING only, not what is sent")
+    ap.add_argument(
+        "--motor-type",
+        default=None,
+        help="force one motor type for every motor. Default: the measured per-motor map "
+        "(YAM_MOTOR_TYPES). Affects reply DECODING only, never what is transmitted.",
+    )
     ap.add_argument(
         "--attempt-error-clear",
         action="store_true",
@@ -91,9 +101,11 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    types = {mid: (args.motor_type or YAM_MOTOR_TYPES.get(mid, "DM4310")) for mid in args.ids}
+
     print(f"motor IDs to ping : {args.ids}")
     print(f"bitrate           : {args.bitrate}")
-    print(f"decode as         : {args.motor_type}")
+    print(f"decode as         : {types}")
     print("frames per motor  : enable (…FC) then disable (…FD)\n")
 
     if not args.yes:
@@ -105,7 +117,7 @@ def main() -> int:
     add_i2rt_to_path()
     from i2rt.motor_drivers.dm_driver import MotorType  # noqa: PLC0415
 
-    motor_type = getattr(MotorType, args.motor_type)
+    motor_types = {mid: getattr(MotorType, name) for mid, name in types.items()}
 
     iface = open_motor_interface(bitrate=args.bitrate)
     print("bus open (normal mode — the adapter is now an active CAN node)\n")
@@ -115,10 +127,10 @@ def main() -> int:
     try:
         for motor_id in args.ids:
             try:
-                info = iface.motor_on(motor_id, motor_type)
+                info = iface.motor_on(motor_id, motor_types[motor_id])
                 enabled.append(motor_id)
                 alive.append(motor_id)
-                print(f"  ✓ motor {motor_id}: {describe(info)}")
+                print(f"  ✓ motor {motor_id} ({types[motor_id]}): {describe(info)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"  ✗ motor {motor_id}: no reply ({type(exc).__name__})")
             finally:
