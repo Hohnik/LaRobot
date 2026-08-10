@@ -24,6 +24,22 @@
 
 ---
 
+## ⭐ STATUS, 2026-08-10 — steps 1-4 are DONE. Read this before the step list below.
+
+The numbered steps were written before any of them had been attempted, and most are now history. What is
+still live is **step 6**, which is where Julien wants to go next.
+
+| step | state |
+|---|---|
+| 1b gripper teleop · 1 sim teleop · 2 whole-arm over gs_usb · 3 gravity comp + hand-guiding · 4 SpaceMouse → real arm | ✅ **done**, all on hardware |
+| axis mapping (not in the original list) | ✅ **done** — any puck direction can drive any motion, tuned on the arm, per-arm maps available |
+| **6 two arms, two SpaceMice** | ⭐ **NEXT — designed below, not built** |
+| 5 recorder → MCAP | open. Deliberately after teleop feels right, but **before** collecting demos in anger |
+| 7 cameras | open, nothing depends on it yet |
+
+⚠️ The step *ordering* below is therefore stale — step 5 now follows step 6. The **reasoning** in each step
+is not stale, which is why they are kept rather than deleted.
+
 ## The target, stated precisely
 
 **One SpaceMouse produces a 6-DoF cartesian twist. One YAM arm accepts joint positions. Teleop is the
@@ -184,10 +200,67 @@ so the action space can be chosen per experiment without re-collecting (Setup-Pl
 
 ---
 
-## Step 6 — Second SpaceMouse → bimanual
+## Step 6 — Two arms, two SpaceMice ⭐ **what Julien asked for next, 2026-08-10**
 
-The hard part is already done: `move_both_grippers.py` proved two arms on two independent CAN buses driven
-from one 100 Hz loop, with genuinely independent trajectories. Bimanual teleop is that, with IK in the middle.
+*"I would like to get to the point where we can control both arms with both mice."*
+
+### The blocker is not the hardware, and it is not the compute
+
+Both were checked rather than assumed:
+
+| | measured | verdict |
+|---|---|---|
+| two arms, two CAN buses, one 100 Hz loop | `move_both_grippers.py`, genuinely independent trajectories | **proven** |
+| CAN budget, 14 motors | ~6.2 ms/cycle against a 10 ms deadline | **fits** |
+| **two IK solves per cycle** — never previously measured | **0.100 ms** mean, p99 0.110 ms | **negligible** |
+
+So ~6.3 ms of a 10 ms budget, ~3.7 ms spare. ⚠️ The 6.2 ms figure came from register reads and is a lower
+bound; it says nothing about the loop once cameras and inference compete for CPU.
+
+**The actual blocker is that `teleop_session.py` is single-arm all the way through.** `robot`, `teleop`,
+`mode`, `gripper_value`, `prev_q`, `home_ee`, `park_target`, `last_active_axis`, `guide_ref`, `stall_since`
+and `max_temp_seen` are all one arm's state, held in one function's locals.
+
+### The design: extract `ArmSession`, then run N of them
+
+One object owns **one arm's** robot, `CartesianTeleop`, axis map, mode and cached state, exposing roughly
+`enter_mode()` / `step(dt)` / `shutdown()`. The script holds a list and the loop iterates. Single-arm and
+bimanual then become the same code with N=1 or N=2.
+
+⛔ **Why extraction and not a second `teleop_bimanual.py`.** Duplication has bitten this repo three times:
+`src/spacemouse.py` exists because device logic was copy-pasted and a fix landed in only one copy; the
+simulator's own `twist_from_axes()` ignored the axis map for the same reason; and PARK went around the
+gripper clamp because the clamp lived only in the teleop branch. A second control loop would be the fourth —
+and it would be the one driving two arms at once.
+
+### ⭐ The de-risking that matters: `--arms arm1` must run the N-arm code with N=1
+
+Then the **refactor** is verifiable against a single arm — behaviour Julien already knows the feel of —
+**independently of** the bimanual hardware risk. If N=1 feels identical, the restructure is sound, and going
+to N=2 introduces exactly one new variable.
+
+Without that, the first bimanual run tests a ~400-line restructure *and* two-arm coordination at once, and
+any failure is unattributable. Session 4 is the argument: three changes that passed 34 tests, three dry runs
+and a simulated IK loop produced three failures on first hardware contact, one of which dropped 4.3 kg.
+**Stage the variables.**
+
+### Decisions this needs, with the recommendation
+
+| question | recommendation | why |
+|---|---|---|
+| Do mode keys apply to one arm or both? | **The selected arm.** `a` cycles arm1 → arm2 → BOTH; the status line always shows which | A global `g` puts **8.6 kg** weightless at once, and GUIDE is the mode where a dynamics-model error becomes a *falling* arm (FINDINGS §11.1) |
+| Does *driving* apply to one arm or both? | **Always both** — each arm follows its own puck, continuously | That is the actual goal. Only *edits and mode changes* need a selector |
+| Start mode | **HOLD**, and refuse `--start-mode guide` when N>1 | Two arms going weightless on a first run is the worst possible first run |
+| Per-arm axis maps | ✅ **built** — shared by default, `--fork-map` to diverge | Julien: *"probably the same, actually. But maybe that should be options to map them separately"* |
+| Puck assignment | ✅ **built** — `pick_device_by_wiggle(exclude=…)` | Without it the same puck can be assigned to both arms silently: two arms following one hand, which reads as a control bug |
+| A fault on one arm | **stops both**, then the existing consent flow for each | A chain death on arm1 must not leave arm2 uncommanded and sagging |
+
+### Order of work
+
+1. Extract `ArmSession` with **no behaviour change**; run `--arms arm1` and confirm it feels identical.
+2. Add the `a` selector and per-arm status lines. Still one arm.
+3. `--arms arm1,arm2`, starting in HOLD, gripper enabled, desk clear.
+4. Only then GUIDE and CONTROLS on two arms.
 
 ## Step 7 — Cameras
 

@@ -36,6 +36,7 @@ from axis_map import (  # noqa: E402
     ROBOT_MOTIONS,
     UNBOUND,
     AxisMap,
+    AxisMapStore,
     GestureDetector,
     ambiguity_note,
     axes_readout,
@@ -357,6 +358,121 @@ def test_readout_shows_every_axis() -> None:
 
 
 # ------------------------------------------------- CONTROLS mode primitives ----
+
+
+# ---------------------------------------------------- per-arm map store ----
+
+
+def test_store_defaults_to_one_shared_map() -> None:
+    s = AxisMapStore()
+    assert s.for_arm("arm1") is s.shared
+    assert s.for_arm("arm2") is s.shared
+    assert s.is_shared("arm1") and s.is_shared("arm2")
+    assert "BOTH" in s.scope_note("arm1")
+
+
+def test_store_reads_a_legacy_flat_file_as_the_shared_map() -> None:
+    """⛔ His hand-dialled file must not be lost by introducing per-arm scope."""
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        p.write_text(LEGACY_FILE_CONTENT)
+        s = AxisMapStore.load(p)
+        assert s.per_arm == {}
+        assert s.shared.sign == [1, -1, -1, 1, 1, 1]
+        assert s.shared.source == list(range(N))
+        assert s.for_arm("arm2").sign == [1, -1, -1, 1, 1, 1]
+
+
+def test_store_reads_the_current_nested_shape_too() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        p.write_text(json.dumps({
+            "shared": {"source": [0, 1, 2, 3, 4, 5], "sign": [1] * N},
+            "arm2": {"source": [1, 0, 2, 3, 4, 5], "sign": [1, -1, 1, 1, 1, 1]},
+        }))
+        s = AxisMapStore.load(p)
+        assert s.is_shared("arm1")
+        assert not s.is_shared("arm2")
+        assert s.for_arm("arm2").source == [1, 0, 2, 3, 4, 5]
+        assert "arm2 ONLY" in s.scope_note("arm2")
+
+
+def test_store_editing_a_shared_map_affects_both_arms() -> None:
+    """The blast radius that scope_note() exists to announce."""
+    s = AxisMapStore()
+    m = s.for_arm("arm1")
+    m.flip(2)
+    s.set("arm1", m)
+    assert s.for_arm("arm2").sign[2] == -1, "shared means shared — this is the point of the warning"
+
+
+def test_store_fork_isolates_one_arm() -> None:
+    s = AxisMapStore()
+    s.fork("arm2")
+    assert not s.is_shared("arm2") and s.is_shared("arm1")
+    m = s.for_arm("arm2")
+    m.flip(2)
+    s.set("arm2", m)
+    assert s.for_arm("arm2").sign[2] == -1
+    assert s.for_arm("arm1").sign[2] == 1, "forking must stop arm2 edits reaching arm1"
+
+
+def test_store_fork_seeds_from_what_the_arm_already_used() -> None:
+    s = AxisMapStore(shared=AxisMap(source=[1, 0, 2, 3, 4, 5], sign=[1, -1, 1, 1, 1, 1]))
+    s.fork("arm2")
+    assert s.for_arm("arm2").source == [1, 0, 2, 3, 4, 5]
+    assert s.for_arm("arm2").sign == [1, -1, 1, 1, 1, 1]
+
+
+def test_store_unfork_returns_to_shared() -> None:
+    s = AxisMapStore()
+    s.fork("arm2")
+    s.unfork("arm2")
+    assert s.is_shared("arm2")
+    assert s.for_arm("arm2") is s.shared
+
+
+def test_store_fork_is_idempotent_and_unfork_is_safe() -> None:
+    s = AxisMapStore()
+    s.fork("arm2")
+    before = s.copy()
+    s.fork("arm2")
+    assert s == before
+    s.unfork("arm1")          # never forked; must not raise
+    assert s == before
+
+
+def test_store_round_trips_with_overrides() -> None:
+    s = AxisMapStore(
+        shared=AxisMap(source=[1, 0, 2, 4, 3, 5], sign=[1, 1, -1, 1, 1, -1]),
+        per_arm={"arm2": AxisMap(source=[0, 1, 2, 3, 4, 5], sign=[-1, -1, 1, 1, 1, 1])},
+    )
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        s.save(p)
+        assert AxisMapStore.load(p) == s
+
+
+def test_store_survives_a_corrupt_file() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        for bad in ("nonsense", "[1,2]", "null", '{"shared": 5}', '{"arm2": "x"}'):
+            p.write_text(bad)
+            s = AxisMapStore.load(p)
+            assert s.for_arm("arm1") == AxisMap(), bad
+
+
+def test_store_saving_the_live_file_preserves_every_arm() -> None:
+    s = AxisMapStore.load(REAL_MAP_FILE)
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        s.save(p)
+        after = AxisMapStore.load(p)
+    for arm in ("arm1", "arm2"):
+        rng = np.random.default_rng(11)
+        for _ in range(100):
+            axes = rng.uniform(-1, 1, N)
+            assert np.allclose(s.for_arm(arm).apply(axes), after.for_arm(arm).apply(axes)), arm
 
 
 def test_isolate_keeps_only_the_strongest_axis() -> None:

@@ -63,10 +63,12 @@ version, and exploring destroyed a hand-dialled map — FINDINGS §11.2.)
 |---|---|
 | *push the puck* | the arm performs whatever that control is bound to. **Nothing is edited** |
 | **`f`** | **reverse the direction of the control you just used** — the main one |
-| `1`…`6` | **reassign** that control to another motion — **1**=X **2**=Y **3**=UP **4**=ROLL **5**=PITCH **6**=YAW. The way you last pushed becomes that motion's positive direction |
+| `1`…`6` | **SWAP** that control with another motion's — **1**=X **2**=Y **3**=UP **4**=ROLL **5**=PITCH **6**=YAW. Both move, so nothing is orphaned, and **the same key again swaps back** |
 | `u` | that control drives nothing |
 | `0` | revert the whole map to how it was when the session started |
-| `-` / `+` | slower / faster |
+| `-` / `+` | linear speed | 
+| `,` / `.` | rotation speed |
+| `r` | wrist rotation on / off |
 | `t` / `g` / `h` / `m` | leave to TELEOP / GUIDE / HOLD / HOLD |
 
 The status line shows which control you last used, which motion it drives, and the resulting speed:
@@ -81,6 +83,24 @@ gesture can never drive two.
 
 **Saving is no longer unconditional:** the file is written only if the map actually changed, and the previous
 contents are copied to `config/spacemouse_map.prev.json` first.
+
+### One map or two? — `--fork-map`
+
+By default **both arms share one map**, and the plan line says so out loud:
+
+```
+  map scope   : SHARED — edits here affect BOTH arms
+```
+
+If arm2 genuinely needs different directions — a mirrored arm may well want an inverted Y — give it its own,
+seeded from whatever it uses today:
+
+```bash
+uv run scripts/teleop_session.py --yes --arm arm2 --fork-map     # arm2 gets its own map
+uv run scripts/teleop_session.py --yes --arm arm2 --share-map    # ...and back to the shared one
+```
+
+⛔ **Check the scope line before editing.** Tuning arm2 while it is still on the shared map changes arm1 too.
 
 ### The six motions — measured, not assumed
 

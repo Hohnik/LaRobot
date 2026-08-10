@@ -126,17 +126,20 @@ to be able to control one of the arms."*
 | 1 | ⭐ **Set up the mouse controls, in CONTROLS mode on the real arm** | `teleop_session.py --yes --arm arm1`, then `m`. The arm **moves**, one isolated axis at a time at half speed; push a direction, watch, press `f` to reverse it or `1`-`6` to reassign it. ⛔ **Do NOT use `--no-gripper` for this** — see §2 and FINDINGS §11.1. `scripts/map_axes.py` still exists for no-hardware sign tweaks but it cannot show you what a direction *is*, which is the actual difficulty |
 | 2 | **Verify PARK on hardware** | ⚠️ **Three defects, all fixed, none tested on the arm.** It was cancelled by any unrecognised key (Enter included); with `--no-gripper` the 7-vs-6 length mismatch **raised, skipped the release-consent flow and disabled the motors mid-air**; and it bypassed the gripper clamp. `s` to save a pose, move away, `p` to return. Also worth doing **once with `--no-gripper`**, since that was the broken path |
 | 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** The status line now prints **`jaw NN°C` separately from `hottest`** — watch *that* for **60 s** in TELEOP. A plateau near idle (31-36 °C) is the pass; a steady climb means quit and use `--no-gripper`. ⛔ Watching `hottest` is **not** this test: motors 2/3 carry the 4.3 kg and sit at 41-42 °C all session, so a gripper climbing 33 → 41 °C is invisible inside a `max()` |
-| 4 | ~~**Axis remapping**~~ | ✅ **Done 2026-08-10.** Any puck axis can drive any motion, in either direction, taught by gesture; motions can also be left deliberately unbound. `src/axis_map.py` + `scripts/map_axes.py`, 25 headless tests |
-| 5 | **Simultaneous bimanual teleop** | Hard half proven (`move_both_grippers.py`). Needs one process, two robots, two `CartesianTeleop`s, two pucks assigned up front. ~6.2 ms/cycle against a 10 ms budget. ⚠️ **Open question for Julien: should the axis map become per-arm?** It is one global file today. A mirrored left arm may well want inverted Y, and that is his call, not a guess |
+| 4 | ~~**Axis remapping**~~ | ✅ **Done and TUNED ON THE ARM, 2026-08-10.** Julien's live map is a real permutation — `X←y+ Y←x+ UP←z− ROLL←pitch+ PITCH←roll+ YAW←yaw−` — so the feature earned its place; sign flips alone could not have expressed it. Set up in **CONTROLS mode** (`m`): the arm moves one isolated axis at a time, `f` reverses the control you just used, `1`-`6` **swap** it with another motion. Per-arm maps exist (`--fork-map`), shared by default |
+| 5 | ⭐⭐ **Two arms, two SpaceMice** — **what Julien asked for next** | **Fully designed in [ROADMAP step 6](ROADMAP.md); not built.** Neither hardware nor compute is the blocker: two arms on two buses from one loop is proven, and **two IK solves cost 0.100 ms/cycle** (measured) against a 10 ms deadline with ~6.2 ms of CAN. The blocker is that `teleop_session.py` holds one arm's state in one function's locals. Plan: extract `ArmSession`, run N of them, and ⭐ **make `--arms arm1` exercise the N-arm code with N=1 first**, so the refactor is verified separately from the two-arm hardware risk. Two prerequisites are **already done**: per-arm axis maps (`AxisMapStore` + `--fork-map`) and puck assignment with `exclude=` |
 | 6 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
 
 ⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile, they have
 tests, and item 3 is verified numerically against two independent failures — but *"verified in principle"*
 is not *"verified"*. **Treat the first run as a test, not a demonstration.**
 
-⭐ **Item 1 is now free.** The axis map can be decided and verified with zero hardware risk
-(`map_axes.py` → `teleop_sim.py`), so there is no reason to spend bench time on it. Do it first,
-somewhere comfortable, and arrive at the arm with the mapping already right.
+⛔ **And item 1 is the counter-example to that caution, so read it before trusting a "free" step.** It was
+written here as *"now free — decide the map with zero hardware risk, arrive at the arm with the mapping
+already right."* **That was wrong**, and Julien said so immediately: you cannot decide a direction is wrong
+until you have watched the arm go that way, and no amount of off-line tooling supplies that. The whole
+premise — that the map is a property of the input device — was mine and it was false. **The map is a
+property of the device *and* how the arm is turned on his desk**, and only one of those is in a file.
 
 ## 6. What to do next
 

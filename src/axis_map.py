@@ -392,6 +392,125 @@ def ambiguity_note(axes: Any) -> str | None:
     return None
 
 
+class AxisMapStore:
+    """One shared axis map, plus optional per-arm overrides.
+
+    ⭐ Julien's requirement, and his own reasoning: *"it should probably be per arm
+    remapping because maybe one of the directions might want to be different for the
+    arms, but I don't know if that's actually the case. Maybe they're gonna be
+    exactly the same. Probably the same, actually. But maybe that should be options
+    to map them separately."*
+
+    So the default is **one map for both arms** — his "probably the same" — and an
+    override is created only when he explicitly asks for one. That ordering matters:
+    the alternative (a map per arm from the start) would let the two silently
+    diverge, and then a puck that feels wrong on arm2 is indistinguishable from a
+    map that was never copied across.
+
+    ⛔ THE ONE HARD REQUIREMENT: whatever reads this must say **which scope it is
+    editing**. Tuning arm2 and silently changing arm1 is the failure mode, and it is
+    the same shape as the bug that destroyed the hand-dialled map — an edit whose
+    blast radius was larger than the operator believed.
+
+    On disk::
+
+        {"shared": {"source": [...], "sign": [...]},
+         "arm2":   {"source": [...], "sign": [...]}}     # optional
+
+    A legacy flat file (`{"sign": [...]}` or `{"source": ..., "sign": ...}`) is read
+    as the shared map, so nothing hand-dialled is lost.
+    """
+
+    SHARED = "shared"
+
+    def __init__(self, shared: AxisMap | None = None, per_arm: dict[str, AxisMap] | None = None):
+        self.shared = shared if shared is not None else AxisMap()
+        self.per_arm = dict(per_arm) if per_arm else {}
+
+    @classmethod
+    def load(cls, path: Path) -> AxisMapStore:
+        if not path.exists():
+            return cls()
+        try:
+            raw: Any = json.loads(path.read_text())
+        except Exception:  # noqa: BLE001
+            return cls()
+        if not isinstance(raw, dict):
+            return cls()
+        # Legacy flat shape: the whole file IS the shared map.
+        if "source" in raw or "sign" in raw:
+            return cls(shared=AxisMap.load(path))
+        shared = AxisMap()
+        if isinstance(raw.get(cls.SHARED), dict):
+            s = raw[cls.SHARED]
+            try:
+                shared = AxisMap(source=s.get("source"), sign=s.get("sign"))
+            except Exception:  # noqa: BLE001
+                shared = AxisMap()
+        per_arm: dict[str, AxisMap] = {}
+        for key, val in raw.items():
+            if key == cls.SHARED or not isinstance(val, dict):
+                continue
+            try:
+                per_arm[key] = AxisMap(source=val.get("source"), sign=val.get("sign"))
+            except Exception:  # noqa: BLE001
+                continue
+        return cls(shared=shared, per_arm=per_arm)
+
+    def save(self, path: Path) -> None:
+        data: dict[str, Any] = {self.SHARED: {"source": self.shared.source, "sign": self.shared.sign}}
+        for arm, m in sorted(self.per_arm.items()):
+            data[arm] = {"source": m.source, "sign": m.sign}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n")
+
+    # ---- which map applies -------------------------------------------------
+
+    def for_arm(self, arm: str) -> AxisMap:
+        """The map this arm actually uses — its override if it has one, else shared."""
+        return self.per_arm[arm] if arm in self.per_arm else self.shared
+
+    def is_shared(self, arm: str) -> bool:
+        return arm not in self.per_arm
+
+    def scope_note(self, arm: str) -> str:
+        """Human-readable statement of blast radius. Print this, always."""
+        if self.is_shared(arm):
+            return "SHARED — edits here affect BOTH arms"
+        return f"{arm} ONLY — arm-specific, the other arm keeps the shared map"
+
+    # ---- editing -----------------------------------------------------------
+
+    def set(self, arm: str, m: AxisMap) -> None:
+        """Write a map back into whichever slot this arm reads from."""
+        if arm in self.per_arm:
+            self.per_arm[arm] = m
+        else:
+            self.shared = m
+
+    def fork(self, arm: str) -> None:
+        """Give `arm` its own map, seeded from whatever it uses today."""
+        if arm not in self.per_arm:
+            self.per_arm[arm] = self.for_arm(arm).copy()
+
+    def unfork(self, arm: str) -> None:
+        """Drop `arm`'s override and go back to the shared map."""
+        self.per_arm.pop(arm, None)
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, AxisMapStore)
+            and self.shared == other.shared
+            and self.per_arm == other.per_arm
+        )
+
+    def copy(self) -> AxisMapStore:
+        return AxisMapStore(
+            shared=self.shared.copy(),
+            per_arm={a: m.copy() for a, m in self.per_arm.items()},
+        )
+
+
 def axes_readout(axes: Any) -> str:
     """A live readout of all six puck axes, for teaching and for verifying.
 

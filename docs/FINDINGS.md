@@ -609,3 +609,60 @@ Speed is **half** teleop's (`CONTROLS_SCALE = 0.5`): it is the mode you enter wi
 confirmed, so a wrong direction should be a slow wrong direction. Everything below the twist is the
 *existing, hardware-proven* chain — IK, per-cycle joint-step clamp, joint limits, workspace box, `SafeRobot`
 rate limiter. **CONTROLS mode adds a twist source, not a control path.**
+
+### 12.1 What using it on the arm changed — 2026-08-10
+
+It worked, and Julien's live map came out a genuine permutation:
+`X←y+  Y←x+  UP←z−  ROLL←pitch+  PITCH←roll+  YAW←yaw−`. **Sign flips alone could not have expressed that**,
+so the permutation half earned its place rather than being speculative generality. Two things came back:
+
+**1. `1`-`6` now SWAP instead of steal-and-unbind.** *"Instead of only changing it to that specific thing and
+then just deleting the other one, it would just swap whatever was on the other… that will make it a lot
+easier."* He is right: the commonest edit is **two controls in each other's places**, and stealing left an
+orphan he then had to notice and re-bind, with a motion silently dead in between. A straight exchange is also
+an **involution** — the same key again undoes it — and preserves injectivity by construction. The sign
+travels with the puck axis, because the unit being exchanged is the whole control (which axis, pushed which
+way), not just the wiring.
+
+**2. `,` and `.` were missing from the CONTROLS key handler**, so rotation speed could not be changed there
+at all while linear could. The keys had been copied from the drive-mode handler and the second pair dropped.
+⚠️ **The reason it took a hardware session to notice is the interesting part:** the status line showed only
+the *resulting* speed of the active axis, so a key that did nothing was indistinguishable from a key that
+worked. Both scales are now printed continuously. *Same shape as the jaw temperature and the GUIDE drift —
+a readout must show the quantity a key is supposed to change.*
+
+---
+
+## 13. Bimanual prerequisites — built 2026-08-10, and one gap that would have bitten silently
+
+**Per-arm axis maps (`AxisMapStore`).** Shared by default — Julien's *"probably the same, actually"* — with an
+override created only by an explicit `--fork-map`. Defaulting to a map per arm would let the two silently
+diverge, after which a puck that feels wrong on arm2 is indistinguishable from a map that was never copied
+across. ⛔ **Whatever reads it must print which scope it is editing**; tuning arm2 and silently changing arm1
+is the same shape as the bug in §11.2 — an edit whose blast radius was larger than the operator believed.
+A legacy flat file still loads as the shared map, so nothing hand-dialled is lost.
+
+**⛔ `pick_device_by_wiggle()` could assign the same puck to both arms.** Called twice without an `exclude`,
+its single-device shortcut returns that device unconditionally, and with two attached nothing stopped the
+operator moving the one they had already assigned. **Both failures are silent, and the symptom — two arms
+following one hand — reads as a control bug rather than a device-assignment bug.** Exactly the class of the
+CAN adapter chosen by index that silently retargeted the wrong robot (§0 #5). Now takes `exclude=[path, …]`
+and says plainly when no unassigned puck remains.
+
+**Two-arm IK, measured (it never had been):** `0.100 ms` mean per cycle, p99 `0.110 ms`, for two
+`CartesianTeleop.step()` calls. Against a 10 ms deadline with ~6.2 ms of CAN for 14 motors, that is ~3.7 ms
+spare. **IK is not the bimanual bottleneck**, and the assumption that it might be is now retired.
+
+---
+
+## 14. A test whose premise expires
+
+`test_backward_compatible_with_hand_dialled_file` loaded `config/spacemouse_map.json` and asserted it was
+still sign-only. It failed the moment Julien legitimately saved a permutation — **correctly**, but for a
+useless reason: its own guard fired, not the property it was protecting.
+
+**The property is about the file FORMAT, not about whatever is currently in the file.** It now runs against a
+pinned fixture string, and a separate test checks that the live config loads, is injective, and round-trips.
+
+⭐ **Generalises: a test whose subject is a file the user edits has a moving target.** Pin the fixture; test
+the live artefact only for properties that must hold *whatever* it contains.

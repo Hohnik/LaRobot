@@ -162,7 +162,11 @@ def find_all_devices() -> list[dict]:
     ]
 
 
-def pick_device_by_wiggle(label: str = "this arm", timeout: float = 30.0) -> dict | None:
+def pick_device_by_wiggle(
+    label: str = "this arm",
+    timeout: float = 30.0,
+    exclude: list[Any] | None = None,
+) -> dict | None:
     """Ask the operator to move the puck they want, and return that one.
 
     ⛔ WHY THIS EXISTS, rather than an index or a serial.
@@ -179,12 +183,28 @@ def pick_device_by_wiggle(label: str = "this arm", timeout: float = 30.0) -> dic
     seconds and removes an entire class of "which puck drives which arm" bug —
     the same class that silently retargeted the wrong robot earlier today.
 
+    ⛔ `exclude` IS REQUIRED FOR BIMANUAL, and its absence was a real gap. Called
+    twice without it, this function can hand **the same puck to both arms**: the
+    single-device shortcut returns that device unconditionally, and with two devices
+    nothing stops the operator moving the one they already assigned. Both failures
+    are silent, and the symptom — two arms following one hand — reads as a control
+    bug rather than a device-assignment bug. That is the same class as the CAN
+    adapter chosen by index, which silently retargeted the wrong robot
+    (FINDINGS §0 #5). Pass the `path` of every already-assigned device.
+
     Returns the chosen device info, or None on timeout / no devices.
     """
-    devices = find_all_devices()
+    taken = {bytes(p) if isinstance(p, (bytes, bytearray)) else p for p in (exclude or [])}
+    devices = [d for d in find_all_devices() if d.get("path") not in taken]
     if not devices:
+        if taken:
+            print(f"\n   ✗ no unassigned SpaceMouse left for {label} — "
+                  f"{len(taken)} already assigned, and no other puck is attached.")
+            print("     Plug in a second SpaceMouse, or drive one arm at a time.\n")
         return None
     if len(devices) == 1:
+        if taken:
+            print(f"   ✓ one unassigned puck left — using it for {label}\n")
         return devices[0]
 
     print(f"\n⭐ {len(devices)} SpaceMice attached and they are indistinguishable to software:")

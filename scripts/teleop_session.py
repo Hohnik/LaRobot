@@ -86,6 +86,7 @@ from axis_map import (  # noqa: E402
     isolate,
     isolated_axes,
 )
+from axis_map import AxisMapStore  # noqa: E402
 from axis_map import N as N_AXES  # noqa: E402
 from keyboard import KeyReader  # noqa: E402
 from spacemouse import (  # noqa: E402
@@ -151,7 +152,7 @@ PARK_FILE = REPO / "config" / "park_pose.json"
 HELP = """
   MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
-  REMAP     m  MAP mode — choose WHICH puck axis drives WHICH motion (arm holds still)
+  CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
   GRIPPER   o open   c close          r  wrist rotation on/off
   OTHER     ?  this help              q  QUIT (asks before releasing the arm)
@@ -219,14 +220,30 @@ def main() -> int:  # noqa: PLR0915
                     help="start with wrist rotation disabled (toggle live with r)")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
     ap.add_argument("--box", type=float, default=WORKSPACE_BOX)
+    ap.add_argument("--fork-map", action="store_true",
+                    help="give THIS arm its own axis map, copied from the one it uses now. "
+                         "Without this, both arms share one map and editing changes both")
+    ap.add_argument("--share-map", action="store_true",
+                    help="drop this arm's own axis map and go back to the shared one")
     args = ap.parse_args()
+    if args.fork_map and args.share_map:
+        ap.error("--fork-map and --share-map are opposites; pass at most one")
 
     # Rotation is ON by default now. Julien: "the gripper cannot be tilted
     # currently and cannot be twisted". It was off for the first hardware run
     # because a wrong rotation sign swings the wrist while a wrong translation
     # sign only nudges — that caution has served its purpose.
     rotation = not args.no_rotation
-    axis_map = AxisMap.load(MAP_FILE)
+    # ⛔ The store decides WHICH map this arm uses — its own override if it has one,
+    # otherwise the shared one. Editing a shared map changes both arms, so the scope
+    # is printed in the plan and again at exit. Never leave that implicit.
+    map_store = AxisMapStore.load(MAP_FILE)
+    if args.fork_map:
+        map_store.fork(args.arm)
+    elif args.share_map:
+        map_store.unfork(args.arm)
+    axis_map = map_store.for_arm(args.arm)
+    map_store_at_start = map_store.copy()
     axis_map_at_start = axis_map.copy()
     park = load_json(PARK_FILE, {}).get(args.arm)
     angular_scale = ANGULAR_SCALE
@@ -251,6 +268,7 @@ def main() -> int:  # noqa: PLR0915
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
     print(f"  axis map    : {axis_map.one_line()}   (m to change it live)")
+    print(f"  map scope   : {map_store.scope_note(args.arm)}")
     if axis_map.unbound():
         names = ", ".join(ROBOT_MOTIONS[i]["short"] for i in axis_map.unbound())
         print(f"  ⚠️  UNBOUND  : {names} — the arm will NOT perform these until they are bound (m)")
@@ -859,12 +877,14 @@ def main() -> int:  # noqa: PLR0915
         # been produced on real hardware and were only recoverable because the file
         # happened to be committed. Two changes: nothing is written unless the map
         # actually changed, and the previous contents are kept alongside it.
-        if axis_map != axis_map_at_start:
+        map_store.set(args.arm, axis_map)
+        if map_store != map_store_at_start:
             try:
                 if MAP_FILE.exists():
                     BACKUP_FILE.write_text(MAP_FILE.read_text())
-                axis_map.save(MAP_FILE)
+                map_store.save(MAP_FILE)
                 print(f"\naxis map CHANGED and saved → {MAP_FILE.relative_to(REPO)}")
+                print(f"  scope: {map_store.scope_note(args.arm)}")
                 print(f"  previous contents kept in {BACKUP_FILE.relative_to(REPO)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"\n⚠️  could not save the axis map: {type(exc).__name__}: {exc}")
