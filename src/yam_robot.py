@@ -47,6 +47,36 @@ GRIPPER_LIMITS_FILE = REPO_ROOT / "config" / "gripper_limits.json"
 # once — not on every startup.
 GENTLE_TEST_TORQUE = 0.3
 
+# ⛔⭐ THE MASS THAT MADE THE ARM FALL, 2026-08-10.
+#
+# `GripperType.NO_GRIPPER` does not merely leave motor 7 unenabled — it swaps the
+# *dynamics model* used for gravity compensation. The bare arm XML gives its
+# terminal `gripper` body `mass="1e-6"` (yam.xml:38), and the real mass is merged
+# in from the gripper XML, which NO_GRIPPER replaces with a stub. Summing
+# linear_4310.xml's inertials: body 0.553219 + two fingers at 0.0710042 =
+# **0.695 kg**, at the very end of the arm.
+#
+# Measured consequence, in simulation, at the saved park pose:
+#
+#     gravity torque WITH gripper    [-0.00, -4.81, 6.34, 1.34, -0.07, -0.00] Nm
+#     gravity torque WITHOUT gripper [-0.00, -2.67, 3.88, 0.49, -0.00,  0.00] Nm
+#     joint 3 (elbow_pitch) short by  +2.47 Nm  =  39% of what it needs
+#
+# In `zero_gravity_mode=True` the constructor sets **kp = 0** and commands zero
+# torque (motor_chain_robot.py:241), so `motor_torques = gravity_comp` alone
+# (:366). There is no position term to take up a shortfall — the missing 2.47 Nm
+# is an unopposed torque pulling the elbow down, and the arm folds forward. That
+# is exactly what happened: GUIDE mode was entered with --no-gripper and the arm
+# sank while the status line reported a calm 35 °C for 33 seconds.
+#
+# Passing `ee_mass` restores it: worst residual falls 2.465 -> 0.188 Nm (3% of the
+# elbow's requirement), verified in simulation.
+# ⚠️ `ee_inertia` is NOT usable — the SDK writes an `ipos` attribute that MuJoCo
+# rejects ("Schema violation: unrecognized attribute: 'ipos'", should be `pos`).
+# That is a bug in the vendored tree, so only the mass can be corrected, and the
+# 0.188 Nm residual is the centre-of-mass offset we cannot express.
+GRIPPER_MASS_KG = 0.695
+
 
 def save_gripper_limits(arm: str, limits: tuple[float, float]) -> Path:
     GRIPPER_LIMITS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -166,6 +196,62 @@ def reconcile_gripper_limits(saved: list[float], raw_pos: float, margin: float =
     return None
 
 
+def park_target_from(
+    measured: Any,
+    saved: Any,
+    gripper_index: int | None = None,
+    clamp: Any = None,
+) -> tuple[Any, str | None]:
+    """Build a PARK target from a saved pose that may not match this robot's shape.
+
+    Returns `(target, warning_or_None)`. Pure, so it can be tested without an arm —
+    which is the point, because the bug it fixes could only be found by reading.
+
+    ⛔ TWO REAL DEFECTS LIVE HERE, both found on 2026-08-10 by reading the code.
+
+    **1. A length mismatch used to drop the arm.** `config/park_pose.json` holds 7
+    joints. Run with `--no-gripper` and the robot has 6, so the old
+    `park_target - measured` raised `ValueError` — and that exception escaped the
+    control loop, skipped the "the arm is HOLDING, press g or d" consent flow, and
+    fell into `finally`, which **disables the motors**. A raised arm sags. And
+    `--no-gripper` is precisely the escape hatch the gripper instructions tell you
+    to fall back to, so the fallback was the broken path. Symmetrically, a pose
+    saved *in* a no-gripper session has 6 entries and broke a later 7-DoF session.
+    Fixed by starting from the measured pose and overlaying only the joints the
+    saved pose actually carries: never invent a target for a joint we know nothing
+    about.
+
+    **2. PARK was the one path that bypassed the gripper clamp.** It commanded the
+    saved jaw value directly, so a pose saved with the jaws resting on a mechanical
+    stop would drive them back onto that stop and *hold* them there. Holding a
+    position at a stop is stall torque — full current, no motion, no cooling — which
+    is exactly how motor 7 cooked three times (FINDINGS §4, rule 1: never command
+    the gripper to hold at a hard stop). `clamp` is applied here so no caller can
+    forget it.
+    """
+    import numpy as np
+
+    measured = np.asarray(measured, dtype=float)
+    saved = np.asarray(saved, dtype=float)
+    target = measured.copy()
+
+    shared = min(len(measured), len(saved))
+    target[:shared] = saved[:shared]
+
+    warning = None
+    if len(saved) != len(measured):
+        warning = (
+            f"the saved park pose has {len(saved)} joints and this robot has "
+            f"{len(measured)} — parking the {shared} they share and leaving the rest "
+            f"where they are"
+        )
+
+    if gripper_index is not None and clamp is not None and len(target) > gripper_index:
+        target[gripper_index] = clamp(float(target[gripper_index]))
+
+    return target, warning
+
+
 def read_raw_gripper_position(arm: str) -> float | None:
     """Raw jaw motor position, read the same way the robot will read it."""
     add_i2rt_to_path()
@@ -237,16 +323,23 @@ def build_robot(
         #
         # Re-enabling gripper control needs the calibration reworked to measure
         # limits at the torque the RUNTIME uses, not at 0.3 Nm. See docs/FINDINGS.md.
+        #
+        # ⛔ `ee_mass` IS NOT OPTIONAL HERE. NO_GRIPPER swaps the gravity-compensation
+        # model as well as dropping motor 7, and without this the elbow is short by
+        # 39% of its holding torque — which in GUIDE mode (kp=0) drops the arm. See
+        # GRIPPER_MASS_KG above for the measurement and the incident.
         kwargs: dict = dict(
             channel=chain_channel(arm),
             arm_type=ArmType.YAM,
             gripper_type=GripperType.NO_GRIPPER,
             zero_gravity_mode=zero_gravity,
+            ee_mass=GRIPPER_MASS_KG,
             sim=False,
         )
         return SafeRobot(get_yam_robot(**kwargs)), (
-            "gripper NOT controlled (6 DoF) — motor 7 is left free. "
-            "Pass with_gripper=True only once the calibration is reworked."
+            f"gripper NOT controlled (6 DoF) — motor 7 is left free, and the gravity model "
+            f"carries ee_mass={GRIPPER_MASS_KG} kg so the arm still holds itself "
+            f"(~0.19 Nm residual at the elbow)."
         )
 
     kwargs: dict = dict(
