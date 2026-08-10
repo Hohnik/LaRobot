@@ -84,7 +84,20 @@ JAW_SPEED = 0.6     # rad/s
 
 DEFAULT_KP = 8.0
 DEFAULT_KD = 1.0
-DEFAULT_MAX_TORQUE = 1.2
+# ⭐ Per-motor, because one global limit is the wrong shape. Measured 2026-08-10
+# over three real teleop runs: gripper_twist never exceeded 0.168 Nm however hard
+# the puck was twisted, while gripper_jaws sat at 1.20-1.23 Nm the moment it was
+# pushed toward the stop it already rests against.
+#
+# A single number has to be loose enough for the jaws, which then leaves the
+# twist joint with a limit 7x above anything it can legitimately need. Splitting
+# them is TIGHTER overall, not looser: the twist joint now trips at ~3.5x its
+# observed peak, and the jaws get the headroom their mechanism actually demands.
+MAX_TORQUE_BY_MOTOR = {
+    6: 0.6,   # gripper_twist — observed peak 0.168 Nm across 4222 samples
+    7: 2.5,   # gripper_jaws  — needs ~1.2 Nm against its stop; DM4310 peak is 10 Nm
+}
+DEFAULT_MAX_TORQUE = 1.2  # fallback for any motor not in the table
 MAX_TRACKING_ERROR = 0.35
 LIMIT_MARGIN = 0.05
 JAW_WINDOW = 0.60  # rad either side of the start position; limits are unknown
@@ -104,12 +117,17 @@ def main() -> int:
     ap.add_argument("--no-jaws", action="store_true", help="twist only; leave motor 7 alone entirely")
     ap.add_argument("--kp", type=float, default=DEFAULT_KP)
     ap.add_argument("--kd", type=float, default=DEFAULT_KD)
-    ap.add_argument("--max-torque", type=float, default=DEFAULT_MAX_TORQUE)
+    ap.add_argument("--max-torque", type=float, default=None,
+                    help="override the per-motor torque limits with one value for all")
     ap.add_argument("--bitrate", type=int, default=YAM_BITRATE)
     args = ap.parse_args()
 
     twist_name, twist_lo, twist_hi = YAM_JOINTS[TWIST_MOTOR]
     motors = [TWIST_MOTOR] if args.no_jaws else [TWIST_MOTOR, JAW_MOTOR]
+    torque_limit = {
+        m: (args.max_torque if args.max_torque is not None else MAX_TORQUE_BY_MOTOR.get(m, DEFAULT_MAX_TORQUE))
+        for m in motors
+    }
 
     print("=== mapping ===")
     print(f"  ARM              : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
@@ -121,7 +139,8 @@ def main() -> int:
         print(f"  puck Z (push/lift)→ motor {JAW_MOTOR} gripper_jaws   "
               f"{args.jaw_speed} rad/s at full deflection, ±{args.jaw_window} rad around start")
     print(f"  control          : {CONTROL_HZ:.0f} Hz for {args.seconds:.0f} s, kp={args.kp} kd={args.kd}")
-    print(f"  abort if         : error != normal, |torque| > {args.max_torque} Nm, "
+    print(f"  torque limits    : " + "  ".join(f"m{m} {torque_limit[m]} Nm" for m in motors))
+    print(f"  abort if         : error != normal, torque over the above, "
           f"|tracking| > {MAX_TRACKING_ERROR} rad")
     print("  deadman          : release the puck and the target freezes\n")
 
@@ -224,8 +243,20 @@ def main() -> int:
                 if int(str(fb.error_code), 16) != 0x1:
                     abort_reason = f"motor {m} error: {fb.error_message}"
                     raise RuntimeError(abort_reason)
-                if abs(fb.torque) > args.max_torque:
-                    abort_reason = f"motor {m} torque {fb.torque:+.3f} Nm exceeded {args.max_torque}"
+                if abs(fb.torque) > torque_limit[m]:
+                    lag = fb.position - target[m]
+                    hint = (
+                        "the joint is being pushed against something it cannot move — most likely a "
+                        "mechanical stop, since it barely moved while torque rose"
+                        if abs(lag) > 0.05 and abs(fb.velocity) < 0.05
+                        else "the joint was moving, so this is mechanism friction rather than an obstruction"
+                    )
+                    abort_reason = (
+                        f"motor {m} ({YAM_JOINTS[m][0]}) torque {fb.torque:+.3f} Nm exceeded "
+                        f"{torque_limit[m]} Nm at position {fb.position:+.4f} "
+                        f"(target {target[m]:+.4f}, lag {lag:+.4f} rad, vel {fb.velocity:+.3f} rad/s)\n"
+                        f"     → {hint}"
+                    )
                     raise RuntimeError(abort_reason)
                 if abs(fb.position - target[m]) > MAX_TRACKING_ERROR:
                     abort_reason = (

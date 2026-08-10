@@ -227,6 +227,78 @@ def _verify_serial(iface: Any, expected: str, arm: str) -> None:
         )
 
 
+_chain_patched = False
+GS_USB_CHANNEL_PREFIX = "gsusb"
+
+
+def chain_channel(arm: str = DEFAULT_ARM) -> str:
+    """The channel string to hand `DMChainCanInterface` / `get_yam_robot()`.
+
+    Returns e.g. ``"gsusb1"`` — the gs_usb adapter *index* for `arm`, resolved by
+    serial (never by position), wrapped in a form the vendor code will accept.
+
+    ⚠️ The name is load-bearing and must not contain the substring ``"can"``.
+    `dm_driver.py:409` branches on ``if "can" in channel:`` and hands anything
+    matching straight to SocketCAN, which does not exist here. ``"gsusb1"`` is
+    chosen precisely because it fails that test.
+    """
+    index, _ = resolve_arm(arm)
+    return f"{GS_USB_CHANNEL_PREFIX}{index}"
+
+
+def patch_dm_driver_for_gs_usb() -> None:
+    """Let the whole-arm chain reach the CANable, not just single motors.
+
+    ⭐ WHY THIS IS NEEDED AT ALL
+
+    `DMSingleMotorCanInterface` accepts a `bustype`, which is how every
+    single-motor script here already works. But the layer above it —
+    `DMChainCanInterface`, the one `get_yam_robot()` uses and the only route to
+    all seven motors, gravity compensation and the gripper force limiter — does
+    not expose it (`dm_driver.py:372-424`). It picks the bus itself::
+
+        if "can" in channel:
+            DMSingleMotorCanInterface(channel=channel, bustype="socketcan", ...)
+        else:
+            DMSingleMotorCanInterface(channel=channel, bitrate=bitrate, ...)
+
+    Both branches end at SocketCAN — the second by falling back to the default.
+    There is no argument anywhere that changes it.
+
+    So the interception happens one level lower, at the constructor that *does*
+    understand bustype: a channel named ``gsusb<N>`` is rewritten to
+    ``(channel=N, bustype="gs_usb")``. Anything else is passed through untouched,
+    so behaviour on Linux/SocketCAN is bit-for-bit unchanged.
+
+    ⛔ Deliberately a patch and not a fork. `third_party/i2rt` stays a clean
+    upstream checkout that can be re-pulled without merging anything.
+
+    Idempotent.
+    """
+    global _chain_patched
+    if _chain_patched:
+        return
+
+    add_i2rt_to_path()
+    from i2rt.motor_drivers import dm_driver
+
+    original_init = dm_driver.DMSingleMotorCanInterface.__init__
+
+    def __init__(self: Any, *args: Any, **kwargs: Any) -> None:  # noqa: N807
+        channel = kwargs.get("channel")
+        if isinstance(channel, str) and channel.startswith(GS_USB_CHANNEL_PREFIX):
+            suffix = channel[len(GS_USB_CHANNEL_PREFIX) :]
+            if suffix.isdigit():
+                kwargs["channel"] = int(suffix)
+                kwargs["bustype"] = "gs_usb"
+        original_init(self, *args, **kwargs)
+
+    dm_driver.DMSingleMotorCanInterface.__init__ = __init__
+    patch_gs_usb_for_macos()
+    patch_gs_usb_echo_filter()
+    _chain_patched = True
+
+
 def add_i2rt_to_path() -> Path:
     """Make the vendored I2RT SDK importable without installing it.
 
