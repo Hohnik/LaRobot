@@ -1,6 +1,17 @@
 # yam-robotics — SpaceMouse teleop for a YAM arm
 
-> **Status: session 2, Monday 2026-08-10 — in progress.**
+> # ▶▶ NO CONTEXT? READ **[docs/HANDOFF.md](docs/HANDOFF.md)** FIRST.
+> It rebuilds the whole picture — state, working rules, traps, and what to do next — without this file.
+>
+> **Status: session 2, Monday 2026-08-10, 09:30-14:00 CEST — closed.**
+> ⭐ **A SpaceMouse drove the real arm.** Gravity compensation holds to 0.61°, hand-guiding works, and the
+> cartesian teleop loop runs on hardware at 100 Hz.
+> ⛔ **The gripper is deliberately NOT controlled** (`NO_GRIPPER` default) — motor 7 was cooked three times;
+> the mechanism and the fix are in [docs/FINDINGS.md](docs/FINDINGS.md) §3.5.
+>
+> *(previous status below)*
+>
+> **Session 2 — in progress.**
 > ⭐ **Both arms are alive and under control.** Motor 6 (`gripper_twist`) has been driven on each arm
 > individually and on **both simultaneously**, from a single 100 Hz loop across two independent CAN buses.
 > The arms have **only ever been commanded on that one joint** — no multi-joint motion yet, by choice.
@@ -447,6 +458,7 @@ yam-robotics/
 │   ├── Setup-Plan.md          # the friend's 382-line bimanual YAM plan (copy; original in ~/Downloads)
 │   ├── ROADMAP.md             # ⭐ the ordered plan and WHY each step comes where it does
 │   ├── COMMANDS.md            # ⭐ every command, grouped by how much it can move
+│   ├── HANDOFF.md             # ⭐⭐ START HERE with no context: state, rules, traps, next steps
 │   └── FINDINGS.md            # ⭐⭐ the latent knowledge: every measurement, every trap, every rule
 ├── scripts/
 │   ├── probe_hardware.py      # HID enumeration + open the SpaceMouse          read-only

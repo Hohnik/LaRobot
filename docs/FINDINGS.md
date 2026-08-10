@@ -173,6 +173,53 @@ the loop once cameras and inference compete for CPU — but the specific claim i
 
 ---
 
+## 3.5 ⛔⭐ THE GRIPPER IS NOT UNDER CONTROL, AND THAT IS DELIBERATE — read this first
+
+**Motor 7 was cooked three separate times on 2026-08-10.** Three different fixes were attempted and the first
+two addressed the wrong layer. This is the true mechanism, and it is the single most important open item.
+
+**The evidence that settled it**, printed by our own stall guard:
+
+```
+⚠️ GRIPPER STALLED (+7.71 Nm, not moving) — releasing it to 1.186
+```
+
+**`1.186`.** That is the *normalised* gripper position, and it is outside `[0, 1]` — **the jaws sit 18.6%
+beyond the "fully open" end of their own calibrated range.** `command_joint_pos` clips it back to `1.0`,
+which maps to the end stop, so the motor is commanded into a stop **it is already past** and pushes at
+7.71 Nm indefinitely.
+
+**It is self-reinforcing, which is why every run was worse than the last:** 7.7 Nm of runtime torque shoves
+the jaws further beyond the limit that a 0.3 Nm calibration detected. The calibration finds a "stop" that
+the runtime simply pushes through, so each session starts further outside the range than the one before.
+
+**Why the earlier fixes could not work:**
+- Clamping the command **above** `command_joint_pos` is bypassed: the vendor's clip is **below** it
+  (`motor_chain_robot.py:390`).
+- Releasing the command to the *measured* value is a no-op: `1.186` clips to `1.0`, the same stop. **A guard
+  that cannot express a safe command is not a guard.**
+- The ±2π reconciliation (§3) is correct and still necessary, but it fixes limits in the wrong **frame**, not
+  limits of the wrong **size**. Both faults are real and independent.
+
+**Current state: `GripperType.NO_GRIPPER` is the default.** Motor 7 is never enabled and never commanded; its
+400 ms timeout leaves it damped and free. The six arm joints are entirely unaffected and teleop works fully.
+`--gripper` opts back in.
+
+> ### ⭐ To fix it properly (the next session's job)
+> **Calibrate at the torque the runtime actually uses, not at 0.3 Nm.** The runtime reaches 7.7 Nm, so a
+> limit found at 0.3 Nm is not a limit — it is where the jaws stop being easy to move. Options, in order of
+> preference:
+> 1. Calibrate at ~2-3 Nm and **inset** the saved range by a margin, so the runtime can never command the
+>    true stop.
+> 2. Reduce the gripper's `kp` (currently 20.0 from `linear_4310.yml`) so the runtime cannot generate 7.7 Nm
+>    against a stop in the first place.
+> 3. Command the gripper by **torque** rather than position — a gripper does not want a position controller.
+>
+> ⚠️ Whatever is chosen, **verify by leaving it holding for 60 s and watching the temperature plateau.**
+> A gripper at equilibrium is the test; a gripper that "looks fine for 5 seconds" is not.
+
+---
+
 ## 4. ⛔ The over-temperature incident, 2026-08-10 ~12:4x — read this before long sessions
 
 **What happened.** During the first real cartesian teleop run, at t≈24 s:
