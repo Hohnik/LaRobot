@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Tests for `pick_device_by_wiggle`'s exclusion. No hardware, no HID device.
+
+    uv run scripts/test_puck_assignment.py
+
+⛔ WHY THIS IS WORTH TESTING. Without `exclude`, calling the picker once per arm can
+hand **the same puck to both arms**, and both routes to that are silent: the
+single-device shortcut returns unconditionally, and with two attached nothing stops
+the operator moving the one they already assigned. The symptom — two arms following
+one hand — reads as a control bug, so it would be debugged in the control loop,
+which is the wrong file entirely. That is exactly the CAN-adapter-by-index failure
+(FINDINGS §0 #5) in a new place.
+
+The device list is monkeypatched, so this exercises the selection logic without
+touching hidapi or seizing Julien's SpaceMouse.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO / "src"))
+
+import spacemouse  # noqa: E402
+
+PUCK_A = {"path": b"DevSrvsID:1111", "vendor_id": 0x256F, "product_id": 0xC635}
+PUCK_B = {"path": b"DevSrvsID:2222", "vendor_id": 0x256F, "product_id": 0xC635}
+
+
+class FakeDevices:
+    """Swap out find_all_devices() for the duration of a test."""
+
+    def __init__(self, devices: list[dict]):
+        self.devices = devices
+
+    def __enter__(self):  # noqa: ANN204
+        self._real = spacemouse.find_all_devices
+        spacemouse.find_all_devices = lambda: list(self.devices)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        spacemouse.find_all_devices = self._real
+
+
+def test_one_puck_no_exclusion_is_returned() -> None:
+    with FakeDevices([PUCK_A]):
+        assert spacemouse.pick_device_by_wiggle() == PUCK_A
+
+
+def test_the_only_puck_is_NOT_handed_out_twice() -> None:
+    """⛔ The core regression: one puck, two arms, must not silently serve both."""
+    with FakeDevices([PUCK_A]):
+        first = spacemouse.pick_device_by_wiggle(label="arm1")
+        assert first == PUCK_A
+        second = spacemouse.pick_device_by_wiggle(label="arm2", exclude=[first["path"]])
+        assert second is None, "the same puck was assigned to both arms"
+
+
+def test_second_call_gets_the_other_puck_without_asking() -> None:
+    """Two pucks, one already taken -> the remaining one needs no wiggle at all."""
+    with FakeDevices([PUCK_A, PUCK_B]):
+        second = spacemouse.pick_device_by_wiggle(label="arm2", exclude=[PUCK_A["path"]])
+        assert second == PUCK_B
+
+
+def test_exclusion_accepts_bytes_or_str_paths() -> None:
+    with FakeDevices([PUCK_A, PUCK_B]):
+        assert spacemouse.pick_device_by_wiggle(exclude=[bytearray(PUCK_A["path"])]) == PUCK_B
+
+
+def test_no_devices_at_all_returns_none() -> None:
+    with FakeDevices([]):
+        assert spacemouse.pick_device_by_wiggle() is None
+
+
+def test_excluding_everything_returns_none() -> None:
+    with FakeDevices([PUCK_A, PUCK_B]):
+        got = spacemouse.pick_device_by_wiggle(exclude=[PUCK_A["path"], PUCK_B["path"]])
+        assert got is None
+
+
+def main() -> int:
+    tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
+    failed = []
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"  ✓ {name}")
+        except Exception as exc:  # noqa: BLE001
+            failed.append(name)
+            print(f"  ✗ {name}\n      {type(exc).__name__}: {exc}")
+    print(f"\n{len(tests) - len(failed)}/{len(tests)} passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
