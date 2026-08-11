@@ -273,55 +273,70 @@ one of which dropped 4.3 kg. Two specific process faults worth carrying:
 
 ---
 
-## 8. ⭐ The Intel RealSense D405 — what the next session needs to know before it starts
+## 8. ⭐ The Intel RealSense D405 — MEASURED, 2026-08-11. Read this before touching it.
 
-**Status, 2026-08-11:** both cameras have arrived. One is **provisionally mounted on arm B**, the other is
-**with arm G**. ⚠️ **Neither is connected to the laptop** — verified by an unbounded `ioreg -p IOUSB` scan
-listing all 14 USB devices, with no Intel (vendor `0x8086`) or RealSense device among them. Julien's manual
-points at **`intelrealsense.com/get-started`**.
+**One camera is connected and healthy.** Julien mounted one provisionally on **arm B**; the second is with
+**arm G** and is **not plugged in** (only one serial appears on the bus).
 
-### ⚠️ Everything below is PRIOR BELIEF, not verified on this machine
+### What was measured, not assumed
 
-It is written down because it will save the next session hours of dead ends — but **every line of it must be
-checked, and this repo's whole history is a warning about confident, plausible, wrong answers**
-([FINDINGS §0](FINDINGS.md)). Treat it as a set of hypotheses to test, not facts to build on.
+| | value | why it matters |
+|---|---|---|
+| product | `Intel(R) RealSense(TM) Depth Camera 405` | it is the D405, confirmed |
+| **serial** | **`255323071773`** | ⭐ **a REAL serial.** Unlike the two SpaceMice, which report empty serials and forced the wiggle-to-assign hack, two D405s can be told apart properly. **Select by serial, never by index** (FINDINGS §0 #5) |
+| USB IDs | VID `0x8086` (32902), PID `0x0B5B` (2907) | for `ioreg`/`lsusb`-style checks |
+| `bcdDevice` | `20721` = `0x50F1` | **probably firmware 5.15.1**, unverified — confirm with `rs-enumerate-devices` |
+| **link speed** | **SuperSpeed (5 Gbps), `Device Speed = 3`** | ⭐ it negotiated **USB 3**, not USB 2. Bandwidth is not a problem for one camera. Re-check when the second is added |
+| **UVC** | `Intel(R) RealSense(TM) Depth Camera 405  Depth` → `UVC Camera VendorID_32902 ProductID_2907` | ⭐⭐ **see below — this is the shortcut** |
 
-**What the D405 is.** A short-range stereo depth camera, physically the same module family as the D435 but
-tuned for close work — roughly **7 cm to 50 cm**, which is exactly right for a gripper-mounted view. It has
-a colour sensor and stereo depth, **no IMU**, and connects by **USB-C 3.x**. The MJCF in
-`third_party/i2rt` already models it on the flange at a **25° cant with +Z along the optical axis**
-(FINDINGS §19), which is why `--frame camera` exists and has been correct-but-unusable until now.
+### ⭐⭐ The shortcut: it is also a plain UVC camera
 
-**⛔ The likely hard part, and it rhymes with a problem this repo already solved once.** Intel's
-`librealsense` SDK is Linux- and Windows-first. macOS support is real but second-class, and **Apple Silicon
-is the weakest case**: there are generally **no official `pyrealsense2` wheels for macOS ARM**, so Python
-bindings usually mean building `librealsense` from source with CMake. ⭐ **This is the same shape as the CAN
-problem** — an SDK that assumes a platform we are not on — and that was solved by patching from outside
-rather than forking (`src/yam_can.py`, FINDINGS §2). Expect a similar shape here and read that section first.
+macOS lists the D405 as a standard **UVC camera**, which means **OpenCV can open it with no SDK at all**.
+`scripts/camera_view.py --list` should now show it as an extra index.
 
-**Things worth checking early, roughly in order:**
+**That is very likely enough for teleop today.** Driving the arm from the camera's point of view needs a
+*picture*, not a point cloud — and the whole control-frame machinery (`v` → tool frame) is already built and
+waiting. ⭐ **Try this before spending an hour on the SDK.**
 
-1. **Plug one in and look.** `ioreg -p IOUSB -l -w 0 | rg -i "realsense|8086"` should show it. If nothing
-   appears, it is cable or port, not software — the D405 needs a **data-capable USB-C cable**, and
-   charge-only cables are a classic silent failure.
-2. **USB3 vs USB2.** A D405 on a USB2 link will either refuse or fall back to a crawl. Check what it
-   negotiated. ⚠️ Both arms, both SpaceMice and the C920 already share this laptop's hubs — see the device
-   list above. **Two depth cameras plus everything else is a real bandwidth question, not a formality.**
-3. **Can `pyrealsense2` be installed at all?** `uv add pyrealsense2` is the cheap test. If there is no
-   wheel, the options are a source build, Rosetta, or treating the camera as a plain UVC device for colour
-   only — which `scripts/camera_view.py` already handles, and which may be enough for teleop.
-4. **Firmware.** Intel ships firmware updates and mismatches cause confusing failures. Check the version
-   before debugging anything else.
-5. **Serial numbers.** Two identical cameras raise **exactly** the ambiguity this repo has hit twice — the
-   CAN adapters and the two SpaceMice. ⛔ **Select by serial, never by index** (FINDINGS §0 #5). Unlike the
-   SpaceMice, RealSense devices *do* report real serials, so this one is solvable properly.
+⚠️ Caveats: the entry macOS shows is the **Depth** stream, which over UVC is 16-bit and will look wrong
+rendered as ordinary colour. Whether the RGB stream appears as a separate index is **not yet known** — check
+`--list`. And a UVC-only path gives no depth alignment, no intrinsics and no camera controls.
 
-**What already exists and should not be rebuilt:** the `camera` control frame, the terminal and windowed
-viewers, the frame-rate and latency instrumentation, and the finding that the C920's ~200 ms latency is
-sensor-and-encode rather than software ([FINDINGS §21.3](FINDINGS.md)). ⭐ **A D405 may well be much faster**
-— it is a machine-vision camera rather than a consumer webcam — which would make the latency question worth
-re-measuring rather than assuming it carries over.
+### The SDK situation — measured, and the prediction held
 
-**⚠️ The agent still cannot test any of this.** macOS camera permission is per-application
-([FINDINGS §21.1](FINDINGS.md)). Enumeration over `ioreg` and `system_profiler` works; opening a stream does
-not. Plan for measurements to be commands Julien runs, and put the diagnostics *in the program*.
+**`pip install pyrealsense2` is impossible here.** Wheels exist only for `manylinux1_x86_64`,
+`manylinux2014_aarch64` and `win_amd64` — **no macOS build at any version**, including the older 2.55 that
+once had one. Verified with `uv pip install --dry-run` on both current and pinned versions.
+
+⭐ **But `librealsense` IS available from Homebrew as a prebuilt bottle** — `stable 2.58.3 (bottled)`,
+dependencies `glfw` and `libusb`, not currently installed. A *bottle* means no source compilation for the
+C++ library and its tools:
+
+```bash
+brew install librealsense      # then:
+rs-enumerate-devices           # confirms the camera, reports firmware
+realsense-viewer               # GUI: streams, depth, and the camera's own controls
+```
+
+⚠️ **The Homebrew formula does not necessarily build the PYTHON bindings** — those usually need a source
+build with `-DBUILD_PYTHON_BINDINGS=ON`. So the likely ladder, cheapest first:
+
+1. **UVC via OpenCV** — nothing to install. Probably enough for teleop.
+2. **`brew install librealsense`** — prebuilt tools, confirms hardware and firmware, gives a viewer.
+3. **Source build with Python bindings** — only if depth data is genuinely needed in Python.
+
+⭐ **This is the same shape as the CAN SDK problem** ([FINDINGS §2](FINDINGS.md)): a vendor SDK that assumes
+a platform we are not on. That was solved by patching from *outside* while keeping `third_party/` a clean
+upstream checkout. **Read §2 before choosing an approach here** — and note it also ends with the reminder
+that Linux remains right for the final rig, so effort spent fighting macOS should be proportionate.
+
+### What already exists and must not be rebuilt
+
+The `camera` control frame (correct for the D405's modelled 25° flange cant), both viewers, the frame-rate
+and latency instrumentation, and the finding that the C920's ~200 ms latency is sensor-and-encode rather
+than software ([FINDINGS §21.3](FINDINGS.md)). ⭐ **A D405 may be much faster** — it is a machine-vision
+camera, not a consumer webcam — so **re-measure rather than assume that carries over.**
+
+⚠️ **The agent still cannot open a camera stream.** macOS camera permission is per-application
+([FINDINGS §21.1](FINDINGS.md)); enumeration via `ioreg`/`system_profiler` works, opening does not. Plan for
+measurements to be commands Julien runs, and put the diagnostics *inside* the program.

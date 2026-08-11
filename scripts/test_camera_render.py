@@ -264,5 +264,54 @@ def test_kitty_deletes_the_previous_frame_and_silences_replies() -> None:
     assert "q=2" in out.split(";", 1)[0], "must suppress replies, or they land in stdin"
 
 
+
+
+def test_kitty_sends_genuine_png_because_there_is_no_jpeg_format_code() -> None:
+    """⛔ THE BUG Julien saw as a blank screen in kitty mode.
+
+    The kitty protocol's `f` takes exactly three values: 24 (raw RGB), 32 (raw RGBA)
+    and 100 (**PNG**). There is no JPEG. The first version encoded JPEG and labelled
+    it `f=100`, so the terminal failed to decode and said nothing — because `q=2` had
+    suppressed the very error that explains it.
+    """
+    import base64
+
+    img = np.zeros((180, 320, 3), np.uint8)
+    img[:] = (50, 120, 200)
+    out = C.render_kitty(img, 40, 12)
+    assert "f=100" in out
+    first_data = out.split("\x1b_G")[2]
+    payload = first_data.split(";", 1)[1].split("\x1b")[0]
+    raw = base64.b64decode(payload + "=" * (-len(payload) % 4))
+    assert raw[:4] == b"\x89PNG", (
+        f"f=100 declares PNG but the payload starts {raw[:4]!r} — that is the bug"
+    )
+
+
+def test_the_image_is_downscaled_because_payload_is_latency() -> None:
+    """720p PNG is ~1 MB and 31 ms to encode: 40 MB/s at 30 fps, which cannot work."""
+    big = np.zeros((720, 1280, 3), np.uint8)
+    big[:] = (90, 90, 90)
+    assert C._downscale(big, 480).shape[1] == 480
+    assert C._downscale(big, 480).shape[0] == 270, "aspect ratio must survive the downscale"
+    small = np.zeros((180, 320, 3), np.uint8)
+    assert C._downscale(small, 480).shape[:2] == (180, 320), "must not UPscale"
+
+
+def test_a_bigger_image_width_costs_a_bigger_payload() -> None:
+    """The knob Julien tunes against the on-screen draw-ms readout."""
+    img = np.zeros((720, 1280, 3), np.uint8)
+    img[:] = np.random.default_rng(2).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    assert len(C.render_kitty(img, 60, 20, 320)) < len(C.render_kitty(img, 60, 20, 640))
+
+
+def test_errors_can_be_unsuppressed_for_diagnosis() -> None:
+    """⭐ q=2 is right for a 30 fps loop and wrong for finding out why nothing shows.
+    --term-test needs the error, so `quiet=False` must actually drop q=2."""
+    img = np.zeros((90, 160, 3), np.uint8)
+    assert "q=2" in C.render_kitty(img, 20, 6, quiet=True)
+    assert "q=2" not in C.render_kitty(img, 20, 6, quiet=False)
+
+
 if __name__ == "__main__":
     sys.exit(main())

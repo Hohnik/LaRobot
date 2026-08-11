@@ -388,50 +388,135 @@ def term_diagnosis() -> str:
     return "\n".join(lines)
 
 
-def render_kitty(frame, cols: int, rows: int, quality: int = 60) -> str:
+def _downscale(frame, max_width: int):  # noqa: ANN001, ANN201
+    """Shrink to at most `max_width`, preserving shape. Payload is latency.
+
+    The terminal scales whatever it receives into the cell box, so sending more
+    pixels than the box can display is pure cost. Measured PNG payloads for a
+    photo-like frame, and why the default is not 720p:
+
+        1280x720   998 KB   31 ms encode   ->  40 MB/s at 30 fps. Impossible.
+         640x360   283 KB    6.6 ms
+         480x270  ~180 KB   ~3 ms          ->  the default
+         320x180    78 KB    1.6 ms        ->  still 22x the detail of blocks
+    """
+    h, w = frame.shape[:2]
+    if w <= max_width:
+        return frame
+    return cv2.resize(frame, (max_width, max(1, round(h * max_width / w))),
+                      interpolation=cv2.INTER_AREA)
+
+
+def render_kitty(frame, cols: int, rows: int, max_width: int = 480, quiet: bool = True) -> str:
     """A real image, drawn by the kitty graphics protocol (kitty, Ghostty, Konsole).
 
-    ⛔ TWO THINGS THAT WOULD HAVE BROKEN THIS, both from reading the protocol spec
-    rather than from running it — the agent cannot test any of this (FINDINGS §21.1).
+    ⛔⭐ THE BUG THIS FIXES, and it is a good lesson in reading a spec properly.
 
-    **1. Images PERSIST until deleted.** Unlike a text redraw, each transmitted image
-    stays placed. Sending one every frame at 30 fps would pile up placements
-    indefinitely and grow the terminal's memory without bound. `a=d,d=A` deletes all
-    existing placements before each new frame.
+    The first version encoded **JPEG** and labelled it `f=100`. But in the kitty
+    protocol `f` takes only three values — `f=24` (raw RGB), `f=32` (raw RGBA) and
+    `f=100` (**PNG**). **There is no JPEG.** So the terminal was handed JPEG bytes,
+    told they were PNG, failed to decode them, and said nothing — because `q=2` had
+    suppressed exactly the error message that would have explained it. Julien saw a
+    blank screen in kitty mode while blocks mode worked.
 
-    **2. The terminal REPLIES to every image.** kitty answers with
-    `ESC _G i=…;OK ESC \\` on success or an error string on failure. Those bytes
-    arrive on **stdin** — and this viewer reads stdin for keypresses, so every frame
-    would inject a burst of escape characters that the key handler sees as junk
-    input. `q=2` suppresses the responses entirely, which is what a real-time
-    redraw loop wants.
+    ⚠️ Two lessons worth keeping. **A format code is not a MIME type**: `f=100`
+    named the container, and assuming it meant "some compressed image" is the same
+    class of error as assuming an SDK flag means what its name suggests. And
+    **suppressing errors cost more than the noise it saved** — `q=2` is right for a
+    30 fps redraw, but it turned a one-line diagnosis into a session of guessing,
+    which is why `--term-test` now exists to send one image with errors ENABLED.
 
-    The payload is base64 of a JPEG in 4096-byte chunks, `m=1` on every chunk but the
-    last, `f=100` meaning "this is a PNG/JPEG file, decode it yourself", and `c`/`r`
-    placing it in a cell box so it scales exactly like the block renderer does.
+    Three further protocol facts, all load-bearing:
+
+    - **PNG is the only compressed format**, and PNG of a photo is large — hence the
+      downscale. `IMWRITE_PNG_COMPRESSION=1` is deliberate: level 1 costs ~1.6 ms at
+      320x180 where the default costs several times that, for a few percent of size.
+    - **Images persist until deleted.** One per frame at 30 fps accumulates
+      placements without bound, so `a=d,d=A` clears the previous frame first.
+    - **The terminal replies on stdin**, which this viewer reads for keypresses, so
+      `q=2` is needed in the live loop or every frame injects junk input.
     """
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    small = _downscale(frame, max_width)
+    ok, buf = cv2.imencode(".png", small, [int(cv2.IMWRITE_PNG_COMPRESSION), 1])
     if not ok:
         return ""
     data = base64.b64encode(buf.tobytes()).decode("ascii")
     chunks = [data[i:i + 4096] for i in range(0, len(data), 4096)]
-    out = ["\x1b_Ga=d,d=A,q=2\x1b\\"]          # clear the previous frame's placement
+    q = "q=2," if quiet else ""
+    out = [f"\x1b_Ga=d,d=A,{q}".rstrip(",") + "\x1b\\"]      # clear the previous placement
     for i, chunk in enumerate(chunks):
         first, last = i == 0, i == len(chunks) - 1
-        ctrl = f"a=T,f=100,c={cols},r={rows},q=2," if first else ""
+        ctrl = f"a=T,f=100,c={cols},r={rows},{q}" if first else ""
         out.append(f"\x1b_G{ctrl}m={0 if last else 1};{chunk}\x1b\\")
     return "".join(out)
 
 
+def term_test(cols: int = 40, rows: int = 12) -> int:
+    """Send ONE small image with errors ENABLED, and report what the terminal says.
 
-def render_iterm(frame, cols: int, rows: int, quality: int = 60) -> str:
+    ⭐ This exists because `q=2` — correct for a 30 fps loop — silently swallowed the
+    error that would have identified the JPEG-labelled-as-PNG bug immediately. One
+    command now produces ground truth instead of a guess.
+
+    kitty replies `ESC _G i=<id>;OK ESC \\` on success, or `ESC _G i=<id>;<ERROR>
+    ESC \\` on failure. Anything else — including silence — means the terminal does
+    not implement the protocol at all.
+    """
+    import select
+    import termios
+    import tty
+
+    img = np.zeros((180, 320, 3), np.uint8)
+    img[:60] = (60, 60, 220); img[60:120] = (60, 220, 60); img[120:] = (220, 120, 60)
+    cv2.putText(img, "KITTY TEST", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+
+    print("Sending one test image with error reporting ON.")
+    print("You should see three colour bars and the words KITTY TEST.\n")
+    payload = render_kitty(img, cols, rows, quiet=False)
+
+    fd = sys.stdin.fileno()
+    try:
+        saved = termios.tcgetattr(fd)
+    except Exception:  # noqa: BLE001
+        print("⚠️  not a terminal — run this directly in your shell.")
+        return 1
+    try:
+        tty.setcbreak(fd)
+        sys.stdout.write(payload)
+        sys.stdout.flush()
+        reply = ""
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            if select.select([sys.stdin], [], [], 0.05)[0]:
+                reply += sys.stdin.read(1)
+                if reply.endswith("\x1b\\"):
+                    break
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+
+    print("\n\n--- what the terminal replied ---")
+    if not reply:
+        print("  (nothing)  -> this terminal does not implement the kitty graphics protocol")
+        return 1
+    printable = reply.replace("\x1b", "<ESC>")
+    print(f"  {printable!r}")
+    if ";OK" in reply:
+        print("\n  ✅ OK — the protocol works and the image above should be visible.")
+        return 0
+    print("\n  ⛔ the terminal reported an ERROR. The text after ';' is the reason.")
+    return 1
+
+
+
+def render_iterm(frame, cols: int, rows: int, max_width: int = 480, quality: int = 60) -> str:
     """A real image, drawn inline by iTerm2/WezTerm at full resolution.
 
     The frame is JPEG-encoded and base64'd into iTerm2's inline-image escape. JPEG
     rather than PNG deliberately: a 320x180 PNG is several times larger and the whole
     payload is written to the terminal every frame, so size is latency.
     """
-    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    ok, buf = cv2.imencode(".jpg", _downscale(frame, max_width),
+                           [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:
         return ""
     b64 = base64.b64encode(buf.tobytes()).decode("ascii")
@@ -496,9 +581,9 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
 
                 t_draw = time.perf_counter()
                 if mode == "iterm":
-                    body = render_iterm(frame, cols, rows)
+                    body = render_iterm(frame, cols, rows, args.image_width)
                 elif mode == "kitty":
-                    body = render_kitty(frame, cols, rows)
+                    body = render_kitty(frame, cols, rows, args.image_width)
                 else:
                     body = render_ansi(frame, cols, rows)
                 sys.stdout.write("\x1b[H" + body)
@@ -573,6 +658,14 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--term-test", action="store_true",
+                    help="⭐ send ONE image with error reporting ON and print what the terminal "
+                         "says. Use this when image mode shows nothing — it turns a blank "
+                         "screen into the terminal's actual error message")
+    ap.add_argument("--image-width", type=int, default=480,
+                    help="longest side of the image sent in iterm/kitty mode. Payload is "
+                         "latency: 480 is ~180 KB/frame, 320 is ~104 KB, 720p is 1.3 MB and "
+                         "will not keep up. Watch the draw-ms readout and tune")
     ap.add_argument("--term-info", action="store_true",
                     help="print what this terminal is and whether it can draw images, then exit")
     ap.add_argument("--term-mode", default="auto", choices=["auto", "blocks", "iterm", "kitty"],
@@ -601,6 +694,9 @@ def main() -> int:
     if args.term_info:
         print(term_diagnosis())
         return 0
+
+    if args.term_test:
+        return term_test()
 
     if args.list:
         list_cameras()

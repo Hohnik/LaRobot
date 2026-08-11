@@ -1006,8 +1006,44 @@ degraded one.
 *"Ghostty detected (speaks the kitty graphics protocol)"* with `best mode: kitty`. So
 `--term` already draws real images with no flag needed.
 
-⚠️ Two kitty-protocol facts that would each have broken a 30 fps redraw loop, both
-found by reading the spec rather than by running it — the agent cannot test this:
+### 21.2.1 ⛔ `f=100` is PNG, not "some compressed image" — the blank-screen bug
+
+Julien's screenshots showed **blocks working and kitty blank**. The cause: the first
+kitty renderer encoded **JPEG** and labelled it `f=100`.
+
+In the kitty graphics protocol `f` takes exactly three values — `f=24` (raw RGB),
+`f=32` (raw RGBA) and `f=100` (**PNG**). **There is no JPEG.** So the terminal was
+handed JPEG bytes, told they were PNG, failed to decode, and said nothing —
+**because `q=2` had suppressed the very error that explains it.**
+
+Two lessons, and the second is the more expensive one:
+
+- **A format code is not a MIME type.** `f=100` names a specific container. Reading
+  it as "compressed image" is the same class of error as assuming an SDK flag means
+  what its name suggests — which is how `--no-gripper` dropped an arm (§11.1).
+- ⚠️ **Suppressing errors cost far more than the noise it saved.** `q=2` is correct
+  for a 30 fps redraw loop, and it turned a one-line diagnosis into a session of
+  guessing. **`--term-test` now exists to send exactly one image with errors
+  ENABLED** and print the terminal's reply verbatim. *When a display path can fail
+  silently, ship the diagnostic that makes it speak.*
+
+**PNG forces a size decision, because PNG of a photo is large.** Measured on a
+photo-like frame:
+
+```
+  1280x720   998 KB   31 ms encode   -> 40 MB/s at 30 fps. Impossible.
+   640x360   283 KB    6.6 ms
+   480x270  ~180 KB   ~3 ms          -> the default (--image-width)
+   320x180    78 KB    1.6 ms        -> still 22x the detail of blocks
+```
+
+⭐ Even the smallest is a large win: a 67x19 cell grid is 67x38 = **2,546 pixels**,
+while 320x180 is **57,600**. `IMWRITE_PNG_COMPRESSION=1` is deliberate — level 1
+costs ~1.6 ms where the default costs several times that, for a few percent of size.
+
+⚠️ Two further kitty-protocol facts that would each have broken a 30 fps redraw loop,
+both found by reading the spec rather than by running it — the agent cannot test
+this:
 
 - **Images persist until deleted.** One per frame at 30 fps would accumulate
   placements without bound. `a=d,d=A` clears the previous frame first.
