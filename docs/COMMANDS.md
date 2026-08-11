@@ -47,7 +47,13 @@ uv run scripts/read_arm_state.py --yes --arm arm1
 | **`1` `2` `3`** | flip **ROLL / PITCH / YAW** — same file |
 | `-` / `+` | linear speed slower / faster |
 | `?` | reprint the key list |
-| `q` | **QUIT** — goes to HOLD and *asks*. Then `g` to go weightless and park by hand, `d` to disable |
+| `b` | **assign the puck buttons** to gripper open/close — works in **any** mode. Then hold a button to move the jaws (in TELEOP/CONTROLS); `f` swaps them |
+| `q` | **QUIT** — goes to HOLD and *asks*. Then **`p` to park**, `g` to go weightless and park by hand, `d` to disable |
+
+⭐ **`q` `p` `d` is a hands-free shutdown.** The park pose defaults to **wherever the arm was when the
+session started**, so unless you have saved one with `s`, pressing `p` at the quit prompt drives it back to
+where it began and `d` then releases it. This also means the two arms no longer have to be placed the same
+way before a session — each parks back to its own measured start.
 
 Useful flags: `--start-mode hold|guide|teleop` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--box 0.4`
 

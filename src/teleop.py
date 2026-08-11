@@ -59,11 +59,32 @@ class CartesianTeleop:
         model_path: Path = DEFAULT_MODEL,
         ee_site: str = DEFAULT_EE_SITE,
         position_cost: float = 1.0,
-        orientation_cost: float = 0.5,
+        # ⛔⭐ 0.05, NOT 0.5. Lowered 10x on 2026-08-11 after measuring, and the
+        # measurement is counter-intuitive enough to be worth keeping:
+        #
+        #   pos:ori    pure-roll tool wander    rotation achieved
+        #   1.0:0.5          0.443 m                  7.9 deg     <- the old default
+        #   1.0:0.2          0.034 m                129.5 deg
+        #   1.0:0.05         0.002 m                134.6 deg     <- now
+        #   1.0:0.01         0.000 m                 18.2 deg
+        #
+        # The old default was the WORST OF BOTH: it wandered 44 cm *and* achieved
+        # the least rotation. A higher orientation cost produced LESS rotation,
+        # because the effort went into satisfying an unreachable orientation by
+        # translating, which drags the arm into a configuration that can rotate
+        # even less. Verified at three different starting poses; small rotations
+        # are unaffected and translation reach is unchanged (0.319 -> 0.320 m).
+        #
+        # The priority this encodes, in one line: **never sacrifice where the tool
+        # IS to chase where it POINTS.** A wrist that cannot turn should simply not
+        # turn — it should not drag the whole arm across the desk.
+        orientation_cost: float = 0.05,
         posture_cost: float = 1e-2,
         lm_damping: float = 1.0,
         solver: str = "daqp",
         damping: float = 1e-3,
+        max_lead_m: float = 0.05,
+        max_lead_rad: float = 0.25,
     ):
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.ee_site = ee_site
@@ -88,6 +109,12 @@ class CartesianTeleop:
             self.limits: list = [mink.ConfigurationLimit(self.model)]
         except Exception:  # noqa: BLE001
             self.limits = []
+
+        # ⛔⭐ ANTI-WINDUP. How far the integrated goal may run ahead of the pose the
+        # arm has actually achieved. This is `SafeRobot.max_lag` one layer up, and it
+        # exists for a measured reason — see `step()`.
+        self.max_lead_m = max_lead_m
+        self.max_lead_rad = max_lead_rad
 
         self.target: mink.SE3 | None = None
 
@@ -125,6 +152,7 @@ class CartesianTeleop:
             rotation=mink.SO3.exp(ang).multiply(self.target.rotation()),
             translation=self.target.translation() + lin,
         )
+        self._limit_lead()
         self.ee_task.set_target(self.target)
 
         vel = mink.solve_ik(
@@ -137,6 +165,85 @@ class CartesianTeleop:
         )
         self.configuration.integrate_inplace(vel, dt)
         return np.array(self.configuration.q[:N_ARM_JOINTS], dtype=float)
+
+    def _limit_lead(self) -> None:
+        """Stop the integrated goal running away from the pose actually achieved.
+
+        ⛔⭐ THE BUG THIS FIXES — Julien, 2026-08-11: *"the inverse kinematics being
+        weird and not working as intended, specifically when the robot gets into
+        weird positions, and then it starts moving very, very incoherently."*
+
+        `step()` advances `self.target` by the twist **unconditionally**. It never
+        asks whether the arm followed. Measured in simulation, commanding pure roll
+        at 0.6 rad/s from the park pose:
+
+            t=4 s   target-vs-achieved gap 0.0004 m   tool point moved 0.000 m
+            t=8 s   target-vs-achieved gap 0.238  m   tool point moved 0.238 m
+            t=12 s                                    tool point moved 0.290 m
+
+        **A pure rotation command moved the tool point 41 cm.** The chain is:
+
+        1. A wrist joint hits its limit — the tight ones are ±1.5708. (Confirmed:
+           the IK-vs-command gap pins at exactly 0.0800 rad, which *is*
+           `JOINT_LIMIT_MARGIN`, so a joint is clamped at the margin while the IK
+           believes it is at the true limit.)
+        2. The orientation goal keeps integrating anyway, so it runs arbitrarily
+           far past anything reachable.
+        3. The QP now holds an impossible orientation target, and because
+           `position_cost` (1.0) and `orientation_cost` (0.5) are traded against
+           each other, it starts **moving the tool point to partially satisfy the
+           unreachable rotation**.
+        4. The workspace box then re-clamps translation, which fights the
+           orientation task — hence the oscillation in the measurement above.
+
+        So the arm does something the operator never asked for, in a direction that
+        has no relation to the puck. That is exactly "incoherent".
+
+        ⭐ The fix is the same idea as `SafeRobot.max_lag`, one layer up: a goal may
+        only lead reality by a bounded amount. Translation and rotation are limited
+        separately because they fail independently — the workspace box already
+        happened to bound translation, which is why only rotation misbehaved.
+
+        ⚠️ This deliberately does NOT try to detect singularities or predict
+        reachability. It does not need to: whatever the reason the arm cannot
+        follow — joint limit, singularity, rate limiter, a stalled motor — the
+        symptom is the same, an unclosable gap, and bounding the gap bounds every
+        one of those cases with no model of why.
+        """
+        if self.target is None:
+            return
+        achieved = self.configuration.get_transform_frame_to_world(self.ee_site, "site")
+
+        lin = self.target.translation() - achieved.translation()
+        dist = float(np.linalg.norm(lin))
+        if dist > self.max_lead_m:
+            lin = lin * (self.max_lead_m / dist)
+
+        # Rotational lead, as an axis-angle in the world frame.
+        d_rot = self.target.rotation().multiply(achieved.rotation().inverse())
+        log = d_rot.log()
+        angle = float(np.linalg.norm(log))
+        if angle > self.max_lead_rad:
+            d_rot = mink.SO3.exp(log * (self.max_lead_rad / angle))
+
+        self.target = mink.SE3.from_rotation_and_translation(
+            rotation=d_rot.multiply(achieved.rotation()),
+            translation=achieved.translation() + lin,
+        )
+
+    def lead(self) -> tuple[float, float]:
+        """How far the goal is currently ahead of the achieved pose: (metres, rad).
+
+        Exposed so the session can show it. A goal that sits pinned at the limit is
+        the signature of an arm that cannot follow, and that is worth seeing rather
+        than inferring from the arm behaving oddly.
+        """
+        if self.target is None:
+            return 0.0, 0.0
+        achieved = self.configuration.get_transform_frame_to_world(self.ee_site, "site")
+        d = float(np.linalg.norm(self.target.translation() - achieved.translation()))
+        a = float(np.linalg.norm(self.target.rotation().multiply(achieved.rotation().inverse()).log()))
+        return d, a
 
     def ee_position(self) -> np.ndarray:
         """Where the IK believes the end effector currently is."""

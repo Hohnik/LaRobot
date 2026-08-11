@@ -753,3 +753,94 @@ reached for `f` unprompted, which is the sign the rule is the right one. Like `s
 Buttons are **hold-to-move** at 0.6 normalised units/s (~1.6 s for the full stroke), not step-per-press: a
 gripper wants squeeze-and-hold. `o`/`c` remain as keyboard steps. The assignment lives in the axis map, so it
 is **per-arm** for free, and an unset button writes no key at all rather than a `null`.
+
+### 17.1 …and it shipped broken, in the most annoying possible way
+
+Julien, next session: *"the space mouse buttons that should control the gripper don't do anything. And then
+it says press b to set the gripper, and then b does nothing either."*
+
+`b` was handled **inside the CONTROLS-mode branch**, while the *"press b to set the gripper buttons"* hint
+printed from the button-reading block, which ran in **TELEOP as well**. So in TELEOP the hint appeared, `b`
+fell through to the catch-all, and nothing happened. Buttons were also read only in teleop/map, so they were
+dead in GUIDE and HOLD entirely.
+
+⛔ **A message that tells you to press a key which does nothing where you are is the same defect as the
+refusal that named the wrong arm (§16): the text is right, the context is wrong, and it costs a session to
+find out.** Button assignment is a property of the **device**, not of the arm's mode, so it now sits above
+the mode dispatch and works everywhere. The puck is read every cycle in every mode — which also stops HID
+reports queueing up during GUIDE/HOLD and arriving in a burst at the next mode switch.
+
+---
+
+## 18. ⛔⭐ "It moves very incoherently in weird positions" — a pure rotation moved the tool point 44 cm
+
+Julien, 2026-08-11: *"the inverse kinematics being weird and not working as intended, specifically when the
+robot gets into weird positions, and then it starts moving very, very incoherently."*
+
+### The first hypothesis was wrong, and measuring it saved a day
+
+The obvious story — *near a singularity the Jacobian blows up, joint velocities explode, and the per-joint
+`MAX_JOINT_STEP` clamp distorts the direction* — is **refuted**. Measured: mink's `lm_damping` keeps the
+requested joint velocity around **0.45 rad/s against a 1.5 rad/s clamp**, so the clamp never binds, and at a
+genuine singularity (`σ_min = 0.0001`, folded near the base) the arm asks for **0.03 rad/s** — it barely
+moves *at all* rather than blowing up. Direction error from clamping: **0.00°** at every pose tested.
+
+### What is actually happening
+
+Reproducing the real control loop — IK, joint-step clamp, joint-limit clamp, workspace box — and commanding
+**pure roll at 0.6 rad/s** from the park pose:
+
+```
+   t     |target-EE|    |IK q - commanded q|    tool point moved
+ 4.0 s     0.0004 m          0.0000 rad              0.000 m
+ 8.0 s     0.238  m          0.0800 rad              0.238 m
+12.0 s     0.074  m          0.0800 rad              0.290 m      (peak 0.44 m)
+```
+
+**A pure rotation command translated the tool point 44 cm.** The chain:
+
+1. A wrist joint reaches its limit — the tight ones are ±1.5708 rad. *(Confirmed by the second column: the
+   gap between IK's internal joint state and the commanded one pins at exactly **0.0800**, which **is**
+   `JOINT_LIMIT_MARGIN`. A joint is clamped at the margin while the IK believes it is at the true limit.)*
+2. `CartesianTeleop.step()` advances `self.target` by the twist **unconditionally**. It never asks whether
+   the arm followed, so the orientation goal runs arbitrarily far past anything reachable.
+3. The QP now holds an impossible orientation target, and `position_cost` (1.0) and `orientation_cost` (0.5)
+   are **traded against each other** — so it starts moving the **tool point** to partially satisfy a rotation
+   it can never achieve.
+4. The workspace box re-clamps translation, fighting the orientation task — hence the oscillation above.
+
+### Two fixes, and the second one is the surprise
+
+**(a) Anti-windup on the goal.** `_limit_lead()` bounds how far `target` may run ahead of the pose actually
+achieved — 0.05 m and 0.25 rad, separately, because translation and rotation fail independently (the
+workspace box already happened to bound translation, which is why only rotation misbehaved). **This is
+`SafeRobot.max_lag` one layer up**, and it needs no model of *why* the arm cannot follow: joint limit,
+singularity, rate limiter or an obstacle all present as an unclosable gap, and bounding the gap bounds them
+all. Verified bounded, not merely slowed: the worst lead is **identical at 10 s and 80 s** (0.250060 rad).
+
+**(b) `orientation_cost` 0.5 → 0.05.** Anti-windup alone cut the wander from 0.44 m to 0.40 m — barely
+anything — because a *persistent* unreachable orientation error still bleeds into position. The cost ratio is
+the real lever, and the measurement is counter-intuitive:
+
+| `position:orientation` | pure-roll tool wander | rotation achieved |
+|---|---|---|
+| **1.0 : 0.5** ← the old default | **0.443 m** | **7.9°** |
+| 1.0 : 0.2 | 0.034 m | 129.5° |
+| **1.0 : 0.05** ← now | **0.002 m** | **134.6°** |
+| 1.0 : 0.01 | 0.000 m | 18.2° |
+
+⭐ **The old default was the worst of both worlds: it wandered 44 cm *and* achieved the least rotation.** A
+*higher* orientation cost produced *less* rotation, because the effort went into satisfying an unreachable
+orientation by translating, which drags the arm into a configuration that can rotate even less. Verified at
+three starting poses; small rotations are unaffected and translation reach is unchanged (0.319 → 0.320 m).
+
+> **The priority this encodes, in one line: never sacrifice where the tool IS to chase where it POINTS.**
+> A wrist that cannot turn should simply not turn — it should not drag the whole arm across the desk.
+
+**Also added:** the TELEOP status line now prints `⚠️ STUCK lead 5cm/14°` when the goal is pinned near its
+limit. An arm that cannot follow used to present *only* as an arm behaving strangely.
+
+⚠️ **`scripts/test_teleop_ik.py` reproduces the whole loop, not just `CartesianTeleop`** — the bug only
+appears when the clamps interact with the IK, so testing the class in isolation would have missed it
+entirely. One test deliberately restores `orientation_cost=0.5` and asserts the wander **comes back**: if
+that ever stops failing, the cause has moved.

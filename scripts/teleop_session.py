@@ -177,8 +177,8 @@ HELP = """
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
-  GRIPPER   o open   c close          r  wrist rotation on/off
-  OTHER     ?  this help              q  QUIT (asks before releasing the arm)
+  GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
+  OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
 """
 
 MAP_HELP = """
@@ -345,6 +345,25 @@ def main() -> int:  # noqa: PLR0915
         print(f"  {note}\n")
         chain = robot.motor_chain
         prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
+
+        # ⭐ DEFAULT PARK POSE = WHEREVER THE ARM STARTED. Julien: *"if the standard
+        # set position for park mode is just the starting position, then I can always
+        # just press p and then d, and I don't have to do anything with my hands."*
+        #
+        # This also removes a real dependency he flagged: the two arms no longer have
+        # to be physically placed the same way before a session, because each one
+        # parks back to its own measured start rather than to a pose recorded from the
+        # other. `s` still overrides it, and a saved pose still wins.
+        #
+        # ⚠️ It is only as good as the pose you start in. Start with the arm drooped
+        # and PARK will faithfully return it to drooped — which is why the plan line
+        # prints the actual numbers rather than just saying "default".
+        startup_pose = np.asarray(robot.get_joint_pos(), dtype=float)
+        if park is None:
+            park = startup_pose.tolist()
+            print(f"  park pose   : none saved — defaulting to the pose the arm is in NOW, "
+                  f"{np.round(startup_pose[:N_ARM], 3).tolist()}")
+            print("                (press s to set a different one; q then p then d parks and quits)")
 
         # ⛔ DELIBERATELY NOT RE-CHECKING THE GRIPPER FRAME HERE. Do not add it back.
         #
@@ -517,6 +536,34 @@ def main() -> int:  # noqa: PLR0915
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
+                    # ---- device configuration: works in EVERY mode ------------
+                    # ⛔ `b` USED TO LIVE IN THE CONTROLS BRANCH ONLY, while the
+                    # "press b to set the gripper buttons" hint printed in TELEOP as
+                    # well. So in TELEOP the hint appeared and b fell through to the
+                    # catch-all and did nothing. Julien hit exactly that: *"it says
+                    # press b to set the gripper, and then b does nothing either."*
+                    #
+                    # A message that tells you to press a key which does nothing
+                    # where you are is the same defect class as the refusal that
+                    # named the wrong arm (FINDINGS §16) — the text is right, the
+                    # context is wrong, and it costs the user a session to find out.
+                    # Button assignment is a property of the DEVICE, not of the
+                    # arm's mode, so it belongs above the mode dispatch entirely.
+                    if k == "b":
+                        learn_button = "open"
+                        print("\n⭐ LEARNING THE GRIPPER BUTTONS.")
+                        print("   Press the puck button you want for OPEN …")
+                        print("   (learned by pressing, never assumed — which physical button")
+                        print("    sets which HID bit has never been measured on this unit)\n")
+                        continue
+                    if k == "f" and last_input_kind == "button":
+                        # Same key, same meaning everywhere: reverse the control just
+                        # used. Axis -> flip its sign; button -> swap open/close.
+                        axis_map.swap_buttons()
+                        print("\n  ↔ SWAPPED the gripper buttons")
+                        print(axis_map.buttons_row() + "\n")
+                        continue
+
                     # ---- MAP mode owns the keyboard while it is active --------
                     # ⚠️ 1-6 mean "select a motion" here and "flip a rotation sign" in
                     # the drive modes. Overloading is a real footgun in a codebase
@@ -544,17 +591,6 @@ def main() -> int:  # noqa: PLR0915
                             else:
                                 mode = "hold"; enter_hold()
                                 print("\n⭐ MODE: HOLD\n")
-                        elif k == "b":
-                            learn_button = "open"
-                            print("\n⭐ LEARNING THE GRIPPER BUTTONS.")
-                            print("   Press the puck button you want for OPEN …")
-                            print("   (the masks are learned by pressing, never assumed — which")
-                            print("    physical button sets which bit has never been measured)\n")
-                        elif k == "f" and last_input_kind == "button":
-                            # ⭐ Same key, same meaning: reverse the control just used.
-                            axis_map.swap_buttons()
-                            print("\n  ↔ SWAPPED the gripper buttons")
-                            print(axis_map.buttons_row() + "\n")
                         elif k == "f":
                             if active is None:
                                 print("\n  push the puck first — f reverses the control you just used.\n")
@@ -763,45 +799,51 @@ def main() -> int:  # noqa: PLR0915
                     break
 
                 # ---- 4. act on the mode -----------------------------------
+                # ---- 3.5 the puck, read EVERY cycle in EVERY mode -------------
+                # ⛔ This used to sit inside the teleop/map branch, which had two
+                # consequences: the buttons were dead in GUIDE and HOLD, and the HID
+                # reports queued up while in those modes and then arrived in a burst
+                # on the next mode switch. Reading unconditionally costs nothing —
+                # TwistReader.read() is non-blocking by construction — and it is what
+                # makes button assignment work from wherever Julien happens to be.
+                raw_axes = reader.read()
+                buttons = getattr(reader, "buttons", 0)
+                pressed = buttons & ~buttons_prev              # rising edge only
+                buttons_prev = buttons
+
+                if learn_button is not None and pressed:
+                    warn = axis_map.learn_button(learn_button, pressed)
+                    if warn:
+                        print(f"\n  ⚠️  {warn}\n")
+                    elif learn_button == "open":
+                        learn_button = "close"
+                        print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
+                        print("   Now press the button you want for CLOSE …\n")
+                    else:
+                        learn_button = None
+                        print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
+                        print(axis_map.buttons_row())
+                        print("   (f swaps them if they are the wrong way round)\n")
+                elif pressed:
+                    # A press counts as "the control you just used", so f reverses it.
+                    # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
+                    # a button never rebinds anything.
+                    last_input_kind = "button"
+                    if axis_map.button_action(pressed) is None:
+                        print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
+                              f"gripper buttons (works in any mode)\n")
+                    elif mode not in ("teleop", "map"):
+                        print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
+                              f"you are in {mode.upper()}\n")
+
+                if learn_button is None and robot.num_dofs() > N_ARM and mode in ("teleop", "map"):
+                    action = axis_map.button_action(buttons)
+                    if action == "open":
+                        gripper_value = clamp_gripper(gripper_value + GRIPPER_BUTTON_RATE * dt)
+                    elif action == "close":
+                        gripper_value = clamp_gripper(gripper_value - GRIPPER_BUTTON_RATE * dt)
+
                 if mode in ("teleop", "map") and teleop is not None:
-                    raw_axes = reader.read()
-
-                    # ---- puck buttons ------------------------------------
-                    # ⚠️ reader.read() must be called first: it is what drains the
-                    # HID reports, and the button state arrives on report 0x03
-                    # inside that same drain.
-                    buttons = getattr(reader, "buttons", 0)
-                    pressed = buttons & ~buttons_prev          # rising edge only
-                    buttons_prev = buttons
-
-                    if learn_button is not None and pressed:
-                        warn = axis_map.learn_button(learn_button, pressed)
-                        if warn:
-                            print(f"\n  ⚠️  {warn}\n")
-                        elif learn_button == "open":
-                            learn_button = "close"
-                            print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
-                            print("   Now press the button you want for CLOSE …\n")
-                        else:
-                            learn_button = None
-                            print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
-                            print(axis_map.buttons_row())
-                            print("   (f swaps them if they are the wrong way round)\n")
-                    elif pressed:
-                        # A button press counts as "the control you just used", so f
-                        # reverses it — but ONLY the keys edit the map, exactly as
-                        # for the axes. Pressing a button never rebinds anything.
-                        last_input_kind = "button"
-                        if axis_map.button_action(pressed) is None:
-                            print(f"\n  button 0x{pressed:02x} is not assigned — press b to "
-                                  f"set the gripper buttons\n")
-
-                    if learn_button is None and robot.num_dofs() > N_ARM:
-                        action = axis_map.button_action(buttons)
-                        if action == "open":
-                            gripper_value = clamp_gripper(gripper_value + GRIPPER_BUTTON_RATE * dt)
-                        elif action == "close":
-                            gripper_value = clamp_gripper(gripper_value - GRIPPER_BUTTON_RATE * dt)
 
                     if mode == "map":
                         # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
@@ -919,6 +961,14 @@ def main() -> int:  # noqa: PLR0915
                     extra = ""
                     if mode == "teleop" and teleop is not None:
                         extra = f"  EE {np.round(teleop.ee_position(), 3)}"
+                        # ⭐ How far the goal is running ahead of the pose actually
+                        # achieved. Pinned at the limit = the arm cannot follow (joint
+                        # limit, singularity, something in the way), which used to
+                        # present only as the arm behaving strangely. See
+                        # CartesianTeleop._limit_lead().
+                        lead_m, lead_r = teleop.lead()
+                        if lead_m > 0.8 * teleop.max_lead_m or lead_r > 0.8 * teleop.max_lead_rad:
+                            extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
                     # ⭐ `jaw` is shown separately from `hottest` on purpose — see the
                     # comment where it is read. Watching this number plateau is the
                     # actual test of the 2π frame fix; watching `hottest` is not,
@@ -946,11 +996,61 @@ def main() -> int:  # noqa: PLR0915
             if chain_alive(robot):
                 enter_hold()
                 print("\nThe arm is HOLDING its pose. It will not be released until you choose.")
+                print("   p = PARK — drive back to the park pose, then it holds there")
                 print("   g = go weightless so you can park it by hand")
                 print("   d = disable now (⚠️ a raised arm will sag)")
                 while True:
                     k = keys.get()
-                    if k == "g":
+                    if k == "p":
+                        # ⭐ Julien's request: *"it would also be good to do park mode
+                        # [at quit], because then I can do park mode and then disable…
+                        # I don't have to do anything with my hands."* With the park
+                        # pose defaulting to wherever the arm started, `q p d` is a
+                        # complete hands-free shutdown.
+                        #
+                        # ⚠️ This is a SECOND park loop, and duplication is what has
+                        # bitten this repo four times. It is bounded deliberately: the
+                        # trajectory itself is the same tested `advance_park_command`,
+                        # every command still goes through SafeRobot's rate and lag
+                        # limits, and the session is already terminating so there is no
+                        # state to keep consistent afterwards. What differs is only
+                        # that this one blocks instead of interleaving with teleop.
+                        tgt, warn = park_target_from(
+                            robot.get_joint_pos(), park,
+                            gripper_index=N_ARM, clamp=clamp_gripper,
+                        )
+                        if warn:
+                            print(f"\n  ⚠️  {warn}.")
+                        cmd = np.asarray(robot.get_joint_pos(), dtype=float)
+                        best = float(np.max(np.abs(tgt - cmd)))
+                        last_progress = time.perf_counter()
+                        print(f"\n⭐ PARKING to {np.round(np.asarray(tgt)[:N_ARM], 2)} — "
+                              f"any key stops it.\n")
+                        while True:
+                            now = time.perf_counter()
+                            if not chain_alive(robot):
+                                print("\n⚠️  the chain died while parking.")
+                                break
+                            meas = np.asarray(robot.get_joint_pos(), dtype=float)
+                            err = float(np.max(np.abs(tgt - meas)))
+                            if err < PARK_TOLERANCE:
+                                print(f"\n⭐ PARKED ({err:.3f} rad off). Press d to disable.\n")
+                                break
+                            if now - last_progress > PARK_STALL_SECONDS:
+                                print(f"\n⛔ PARK STALLED — {err:.3f} rad to go, no progress for "
+                                      f"{PARK_STALL_SECONDS:.0f}s. Holding. Use g, then d.\n")
+                                break
+                            if keys.get() is not None:
+                                print("\n  park stopped. The arm is HOLDING.\n")
+                                break
+                            if err < best - PARK_PROGRESS_EPS:
+                                best, last_progress = err, now
+                            cmd = advance_park_command(cmd, tgt, PARK_SPEED / CONTROL_HZ)
+                            robot.command_joint_pos(cmd)
+                            time.sleep(1.0 / CONTROL_HZ)
+                        enter_hold()
+                        print("   p = park again    g = weightless    d = disable")
+                    elif k == "g":
                         enter_guide()
                         print("\n⭐ weightless — park the arm, then press d to disable.")
                     elif k == "d":
