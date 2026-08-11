@@ -29,30 +29,41 @@ chosen by index silently retargeted the wrong robot). AVFoundation gives no way
 around it, so instead of pretending, `--list` makes the ambiguity visible: it opens
 each index and reports what answered. Check it after any replug.
 
-LATENCY, AND WHAT ACTUALLY CAUSES IT
--------------------------------------
-Almost all webcam "lag" is **queued frames**, not decode time: the driver buffers,
-and a naive `read()` hands you the oldest frame in the queue. Two fixes are applied:
+LATENCY AND FRAME RATE — WHAT ACTUALLY MATTERED HERE
+-----------------------------------------------------
+⛔ The first two explanations were both wrong, and the way they were wrong is worth
+keeping. The camera was thought to be bandwidth-limited (uncompressed 1080p over
+USB 2.0), and separately, stale frames were thought to be queued by the driver. The
+fix written for the second — grab repeatedly to drain the queue, decode only the
+last — is right on Linux and **backwards on macOS, where `grab()` blocks until the
+next frame arrives.** Five grabs per displayed frame at 30 fps is 167 ms, i.e. 6 fps.
+That, not bandwidth, is why Julien saw 5 fps.
 
-- **MJPG** rather than the default YUY2. The C920 does 1080p30 compressed; uncompressed
-  it falls to ~5 fps over USB2 bandwidth, which *looks* like latency and is not.
-- **Drain-then-retrieve**: `grab()` is cheap (no decode), `retrieve()` is not. Grabbing
-  until the queue is empty and decoding only the last frame shows the newest image
-  rather than the oldest.
+⚠️ It survived because `--probe` measured with `cap.read()` while the viewer used
+the drain loop. The probe reported a healthy 30 fps for code the viewer never ran.
+**A measurement that does not exercise the real path measures nothing** — so
+`--measure` now runs through `FrameGrabber`, exactly as the viewer does.
 
-`--measure` reports the real frame interval so the claim is checked, not asserted.
+The working approach on a blocking backend is to put the blocking where it cannot
+hurt: a background thread reads continuously at the camera's own rate and each frame
+overwrites the last, so the display loop never waits and always shows the newest
+frame. Old frames are dropped by being overwritten rather than by being read.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 
 import cv2
 import numpy as np
 
 MAX_PROBE_INDEX = 6
+
+# Live-switchable capture sizes, bound to keys 1..5 in the viewer.
+SIZES = [(424, 240), (640, 480), (960, 540), (1280, 720), (1920, 1080)]
 
 
 def list_cameras() -> None:
@@ -135,12 +146,13 @@ def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
     # ⭐ MJPG first, THEN the resolution. Setting size before the codec leaves the
     # C920 in uncompressed YUY2, where 1080p does not fit in the USB bandwidth and
     # drops to a few fps — which reads as "lag" but is a bandwidth problem.
-    # ⚠️ UNVERIFIED ON THIS MACHINE: OpenCV's macOS (AVFoundation) backend is widely
-    # reported to IGNORE CAP_PROP_FOURCC, unlike Linux V4L2 and Windows DSHOW. If it
-    # does, this line is a no-op here and resolution is the only lever that works.
-    # `--probe` settles it: if the MJPG and as-is rows report the same fps, it is
-    # being ignored. Either way the 640x480 default is safe, because lowering the
-    # resolution cuts bandwidth under both explanations.
+    # ⚠️ MEASURED 2026-08-11: on this Mac the codec request makes NO difference —
+    # --probe reported ~30 fps with and without it at every resolution, and reading
+    # CAP_PROP_FOURCC back returns -1 (prints as "ÿÿÿÿ"), i.e. the property is not
+    # readable. So AVFoundation is choosing the format itself, and choosing well:
+    # 1920x1080 at 30 fps cannot fit down USB 2.0 uncompressed, so it must already
+    # be compressing. This line is kept because it is correct and load-bearing on
+    # Linux, where this rig is ultimately headed.
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -152,21 +164,75 @@ def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
     return cap
 
 
-def newest_frame(cap):  # noqa: ANN001, ANN201
-    """Drain the queue and decode only the most recent frame.
+class FrameGrabber:
+    """Reads the camera in a background thread and keeps only the newest frame.
 
-    `grab()` pulls a frame off the driver queue without decoding it; `retrieve()`
-    decodes. Grabbing repeatedly until the queue runs dry and decoding once is what
-    turns "several frames behind" into "current".
+    ⛔⭐ THE BUG THIS REPLACES, because it is a good lesson and it was mine.
+
+    The previous version tried to avoid stale frames by "draining the queue":
+
+        cap.grab()                    # cheap, no decode
+        for _ in range(4):            # drain whatever else is waiting
+            if not cap.grab(): break
+        ok, frame = cap.retrieve()    # decode only the newest
+
+    That is correct on Linux/V4L2, where `grab()` returns immediately when no frame
+    is waiting. **On macOS/AVFoundation `grab()` BLOCKS until the next frame
+    arrives.** So the loop did not drain a queue — it *waited for five more frames*.
+    At 30 fps that is 5 x 33 ms = 167 ms per displayed frame, i.e. **6 fps**.
+    Julien measured 5.
+
+    ⚠️ And the reason it survived: `--probe` measured with `cap.read()` while the
+    viewer used the drain loop, so the probe reported a healthy 30 fps for code the
+    viewer never ran. **A measurement that does not exercise the real path measures
+    nothing.** `--measure` now runs through this exact class.
+
+    The right way to get "newest frame, no waiting" on a blocking backend is to move
+    the blocking somewhere it does not matter: a thread reads continuously at the
+    camera's own rate, and each new frame simply overwrites the last. The display
+    loop then takes whatever is currently there and never blocks, so it shows the
+    most recent frame captured and old frames are dropped by being overwritten
+    rather than by being read and thrown away.
     """
-    ok = cap.grab()
-    if not ok:
-        return None
-    for _ in range(4):                     # bounded: never spin on a fast producer
-        if not cap.grab():
-            break
-    ok, frame = cap.retrieve()
-    return frame if ok else None
+
+    def __init__(self, cap):  # noqa: ANN001
+        self._cap = cap
+        self._lock = threading.Lock()
+        self._frame = None
+        self._seq = 0
+        self._running = True
+        self._captured = 0
+        self._t0 = time.perf_counter()
+        self._thread = threading.Thread(target=self._run, name="camera", daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while self._running:
+            ok, frame = self._cap.read()
+            if not ok:
+                time.sleep(0.005)
+                continue
+            with self._lock:
+                self._frame = frame
+                self._seq += 1
+                self._captured += 1
+
+    def newest(self):  # noqa: ANN201
+        """The most recent frame and its sequence number. Never blocks."""
+        with self._lock:
+            return self._frame, self._seq
+
+    def capture_fps(self) -> float:
+        dt = time.perf_counter() - self._t0
+        return self._captured / dt if dt > 0 else 0.0
+
+    def stop(self) -> None:
+        """⚠️ Always call this. A daemon thread holding the camera open keeps the
+        device busy for the next process, and Julien asked specifically that every
+        test be quittable."""
+        self._running = False
+        self._thread.join(timeout=1.0)
+        self._cap.release()
 
 
 def main() -> int:
@@ -176,15 +242,15 @@ def main() -> int:
                     help="sweep resolutions and codecs on --index and report the REAL fps "
                          "for each. Run this once to find the best setting for your link")
     ap.add_argument("--index", type=int, default=0, help="camera index (see --list)")
-    # ⛔ 640x480 BY DEFAULT, and the reason is arithmetic rather than taste.
-    # USB 2.0 sustains roughly 24 MB/s for video. One UNCOMPRESSED 1920x1080 frame
-    # is 1920*1080*2 = 4.15 MB, so the link allows 24/4.15 = 5.8 fps -- and Julien
-    # measured exactly 5 fps on 2026-08-11. At 640x480 a frame is 0.61 MB, allowing
-    # ~39 fps, so the sensor's own 30 fps cap becomes the limit instead.
-    # This fix holds whether or not MJPG compression is being applied, which matters
-    # because macOS may be ignoring the codec request entirely (see open_camera).
-    ap.add_argument("--width", type=int, default=640)
-    ap.add_argument("--height", type=int, default=480)
+    # ⭐ 1280x720 by default. An earlier version defaulted to 640x480 on the theory
+    # that USB 2.0 bandwidth capped an uncompressed 1080p stream at ~5.8 fps, which
+    # matched the 5 fps Julien saw. **That theory was REFUTED by --probe on
+    # 2026-08-11**: the camera delivers ~30 fps at every size up to 1920x1080, so it
+    # is compressing and bandwidth was never the constraint. The 5 fps came from the
+    # viewer's own frame-draining loop (see FrameGrabber). Resolution is now a free
+    # choice, and 720p is a good default; keys 1..5 change it live.
+    ap.add_argument("--width", type=int, default=1280)
+    ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--big", action="store_true", help="open the window large")
     ap.add_argument("--flip", action="store_true",
@@ -214,32 +280,36 @@ def main() -> int:
     print(f"camera {args.index}: {w}x{h}, requested {args.fps} fps, MJPG")
 
     if args.measure:
-        # Verify the latency claim instead of asserting it.
+        # ⚠️ Runs through FrameGrabber, the same class the viewer uses. The previous
+        # version measured a different code path and therefore measured nothing.
+        grab = FrameGrabber(cap)
         t0 = time.perf_counter()
-        gaps = []
-        last = t0
-        frames = 0
-        while time.perf_counter() - t0 < args.measure:
-            f = newest_frame(cap)
-            if f is None:
-                continue
-            now = time.perf_counter()
-            gaps.append(now - last)
-            last = now
-            frames += 1
-        cap.release()
+        gaps, last, seen, prev_seq = [], t0, 0, -1
+        try:
+            while time.perf_counter() - t0 < args.measure:
+                frame, seq = grab.newest()
+                if frame is None or seq == prev_seq:
+                    time.sleep(0.001)
+                    continue
+                prev_seq = seq
+                now = time.perf_counter()
+                gaps.append(now - last)
+                last = now
+                seen += 1
+        finally:
+            cap_fps = grab.capture_fps()
+            grab.stop()
         if not gaps:
-            print("⛔ no frames captured at all.")
+            print("no frames captured at all.")
             return 1
         g = np.array(gaps[1:]) * 1000.0
-        print(f"\n  frames        : {frames} in {args.measure:.0f}s "
-              f"= {frames / args.measure:.1f} fps")
+        print(f"\n  captured      : {cap_fps:.1f} fps  (what the camera delivers)")
+        print(f"  delivered     : {seen / args.measure:.1f} fps  (what a viewer would see)")
         print(f"  frame interval: mean {g.mean():.1f} ms  p50 {np.percentile(g, 50):.1f}  "
               f"p95 {np.percentile(g, 95):.1f}  max {g.max():.1f}")
-        print("\n  ⚠️ This is the CAPTURE interval, not glass-to-glass latency. It bounds")
-        print("     it from below: display and USB transport add more. The honest way to")
-        print("     measure the real thing is to point the camera at a running stopwatch")
-        print("     on the screen and photograph both.")
+        print("\n  ⚠️ This is the CAPTURE interval, not glass-to-glass latency. It bounds it")
+        print("     from below; the sensor, USB transport and display add more. To measure the")
+        print("     real thing, point the camera at a running stopwatch and photograph both.")
         return 0
 
     win = "wrist camera — q or ESC to quit"
@@ -247,37 +317,69 @@ def main() -> int:
     if args.big:
         cv2.resizeWindow(win, 1600, 900)
 
-    print("\n  q or ESC quits.  f mirrors.  r rotates 90°.")
-    print("  ⭐ Drive with `teleop_session.py` in another terminal, and press v there")
-    print("     to put the controls in the TOOL frame — then 'forward' on the puck means")
-    print("     forward in THIS image, which is the whole point.\n")
+    print("\n  q or ESC quits.   f mirrors.   r rotates 90°.")
+    print("  1..5 switch resolution live: 424x240 / 640x480 / 960x540 / 1280x720 / 1920x1080")
+    print("  ⭐ Drive with `teleop_session.py` in another terminal and press v there to put")
+    print("     the controls in the TOOL frame — then 'forward' on the puck means forward in")
+    print("     THIS picture, which is the point of having the camera.\n")
 
     flip, rotate = args.flip, args.rotate
+    grab = FrameGrabber(cap)
+    shown, t_fps, disp_fps, prev_seq = 0, time.perf_counter(), 0.0, -1
     try:
         while True:
-            frame = newest_frame(cap)
+            frame, seq = grab.newest()
             if frame is None:
+                if cv2.waitKey(5) & 0xFF in (ord("q"), 27):
+                    break
                 continue
+            if seq != prev_seq:
+                prev_seq = seq
+                shown += 1
             if flip:
                 frame = cv2.flip(frame, 1)
             r = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
                  270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(rotate)
             if r is not None:
                 frame = cv2.rotate(frame, r)
+
+            now = time.perf_counter()
+            if now - t_fps >= 0.5:
+                disp_fps = shown / (now - t_fps)
+                shown, t_fps = 0, now
+            h, w = frame.shape[:2]
+            # ⭐ The rate is drawn ON the picture. Julien could not tell 5 fps from 30
+            # by eye until it was measured; a number in the corner makes a regression
+            # obvious the instant it happens instead of after a session of confusion.
+            cv2.putText(frame, f"{w}x{h}  {disp_fps:4.1f} fps shown / {grab.capture_fps():4.1f} captured",
+                        (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, cv2.LINE_AA)
+            cv2.putText(frame, f"{w}x{h}  {disp_fps:4.1f} fps shown / {grab.capture_fps():4.1f} captured",
+                        (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1, cv2.LINE_AA)
             cv2.imshow(win, frame)
+
             k = cv2.waitKey(1) & 0xFF
             if k in (ord("q"), 27):
                 break
             if k == ord("f"):
                 flip = not flip
                 print(f"  mirror {'ON' if flip else 'OFF'}")
-            if k == ord("r"):
+            elif k == ord("r"):
                 rotate = (rotate + 90) % 360
                 print(f"  rotate {rotate}°")
+            elif k in [ord(c) for c in "12345"]:
+                w2, h2 = SIZES[int(chr(k)) - 1]
+                grab.stop()
+                cap = open_camera(args.index, w2, h2, args.fps)
+                if cap is None:
+                    print(f"  could not reopen at {w2}x{h2}")
+                    return 1
+                grab = FrameGrabber(cap)
+                shown, t_fps, prev_seq = 0, time.perf_counter(), -1
+                print(f"  resolution -> {w2}x{h2}")
     except KeyboardInterrupt:
         pass
     finally:
-        cap.release()
+        grab.stop()
         cv2.destroyAllWindows()
     return 0
 
