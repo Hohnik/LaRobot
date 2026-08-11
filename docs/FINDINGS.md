@@ -844,3 +844,52 @@ limit. An arm that cannot follow used to present *only* as an arm behaving stran
 appears when the clamps interact with the IK, so testing the class in isolation would have missed it
 entirely. One test deliberately restores `orientation_cost=0.5` and asserts the wander **comes back**: if
 that ever stops failing, the cause has moved.
+
+---
+
+## 19. ⭐ Driving from the camera's point of view is a FRAME question, not a camera question
+
+Julien, 2026-08-11, wanting to use the C920 as a stand-in for the wrist cameras that have not arrived:
+*"I would provisionally like to use the Logitech camera… mounted on one of the arms as a test so that I can
+try to learn to control the arm from the point of view of the camera to get the tilts right and stuff."*
+
+**The interesting half of that request has nothing to do with cameras.** Until now every twist was
+interpreted in the **world** frame — and `teleop.py` flagged the consequence from the very first version:
+
+> *"World-frame integration: rotation pre-multiplies, so a twist means the same thing regardless of how the
+> gripper happens to be oriented. Body frame would be more natural to a hand holding the puck, and is a
+> deliberate later choice — not something to leave ambiguous now."*
+
+This is that later choice, and the camera is what forces it. Looking **at** the arm, world frame is right:
+"forward" is a fixed direction on the desk, predictable, and a wrong sign only nudges. Looking **through** a
+wrist camera, world frame is wrong the moment you tilt: "push forward" then means forward *in the image*,
+and the image turns with the wrist. **That is exactly what "get the tilts right" is.**
+
+So `CartesianTeleop` gained `frame = world | tool | camera`, applied as `R_wf @ v` and `R_wf @ ω` before the
+existing world-frame integration — which leaves the anti-windup and the workspace box untouched. `v` cycles
+it live, and that is safe without a resync because a twist is a *velocity*: a frame change alters the
+interpretation from the next cycle and leaves no stale cached state, unlike a mode change.
+
+⛔ **`camera` is the MODELLED D405 mount and is WRONG for the hand-mounted C920.** The MJCF puts the D405 on
+the flange at a 25° cant with `+Z` along the optical axis; a webcam cable-tied on by hand shares none of
+that, and nobody has measured where it actually sits. **Use `tool` for the stand-in**, mount the camera
+roughly looking the way the gripper points, and dial the remainder out with the axis map. Using `camera` for
+an unmeasured mount would be inventing a transform — the single most repeated failure in this file.
+
+### Camera capture: two facts worth keeping
+
+**Almost all webcam "lag" is queued frames, not decode time.** A naive `read()` returns the *oldest* frame
+in the driver's queue. `scripts/camera_view.py` grabs repeatedly (cheap, no decode) until the queue is dry
+and decodes only the last one. It also sets **MJPG before the resolution** — left in uncompressed YUY2 the
+C920 cannot fit 1080p through USB2 and collapses to a few fps, which *reads* as latency and is a bandwidth
+problem. `--measure` reports the real frame interval so the claim is checked rather than asserted.
+
+⚠️ **macOS gates camera access, and no code change fixes it.** First run prints
+`OpenCV: not authorized to capture video (status 0)` until the permission is granted to the app running the
+terminal — **System Settings → Privacy & Security → Camera**. Encountered 2026-08-11; the agent cannot
+grant it.
+
+⚠️ **OpenCV on macOS selects cameras by INDEX**, which collides with this repo's hard rule against selecting
+hardware by index (§0 #5). AVFoundation offers no name-based alternative, so rather than pretend, `--list`
+makes the ambiguity visible and suggests the honest disambiguation: cover the arm-mounted camera with a hand
+and re-run — the index whose mean brightness collapses is the one on the arm.

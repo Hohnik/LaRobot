@@ -43,6 +43,16 @@ DEFAULT_EE_SITE = "tcp_site"
 
 N_ARM_JOINTS = 6  # joints 1-6; the gripper is commanded separately, not by IK
 
+# ⭐ The frames a twist can be expressed in. `world` is the original behaviour and
+# stays the default; the others exist because Julien wants to drive while watching a
+# wrist camera, and *"push forward"* then means forward IN THE IMAGE, which turns
+# with the wrist. See `CartesianTeleop._twist_to_world()`.
+FRAMES = {
+    "world": None,              # base frame: +X out from the base, +Y left, +Z up
+    "tool": ("tcp_site", "site"),
+    "camera": ("camera", "body"),
+}
+
 
 class CartesianTeleop:
     """Integrates a twist into an EE pose and solves IK for joint targets.
@@ -85,6 +95,7 @@ class CartesianTeleop:
         damping: float = 1e-3,
         max_lead_m: float = 0.05,
         max_lead_rad: float = 0.25,
+        frame: str = "world",
     ):
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.ee_site = ee_site
@@ -116,6 +127,11 @@ class CartesianTeleop:
         self.max_lead_m = max_lead_m
         self.max_lead_rad = max_lead_rad
 
+        # ⭐ WHICH FRAME THE PUCK'S TWIST IS EXPRESSED IN. See `_twist_to_world()`.
+        if frame not in FRAMES:
+            raise ValueError(f"frame must be one of {sorted(FRAMES)}, got {frame!r}")
+        self.frame = frame
+
         self.target: mink.SE3 | None = None
 
     def reset(self, q_arm: np.ndarray) -> None:
@@ -142,6 +158,7 @@ class CartesianTeleop:
             raise RuntimeError("reset() must be called with the arm's measured joint positions first")
 
         twist = np.asarray(twist, dtype=float)
+        twist = self._twist_to_world(twist)
         lin, ang = twist[:3] * dt, twist[3:] * dt
 
         # World-frame integration: rotation pre-multiplies, so a twist means the
@@ -165,6 +182,55 @@ class CartesianTeleop:
         )
         self.configuration.integrate_inplace(vel, dt)
         return np.array(self.configuration.q[:N_ARM_JOINTS], dtype=float)
+
+    def _twist_to_world(self, twist: np.ndarray) -> np.ndarray:
+        """Re-express the puck's twist in the world frame, from whichever frame it
+        was meant in. `world` returns it untouched.
+
+        ⭐ WHY THIS EXISTS. Julien, 2026-08-11, wanting to mount a webcam on the arm:
+        *"I can try to learn to control the arm from the point of view of the camera
+        to get the tilts right and stuff."*
+
+        World-frame control means "forward" is a fixed direction on the desk, however
+        the wrist happens to be turned. That is the right default when you are looking
+        AT the arm — it is predictable, and a wrong sign only nudges. But it is the
+        wrong thing entirely when you are looking THROUGH a camera on the wrist:
+        there, "push forward" means forward *in the image*, and the image turns with
+        the wrist. `teleop.py` flagged this from the start as *"a deliberate later
+        choice — not something to leave ambiguous now"*. This is that choice, made.
+
+        The maths is small: a twist meant in frame F is `R_wf @ v` and `R_wf @ ω` in
+        world coordinates, where `R_wf` is F's orientation in the world. Integration
+        stays world-frame, so the anti-windup and the workspace box are untouched.
+
+        ⚠️ **`camera` uses the MODELLED D405 mount** — the MJCF puts it on the flange
+        at a 25° cant with `+Z` along the optical axis (ROS/OpenCV convention). That
+        is correct for the real wrist cameras when they arrive and **wrong for a
+        webcam cable-tied on by hand**, whose mounting transform nobody has measured.
+        For the C920 stand-in use **`tool`**, mount the camera roughly looking the way
+        the gripper points, and dial the rest out with the axis map. Using `camera`
+        for an unmeasured mount would be inventing a transform, which is the single
+        most repeated failure in FINDINGS.
+        """
+        spec = FRAMES[self.frame]
+        if spec is None:
+            return twist
+        name, kind = spec
+        rot = self.configuration.get_transform_frame_to_world(name, kind).rotation().as_matrix()
+        out = np.empty(6)
+        out[:3] = rot @ twist[:3]
+        out[3:] = rot @ twist[3:]
+        return out
+
+    FRAME_NOTES = {
+            "world": "WORLD — fixed to the desk; 'forward' does not turn with the wrist",
+            "tool": "TOOL — attached to the gripper; 'forward' is where the gripper points",
+            "camera": "CAMERA — the MODELLED D405 optical frame (⚠️ wrong for a hand-mounted webcam)",
+    }
+
+    def frame_note(self) -> str:
+        """One line describing what the puck's directions currently mean."""
+        return self.FRAME_NOTES[self.frame]
 
     def _limit_lead(self) -> None:
         """Stop the integrated goal running away from the pose actually achieved.

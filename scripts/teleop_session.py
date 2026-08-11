@@ -100,7 +100,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
-from teleop import CartesianTeleop  # noqa: E402
+from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
     advance_park_command,
@@ -178,6 +178,7 @@ HELP = """
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
+  FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
   OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
 """
 
@@ -243,6 +244,11 @@ def main() -> int:  # noqa: PLR0915
                          "gripper misbehaves again")
     ap.add_argument("--no-rotation", action="store_true",
                     help="start with wrist rotation disabled (toggle live with r)")
+    ap.add_argument("--frame", default="world", choices=sorted(FRAMES),
+                    help="which frame the puck's directions mean. world = fixed to the desk "
+                         "(default, and what was tuned on hardware); tool = attached to the "
+                         "gripper, for driving while watching a wrist camera; camera = the "
+                         "MODELLED D405 mount, wrong for a hand-mounted webcam. Toggle live with v")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
     ap.add_argument("--box", type=float, default=WORKSPACE_BOX)
     ap.add_argument("--fork-map", action="store_true",
@@ -259,6 +265,7 @@ def main() -> int:  # noqa: PLR0915
     # because a wrong rotation sign swings the wrist while a wrong translation
     # sign only nudges — that caution has served its purpose.
     rotation = not args.no_rotation
+    control_frame = args.frame
     # ⛔ The store decides WHICH map this arm uses — its own override if it has one,
     # otherwise the shared one. Editing a shared map changes both arms, so the scope
     # is printed in the plan and again at exit. Never leave that implicit.
@@ -299,6 +306,7 @@ def main() -> int:  # noqa: PLR0915
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
     print(f"  axis map    : {axis_map.one_line()}   (m to change it live)")
     print(f"  map scope   : {map_store.scope_note(args.arm)}")
+    print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[control_frame]}  (v cycles it live)")
     if axis_map.unbound():
         names = ", ".join(ROBOT_MOTIONS[i]["short"] for i in axis_map.unbound())
         print(f"  ⚠️  UNBOUND  : {names} — the arm will NOT perform these until they are bound (m)")
@@ -416,7 +424,7 @@ def main() -> int:  # noqa: PLR0915
             # Take the jaws exactly where they are. Do NOT clamp here: clamping on
             # entry is a command to move, and nobody asked for that.
             gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
-            teleop = CartesianTeleop()
+            teleop = CartesianTeleop(frame=control_frame)
             teleop.reset(q[:N_ARM])
             home_ee = teleop.ee_position().copy()
 
@@ -555,6 +563,18 @@ def main() -> int:  # noqa: PLR0915
                         print("   Press the puck button you want for OPEN …")
                         print("   (learned by pressing, never assumed — which physical button")
                         print("    sets which HID bit has never been measured on this unit)\n")
+                        continue
+                    if k == "v":
+                        # ⭐ Cycle which frame the puck's directions mean. Safe to do
+                        # live: the twist is a VELOCITY, so a frame change alters the
+                        # interpretation from the next cycle onward and leaves no
+                        # stale cached state behind — unlike a mode change, which is
+                        # why this does not need resync().
+                        order = ["world", "tool", "camera"]
+                        control_frame = order[(order.index(control_frame) + 1) % len(order)]
+                        if teleop is not None:
+                            teleop.frame = control_frame
+                        print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[control_frame]}\n")
                         continue
                     if k == "f" and last_input_kind == "button":
                         # Same key, same meaning everywhere: reverse the control just

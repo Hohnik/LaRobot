@@ -145,6 +145,36 @@ report an empty serial number, so there is nothing else to key an assignment off
 
 ---
 
+## ⭐ Driving from the camera's point of view
+
+Two terminals. Neither the camera process nor the frame setting can move a motor on its own.
+
+```bash
+uv run scripts/camera_view.py --list            # which index is the arm-mounted camera?
+uv run scripts/camera_view.py --index 1 --big   # the live view
+```
+
+Then in the session, press **`v`** to cycle the control frame, or start with `--frame tool`:
+
+| frame | what "forward" on the puck means | use it when |
+|---|---|---|
+| **world** *(default)* | a fixed direction on the desk; does **not** turn with the wrist | you are looking **at** the arm |
+| **tool** | where the gripper points — **turns with the wrist** | you are looking **through** the wrist camera ⭐ |
+| **camera** | the **modelled D405** optical frame | ⛔ only once the real wrist cameras are mounted |
+
+⛔ **Use `tool`, not `camera`, for the hand-mounted C920.** `camera` uses the D405's mounting transform
+from the MJCF — a 25° cant off the flange — which is simply not where a webcam cable-tied on by hand is
+sitting. Nobody has measured that mount, and inventing the transform is the exact failure this repo keeps
+cataloguing. Mount the webcam roughly looking the way the gripper points and use `tool`.
+
+⚠️ **First run needs macOS camera permission.** You will see
+`OpenCV: not authorized to capture video` until it is granted — macOS raises the dialog for the app running
+the terminal. If no dialog appears, grant it in **System Settings → Privacy & Security → Camera**. This is a
+system gate; no code change fixes it.
+
+`--measure 10` captures headlessly and reports the real frame interval, so "no latency" is checked rather
+than asserted. `--flip` and `--rotate` handle a camera mounted mirrored or sideways.
+
 ## Read-only — cannot move anything, no `--yes` needed
 
 ```bash

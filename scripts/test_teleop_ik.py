@@ -163,6 +163,75 @@ def test_lead_is_zero_at_rest() -> None:
     assert m < 1e-6 and r < 1e-6, (m, r)
 
 
+# ------------------------------------------------------- control frames ----
+
+
+def test_world_frame_is_unchanged_by_default() -> None:
+    """The default must still be world — this is the behaviour tuned on hardware."""
+    tp = CartesianTeleop()
+    assert tp.frame == "world"
+    raw = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    assert np.allclose(tp._twist_to_world(raw), raw), "world frame must be a passthrough"
+
+
+def test_an_unknown_frame_is_refused() -> None:
+    try:
+        CartesianTeleop(frame="gripper")
+    except ValueError as exc:
+        assert "frame must be one of" in str(exc)
+    else:
+        raise AssertionError("an unknown frame name must be refused, not silently ignored")
+
+
+def test_tool_frame_turns_with_the_wrist_and_world_does_not() -> None:
+    """⭐ THE POINT OF THE FEATURE. Same puck push, two different wrist orientations:
+    in WORLD the tool goes the same way both times; in TOOL it follows the wrist."""
+    push = np.array([0.12, 0.0, 0.0, 0.0, 0.0, 0.0])
+    turned = PARK.copy()
+    turned[5] += 1.2                      # rotate the wrist about its own axis
+
+    dirs = {}
+    for frame in ("world", "tool"):
+        for label, start in (("straight", PARK), ("turned", turned)):
+            tp = CartesianTeleop(frame=frame)
+            tp.reset(start)
+            before = tp.ee_position().copy()
+            for _ in range(100):
+                tp.step(push, DT)
+            d = tp.ee_position() - before
+            dirs[(frame, label)] = d / (np.linalg.norm(d) + 1e-12)
+
+    def angle(a, b):
+        return float(np.degrees(np.arccos(np.clip(np.dot(a, b), -1, 1))))
+
+    world_shift = angle(dirs[("world", "straight")], dirs[("world", "turned")])
+    tool_shift = angle(dirs[("tool", "straight")], dirs[("tool", "turned")])
+    assert world_shift < 10.0, f"world-frame motion should NOT follow the wrist, moved {world_shift:.1f}°"
+    assert tool_shift > 25.0, f"tool-frame motion SHOULD follow the wrist, only moved {tool_shift:.1f}°"
+
+
+def test_every_frame_still_moves_the_arm() -> None:
+    """A frame that transforms the twist to nothing would be a silent dead control."""
+    for frame in ("world", "tool", "camera"):
+        tp = CartesianTeleop(frame=frame)
+        tp.reset(PARK)
+        before = tp.ee_position().copy()
+        for _ in range(100):
+            tp.step(np.array([0.12, 0.0, 0.0, 0.0, 0.0, 0.0]), DT)
+        moved = float(np.linalg.norm(tp.ee_position() - before))
+        assert moved > 0.05, f"frame {frame!r} moved the tool only {moved:.4f} m in 1 s"
+
+
+def test_frame_note_describes_each_frame() -> None:
+    for frame in ("world", "tool", "camera"):
+        note = CartesianTeleop(frame=frame).frame_note()
+        assert note and frame.upper() in note.upper()
+    assert "⚠️" in CartesianTeleop(frame="camera").frame_note(), (
+        "the camera frame is the MODELLED D405 mount and must say so — a hand-mounted "
+        "webcam does not share it"
+    )
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []
