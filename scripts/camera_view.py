@@ -53,9 +53,11 @@ frame. Old frames are dropped by being overwritten rather than by being read.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 import threading
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -235,6 +237,133 @@ class FrameGrabber:
         self._cap.release()
 
 
+UPPER_HALF = "\u2580"   # ▀ — foreground paints the top pixel, background the bottom
+
+
+def render_ansi(frame, cols: int, rows: int) -> str:
+    """Turn a camera frame into coloured text that fills a terminal.
+
+    ⭐ WHY THIS EXISTS. Julien, 2026-08-11: *"the order of my open programs on my mac
+    constantly gets moved around whenever the cam opens to the desktop as a small
+    window, and I have to re-sort the windows manually."* A native window makes the
+    Python process a GUI application, so macOS brings it to the front and reshuffles
+    his layout every single time. Nothing in OpenCV prevents that.
+
+    Drawing into a terminal sidesteps it completely: he already keeps terminals open
+    for the teleop session, so the camera becomes one more pane in a layout he
+    already has, and no window is ever created.
+
+    **The half-block trick.** A terminal cell is roughly twice as tall as it is wide,
+    which would squash the picture. Printing `▀` with a foreground colour and a
+    background colour puts **two** vertically-stacked pixels in one cell — the
+    foreground paints the top half, the background the bottom. That doubles the
+    vertical resolution and makes each rendered pixel close to square.
+
+    ⚠️ **Colour codes are only emitted when the colour changes.** A full-colour cell
+    costs ~40 bytes; a 100x50 render is 5000 cells, so a naive version writes 200 KB
+    per frame and 6 MB/s at 30 fps, which the terminal cannot keep up with. Emitting
+    a code only on change collapses that dramatically on real images, where
+    neighbouring pixels are usually similar.
+    """
+    small = cv2.resize(frame, (cols, rows * 2), interpolation=cv2.INTER_AREA)
+    rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+    out: list[str] = []
+    for y in range(rows):
+        top, bot = rgb[2 * y], rgb[2 * y + 1]
+        last_fg = last_bg = None
+        for x in range(cols):
+            fg = (int(top[x][0]), int(top[x][1]), int(top[x][2]))
+            bg = (int(bot[x][0]), int(bot[x][1]), int(bot[x][2]))
+            if fg != last_fg:
+                out.append(f"\x1b[38;2;{fg[0]};{fg[1]};{fg[2]}m")
+                last_fg = fg
+            if bg != last_bg:
+                out.append(f"\x1b[48;2;{bg[0]};{bg[1]};{bg[2]}m")
+                last_bg = bg
+            out.append(UPPER_HALF)
+        out.append("\x1b[0m\n")
+    return "".join(out)
+
+
+def terminal_grid(margin_rows: int = 3) -> tuple[int, int]:
+    """Character columns and rows available for the picture."""
+    size = shutil.get_terminal_size(fallback=(100, 30))
+    return max(20, size.columns), max(10, size.lines - margin_rows)
+
+
+def run_terminal(cap, args) -> int:  # noqa: ANN001
+    """Draw the camera into this terminal. Creates no window at all.
+
+    ⛔ Quitting is guaranteed: `q`/ESC, Ctrl-C, and the `finally` block all restore
+    the cursor and colours and stop the grabber thread. Julien asked specifically
+    that every test be quittable, and a program that leaves a terminal without a
+    cursor is exactly the kind of mess that makes people avoid a tool.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+    from keyboard import KeyReader  # noqa: PLC0415
+
+    grab = FrameGrabber(cap)
+    flip, rotate = args.flip, args.rotate
+    shown, t_fps, disp_fps, prev_seq = 0, time.perf_counter(), 0.0, -1
+    sys.stdout.write("\x1b[?25l\x1b[2J")          # hide cursor, clear once
+    try:
+        with KeyReader() as keys:
+            while True:
+                frame, seq = grab.newest()
+                if frame is None:
+                    time.sleep(0.01)
+                    continue
+                if seq == prev_seq:
+                    time.sleep(0.002)
+                else:
+                    prev_seq = seq
+                    shown += 1
+                if flip:
+                    frame = cv2.flip(frame, 1)
+                r = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                     270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(rotate)
+                if r is not None:
+                    frame = cv2.rotate(frame, r)
+
+                cols, rows = terminal_grid()
+                now = time.perf_counter()
+                if now - t_fps >= 0.5:
+                    disp_fps = shown / (now - t_fps)
+                    shown, t_fps = 0, now
+                h, w = frame.shape[:2]
+                # \x1b[H homes the cursor instead of clearing, so the picture is
+                # overwritten in place. Clearing every frame flickers badly.
+                sys.stdout.write("\x1b[H" + render_ansi(frame, cols, rows))
+                sys.stdout.write(
+                    f"\x1b[0m{w}x{h}  {disp_fps:4.1f} fps shown / {grab.capture_fps():4.1f} captured"
+                    f"   q quit · f mirror · r rotate · 1-5 resolution\x1b[K"
+                )
+                sys.stdout.flush()
+
+                for k in keys.drain():
+                    if k in ("q", "\x1b"):
+                        return 0
+                    if k == "f":
+                        flip = not flip
+                    elif k == "r":
+                        rotate = (rotate + 90) % 360
+                    elif k in "12345":
+                        w2, h2 = SIZES[int(k) - 1]
+                        grab.stop()
+                        cap = open_camera(args.index, w2, h2, args.fps)
+                        if cap is None:
+                            return 1
+                        grab = FrameGrabber(cap)
+                        shown, t_fps, prev_seq = 0, time.perf_counter(), -1
+    except KeyboardInterrupt:
+        pass
+    finally:
+        grab.stop()
+        sys.stdout.write("\x1b[0m\x1b[?25h\n")   # colours off, cursor back
+        sys.stdout.flush()
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Live camera view. Touches no robot.")
     ap.add_argument("--list", action="store_true", help="probe every index and report")
@@ -252,7 +381,13 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--big", action="store_true", help="open the window large")
+    ap.add_argument("--term", action="store_true",
+                    help="⭐ draw the video IN THIS TERMINAL instead of opening a window. "
+                         "No window is created, so your macOS window order is never disturbed")
+    ap.add_argument("--big", action="store_true",
+                    help="make the WINDOW larger on screen. ⚠️ It does not change capture "
+                         "quality — a 640x480 stream just gets upscaled. Use --width/--height "
+                         "for actual resolution")
     ap.add_argument("--flip", action="store_true",
                     help="mirror the image left-right — try this if steering feels inverted")
     ap.add_argument("--rotate", type=int, default=0, choices=[0, 90, 180, 270],
@@ -311,6 +446,9 @@ def main() -> int:
         print("     from below; the sensor, USB transport and display add more. To measure the")
         print("     real thing, point the camera at a running stopwatch and photograph both.")
         return 0
+
+    if args.term:
+        return run_terminal(cap, args)
 
     win = "wrist camera — q or ESC to quit"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
