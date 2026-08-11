@@ -893,3 +893,66 @@ grant it.
 hardware by index (§0 #5). AVFoundation offers no name-based alternative, so rather than pretend, `--list`
 makes the ambiguity visible and suggests the honest disambiguation: cover the arm-mounted camera with a hand
 and re-run — the index whose mean brightness collapses is the one on the arm.
+
+
+---
+
+## 20. ⭐ "It lags at high speed" is a singularity problem, not a speed problem
+
+Julien, 2026-08-11: *"at high speeds the arm takes longer to follow the path that it's been told to move…
+I can only really control it at speeds of less than half a meter per second."*
+
+**Two hypotheses were tested and refuted before the real one.** It is not a constant per-speed cost, and it
+is not a startup transient. Pushing +X at 0.25 m/s from the home pose, joint speed by cycle:
+
+```
+  cycle   1      0.66 rad/s          <- first cycle, fine
+  cycle   2-10   0.67 rad/s          <- not a transient
+  cycle  50-150  3.30 rad/s          <- it ESCALATES with time
+```
+
+Tracing it against `sigma_min`, the smallest singular value of the Jacobian — the standard measure of how
+close the arm is to a configuration where some direction of motion becomes unreachable:
+
+| cycle | joint rad/s | EE moved | `sigma_min` |
+|---|---|---|---|
+| 20 | 0.68 | 0.05 m | 0.170 |
+| 100 | 1.34 | 0.25 m | 0.121 |
+| 140 | **2.93** | 0.35 m | 0.048 |
+| 180 | 0.12 | 0.38 m | **0.005** ← stalled |
+
+**The same tip speed costs 0.68 rad/s in the middle of the workspace and 2.93 rad/s near full reach**, and
+then the arm stops entirely. `SafeRobot` caps commands at 1.0 rad/s, so past that point the command is
+throttled, the arm falls behind, and it reads as latency.
+
+⭐ **So speed is not the cause — it only decides how quickly you arrive at the part of the workspace where
+this happens.** That reframing matters, because the obvious fix (raise the cap) would not fix it. It would
+move the wall a little further out and cost the guard that makes a wrong motion catchable, on a rig with
+**no e-stop**.
+
+**The fix is to ask for less.** `CartesianTeleop._apply_speed_scale()` measures the joint speed the solver
+just requested and, if it exceeded `max_joint_rate` (0.9 rad/s, deliberately just under SafeRobot's 1.0),
+scales the twist by exactly that ratio. Tip speed and joint speed are locally proportional, so it lands on
+the allowed rate in a single step. Recovery is slower than reduction — 5% per cycle, ~0.2 s to full — because
+reacting instantly in both directions oscillates at the boundary, which would feel worse than the lag.
+
+**Measured, over 200 cycles (2 s):**
+
+| commanded | cycles over the cap, before | after | worst lead |
+|---|---|---|---|
+| 0.12 m/s | 0 | 0 | 0.9 mm |
+| 0.25 m/s | **86** | **0** | 5.1 mm |
+| 0.40 m/s | 98 | 1 | 7.0 mm |
+| 1.00 m/s | 42 | 2 | 7.3 mm |
+
+At 0.25 m/s the rate limiter had been intervening on **43% of all cycles**. It now never does, and the
+command stays within 7 mm of the arm instead of pinned at the 50 mm anti-windup bound.
+
+⚠️ **The throttle costs time, not workspace.** A first test compared reach after a fixed number of cycles
+and failed — correctly, since a throttled arm is behind at any given moment. Given time both converge on
+**exactly 0.5194 m**. The test now asserts that distinction explicitly, because "it got slower" and "it can
+no longer reach as far" are very different regressions and only one of them is acceptable.
+
+Low speeds are untouched: at 0.12 m/s the scale never leaves 1.0, so normal driving is unchanged. The status
+line prints `⚠️ SLOWED to N% (near the reach limit)` — without it, the throttle would present as
+unexplained sluggishness, which is the same class of silent-failure this file exists to catalogue.

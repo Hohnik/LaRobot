@@ -246,5 +246,92 @@ def main() -> int:
     return 1 if failed else 0
 
 
+
+
+# --------------------------------------------------------- speed throttle ----
+
+SAFEROBOT_CAP = 1.0   # rad/s — what SafeRobot actually allows through
+
+
+def _cycles_over_cap(v: float, throttle: bool, cycles: int = 200):
+    tp = CartesianTeleop(max_joint_rate=0.9 if throttle else 1e9)
+    tp.reset(PARK)
+    prev = PARK.copy()
+    over, lead = 0, 0.0
+    for _ in range(cycles):
+        q = tp.step(np.array([v, 0, 0, 0, 0, 0]), DT)
+        if float(np.max(np.abs(q - prev))) / DT > SAFEROBOT_CAP:
+            over += 1
+        prev = q.copy()
+        lead = max(lead, tp.lead()[0])
+    return over, lead, tp.speed_scale
+
+
+def test_the_throttle_stops_the_rate_limiter_fighting_the_solver() -> None:
+    """⭐ THE FIX. Without it, 86 of 200 cycles at 0.25 m/s asked for more joint
+    speed than SafeRobot allows, so the arm lagged by construction."""
+    for v in (0.25, 0.4, 0.6):
+        without, _, _ = _cycles_over_cap(v, throttle=False)
+        with_, lead, _ = _cycles_over_cap(v, throttle=True)
+        assert without > 20, f"{v} m/s: expected the un-throttled case to saturate, got {without}"
+        assert with_ <= 3, f"{v} m/s: still saturating on {with_} cycles with the throttle on"
+        assert lead < 0.02, f"{v} m/s: command ran {lead:.3f} m ahead of the arm"
+
+
+def test_low_speed_is_completely_unaffected() -> None:
+    """Normal driving must not be slowed down to fix an edge case."""
+    over, lead, scale = _cycles_over_cap(0.12, throttle=True)
+    assert over == 0 and lead < 0.005
+    assert scale == 1.0, f"the throttle engaged at a speed that never needed it (scale {scale})"
+
+
+def test_the_throttle_recovers_when_the_arm_can_follow_again() -> None:
+    """It must not latch. Drive into the workspace edge, then come back."""
+    tp = CartesianTeleop()
+    tp.reset(PARK)
+    for _ in range(200):                        # out to the edge; scale collapses
+        tp.step(np.array([0.4, 0, 0, 0, 0, 0]), DT)
+    assert tp.speed_scale < 0.5, f"expected a throttle near the edge, got {tp.speed_scale}"
+    for _ in range(300):                        # come back toward the middle
+        tp.step(np.array([-0.2, 0, 0, 0, 0, 0]), DT)
+    assert tp.speed_scale > 0.9, f"the throttle latched: still {tp.speed_scale:.2f} back in open space"
+
+
+def test_reset_clears_the_throttle() -> None:
+    """A mode change re-seeds from reality and must not inherit a stale throttle."""
+    tp = CartesianTeleop()
+    tp.reset(PARK)
+    for _ in range(200):
+        tp.step(np.array([0.6, 0, 0, 0, 0, 0]), DT)
+    assert tp.speed_scale < 1.0
+    tp.reset(PARK)
+    assert tp.speed_scale == 1.0
+
+
+def test_the_throttle_costs_time_near_the_edge_but_not_reach() -> None:
+    """⚠️ The distinction this test exists to pin down.
+
+    An earlier version compared reach after a FIXED number of cycles and failed —
+    correctly, because the throttle deliberately slows the approach to the workspace
+    edge, so at any fixed moment the throttled arm is behind. That is the feature
+    working, not a defect. What must not change is where the arm can eventually GET.
+
+    Measured: both converge on 0.5194 m. The throttle trades time, not workspace.
+    """
+    def reach(throttle, cycles):
+        tp = CartesianTeleop(max_joint_rate=0.9 if throttle else 1e9)
+        tp.reset(PARK)
+        home = tp.ee_position().copy()
+        for _ in range(cycles):
+            tp.step(np.array([0.4, 0, 0, 0, 0, 0]), DT)
+        return float(np.linalg.norm(tp.ee_position() - home))
+
+    assert reach(True, 200) < reach(False, 200), "the throttle should slow the approach"
+    settled_on, settled_off = reach(True, 2000), reach(False, 2000)
+    assert abs(settled_on - settled_off) < 0.005, (
+        f"given time, reach must be unchanged: {settled_on:.4f} vs {settled_off:.4f}"
+    )
+
+
 if __name__ == "__main__":
     sys.exit(main())

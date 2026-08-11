@@ -999,6 +999,12 @@ def main() -> int:  # noqa: PLR0915
                         lead_m, lead_r = teleop.lead()
                         if lead_m > 0.8 * teleop.max_lead_m or lead_r > 0.8 * teleop.max_lead_rad:
                             extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
+                        # ⭐ Say WHY the arm feels slow. Near the workspace edge the
+                        # solver needs several rad/s per joint for the same tip
+                        # speed, so the twist gets throttled — and without this line
+                        # that reads as unexplained sluggishness.
+                        if teleop.speed_scale < 0.95:
+                            extra += f"  ⚠️ SLOWED to {teleop.speed_scale * 100:.0f}% (near the reach limit)"
                     # ⭐ `jaw` is shown separately from `hottest` on purpose — see the
                     # comment where it is read. Watching this number plateau is the
                     # actual test of the 2π frame fix; watching `hottest` is not,

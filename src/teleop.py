@@ -96,6 +96,7 @@ class CartesianTeleop:
         max_lead_m: float = 0.05,
         max_lead_rad: float = 0.25,
         frame: str = "world",
+        max_joint_rate: float = 0.9,
     ):
         self.model = mujoco.MjModel.from_xml_path(str(model_path))
         self.ee_site = ee_site
@@ -132,9 +133,16 @@ class CartesianTeleop:
             raise ValueError(f"frame must be one of {sorted(FRAMES)}, got {frame!r}")
         self.frame = frame
 
+        # ⭐ Slow the puck down when the arm cannot keep up. See `_apply_speed_scale`.
+        # 0.9 rad/s sits just under SafeRobot's 1.0 cap, so the twist is reined in
+        # BEFORE the rate limiter has to intervene — the limiter stays a guard rather
+        # than becoming part of normal operation.
+        self.max_joint_rate = max_joint_rate
+        self.speed_scale = 1.0
+
         self.target: mink.SE3 | None = None
 
-    def reset(self, q_arm: np.ndarray) -> None:
+    def reset(self, q_arm: np.ndarray) -> None:  # noqa: D401
         """Seed the IK state from the arm's *measured* joint positions.
 
         Always seed from reality rather than from zero: the IK's notion of where
@@ -145,6 +153,7 @@ class CartesianTeleop:
         n = min(len(q_arm), N_ARM_JOINTS)
         q[:n] = np.asarray(q_arm)[:n]
         self.configuration.update(q)
+        self.speed_scale = 1.0        # a mode change must not inherit a throttle
         self.posture_task.set_target_from_configuration(self.configuration)
         self.target = self.configuration.get_transform_frame_to_world(self.ee_site, "site")
 
@@ -158,7 +167,7 @@ class CartesianTeleop:
             raise RuntimeError("reset() must be called with the arm's measured joint positions first")
 
         twist = np.asarray(twist, dtype=float)
-        twist = self._twist_to_world(twist)
+        twist = self._twist_to_world(twist) * self.speed_scale
         lin, ang = twist[:3] * dt, twist[3:] * dt
 
         # World-frame integration: rotation pre-multiplies, so a twist means the
@@ -180,8 +189,58 @@ class CartesianTeleop:
             damping=self.damping,
             limits=self.limits,
         )
+        q_before = np.array(self.configuration.q[:N_ARM_JOINTS], dtype=float)
         self.configuration.integrate_inplace(vel, dt)
-        return np.array(self.configuration.q[:N_ARM_JOINTS], dtype=float)
+        q_after = np.array(self.configuration.q[:N_ARM_JOINTS], dtype=float)
+        self._apply_speed_scale(q_after - q_before, dt)
+        return q_after
+
+    def _apply_speed_scale(self, joint_step: np.ndarray, dt: float) -> None:
+        """Throttle the puck when the arm physically cannot follow it.
+
+        ⛔⭐ THE PROBLEM, measured 2026-08-11. Julien: *"at high speeds the arm takes
+        longer to follow the path that it's been told to move… I can only really
+        control it at speeds of less than half a meter per second."*
+
+        Pushing +X at 0.25 m/s from the home pose, watching the Jacobian's smallest
+        singular value (`sigma_min`, which measures how close the arm is to a
+        configuration where some direction of motion becomes unreachable):
+
+            cycle  20   joint 0.68 rad/s   moved 0.05 m   sigma_min 0.170
+            cycle 100   joint 1.34 rad/s   moved 0.25 m   sigma_min 0.121
+            cycle 140   joint 2.93 rad/s   moved 0.35 m   sigma_min 0.048
+            cycle 180   joint 0.12 rad/s   moved 0.38 m   sigma_min 0.005   (stalled)
+
+        **The requested joint speed is not constant — it escalates as the arm
+        extends.** The same 0.25 m/s at the tip costs 0.68 rad/s in the middle of the
+        workspace and 2.93 rad/s near full reach, because as `sigma_min` collapses
+        the arm must move its joints ever faster to produce the same tip motion.
+        `SafeRobot` caps commands at 1.0 rad/s, so beyond that point the command is
+        throttled, the arm falls behind, and it feels like latency.
+
+        ⚠️ So this is **not really a speed problem**. Speed only decides how quickly
+        you reach the part of the workspace where it happens. Raising the cap would
+        not fix it either — it would just move the wall, at the cost of the guard
+        that makes a wrong motion catchable, on a rig with no e-stop.
+
+        **The fix is to ask for less.** If the last cycle wanted more joint speed
+        than allowed, scale the twist by exactly the ratio; because tip speed and
+        joint speed are locally proportional, that lands on the allowed rate in one
+        step. Recovery is deliberately slower than reduction (5% per cycle, so ~0.2 s
+        to return to full) — reacting instantly in both directions would oscillate at
+        the boundary, which would feel worse than the lag it replaces.
+
+        The result is that the arm slows down smoothly near its limits instead of
+        silently lagging, and `speed_scale` is reported so the operator can see it
+        happening rather than wonder why the arm feels heavy.
+        """
+        if dt <= 0:
+            return
+        requested = float(np.max(np.abs(joint_step))) / dt
+        if requested > self.max_joint_rate:
+            self.speed_scale = max(0.05, self.speed_scale * self.max_joint_rate / requested)
+        elif self.speed_scale < 1.0:
+            self.speed_scale = min(1.0, self.speed_scale * 1.05)
 
     def _twist_to_world(self, twist: np.ndarray) -> np.ndarray:
         """Re-express the puck's twist in the world frame, from whichever frame it
