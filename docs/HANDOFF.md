@@ -104,6 +104,33 @@ These are not preferences, they were arrived at by things going wrong.
    and never re-derived against the thing they guard — a clamp PARK went around, a refusal a weaker copy
    undermined, a temperature monitor that aggregated away its own signal.
 
+## 4.5 The rig, as of 2026-08-11
+
+- **Power: wall sockets only. THERE IS NO E-STOP.** Julien confirmed it. The only way to cut power in a
+  hurry is the mains plug, so *keep a hand near it* and prefer the software stops — `h` for HOLD, `q` for the
+  consent flow. This is also why every new motion path here is slow, bounded and interruptible: there is no
+  hardware backstop underneath the software one.
+- Both arms and **both SpaceMice run off Julien's laptop**. Two arms, two CANables, two independent buses.
+- **Both arms are calibrated** (`config/gripper_limits.json` holds `arm1` *and* `arm2` since 2026-08-11).
+- ⭐ **Two separate terminal sessions, one per arm, already work simultaneously** — Julien drove both arms at
+  once that way on 2026-08-10. That is a genuinely useful data point: it rules out CAN, USB and CPU
+  contention as blockers for bimanual, and leaves the single-process refactor as the *only* remaining work.
+
+**Health check after the overnight power cycle (2026-08-11), all agent-safe, nothing energised beyond a
+register read:**
+
+| check | arm1 | arm2 |
+|---|---|---|
+| motors on the bus | 7/7, gear ratios 40/40/40/10/10/10/10 | 7/7, same |
+| errors | all `0x1 (normal)` | all `0x1 (normal)` |
+| temperatures | 27-30 °C | 27-30 °C |
+| joints 1-6 | ≈ 0 — the parked pose, mechanically supported | ≈ 0 |
+| saved jaw limits still valid? | ✅ yes, after the automatic −2π shift | ✅ yes, no shift needed |
+| normalised jaw position | **0.034** — nearly closed, only just inside the band | 0.516 — mid-stroke |
+
+⚠️ **arm1's jaws sit at 0.034**, so there is very little closing travel before the clamp stops it. Harmless,
+but do not read "the gripper won't close further" as a fault.
+
 ## 5. The three traps that will bite you first
 
 1. **Never select hardware by index.** Adapter enumeration order changed *twice* in one session. Everything
@@ -129,7 +156,8 @@ to be able to control one of the arms."*
 | 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** The status line now prints **`jaw NN°C` separately from `hottest`** — watch *that* for **60 s** in TELEOP. A plateau near idle (31-36 °C) is the pass; a steady climb means quit and use `--no-gripper`. ⛔ Watching `hottest` is **not** this test: motors 2/3 carry the 4.3 kg and sit at 41-42 °C all session, so a gripper climbing 33 → 41 °C is invisible inside a `max()` |
 | 4 | ~~**Axis remapping**~~ | ✅ **Done and TUNED ON THE ARM, 2026-08-10.** Julien's live map is a real permutation — `X←y+ Y←x+ UP←z− ROLL←pitch+ PITCH←roll+ YAW←yaw−` — so the feature earned its place; sign flips alone could not have expressed it. Set up in **CONTROLS mode** (`m`): the arm moves one isolated axis at a time, `f` reverses the control you just used, `1`-`6` **swap** it with another motion. Per-arm maps exist (`--fork-map`), shared by default |
 | 5 | ⭐⭐ **Two arms, two SpaceMice** — **what Julien asked for next** | **Fully designed in [ROADMAP step 6](ROADMAP.md); not built.** Neither hardware nor compute is the blocker: two arms on two buses from one loop is proven, and **two IK solves cost 0.100 ms/cycle** (measured) against a 10 ms deadline with ~6.2 ms of CAN. The blocker is that `teleop_session.py` holds one arm's state in one function's locals. Plan: extract `ArmSession`, run N of them, and ⭐ **make `--arms arm1` exercise the N-arm code with N=1 first**, so the refactor is verified separately from the two-arm hardware risk. Two prerequisites are **already done**: per-arm axis maps (`AxisMapStore` + `--fork-map`) and puck assignment with `exclude=` |
-| 6 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
+| 6 | **Cameras — real-time, no perceptible latency** | Julien's requirement, 2026-08-10: the C920 plus the wrist D405s, and *"they need to be real time, no latency type of setup."* ⚠️ Nothing here has been designed yet, and it is the one item that could disturb the 100 Hz loop — the ~6.2 ms/cycle CAN measurement was taken with **nothing else competing for CPU**. Expect cameras to want their own process and a shared-memory or timestamped-queue handoff rather than inline capture |
+| 7 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
 
 ⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile, they have
 tests, and item 3 is verified numerically against two independent failures — but *"verified in principle"*
@@ -164,6 +192,7 @@ demo must be re-collected) → cameras.
 | 1 | 2026-08-07 | Hardware enumerated. SpaceMouse readable. **Wrongly concluded the CAN protocol was unknown and macOS unusable.** |
 | 2 | 2026-08-10, 09:30-14:00 CEST (40 min lunch) | Both prior conclusions refuted. Arm identified, driven, gravity-compensated, hand-guided and **teleoperated with a SpaceMouse**. Gripper disabled after cooking motor 7 three times. ~30 commits. |
 | 3 | 2026-08-10, ~14:25-15:xx CEST | **No hardware touched.** Full axis remapping built (`src/axis_map.py`, `scripts/map_axes.py`) with 25 tests. Four defects found **by reading** and fixed — see FINDINGS §9. The world-frame axis semantics measured in simulation instead of assumed. 34 headless tests now exist where there were none. |
+| 5 | 2026-08-11, morning | Hardware re-checked after an overnight power cycle (all clean, no recalibration needed). **PARK confirmed working by Julien.** Fixed: the gripper buttons, which shipped broken (`b` only worked in one mode while its own hint printed in another); `q` now offers **`p` park** and the park pose defaults to the session's starting pose, making `q p d` hands-free. ⭐ **Diagnosed and fixed the "incoherent motion":** pure rotation was translating the tool point **44 cm**. The obvious singularity hypothesis was **refuted by measurement**; the cause was an unconditionally-integrated orientation goal plus an `orientation_cost` that was 10× too high — which was making rotation *worse* as well. 92 headless tests. |
 | 4 | 2026-08-10, ~15:20-16:xx CEST | ⛔ **First hardware run of session-3 code, and it went badly.** `mjpython --view` could not start; **the arm fell** in GUIDE because `--no-gripper` swaps the gravity model; and the new MAP mode **destroyed the hand-dialled axis map** (recovered from git). All three diagnosed to root cause and fixed, all three documented in [FINDINGS §11](FINDINGS.md). MAP mode replaced by **CONTROLS mode**, designed by Julien: the arm moves, one isolated axis at a time, and only keys edit the map. 43 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
