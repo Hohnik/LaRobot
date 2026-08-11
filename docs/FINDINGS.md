@@ -956,3 +956,65 @@ no longer reach as far" are very different regressions and only one of them is a
 Low speeds are untouched: at 0.12 m/s the scale never leaves 1.0, so normal driving is unchanged. The status
 line prints `⚠️ SLOWED to N% (near the reach limit)` — without it, the throttle would present as
 unexplained sluggishness, which is the same class of silent-failure this file exists to catalogue.
+
+
+---
+
+## 21. The terminal camera view: what is fixable in software and what is not
+
+### 21.1 ⛔ The agent cannot test the camera. At all. Ever.
+
+**macOS grants camera access per application.** The permission Julien granted covers
+his terminal; the agent's shell runs under a different process and gets
+`OpenCV: not authorized to capture video (status 0)` no matter what the code does.
+There is no flag, no entitlement and no code change that works around it.
+
+**Consequences, and they shape how this file should be built:**
+
+- Anything camera-related must be verified either by **Julien running a command**, or
+  by making the logic a **pure function of an image** and testing that. Both
+  camera bugs so far — the stretched aspect ratio and the 5 fps drain loop — lived in
+  exactly such pure functions. `scripts/test_camera_render.py` exists for this.
+- ⚠️ **`--probe` once measured a code path the viewer never ran** and reported a
+  healthy 30 fps while the viewer delivered 5. *A measurement that does not exercise
+  the real path measures nothing.* `--measure` now runs through `FrameGrabber`, the
+  same class the viewer uses.
+- The agent also cannot read the terminal's identity: its shell has no TTY and
+  reports `TERM_PROGRAM` unset. **`--term-info` exists so the program reports what
+  the agent cannot detect.**
+
+### 21.2 A two-way toggle whose sides can be identical is not a toggle
+
+`b` switched between `"blocks"` and `detect_term_mode()`. In any terminal the
+detector did not recognise, **both sides were `"blocks"`** and pressing it changed
+nothing — indistinguishable from a broken key. Kitty was worse: *detected* and then
+silently discarded because its protocol was unimplemented, so a kitty user was
+downgraded with no indication at all.
+
+Now `b` **cycles** blocks → iterm → kitty (a three-way cycle cannot be a no-op),
+prints the mode it moved to, and says when that differs from what was detected. The
+kitty graphics protocol is implemented rather than detected-and-dropped.
+`detect_term_mode()` returns **the mode and the reason**, and the reason is printed
+on entry.
+
+⭐ **Generalises past this key:** a fallback that is invisible is a bug report waiting
+to happen. Say which path was taken *and why*, especially when the fallback is the
+degraded one.
+
+### 21.3 The remaining latency is the camera, and software cannot fix it
+
+Measured by Julien on 2026-08-11 with the on-screen draw-cost readout: **~2 ms per
+frame.** So the render, the terminal and the grabber are all irrelevant to the
+~0.2 s he perceives.
+
+What is left is the **C920 itself** — sensor readout, onboard MJPEG encoding, and USB
+transport. For consumer webcams that is typically **100-200 ms**, and no software
+change removes it.
+
+**The only lever that helps is resolution** (fewer pixels to read out, encode and
+transfer), which is why key `1` selects 320×180. Beyond that this needs different
+hardware; the D405 wrist cameras, when they arrive, are the real answer.
+
+⚠️ **Do not spend more time optimising the software path.** It was measured at 2 ms
+against a ~200 ms budget. The next person to look at this should confirm that number
+is still ~2 ms and then stop.

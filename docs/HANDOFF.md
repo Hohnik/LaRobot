@@ -6,6 +6,22 @@
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) →
 > [ROADMAP.md](ROADMAP.md). The README is the live state; `git log` carries the reasoning for every change,
 > and the commit messages are deliberately long because they hold the *why*.
+>
+> ## ⭐ If you are a fresh agent, the four things that matter most
+>
+> 1. **§2 separates what is CONFIRMED ON HARDWARE from what is only verified in simulation.** Respect that
+>    line. Three changes here passed their tests and then failed on first contact with the arm — one of
+>    them dropped 4.3 kg. "It compiles and has tests" is not "it works".
+> 2. **§4 is the working contract**, and rule 1 is absolute: *the agent never runs anything that can move
+>    the arm.* Scripts that enable motors but send no setpoint are yours; anything that sends a setpoint is
+>    Julien's. Rule 8 is how to write to him, and it has cost real time twice.
+> 3. **[FINDINGS §0](FINDINGS.md) is the single most useful page in the repo.** This stack fails by lying,
+>    not by crashing: every defect catalogued there produced a confident, plausible, wrong answer and not
+>    one raised an exception. Check values for plausibility, never merely for the absence of an exception.
+> 4. **§5.5 is the task list**, ordered, with the reasoning for the order. Item 1 is the next thing to build.
+>
+> Run `uv run scripts/test_*.py` first — **152 headless tests, no hardware needed** — to confirm the tree
+> is sound before changing anything.
 
 ---
 
@@ -41,8 +57,10 @@ learning programme, this is an engineering build with hardware and deadlines. It
   makes driving from a camera view work. Each frame keeps its **own** map.
 - **Pure rotation no longer drags the tool point** — it used to wander up to 44 cm ([§18](FINDINGS.md)).
 - **Speed throttle near the workspace edge** — the fix for "it lags at high speed" ([§20](FINDINGS.md)).
-- **Camera view at 30 fps** (`scripts/camera_view.py`) — ⚠️ the agent physically cannot test this;
-  see §4.5.
+- **Camera view at 30 fps** (`scripts/camera_view.py`), in a **window or in the terminal**.
+  ⚠️ The agent physically cannot test anything camera-related — see [FINDINGS §21.1](FINDINGS.md).
+- **Mirror-mode engagement logic** (`src/mirror.py`) — copy or mirror, staged engagement,
+  14 tests. ⚠️ **The script that opens both arms and runs it does not exist yet.**
 
 **⛔⭐ READ THIS FIRST — the arm fell on 2026-08-10, and the cause was advice in these docs.**
 
@@ -116,6 +134,23 @@ These are not preferences, they were arrived at by things going wrong.
    and never re-derived against the thing they guard — a clamp PARK went around, a refusal a weaker copy
    undermined, a temperature monitor that aggregated away its own signal.
 
+8. ⭐ **How to WRITE to Julien, because it has cost real time twice.** Two independent
+   requirements, and both must hold:
+   - **Density** — cut anything that does not change what he thinks or does. No
+     ceremonial time-tracking block, no "anything else?" section by default, no
+     tables recapping what he can read in the commits. One item per line in lists.
+   - **Comprehensibility** — *define every term at first use*, build from what he
+     already knows, and never let a name stand in for an idea. He blew up at
+     *"mink wraps that as a QP"* — three unexplained things in five words — and at an
+     IK explanation that used "inverse" in two different senses in adjacent
+     sentences without saying so. **Short and impenetrable is worse than long and
+     clear.** The model he pointed at is `canon/topics/ewc/content.md` chapter 1 in
+     his Mind Understanding repo: it defines a term before using it, builds ideas as
+     a lineage, and gives confusable pairs their own section.
+   *(Full version, with his exact words, in the agent memory store under
+   `explaining-to-julien.md` — ⚠️ which is per-machine and absent from clones, hence
+   this summary here.)*
+
 ## 4.5 The rig, as of 2026-08-11
 
 - **Power: wall sockets only. THERE IS NO E-STOP.** Julien confirmed it. The only way to cut power in a
@@ -161,16 +196,31 @@ work, not repair. In the order I would do it, with the reasoning:
 
 | # | task | why, and what is already known |
 |---|---|---|
-| 1 | ⭐⭐ **Mirror mode — hand-guide one arm, the other copies it** | Julien's idea, and **the right first two-arm feature**: read arm B's *measured* joint angles and command them to G. **No IK, no second puck, no cartesian anything** — a joint-space copy at 100 Hz. It exercises the whole two-arm process while every risky part is absent, making it the ideal shakedown for `ArmSession` before real bimanual teleop. ⛔ **Safety: the two arms will not start in the same pose.** Commanding G straight to B's pose would make it jump. Ramp G to B's pose first with `advance_park_command()`, which is already tested, and refuse to engage until the gap is small. **Open question for Julien: mirrored (some joints negated) or identical? Depends on how the arms are physically placed.** |
+| 1 | ⭐⭐ **Mirror mode — the SCRIPT. The logic is done.** | Julien's idea, and **the right first two-arm feature**: ✅ **`src/mirror.py` + 14 tests are DONE** — `MirrorLink` handles copy/mirror, staged engagement and the stop-rather-than-chase guard, with no robot handle so it is fully testable without an arm. ❌ **What is missing is the script** that opens both arms, reads B and commands G. That is the same two-arm process `ArmSession` needs, so **build them together**. ✅ Julien answered the design question: **both modes exist, `copy` is the default, and the arms are side by side** — so copy is correct today. ⚠️ **`MIRROR_SIGNS` is a geometric PREDICTION, not a measurement** — reflecting through a vertical plane should negate base_yaw, wrist_roll and gripper_twist and leave the three pitches alone. Expect to adjust it the first time `mirror` is used. |
 | 2 | ⭐ **`ArmSession` + one script for both arms** | Fully designed in [ROADMAP step 6](ROADMAP.md). Neither hardware nor compute is the blocker — two arms on two buses from one loop is proven, two IK solves cost 0.100 ms/cycle against a 10 ms deadline, and Julien has already driven both arms at once as two processes. The blocker is that `teleop_session.py` (~1150 lines) holds one arm's state in one function's locals. ⭐ **Make `--arms B` run the N-arm code with N=1 first**, so the refactor is verified against a feel he already knows, separately from the two-arm risk. Prerequisites **done**: per-arm *and* per-frame maps, and `pick_device_by_wiggle(exclude=…)` |
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
 | 6 | **Real wrist cameras (D405)** | Not owned yet. The `camera` control frame already exists and is correct for them — it is only wrong for the hand-mounted C920 stand-in |
+| 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **Give this repo a git remote** | ~57 commits exist on one Mac only. Julien has deliberately deferred pushing; not forgotten |
 
-⚠️ **Untested on hardware, all built and verified in simulation.** Treat the first run of each as a test:
-control frames (`v`), per-frame maps, the pure-rotation fix, the speed throttle, and the 30 fps camera.
+⚠️ **Untested on hardware, all built and verified in simulation or headlessly.** Treat the first run of
+each as a test: the speed throttle near the workspace edge, and all of `src/mirror.py`.
+✅ Confirmed working by Julien since being built: control frames (`v`), per-frame maps, the pure-rotation
+fix, and the camera at 30 fps in both window and terminal.
+
+> ### ⭐ A LIVE THREAD IN THE OTHER REPO — do not lose it
+>
+> Julien asked for a **proper explanation of inverse kinematics**, taught as a structured path rather than
+> summarised, and ruled that it belongs in his **`Mind Understanding`** learning repo rather than here —
+> where IK is already indexed as a topic. He explicitly parked it: *"I haven't really read through most of
+> your answers yet regarding the inverse kinematic answer and the writing in general. So do the most
+> sensible thing, and we'll come back to it later once we fixed these main issues."*
+>
+> ⚠️ That repo's rules apply there and differ from this one's: `canon/` is **curated and read-only** for
+> session agents, so an IK topic must be **proposed** via `agents/<name>/REPORT.md` §Proposals, not
+> created unilaterally. See that repo's `CLAUDE.md` and `state/NOW.md`.
 
 ## 6. What to do next
 
@@ -196,6 +246,7 @@ demo must be re-collected) → cameras.
 | 3 | 2026-08-10, ~14:25-15:xx CEST | **No hardware touched.** Full axis remapping built (`src/axis_map.py`, `scripts/map_axes.py`) with 25 tests. Four defects found **by reading** and fixed — see FINDINGS §9. The world-frame axis semantics measured in simulation instead of assumed. 34 headless tests now exist where there were none. |
 | 4 | 2026-08-10, ~15:20-16:xx CEST | ⛔ **First hardware run of session-3 code, and it went badly.** `mjpython --view` could not start; **the arm fell** in GUIDE because `--no-gripper` swaps the gravity model; and the new MAP mode **destroyed the hand-dialled axis map** (recovered from git). All three diagnosed to root cause and fixed, all three documented in [FINDINGS §11](FINDINGS.md). MAP mode replaced by **CONTROLS mode**, designed by Julien: the arm moves, one isolated axis at a time, and only keys edit the map. 43 headless tests. |
 | 5 | 2026-08-11, morning | Hardware re-checked after an overnight power cycle (all clean, no recalibration needed). **PARK confirmed working by Julien.** Fixed: the gripper buttons, which shipped broken (`b` only worked in one mode while its own hint printed in another); `q` now offers **`p` park** and the park pose defaults to the session's starting pose, making `q p d` hands-free. ⭐ **Diagnosed and fixed the "incoherent motion":** pure rotation was translating the tool point **44 cm**. The obvious singularity hypothesis was **refuted by measurement**; the cause was an unconditionally-integrated orientation goal plus an `orientation_cost` that was 10× too high — which was making rotation *worse* as well. 92 headless tests. |
+| 7 | 2026-08-11, afternoon | **Camera terminal view** — aspect-ratio stretch fixed (it ignored the source aspect entirely), real C920 modes offered down to 320×180 (a UVC camera silently substitutes the nearest mode, which is why 424×240 became 640×360), and **iTerm2/kitty inline images implemented** so the block renderer is a fallback rather than the only option. `b` had been a two-way toggle whose sides could be identical, so it looked broken. **Latency measured at ~2 ms of draw cost — the rest is the camera hardware.** ⭐ **Mirror-mode logic built** (`src/mirror.py`), whose own tests caught a hidden 5 rad/s jump at the guard handover and a length mismatch. 136 → 152 headless tests. |
 | 6 | 2026-08-11, midday | Arms **renamed B and G** to match their physical labels, config migrated with every value verified byte-identical. **Per-frame control maps** — each frame owns its wiring and `m` describes the frame you are actually in, with tool-frame labels measured from the model. New frames are **seeded from the world map** so nothing is re-tuned from scratch. **Camera fixed: the 5 fps was my own frame-draining loop**, not USB bandwidth — `grab()` blocks on macOS, so "draining" waited for five frames. **Speed lag diagnosed as a singularity problem**, not a speed problem, and throttled at the source. 109 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
