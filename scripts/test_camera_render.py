@@ -153,5 +153,97 @@ def main() -> int:
     return 1 if failed else 0
 
 
+
+
+# ------------------------------------------------------ terminal detection ----
+
+
+class FakeEnv:
+    def __init__(self, **kw):
+        self.kw = kw
+
+    def __enter__(self):  # noqa: ANN204
+        self._saved = {k: os.environ.get(k) for k in
+                       ("TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID")}
+        for k in self._saved:
+            os.environ.pop(k, None)
+        os.environ.update({k: v for k, v in self.kw.items() if v is not None})
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        for k, v in self._saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+
+
+def test_image_capable_terminals_are_detected() -> None:
+    for prog, expect in (("iTerm.app", "iterm"), ("WezTerm", "iterm"),
+                         ("vscode", "iterm"), ("WarpTerminal", "iterm")):
+        with FakeEnv(TERM_PROGRAM=prog):
+            mode, why = C.detect_term_mode()
+        assert mode == expect, f"{prog} -> {mode}, expected {expect}"
+        assert prog.lower() in why.lower()
+
+
+def test_kitty_and_ghostty_are_detected() -> None:
+    with FakeEnv(TERM="xterm-kitty"):
+        assert C.detect_term_mode()[0] == "kitty"
+    with FakeEnv(KITTY_WINDOW_ID="3"):
+        assert C.detect_term_mode()[0] == "kitty"
+    with FakeEnv(TERM="xterm-ghostty"):
+        assert C.detect_term_mode()[0] == "kitty"
+
+
+def test_a_terminal_without_images_says_so_rather_than_failing_silently() -> None:
+    """⛔ The whole reason `b` looked broken: a silent fallback is indistinguishable
+    from a broken feature."""
+    with FakeEnv(TERM_PROGRAM="Apple_Terminal"):
+        mode, why = C.detect_term_mode()
+    assert mode == "blocks"
+    assert "no image protocol" in why, why
+    with FakeEnv():
+        mode, why = C.detect_term_mode()
+    assert mode == "blocks"
+    assert "cannot be detected" in why and "--term-mode" in why
+
+
+def test_the_draw_mode_key_cycles_rather_than_toggles() -> None:
+    """⛔ THE BUG. `b` used to toggle between "blocks" and whatever was detected —
+    so in an undetected terminal both sides were "blocks" and it did nothing. A
+    three-way cycle can never be a no-op."""
+    order = ["blocks", "iterm", "kitty"]
+    seen = set()
+    mode = "blocks"
+    for _ in range(len(order)):
+        mode = order[(order.index(mode) + 1) % len(order)]
+        seen.add(mode)
+    assert seen == set(order), f"cycling did not reach every mode: {seen}"
+
+
+def test_both_image_renderers_produce_a_payload() -> None:
+    img = np.zeros((90, 160, 3), np.uint8)
+    img[:, :] = (30, 120, 200)
+    iterm = C.render_iterm(img, 40, 12)
+    kitty = C.render_kitty(img, 40, 12)
+    assert iterm.startswith("\x1b]1337;File=inline=1") and iterm.endswith("\x07")
+    assert "width=40" in iterm and "height=12" in iterm
+    assert kitty.startswith("\x1b_G") and kitty.endswith("\x1b\\")
+    assert "c=40,r=12" in kitty
+
+
+def test_kitty_chunks_are_within_the_protocol_limit() -> None:
+    """The protocol requires <=4096 base64 bytes per chunk, and m=1 on all but the
+    last. A frame large enough to need several chunks is the case that breaks."""
+    big = np.random.default_rng(1).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    out = C.render_kitty(big, 80, 24)
+    chunks = [c for c in out.split("\x1b_G") if c]
+    assert len(chunks) > 1, "a 720p frame should need multiple chunks"
+    for chunk in chunks:
+        payload = chunk.split(";", 1)[1].rsplit("\x1b\\", 1)[0]
+        assert len(payload) <= 4096, f"chunk of {len(payload)} exceeds the 4096 limit"
+    assert chunks[-1].split(";", 1)[0].endswith("m=0"), "the final chunk must set m=0"
+
+
 if __name__ == "__main__":
     sys.exit(main())

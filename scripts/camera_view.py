@@ -323,20 +323,89 @@ def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 2)
     return max(20, cols), rows
 
 
-def detect_term_mode() -> str:
-    """Which drawing method this terminal actually supports.
+# ⭐ Terminals that can draw a real image, and how. Keys are what they set in the
+# environment; values are the protocol they speak.
+#
+# ⚠️ This list is the reason `b` appeared broken. It toggled between "blocks" and
+# `detect_term_mode()`, so in a terminal this list did not recognise, BOTH sides of
+# the toggle were "blocks" and pressing it changed nothing visibly. A toggle whose
+# two states can be identical is not a toggle — and worse, kitty was *detected* and
+# then silently discarded because its protocol was unimplemented. Both are fixed:
+# kitty is implemented, and the mode is always reported so a downgrade is visible.
+IMAGE_TERMINALS = {
+    "iTerm.app": "iterm",
+    "WezTerm": "iterm",
+    "vscode": "iterm",        # VS Code implements iTerm2's inline-image escape
+    "Hyper": "iterm",
+    "Tabby": "iterm",
+    "ghostty": "kitty",
+    "kitty": "kitty",
+    "rio": "kitty",
+    "konsole": "kitty",
+    "warp": "iterm",
+    "WarpTerminal": "iterm",
+}
 
-    ⭐ **Block characters are a fallback, not the best available.** iTerm2 and WezTerm
-    accept a real image over an escape sequence and draw it at full resolution, which
-    removes the pixelation completely — one character cell stops being one pixel.
-    This is the honest answer to *"do the pixels have to be this large?"*: in a plain
-    terminal yes, and in iTerm2 no.
+
+def detect_term_mode() -> tuple[str, str]:
+    """Best available drawing method, and a human-readable reason.
+
+    Returns e.g. `("iterm", "iTerm.app supports inline images")` or
+    `("blocks", "Apple_Terminal has no image protocol — coloured text only")`.
+
+    ⛔ The reason is returned, not just the mode. A silent fallback to blocks is
+    indistinguishable from a broken feature, which is exactly how `b` wasted
+    Julien's time.
     """
-    if os.environ.get("TERM_PROGRAM") in ("iTerm.app", "WezTerm"):
-        return "iterm"
-    if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("TERM") == "xterm-kitty":
-        return "kitty"
-    return "blocks"
+    prog = os.environ.get("TERM_PROGRAM", "")
+    term = os.environ.get("TERM", "")
+    if os.environ.get("KITTY_WINDOW_ID") or term == "xterm-kitty":
+        return "kitty", "kitty graphics protocol detected"
+    if term.startswith("xterm-ghostty") or prog == "ghostty":
+        return "kitty", "Ghostty detected (speaks the kitty graphics protocol)"
+    for key, mode in IMAGE_TERMINALS.items():
+        if prog and key.lower() in prog.lower():
+            return mode, f"{prog} supports inline images ({mode} protocol)"
+    if prog:
+        return "blocks", f"{prog} reports no image protocol — coloured text only"
+    return "blocks", ("no TERM_PROGRAM set, so image support cannot be detected — "
+                      "coloured text only. Force with --term-mode iterm or kitty to try anyway")
+
+
+def term_diagnosis() -> str:
+    """Everything relevant about this terminal, for pasting into a conversation."""
+    keys = ("TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM", "COLORTERM",
+            "KITTY_WINDOW_ID", "WEZTERM_PANE", "LC_TERMINAL")
+    lines = ["terminal environment:"]
+    for k in keys:
+        lines.append(f"    {k:22s} {os.environ.get(k, '(unset)')}")
+    mode, why = detect_term_mode()
+    lines += ["", f"  -> best mode: {mode}", f"     because   : {why}", "",
+              "  If your terminal DOES support images and was not detected, force it:",
+              "      uv run scripts/camera_view.py --term --term-mode iterm",
+              "      uv run scripts/camera_view.py --term --term-mode kitty",
+              "  and tell the agent which one worked so the detection list can be fixed."]
+    return "\n".join(lines)
+
+
+def render_kitty(frame, cols: int, rows: int, quality: int = 60) -> str:
+    """A real image, drawn by the kitty graphics protocol (kitty, Ghostty, Konsole).
+
+    The payload is base64 of a JPEG, sent in 4096-byte chunks — the protocol requires
+    chunking and `m=1` on every chunk but the last. `a=T` transmits and displays in
+    one go; `c`/`r` place it in a cell box so it scales like the block renderer does.
+    """
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        return ""
+    data = base64.b64encode(buf.tobytes()).decode("ascii")
+    chunks = [data[i:i + 4096] for i in range(0, len(data), 4096)]
+    out = []
+    for i, chunk in enumerate(chunks):
+        first, last = i == 0, i == len(chunks) - 1
+        ctrl = f"a=T,f=100,c={cols},r={rows}," if first else ""
+        out.append(f"\x1b_G{ctrl}m={0 if last else 1};{chunk}\x1b\\")
+    return "".join(out)
 
 
 def render_iterm(frame, cols: int, rows: int, quality: int = 60) -> str:
@@ -365,9 +434,16 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     from keyboard import KeyReader  # noqa: PLC0415
 
-    mode = detect_term_mode() if args.term_mode == "auto" else args.term_mode
-    if mode == "kitty":
-        mode = "blocks"          # kitty's graphics protocol is not implemented yet
+    best, why = detect_term_mode()
+    mode = best if args.term_mode == "auto" else args.term_mode
+    print(f"  terminal: {why}")
+    print(f"  drawing with: {mode}"
+          f"{'  (forced)' if args.term_mode != 'auto' else ''}")
+    if mode == "blocks":
+        print("  ⚠️ Block mode is one character cell per pixel — that is the medium's")
+        print("     limit, not a bug. If your terminal does support images, force it:")
+        print("     --term-mode iterm   or   --term-mode kitty     (b cycles them live)")
+    time.sleep(1.2)
     scale = min(1.0, max(0.1, args.scale))
 
     grab = FrameGrabber(cap)
@@ -403,14 +479,18 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                     shown, t_fps = 0, now
 
                 t_draw = time.perf_counter()
-                body = (render_iterm(frame, cols, rows) if mode == "iterm"
-                        else render_ansi(frame, cols, rows))
+                if mode == "iterm":
+                    body = render_iterm(frame, cols, rows)
+                elif mode == "kitty":
+                    body = render_kitty(frame, cols, rows)
+                else:
+                    body = render_ansi(frame, cols, rows)
                 sys.stdout.write("\x1b[H" + body)
                 sys.stdout.write(
                     f"\x1b[0m\n{w}x{h} {mode}  {cols}x{rows} cells  "
                     f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured  "
                     f"draw {draw_ms:4.1f} ms\x1b[K\n"
-                    f"q quit · f mirror · r rotate · 1-6 resolution · +/- size · b blocks/image\x1b[K"
+                    f"q quit · f mirror · r rotate · 1-6 resolution · +/- size · b cycle draw mode\x1b[K"
                 )
                 sys.stdout.flush()
                 # ⭐ The draw cost is displayed because it is the latency the SOFTWARE
@@ -427,8 +507,15 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                     elif k == "r":
                         rotate = (rotate + 90) % 360
                     elif k == "b":
-                        mode = "blocks" if mode == "iterm" else detect_term_mode()
+                        # ⛔ CYCLES through all three, rather than toggling against a
+                        # detection that may return the mode you are already in. The
+                        # old two-way toggle was a no-op in any terminal the detector
+                        # did not recognise, which is indistinguishable from broken.
+                        order = ["blocks", "iterm", "kitty"]
+                        mode = order[(order.index(mode) + 1) % len(order)]
                         sys.stdout.write("\x1b[2J")
+                        note = "" if mode == best else "  (not what was detected)"
+                        sys.stdout.write(f"\r  drawing with: {mode}{note}\n")
                     elif k in "+=":
                         scale = min(1.0, scale + 0.1)
                         sys.stdout.write("\x1b[2J")
@@ -470,7 +557,9 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
-    ap.add_argument("--term-mode", default="auto", choices=["auto", "blocks", "iterm"],
+    ap.add_argument("--term-info", action="store_true",
+                    help="print what this terminal is and whether it can draw images, then exit")
+    ap.add_argument("--term-mode", default="auto", choices=["auto", "blocks", "iterm", "kitty"],
                     help="how to draw in the terminal. auto detects iTerm2/WezTerm and uses "
                          "their inline-image protocol (full resolution, no pixelation); "
                          "blocks forces coloured text, which works in any terminal")
@@ -492,6 +581,10 @@ def main() -> int:
                     help="capture headlessly for N seconds and report the real frame "
                          "interval, then exit. No window — safe over SSH")
     args = ap.parse_args()
+
+    if args.term_info:
+        print(term_diagnosis())
+        return 0
 
     if args.list:
         list_cameras()
