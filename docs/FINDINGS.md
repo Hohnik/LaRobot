@@ -1001,6 +1001,20 @@ on entry.
 to happen. Say which path was taken *and why*, especially when the fallback is the
 degraded one.
 
+**✅ Confirmed 2026-08-11.** Julien's terminal is **Ghostty 1.3.1** (`TERM_PROGRAM=ghostty`,
+`TERM=xterm-ghostty`, `COLORTERM=truecolor`), and `--term-info` correctly reports
+*"Ghostty detected (speaks the kitty graphics protocol)"* with `best mode: kitty`. So
+`--term` already draws real images with no flag needed.
+
+⚠️ Two kitty-protocol facts that would each have broken a 30 fps redraw loop, both
+found by reading the spec rather than by running it — the agent cannot test this:
+
+- **Images persist until deleted.** One per frame at 30 fps would accumulate
+  placements without bound. `a=d,d=A` clears the previous frame first.
+- **The terminal replies to every image**, on **stdin** — which this viewer reads for
+  keypresses. Without `q=2` every frame would inject escape bytes the key handler
+  sees as junk input.
+
 ### 21.3 The remaining latency is the camera, and software cannot fix it
 
 Measured by Julien on 2026-08-11 with the on-screen draw-cost readout: **~2 ms per

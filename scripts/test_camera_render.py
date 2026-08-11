@@ -234,15 +234,34 @@ def test_both_image_renderers_produce_a_payload() -> None:
 
 def test_kitty_chunks_are_within_the_protocol_limit() -> None:
     """The protocol requires <=4096 base64 bytes per chunk, and m=1 on all but the
-    last. A frame large enough to need several chunks is the case that breaks."""
+    last. A frame large enough to need several chunks is the case that breaks.
+
+    ⚠️ Control-only escapes (the delete that clears the previous frame) carry no
+    `;payload`, so they are skipped rather than parsed as chunks.
+    """
     big = np.random.default_rng(1).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
     out = C.render_kitty(big, 80, 24)
-    chunks = [c for c in out.split("\x1b_G") if c]
-    assert len(chunks) > 1, "a 720p frame should need multiple chunks"
-    for chunk in chunks:
+    parts = [c for c in out.split("\x1b_G") if c]
+    data_parts = [c for c in parts if ";" in c]
+    assert len(data_parts) > 1, "a 720p frame should need multiple chunks"
+    for chunk in data_parts:
         payload = chunk.split(";", 1)[1].rsplit("\x1b\\", 1)[0]
         assert len(payload) <= 4096, f"chunk of {len(payload)} exceeds the 4096 limit"
-    assert chunks[-1].split(";", 1)[0].endswith("m=0"), "the final chunk must set m=0"
+    assert data_parts[-1].split(";", 1)[0].endswith("m=0"), "the final chunk must set m=0"
+
+
+def test_kitty_deletes_the_previous_frame_and_silences_replies() -> None:
+    """⛔ Two protocol facts that would each break a 30 fps redraw loop.
+
+    Images PERSIST until deleted, so without `a=d` every frame adds a placement and
+    the terminal's memory grows without bound. And the terminal REPLIES to each
+    image on **stdin** — which this viewer reads for keypresses — so without `q=2`
+    every frame injects escape bytes the key handler sees as junk.
+    """
+    img = np.zeros((90, 160, 3), np.uint8)
+    out = C.render_kitty(img, 40, 12)
+    assert out.startswith("\x1b_Ga=d,d=A,q=2"), "must clear the previous placement first"
+    assert "q=2" in out.split(";", 1)[0], "must suppress replies, or they land in stdin"
 
 
 if __name__ == "__main__":

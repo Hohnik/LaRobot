@@ -391,21 +391,37 @@ def term_diagnosis() -> str:
 def render_kitty(frame, cols: int, rows: int, quality: int = 60) -> str:
     """A real image, drawn by the kitty graphics protocol (kitty, Ghostty, Konsole).
 
-    The payload is base64 of a JPEG, sent in 4096-byte chunks — the protocol requires
-    chunking and `m=1` on every chunk but the last. `a=T` transmits and displays in
-    one go; `c`/`r` place it in a cell box so it scales like the block renderer does.
+    ⛔ TWO THINGS THAT WOULD HAVE BROKEN THIS, both from reading the protocol spec
+    rather than from running it — the agent cannot test any of this (FINDINGS §21.1).
+
+    **1. Images PERSIST until deleted.** Unlike a text redraw, each transmitted image
+    stays placed. Sending one every frame at 30 fps would pile up placements
+    indefinitely and grow the terminal's memory without bound. `a=d,d=A` deletes all
+    existing placements before each new frame.
+
+    **2. The terminal REPLIES to every image.** kitty answers with
+    `ESC _G i=…;OK ESC \\` on success or an error string on failure. Those bytes
+    arrive on **stdin** — and this viewer reads stdin for keypresses, so every frame
+    would inject a burst of escape characters that the key handler sees as junk
+    input. `q=2` suppresses the responses entirely, which is what a real-time
+    redraw loop wants.
+
+    The payload is base64 of a JPEG in 4096-byte chunks, `m=1` on every chunk but the
+    last, `f=100` meaning "this is a PNG/JPEG file, decode it yourself", and `c`/`r`
+    placing it in a cell box so it scales exactly like the block renderer does.
     """
     ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     if not ok:
         return ""
     data = base64.b64encode(buf.tobytes()).decode("ascii")
     chunks = [data[i:i + 4096] for i in range(0, len(data), 4096)]
-    out = []
+    out = ["\x1b_Ga=d,d=A,q=2\x1b\\"]          # clear the previous frame's placement
     for i, chunk in enumerate(chunks):
         first, last = i == 0, i == len(chunks) - 1
-        ctrl = f"a=T,f=100,c={cols},r={rows}," if first else ""
+        ctrl = f"a=T,f=100,c={cols},r={rows},q=2," if first else ""
         out.append(f"\x1b_G{ctrl}m={0 if last else 1};{chunk}\x1b\\")
     return "".join(out)
+
 
 
 def render_iterm(frame, cols: int, rows: int, quality: int = 60) -> str:

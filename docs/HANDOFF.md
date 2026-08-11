@@ -201,7 +201,7 @@ work, not repair. In the order I would do it, with the reasoning:
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
-| 6 | **Real wrist cameras (D405)** | Not owned yet. The `camera` control frame already exists and is correct for them — it is only wrong for the hand-mounted C920 stand-in |
+| 6 | ⭐⭐ **The D405 wrist cameras — THEY HAVE ARRIVED. This is the next big piece** | Julien mounted one on **arm B** provisionally, the other is with **arm G**. ⚠️ **Neither is plugged in** — verified 2026-08-11 by an unbounded scan of all 14 USB devices: two CANables, two SpaceMice, the C920, an ethernet adapter and five hubs, and **no Intel/RealSense device at all**. So the first step is physical, not software. He gave the manual's link: `intelrealsense.com/get-started`. See §8 below for what to research and what to expect |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **Give this repo a git remote** | ~57 commits exist on one Mac only. Julien has deliberately deferred pushing; not forgotten |
 
@@ -269,3 +269,59 @@ one of which dropped 4.3 kg. Two specific process faults worth carrying:
 2. **A flag named for one thing changed another.** `--no-gripper` was chosen *because* it sounded like the
    smaller, safer experiment. It silently replaced the dynamics model. **Before recommending a flag as
    "safer", read what it actually switches** — the name is not the contract.
+
+
+---
+
+## 8. ⭐ The Intel RealSense D405 — what the next session needs to know before it starts
+
+**Status, 2026-08-11:** both cameras have arrived. One is **provisionally mounted on arm B**, the other is
+**with arm G**. ⚠️ **Neither is connected to the laptop** — verified by an unbounded `ioreg -p IOUSB` scan
+listing all 14 USB devices, with no Intel (vendor `0x8086`) or RealSense device among them. Julien's manual
+points at **`intelrealsense.com/get-started`**.
+
+### ⚠️ Everything below is PRIOR BELIEF, not verified on this machine
+
+It is written down because it will save the next session hours of dead ends — but **every line of it must be
+checked, and this repo's whole history is a warning about confident, plausible, wrong answers**
+([FINDINGS §0](FINDINGS.md)). Treat it as a set of hypotheses to test, not facts to build on.
+
+**What the D405 is.** A short-range stereo depth camera, physically the same module family as the D435 but
+tuned for close work — roughly **7 cm to 50 cm**, which is exactly right for a gripper-mounted view. It has
+a colour sensor and stereo depth, **no IMU**, and connects by **USB-C 3.x**. The MJCF in
+`third_party/i2rt` already models it on the flange at a **25° cant with +Z along the optical axis**
+(FINDINGS §19), which is why `--frame camera` exists and has been correct-but-unusable until now.
+
+**⛔ The likely hard part, and it rhymes with a problem this repo already solved once.** Intel's
+`librealsense` SDK is Linux- and Windows-first. macOS support is real but second-class, and **Apple Silicon
+is the weakest case**: there are generally **no official `pyrealsense2` wheels for macOS ARM**, so Python
+bindings usually mean building `librealsense` from source with CMake. ⭐ **This is the same shape as the CAN
+problem** — an SDK that assumes a platform we are not on — and that was solved by patching from outside
+rather than forking (`src/yam_can.py`, FINDINGS §2). Expect a similar shape here and read that section first.
+
+**Things worth checking early, roughly in order:**
+
+1. **Plug one in and look.** `ioreg -p IOUSB -l -w 0 | rg -i "realsense|8086"` should show it. If nothing
+   appears, it is cable or port, not software — the D405 needs a **data-capable USB-C cable**, and
+   charge-only cables are a classic silent failure.
+2. **USB3 vs USB2.** A D405 on a USB2 link will either refuse or fall back to a crawl. Check what it
+   negotiated. ⚠️ Both arms, both SpaceMice and the C920 already share this laptop's hubs — see the device
+   list above. **Two depth cameras plus everything else is a real bandwidth question, not a formality.**
+3. **Can `pyrealsense2` be installed at all?** `uv add pyrealsense2` is the cheap test. If there is no
+   wheel, the options are a source build, Rosetta, or treating the camera as a plain UVC device for colour
+   only — which `scripts/camera_view.py` already handles, and which may be enough for teleop.
+4. **Firmware.** Intel ships firmware updates and mismatches cause confusing failures. Check the version
+   before debugging anything else.
+5. **Serial numbers.** Two identical cameras raise **exactly** the ambiguity this repo has hit twice — the
+   CAN adapters and the two SpaceMice. ⛔ **Select by serial, never by index** (FINDINGS §0 #5). Unlike the
+   SpaceMice, RealSense devices *do* report real serials, so this one is solvable properly.
+
+**What already exists and should not be rebuilt:** the `camera` control frame, the terminal and windowed
+viewers, the frame-rate and latency instrumentation, and the finding that the C920's ~200 ms latency is
+sensor-and-encode rather than software ([FINDINGS §21.3](FINDINGS.md)). ⭐ **A D405 may well be much faster**
+— it is a machine-vision camera rather than a consumer webcam — which would make the latency question worth
+re-measuring rather than assuming it carries over.
+
+**⚠️ The agent still cannot test any of this.** macOS camera permission is per-application
+([FINDINGS §21.1](FINDINGS.md)). Enumeration over `ioreg` and `system_profiler` works; opening a stream does
+not. Plan for measurements to be commands Julien runs, and put the diagnostics *in the program*.
