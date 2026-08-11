@@ -69,7 +69,7 @@ cd ~/Developer/Projects/yam-robotics && uv run scripts/map_axes.py
 motion, with the arms unplugged if you like. Then:
 
 ```bash
-cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes --arm arm1
+cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes --arm B
 ```
 
 ```
@@ -111,7 +111,7 @@ These are not preferences, they were arrived at by things going wrong.
   consent flow. This is also why every new motion path here is slow, bounded and interruptible: there is no
   hardware backstop underneath the software one.
 - Both arms and **both SpaceMice run off Julien's laptop**. Two arms, two CANables, two independent buses.
-- **Both arms are calibrated** (`config/gripper_limits.json` holds `arm1` *and* `arm2` since 2026-08-11).
+- **Both arms are calibrated** (`config/gripper_limits.json` holds `B` *and* `G` since 2026-08-11).
 - ⭐ **Two separate terminal sessions, one per arm, already work simultaneously** — Julien drove both arms at
   once that way on 2026-08-10. That is a genuinely useful data point: it rules out CAN, USB and CPU
   contention as blockers for bimanual, and leaves the single-process refactor as the *only* remaining work.
@@ -119,7 +119,7 @@ These are not preferences, they were arrived at by things going wrong.
 **Health check after the overnight power cycle (2026-08-11), all agent-safe, nothing energised beyond a
 register read:**
 
-| check | arm1 | arm2 |
+| check | B | G |
 |---|---|---|
 | motors on the bus | 7/7, gear ratios 40/40/40/10/10/10/10 | 7/7, same |
 | errors | all `0x1 (normal)` | all `0x1 (normal)` |
@@ -128,7 +128,7 @@ register read:**
 | saved jaw limits still valid? | ✅ yes, after the automatic −2π shift | ✅ yes, no shift needed |
 | normalised jaw position | **0.034** — nearly closed, only just inside the band | 0.516 — mid-stroke |
 
-⚠️ **arm1's jaws sit at 0.034**, so there is very little closing travel before the clamp stops it. Harmless,
+⚠️ **B's jaws sit at 0.034**, so there is very little closing travel before the clamp stops it. Harmless,
 but do not read "the gripper won't close further" as a fault.
 
 ## 5. The three traps that will bite you first
@@ -150,14 +150,16 @@ to be able to control one of the arms."*
 
 | # | task | why / detail |
 |---|---|---|
-| 1 | ⭐ **Set up the mouse controls, in CONTROLS mode on the real arm** | `teleop_session.py --yes --arm arm1`, then `m`. The arm **moves**, one isolated axis at a time at half speed; push a direction, watch, press `f` to reverse it or `1`-`6` to reassign it. ⛔ **Do NOT use `--no-gripper` for this** — see §2 and FINDINGS §11.1. `scripts/map_axes.py` still exists for no-hardware sign tweaks but it cannot show you what a direction *is*, which is the actual difficulty |
+| 1 | ⭐ **Set up the mouse controls, in CONTROLS mode on the real arm** | `teleop_session.py --yes --arm B`, then `m`. The arm **moves**, one isolated axis at a time at half speed; push a direction, watch, press `f` to reverse it or `1`-`6` to reassign it. ⛔ **Do NOT use `--no-gripper` for this** — see §2 and FINDINGS §11.1. `scripts/map_axes.py` still exists for no-hardware sign tweaks but it cannot show you what a direction *is*, which is the actual difficulty |
 | 2 | **Verify PARK on hardware** | ⚠️ **FOUR defects now, and the fourth was the one that actually mattered.** Julien reported it broken twice. The first three (cancelled by any key; a 7-vs-6 crash that **disabled the motors mid-air**; a bypassed gripper clamp) were all real but none explained why it did not move. The fourth: **PARK commanded `measured + one step`, so the position error — and therefore the torque — was capped at 0.23° forever. A treadmill.** See [FINDINGS §15](FINDINGS.md); it now commands a *trajectory* like TELEOP always did, and stalls out loud instead of printing a number that is not changing. `s`, move away, `p` |
-| 2b | ⛔ **arm2 has never had its jaws calibrated** | `config/gripper_limits.json` holds `arm1` only, so `--arm arm2` refuses to start with the gripper. That refusal is correct — but it printed a command **without `--arm`**, which would have re-calibrated arm1. Fixed. Run `uv run scripts/calibrate_gripper.py --yes --arm arm2` once, ~10 s, jaws only |
+| 2b | ⛔ **G has never had its jaws calibrated** | `config/gripper_limits.json` holds `B` only, so `--arm G` refuses to start with the gripper. That refusal is correct — but it printed a command **without `--arm`**, which would have re-calibrated B. Fixed. Run `uv run scripts/calibrate_gripper.py --yes --arm G` once, ~10 s, jaws only |
 | 3 | **Verify the gripper stays cool** | The 2π frame fix (FINDINGS §3.5) is verified numerically but **not yet on hardware.** The status line now prints **`jaw NN°C` separately from `hottest`** — watch *that* for **60 s** in TELEOP. A plateau near idle (31-36 °C) is the pass; a steady climb means quit and use `--no-gripper`. ⛔ Watching `hottest` is **not** this test: motors 2/3 carry the 4.3 kg and sit at 41-42 °C all session, so a gripper climbing 33 → 41 °C is invisible inside a `max()` |
 | 4 | ~~**Axis remapping**~~ | ✅ **Done and TUNED ON THE ARM, 2026-08-10.** Julien's live map is a real permutation — `X←y+ Y←x+ UP←z− ROLL←pitch+ PITCH←roll+ YAW←yaw−` — so the feature earned its place; sign flips alone could not have expressed it. Set up in **CONTROLS mode** (`m`): the arm moves one isolated axis at a time, `f` reverses the control you just used, `1`-`6` **swap** it with another motion. Per-arm maps exist (`--fork-map`), shared by default |
-| 5 | ⭐⭐ **Two arms, two SpaceMice** — **what Julien asked for next** | **Fully designed in [ROADMAP step 6](ROADMAP.md); not built.** Neither hardware nor compute is the blocker: two arms on two buses from one loop is proven, and **two IK solves cost 0.100 ms/cycle** (measured) against a 10 ms deadline with ~6.2 ms of CAN. The blocker is that `teleop_session.py` holds one arm's state in one function's locals. Plan: extract `ArmSession`, run N of them, and ⭐ **make `--arms arm1` exercise the N-arm code with N=1 first**, so the refactor is verified separately from the two-arm hardware risk. Two prerequisites are **already done**: per-arm axis maps (`AxisMapStore` + `--fork-map`) and puck assignment with `exclude=` |
+| 5 | ⭐⭐ **Two arms, two SpaceMice** — **what Julien asked for next** | **Fully designed in [ROADMAP step 6](ROADMAP.md); not built.** Neither hardware nor compute is the blocker: two arms on two buses from one loop is proven, and **two IK solves cost 0.100 ms/cycle** (measured) against a 10 ms deadline with ~6.2 ms of CAN. The blocker is that `teleop_session.py` holds one arm's state in one function's locals. Plan: extract `ArmSession`, run N of them, and ⭐ **make `--arms B` exercise the N-arm code with N=1 first**, so the refactor is verified separately from the two-arm hardware risk. Two prerequisites are **already done**: per-arm axis maps (`AxisMapStore` + `--fork-map`) and puck assignment with `exclude=` |
 | 6 | **Cameras — real-time, no perceptible latency** | Julien's requirement, 2026-08-10: the C920 plus the wrist D405s, and *"they need to be real time, no latency type of setup."* ⚠️ Nothing here has been designed yet, and it is the one item that could disturb the 100 Hz loop — the ~6.2 ms/cycle CAN measurement was taken with **nothing else competing for CPU**. Expect cameras to want their own process and a shared-memory or timestamped-queue handoff rather than inline capture |
-| 7 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected |
+| 7 | **Live telemetry on screen** | Julien clarified 2026-08-11, and this is the *small* half of "output the data": while driving he wants **camera fps, motor temperatures, and poses in units a human can act on** — plus, once the camera view is in use, **the gripper's angles**. ⚠️ The requirement is "understandable", not "complete". Raw radians and raw quaternions fail it; degrees, centimetres and named axes pass it |
+| 8 | **Debug logs, with more than one view** | Also his, same day: *"there should be different ways to view logs, or there should be multiple logs… we don't always need access to all of the data when we're debugging specific parts."* So **not** one firehose file. Likely shape: one structured record per cycle written once, plus **filtered views** over it — thermal only, IK only, input only — so a session can be replayed narrowly. Design not started |
+| 9 | **Recorder → MCAP in ABC's exact schema** | Setup-Plan §6.1. Get it right and the whole training half works unmodified; get it wrong and every demo must be re-collected. ⏸️ **Deferred by Julien 2026-08-11** — a friend is still writing the plan, so building now would guess at a schema that is about to be specified |
 
 ⚠️ **Items 2 and 3 are code changes that have never been run against the arm.** They compile, they have
 tests, and item 3 is verified numerically against two independent failures — but *"verified in principle"*

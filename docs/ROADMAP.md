@@ -151,7 +151,7 @@ one layer up, and it has to come down the same way.
 index, so `DMChainCanInterface` and `get_yam_robot()` work unmodified. ⛔ Not a fork of the vendor tree —
 `third_party/i2rt` stays a clean upstream checkout that can be re-pulled.
 
-**Done when:** `get_yam_robot(channel=<arm1>, sim=False)` returns a working robot and `get_joint_pos()`
+**Done when:** `get_yam_robot(channel=<B>, sim=False)` returns a working robot and `get_joint_pos()`
 returns the same seven numbers `ping_motors.py` reports.
 
 ---
@@ -233,7 +233,7 @@ simulator's own `twist_from_axes()` ignored the axis map for the same reason; an
 gripper clamp because the clamp lived only in the teleop branch. A second control loop would be the fourth —
 and it would be the one driving two arms at once.
 
-### ⭐ The de-risking that matters: `--arms arm1` must run the N-arm code with N=1
+### ⭐ The de-risking that matters: `--arms B` must run the N-arm code with N=1
 
 Then the **refactor** is verifiable against a single arm — behaviour Julien already knows the feel of —
 **independently of** the bimanual hardware risk. If N=1 feels identical, the restructure is sound, and going
@@ -248,18 +248,18 @@ and a simulated IK loop produced three failures on first hardware contact, one o
 
 | question | recommendation | why |
 |---|---|---|
-| Do mode keys apply to one arm or both? | **The selected arm.** `a` cycles arm1 → arm2 → BOTH; the status line always shows which | A global `g` puts **8.6 kg** weightless at once, and GUIDE is the mode where a dynamics-model error becomes a *falling* arm (FINDINGS §11.1) |
+| Do mode keys apply to one arm or both? | **The selected arm.** `a` cycles B → G → BOTH; the status line always shows which | A global `g` puts **8.6 kg** weightless at once, and GUIDE is the mode where a dynamics-model error becomes a *falling* arm (FINDINGS §11.1) |
 | Does *driving* apply to one arm or both? | **Always both** — each arm follows its own puck, continuously | That is the actual goal. Only *edits and mode changes* need a selector |
 | Start mode | **HOLD**, and refuse `--start-mode guide` when N>1 | Two arms going weightless on a first run is the worst possible first run |
 | Per-arm axis maps | ✅ **built** — shared by default, `--fork-map` to diverge | Julien: *"probably the same, actually. But maybe that should be options to map them separately"* |
 | Puck assignment | ✅ **built** — `pick_device_by_wiggle(exclude=…)` | Without it the same puck can be assigned to both arms silently: two arms following one hand, which reads as a control bug |
-| A fault on one arm | **stops both**, then the existing consent flow for each | A chain death on arm1 must not leave arm2 uncommanded and sagging |
+| A fault on one arm | **stops both**, then the existing consent flow for each | A chain death on B must not leave G uncommanded and sagging |
 
 ### Order of work
 
-1. Extract `ArmSession` with **no behaviour change**; run `--arms arm1` and confirm it feels identical.
+1. Extract `ArmSession` with **no behaviour change**; run `--arms B` and confirm it feels identical.
 2. Add the `a` selector and per-arm status lines. Still one arm.
-3. `--arms arm1,arm2`, starting in HOLD, gripper enabled, desk clear.
+3. `--arms B,G`, starting in HOLD, gripper enabled, desk clear.
 4. Only then GUIDE and CONTROLS on two arms.
 
 ## Step 7 — Cameras

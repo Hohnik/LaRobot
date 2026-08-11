@@ -37,11 +37,20 @@ YAM_BITRATE = 1_000_000  # I2RT documents 1 Mbit/s; see third_party/i2rt README
 # have commanded the wrong arm — with a motion script already written.
 #
 # Serial numbers are stable across replug; bus/address are not.
+# ⭐ RENAMED 2026-08-11, at Julien's request: arm1 -> B, arm2 -> G. The arms are
+# physically labelled B and G, so the names now match what is written on the
+# hardware. "arm1"/"arm2" were an arbitrary software ordering that told you nothing
+# while standing at the bench, and the whole point of a name here is to be able to
+# check, at a glance, that the script is driving the arm you are looking at.
+#
+# ⚠️ The old names are gone deliberately rather than kept as aliases. An alias would
+# let `--arm arm1` keep working while the config files had moved on to B, which is
+# exactly the silent-mismatch class this file already exists to prevent.
 ARM_SERIALS = {
-    "arm1": "2081337C594E5018",  # every measurement of 2026-08-10 was this one
-    "arm2": "20593383594E5018",  # plugged in 2026-08-10, not yet talked to
+    "B": "2081337C594E5018",  # was "arm1" — every measurement of 2026-08-10 was this one
+    "G": "20593383594E5018",  # was "arm2"
 }
-DEFAULT_ARM = "arm1"
+DEFAULT_ARM = "B"
 
 # ⭐ MEASURED on this arm, 2026-08-10, not copied from a config file.
 # Re-derive at any time with:  uv run scripts/identify_arm.py --yes

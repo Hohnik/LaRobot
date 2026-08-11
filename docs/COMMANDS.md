@@ -3,8 +3,8 @@
 > **Every script that can transmit is a dry run by default.** Leaving off `--yes` prints the full plan and
 > sends nothing. That is the single convention to remember.
 >
-> **Everything takes `--arm arm1` or `--arm arm2`**, resolved by adapter *serial*, never by index.
-> Default is `arm1`. Run them from `~/Developer/Projects/yam-robotics`.
+> **Everything takes `--arm B` or `--arm G`**, resolved by adapter *serial*, never by index.
+> Default is `B`. Run them from `~/Developer/Projects/yam-robotics`.
 
 ---
 
@@ -15,18 +15,18 @@
 uv run scripts/map_axes.py
 
 # 2. Everyday driving: guide by hand, teleop with the SpaceMouse, park. All in one session.
-uv run scripts/teleop_session.py --yes --arm arm1
+uv run scripts/teleop_session.py --yes --arm B
 
 # 3. After ANY power cycle, AND once per arm before its very first run. ~10 s, jaws only.
-#    ⛔ --arm is NOT optional here: without it this calibrates arm1 whatever you meant,
-#    driving the wrong arm's jaws into both stops. arm2 needs its own run — as of
-#    2026-08-10 config/gripper_limits.json holds arm1 only, which is why arm2 refuses
+#    ⛔ --arm is NOT optional here: without it this calibrates B whatever you meant,
+#    driving the wrong arm's jaws into both stops. G needs its own run — as of
+#    2026-08-10 config/gripper_limits.json holds B only, which is why G refuses
 #    to start with the gripper enabled.
-uv run scripts/calibrate_gripper.py --yes --arm arm1
-uv run scripts/calibrate_gripper.py --yes --arm arm2
+uv run scripts/calibrate_gripper.py --yes --arm B
+uv run scripts/calibrate_gripper.py --yes --arm G
 
 # 4. Is the arm alive? Enables all 7, reads, disables. Nothing moves.
-uv run scripts/read_arm_state.py --yes --arm arm1
+uv run scripts/read_arm_state.py --yes --arm B
 ```
 
 ### `teleop_session.py` — the keys
@@ -104,15 +104,15 @@ By default **both arms share one map**, and the plan line says so out loud:
   map scope   : SHARED — edits here affect BOTH arms
 ```
 
-If arm2 genuinely needs different directions — a mirrored arm may well want an inverted Y — give it its own,
+If G genuinely needs different directions — a mirrored arm may well want an inverted Y — give it its own,
 seeded from whatever it uses today:
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm arm2 --fork-map     # arm2 gets its own map
-uv run scripts/teleop_session.py --yes --arm arm2 --share-map    # ...and back to the shared one
+uv run scripts/teleop_session.py --yes --arm G --fork-map     # G gets its own map
+uv run scripts/teleop_session.py --yes --arm G --share-map    # ...and back to the shared one
 ```
 
-⛔ **Check the scope line before editing.** Tuning arm2 while it is still on the shared map changes arm1 too.
+⛔ **Check the scope line before editing.** Tuning G while it is still on the shared map changes B too.
 
 ### The six motions — measured, not assumed
 
@@ -219,8 +219,8 @@ Without the viewer the run continues headless, so `--view` is optional in every 
 These send CAN frames yet never enable anything — register reads only.
 
 ```bash
-uv run scripts/identify_arm.py --yes --arm arm1              # motor models, sw versions, safety timeout
-uv run scripts/identify_arm.py --arm arm1 --scan 1 8 --yes   # what is on this bus at all
+uv run scripts/identify_arm.py --yes --arm B              # motor models, sw versions, safety timeout
+uv run scripts/identify_arm.py --arm B --scan 1 8 --yes   # what is on this bus at all
 uv run scripts/bench_can.py --yes --cycle --samples 8000     # control-rate measurement
 ```
 
@@ -232,8 +232,8 @@ power or wiring, not software — see `FINDINGS.md` §8.
 ## Enables motors, sends no setpoint — the arm should not move
 
 ```bash
-uv run scripts/ping_motors.py --yes --arm arm1      # per-motor position, torque, TEMPERATURE, error
-uv run scripts/read_arm_state.py --yes --arm arm1   # all 7 through the whole-arm chain
+uv run scripts/ping_motors.py --yes --arm B      # per-motor position, torque, TEMPERATURE, error
+uv run scripts/read_arm_state.py --yes --arm B   # all 7 through the whole-arm chain
 ```
 
 `ping_motors.py` is also the temperature check. Idle is **31-36 °C**; **41-42 °C while holding a pose is
@@ -244,12 +244,12 @@ normal thermal equilibrium, not a fault.**
 ## ⛔ Moves the arm
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm arm1                 # ⭐ the one to use
-uv run scripts/calibrate_gripper.py --yes --arm arm1              # jaws to both stops, gently, once
-uv run scripts/hold_pose.py --yes --arm arm1                      # hold the pose; success = nothing moves
-uv run scripts/hold_pose.py --yes --arm arm1 --zero-gravity       # weightless, hand-guide only
-uv run scripts/teleop_gripper.py --yes --arm arm1                 # gripper twist + jaws only, no IK
-uv run scripts/move_one_motor.py --yes --arm arm1 --delta 1.5 --cycles 3   # one motor, bounded
+uv run scripts/teleop_session.py --yes --arm B                 # ⭐ the one to use
+uv run scripts/calibrate_gripper.py --yes --arm B              # jaws to both stops, gently, once
+uv run scripts/hold_pose.py --yes --arm B                      # hold the pose; success = nothing moves
+uv run scripts/hold_pose.py --yes --arm B --zero-gravity       # weightless, hand-guide only
+uv run scripts/teleop_gripper.py --yes --arm B                 # gripper twist + jaws only, no IK
+uv run scripts/move_one_motor.py --yes --arm B --delta 1.5 --cycles 3   # one motor, bounded
 uv run scripts/move_both_grippers.py --yes                        # both arms' grippers, one loop
 ```
 
@@ -263,7 +263,7 @@ phases became live mode switches, and the snap bug it contained is fixed there, 
 **Separately, today:** just change the flag. Each session assigns its own puck.
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm arm2
+uv run scripts/teleop_session.py --yes --arm G
 ```
 
 **Simultaneously:** not built yet. The hard half is proven — `move_both_grippers.py` already drives two arms

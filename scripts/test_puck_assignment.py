@@ -52,16 +52,16 @@ def test_one_puck_no_exclusion_is_returned() -> None:
 def test_the_only_puck_is_NOT_handed_out_twice() -> None:
     """⛔ The core regression: one puck, two arms, must not silently serve both."""
     with FakeDevices([PUCK_A]):
-        first = spacemouse.pick_device_by_wiggle(label="arm1")
+        first = spacemouse.pick_device_by_wiggle(label="B")
         assert first == PUCK_A
-        second = spacemouse.pick_device_by_wiggle(label="arm2", exclude=[first["path"]])
+        second = spacemouse.pick_device_by_wiggle(label="G", exclude=[first["path"]])
         assert second is None, "the same puck was assigned to both arms"
 
 
 def test_second_call_gets_the_other_puck_without_asking() -> None:
     """Two pucks, one already taken -> the remaining one needs no wiggle at all."""
     with FakeDevices([PUCK_A, PUCK_B]):
-        second = spacemouse.pick_device_by_wiggle(label="arm2", exclude=[PUCK_A["path"]])
+        second = spacemouse.pick_device_by_wiggle(label="G", exclude=[PUCK_A["path"]])
         assert second == PUCK_B
 
 

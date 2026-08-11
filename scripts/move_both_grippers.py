@@ -94,10 +94,10 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Twist both grippers simultaneously, differently.")
     ap.add_argument("--yes", action="store_true", help="actually move (default: dry run)")
     ap.add_argument("--seconds", type=float, default=20.0, help="how long to oscillate")
-    ap.add_argument("--amp1", type=float, default=1.4, help="arm1 amplitude, rad")
-    ap.add_argument("--amp2", type=float, default=0.5, help="arm2 amplitude, rad")
-    ap.add_argument("--period1", type=float, default=10.0, help="arm1 seconds per full cycle")
-    ap.add_argument("--period2", type=float, default=2.0, help="arm2 seconds per full cycle")
+    ap.add_argument("--amp1", type=float, default=1.4, help="B amplitude, rad")
+    ap.add_argument("--amp2", type=float, default=0.5, help="G amplitude, rad")
+    ap.add_argument("--period1", type=float, default=10.0, help="B seconds per full cycle")
+    ap.add_argument("--period2", type=float, default=2.0, help="G seconds per full cycle")
     ap.add_argument("--kp", type=float, default=DEFAULT_KP)
     ap.add_argument("--kd", type=float, default=DEFAULT_KD)
     ap.add_argument("--max-torque", type=float, default=DEFAULT_MAX_TORQUE)
@@ -106,8 +106,8 @@ def main() -> int:
 
     joint_name, lo, hi = YAM_JOINTS[MOTOR]
     arms = [
-        Arm("arm1", min(abs(args.amp1), MAX_AMPLITUDE), args.period1, +1),
-        Arm("arm2", min(abs(args.amp2), MAX_AMPLITUDE), args.period2, -1),
+        Arm("B", min(abs(args.amp1), MAX_AMPLITUDE), args.period1, +1),
+        Arm("G", min(abs(args.amp2), MAX_AMPLITUDE), args.period2, -1),
     ]
 
     print("=== plan ===")
@@ -139,8 +139,8 @@ def main() -> int:
         """Ramp every arm home IN PARALLEL, then disable. Never raises.
 
         ⛔ The arms must be interleaved, not handled one after the other. An
-        earlier version ramped arm1 home over 1.5 s and only then started arm2 --
-        so arm2 went 1.5 s without a command and tripped its own 400 ms firmware
+        earlier version ramped B home over 1.5 s and only then started G --
+        so G went 1.5 s without a command and tripped its own 400 ms firmware
         watchdog, surfacing as `loss communication` and a failed ramp home.
         Observed on the real hardware, 2026-08-10. The safety timeout worked
         exactly as designed; the shutdown code was starving it.
@@ -227,7 +227,7 @@ def main() -> int:
             if t >= next_report:
                 # 1.7 s, not 2.0: a report interval that is a multiple of a motion
                 # period samples the same phase every time and shows a moving
-                # joint as frozen. arm2's default period is exactly 2.0 s.
+                # joint as frozen. G's default period is exactly 2.0 s.
                 next_report += 1.7
                 where = "   ".join(f"{a.name} {a.samples[-1][2]:+.3f}" for a in arms)
                 print(f"  t={t:5.1f}s   {where}")

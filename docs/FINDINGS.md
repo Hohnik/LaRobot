@@ -41,10 +41,10 @@ finding a measurement (per-unit `inertia`) that would have *differed* if the cla
 
 | | serial | notes |
 |---|---|---|
-| `arm1` | `2081337C594E5018` | everything up to ~11:00 was this one |
-| `arm2` | `20593383594E5018` | plugged in mid-session; **its adapter enumerated FIRST** |
+| `B` | `2081337C594E5018` | everything up to ~11:00 was this one |
+| `G` | `20593383594E5018` | plugged in mid-session; **its adapter enumerated FIRST** |
 
-⛔ **Never select the adapter by index.** `chain_channel('arm1')` returned `gsusb1` at 10:58 and `gsusb0` at
+⛔ **Never select the adapter by index.** `chain_channel('B')` returned `gsusb1` at 10:58 and `gsusb0` at
 11:45 — **the enumeration order changed twice within one session.** `src/yam_can.py` resolves by serial and
 re-verifies after opening.
 
@@ -136,7 +136,7 @@ the loop once cameras and inference compete for CPU — but the specific claim i
 
 - **Stroke: 6.57 motor-rad ↔ 0.096 m** of jaw travel (`linear_4310.yml`), matching the URDF's two prismatic
   tips at 0.0469 m each.
-- **Measured limits (arm1, 2026-08-10): `+0.0704 … −5.0528`, usable stroke 5.123 rad = 78% of declared.**
+- **Measured limits (B, 2026-08-10): `+0.0704 … −5.0528`, usable stroke 5.123 rad = 78% of declared.**
   Saved in `config/gripper_limits.json`.
 - **The jaws began the day parked hard against the `0` stop.** That is why every early jaw command in the
   positive direction tripped the torque limit within a fraction of a second while negative moved freely.
@@ -472,7 +472,7 @@ Three failures in one attempt. All three are mine, and the first is the importan
 
 ### 11.1 `--no-gripper` silently breaks gravity compensation. The arm falls.
 
-**What Julien saw.** He ran `teleop_session.py --yes --arm arm1 --no-gripper --no-rotation`, which starts in
+**What Julien saw.** He ran `teleop_session.py --yes --arm B --no-gripper --no-rotation`, which starts in
 GUIDE. His words: *"only the lowest motor… was in weightless mode, and all of the other motors were turned
 off. And therefore it just fell forward because the bottom motor didn't hold it in place."* The status line
 read a calm `hottest 35°C` for **33 seconds** while the arm sank to its own stops (`q [0.21, 0., 0., …]` —
@@ -637,8 +637,8 @@ a readout must show the quantity a key is supposed to change.*
 
 **Per-arm axis maps (`AxisMapStore`).** Shared by default — Julien's *"probably the same, actually"* — with an
 override created only by an explicit `--fork-map`. Defaulting to a map per arm would let the two silently
-diverge, after which a puck that feels wrong on arm2 is indistinguishable from a map that was never copied
-across. ⛔ **Whatever reads it must print which scope it is editing**; tuning arm2 and silently changing arm1
+diverge, after which a puck that feels wrong on G is indistinguishable from a map that was never copied
+across. ⛔ **Whatever reads it must print which scope it is editing**; tuning G and silently changing B
 is the same shape as the bug in §11.2 — an edit whose blast radius was larger than the operator believed.
 A legacy flat file still loads as the shared map, so nothing hand-dialled is lost.
 
@@ -719,14 +719,14 @@ arm. **The diagnosis is mechanical, not a story.**
 
 ## 16. A refusal that named the wrong arm
 
-arm2's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json`
-holds `arm1` only — and then printed:
+G's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json`
+holds `B` only — and then printed:
 
 ```
 Run this once:  uv run scripts/calibrate_gripper.py --yes
 ```
 
-**No `--arm arm2`.** Following that literally drives **arm1's** jaws into both mechanical stops, while the arm
+**No `--arm G`.** Following that literally drives **B's** jaws into both mechanical stops, while the arm
 you were trying to start stays uncalibrated and the same refusal comes back. The other two refusals in
 `yam_robot.py` both interpolate `--arm {arm}`; this one did not.
 

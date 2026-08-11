@@ -420,10 +420,10 @@ def build_robot(
     else:
         # ⛔ THE ARM NAME MUST BE IN THE COMMAND. This message used to read
         # "uv run scripts/calibrate_gripper.py --yes" with no --arm, so following it
-        # literally would re-calibrate arm1 — driving the WRONG arm's jaws into both
+        # literally would re-calibrate B — driving the WRONG arm's jaws into both
         # mechanical stops — while the arm you were actually trying to start stayed
         # uncalibrated and the same refusal came back. Julien hit exactly this on
-        # arm2's first run. A remediation message that names the wrong target is
+        # G's first run. A remediation message that names the wrong target is
         # worse than no message: it converts a clean refusal into a wrong action.
         raise RuntimeError(
             f"No saved gripper limits for {arm!r} and calibration is not allowed.\n"

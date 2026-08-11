@@ -2,8 +2,8 @@
 """Drive a REAL arm's gripper with the SpaceMouse. Two motors only, no IK.
 
     uv run scripts/teleop_gripper.py                      # dry run: prints the mapping
-    uv run scripts/teleop_gripper.py --yes                # LIVE, arm1
-    uv run scripts/teleop_gripper.py --yes --arm arm2
+    uv run scripts/teleop_gripper.py --yes                # LIVE, B
+    uv run scripts/teleop_gripper.py --yes --arm G
 
 ⛔ THIS MOVES A REAL ROBOT, but only its gripper.
 

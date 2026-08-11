@@ -481,18 +481,18 @@ class AxisMapStore:
     So the default is **one map for both arms** — his "probably the same" — and an
     override is created only when he explicitly asks for one. That ordering matters:
     the alternative (a map per arm from the start) would let the two silently
-    diverge, and then a puck that feels wrong on arm2 is indistinguishable from a
+    diverge, and then a puck that feels wrong on G is indistinguishable from a
     map that was never copied across.
 
     ⛔ THE ONE HARD REQUIREMENT: whatever reads this must say **which scope it is
-    editing**. Tuning arm2 and silently changing arm1 is the failure mode, and it is
+    editing**. Tuning G and silently changing B is the failure mode, and it is
     the same shape as the bug that destroyed the hand-dialled map — an edit whose
     blast radius was larger than the operator believed.
 
     On disk::
 
         {"shared": {"source": [...], "sign": [...]},
-         "arm2":   {"source": [...], "sign": [...]}}     # optional
+         "G":   {"source": [...], "sign": [...]}}     # optional
 
     A legacy flat file (`{"sign": [...]}` or `{"source": ..., "sign": ...}`) is read
     as the shared map, so nothing hand-dialled is lost.

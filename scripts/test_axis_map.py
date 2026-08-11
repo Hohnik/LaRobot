@@ -439,12 +439,12 @@ def test_a_map_without_buttons_writes_no_button_keys() -> None:
 
 def test_buttons_are_per_arm_like_everything_else() -> None:
     s = AxisMapStore()
-    s.fork("arm2")
-    a2 = s.for_arm("arm2")
+    s.fork("G")
+    a2 = s.for_arm("G")
     a2.learn_button("open", 0x01)
-    s.set("arm2", a2)
-    assert s.for_arm("arm2").button_open == 0x01
-    assert s.for_arm("arm1").button_open is None
+    s.set("G", a2)
+    assert s.for_arm("G").button_open == 0x01
+    assert s.for_arm("B").button_open is None
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "m.json"
         s.save(p)
@@ -463,10 +463,10 @@ def test_buttons_do_not_affect_the_axis_mapping() -> None:
 
 def test_store_defaults_to_one_shared_map() -> None:
     s = AxisMapStore()
-    assert s.for_arm("arm1") is s.shared
-    assert s.for_arm("arm2") is s.shared
-    assert s.is_shared("arm1") and s.is_shared("arm2")
-    assert "BOTH" in s.scope_note("arm1")
+    assert s.for_arm("B") is s.shared
+    assert s.for_arm("G") is s.shared
+    assert s.is_shared("B") and s.is_shared("G")
+    assert "BOTH" in s.scope_note("B")
 
 
 def test_store_reads_a_legacy_flat_file_as_the_shared_map() -> None:
@@ -478,7 +478,7 @@ def test_store_reads_a_legacy_flat_file_as_the_shared_map() -> None:
         assert s.per_arm == {}
         assert s.shared.sign == [1, -1, -1, 1, 1, 1]
         assert s.shared.source == list(range(N))
-        assert s.for_arm("arm2").sign == [1, -1, -1, 1, 1, 1]
+        assert s.for_arm("G").sign == [1, -1, -1, 1, 1, 1]
 
 
 def test_store_reads_the_current_nested_shape_too() -> None:
@@ -486,64 +486,64 @@ def test_store_reads_the_current_nested_shape_too() -> None:
         p = Path(d) / "m.json"
         p.write_text(json.dumps({
             "shared": {"source": [0, 1, 2, 3, 4, 5], "sign": [1] * N},
-            "arm2": {"source": [1, 0, 2, 3, 4, 5], "sign": [1, -1, 1, 1, 1, 1]},
+            "G": {"source": [1, 0, 2, 3, 4, 5], "sign": [1, -1, 1, 1, 1, 1]},
         }))
         s = AxisMapStore.load(p)
-        assert s.is_shared("arm1")
-        assert not s.is_shared("arm2")
-        assert s.for_arm("arm2").source == [1, 0, 2, 3, 4, 5]
-        assert "arm2 ONLY" in s.scope_note("arm2")
+        assert s.is_shared("B")
+        assert not s.is_shared("G")
+        assert s.for_arm("G").source == [1, 0, 2, 3, 4, 5]
+        assert "G ONLY" in s.scope_note("G")
 
 
 def test_store_editing_a_shared_map_affects_both_arms() -> None:
     """The blast radius that scope_note() exists to announce."""
     s = AxisMapStore()
-    m = s.for_arm("arm1")
+    m = s.for_arm("B")
     m.flip(2)
-    s.set("arm1", m)
-    assert s.for_arm("arm2").sign[2] == -1, "shared means shared — this is the point of the warning"
+    s.set("B", m)
+    assert s.for_arm("G").sign[2] == -1, "shared means shared — this is the point of the warning"
 
 
 def test_store_fork_isolates_one_arm() -> None:
     s = AxisMapStore()
-    s.fork("arm2")
-    assert not s.is_shared("arm2") and s.is_shared("arm1")
-    m = s.for_arm("arm2")
+    s.fork("G")
+    assert not s.is_shared("G") and s.is_shared("B")
+    m = s.for_arm("G")
     m.flip(2)
-    s.set("arm2", m)
-    assert s.for_arm("arm2").sign[2] == -1
-    assert s.for_arm("arm1").sign[2] == 1, "forking must stop arm2 edits reaching arm1"
+    s.set("G", m)
+    assert s.for_arm("G").sign[2] == -1
+    assert s.for_arm("B").sign[2] == 1, "forking must stop G edits reaching B"
 
 
 def test_store_fork_seeds_from_what_the_arm_already_used() -> None:
     s = AxisMapStore(shared=AxisMap(source=[1, 0, 2, 3, 4, 5], sign=[1, -1, 1, 1, 1, 1]))
-    s.fork("arm2")
-    assert s.for_arm("arm2").source == [1, 0, 2, 3, 4, 5]
-    assert s.for_arm("arm2").sign == [1, -1, 1, 1, 1, 1]
+    s.fork("G")
+    assert s.for_arm("G").source == [1, 0, 2, 3, 4, 5]
+    assert s.for_arm("G").sign == [1, -1, 1, 1, 1, 1]
 
 
 def test_store_unfork_returns_to_shared() -> None:
     s = AxisMapStore()
-    s.fork("arm2")
-    s.unfork("arm2")
-    assert s.is_shared("arm2")
-    assert s.for_arm("arm2") is s.shared
+    s.fork("G")
+    s.unfork("G")
+    assert s.is_shared("G")
+    assert s.for_arm("G") is s.shared
 
 
 def test_store_fork_is_idempotent_and_unfork_is_safe() -> None:
     s = AxisMapStore()
-    s.fork("arm2")
+    s.fork("G")
     before = s.copy()
-    s.fork("arm2")
+    s.fork("G")
     assert s == before
-    s.unfork("arm1")          # never forked; must not raise
+    s.unfork("B")          # never forked; must not raise
     assert s == before
 
 
 def test_store_round_trips_with_overrides() -> None:
     s = AxisMapStore(
         shared=AxisMap(source=[1, 0, 2, 4, 3, 5], sign=[1, 1, -1, 1, 1, -1]),
-        per_arm={"arm2": AxisMap(source=[0, 1, 2, 3, 4, 5], sign=[-1, -1, 1, 1, 1, 1])},
+        per_arm={"G": AxisMap(source=[0, 1, 2, 3, 4, 5], sign=[-1, -1, 1, 1, 1, 1])},
     )
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "m.json"
@@ -554,10 +554,10 @@ def test_store_round_trips_with_overrides() -> None:
 def test_store_survives_a_corrupt_file() -> None:
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "m.json"
-        for bad in ("nonsense", "[1,2]", "null", '{"shared": 5}', '{"arm2": "x"}'):
+        for bad in ("nonsense", "[1,2]", "null", '{"shared": 5}', '{"G": "x"}'):
             p.write_text(bad)
             s = AxisMapStore.load(p)
-            assert s.for_arm("arm1") == AxisMap(), bad
+            assert s.for_arm("B") == AxisMap(), bad
 
 
 def test_store_saving_the_live_file_preserves_every_arm() -> None:
@@ -566,7 +566,7 @@ def test_store_saving_the_live_file_preserves_every_arm() -> None:
         p = Path(d) / "m.json"
         s.save(p)
         after = AxisMapStore.load(p)
-    for arm in ("arm1", "arm2"):
+    for arm in ("B", "G"):
         rng = np.random.default_rng(11)
         for _ in range(100):
             axes = rng.uniform(-1, 1, N)
