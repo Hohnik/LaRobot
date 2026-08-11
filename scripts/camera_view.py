@@ -53,6 +53,8 @@ frame. Old frames are dropped by being overwritten rather than by being read.
 from __future__ import annotations
 
 import argparse
+import base64
+import os
 import shutil
 import sys
 import threading
@@ -64,8 +66,19 @@ import numpy as np
 
 MAX_PROBE_INDEX = 6
 
-# Live-switchable capture sizes, bound to keys 1..5 in the viewer.
-SIZES = [(424, 240), (640, 480), (960, 540), (1280, 720), (1920, 1080)]
+# Live-switchable capture sizes, bound to keys 1..6.
+#
+# ⚠️ A UVC webcam only supports a FIXED LIST of modes, and asking for anything else
+# silently gets you the nearest one it does have. Julien noticed `--probe` reporting
+# "424x240 requested -> 640x360 actual": 424x240 is not a C920 mode, so the driver
+# substituted. These are all real C920 modes, so what you ask for is what you get.
+#
+# ⭐ For the TERMINAL view, capture resolution barely affects picture quality — the
+# renderer downsamples to the character grid anyway. What it does affect is
+# **latency and CPU**: fewer pixels to transfer, decode and scale. So 320x180 is the
+# right choice for the lowest-latency terminal view, and the large sizes are for the
+# windowed view or for recording.
+SIZES = [(320, 180), (320, 240), (640, 360), (640, 480), (1280, 720), (1920, 1080)]
 
 
 def list_cameras() -> None:
@@ -285,27 +298,83 @@ def render_ansi(frame, cols: int, rows: int) -> str:
     return "".join(out)
 
 
-def terminal_grid(margin_rows: int = 3) -> tuple[int, int]:
-    """Character columns and rows available for the picture."""
+def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 2) -> tuple[int, int]:
+    """Character columns and rows to use, **preserving the picture's aspect ratio**.
+
+    ⛔ THE BUG THIS FIXES. The first version returned the whole terminal and let
+    `render_ansi` squash the frame into it, so a 16:9 camera came out stretched to
+    whatever shape the pane happened to be. Julien's screenshot showed it clearly.
+
+    The geometry: a monospace cell is about twice as tall as it is wide, and the
+    half-block trick puts **two** stacked pixels in each cell — so one rendered pixel
+    is roughly square, and a grid of `C` columns by `R` rows displays with an aspect
+    ratio of `C / (2R)`. To match a source of aspect `A` we therefore need
+    `C = 2 · R · A`, and we take the largest such grid that fits inside the terminal.
+
+    `scale` shrinks it below the maximum, for a small corner view rather than a
+    full-pane one.
+    """
     size = shutil.get_terminal_size(fallback=(100, 30))
-    return max(20, size.columns), max(10, size.lines - margin_rows)
+    max_cols = max(20, int(size.columns * scale))
+    max_rows = max(6, int((size.lines - margin_rows) * scale))
+    rows = min(max_rows, int(max_cols / (2 * frame_aspect)))
+    rows = max(6, rows)
+    cols = min(max_cols, int(2 * rows * frame_aspect))
+    return max(20, cols), rows
+
+
+def detect_term_mode() -> str:
+    """Which drawing method this terminal actually supports.
+
+    ⭐ **Block characters are a fallback, not the best available.** iTerm2 and WezTerm
+    accept a real image over an escape sequence and draw it at full resolution, which
+    removes the pixelation completely — one character cell stops being one pixel.
+    This is the honest answer to *"do the pixels have to be this large?"*: in a plain
+    terminal yes, and in iTerm2 no.
+    """
+    if os.environ.get("TERM_PROGRAM") in ("iTerm.app", "WezTerm"):
+        return "iterm"
+    if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("TERM") == "xterm-kitty":
+        return "kitty"
+    return "blocks"
+
+
+def render_iterm(frame, cols: int, rows: int, quality: int = 60) -> str:
+    """A real image, drawn inline by iTerm2/WezTerm at full resolution.
+
+    The frame is JPEG-encoded and base64'd into iTerm2's inline-image escape. JPEG
+    rather than PNG deliberately: a 320x180 PNG is several times larger and the whole
+    payload is written to the terminal every frame, so size is latency.
+    """
+    ok, buf = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    if not ok:
+        return ""
+    b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return (f"\x1b]1337;File=inline=1;width={cols};height={rows};"
+            f"preserveAspectRatio=1;doNotMoveCursor=0:{b64}\x07")
 
 
 def run_terminal(cap, args) -> int:  # noqa: ANN001
     """Draw the camera into this terminal. Creates no window at all.
 
-    ⛔ Quitting is guaranteed: `q`/ESC, Ctrl-C, and the `finally` block all restore
-    the cursor and colours and stop the grabber thread. Julien asked specifically
-    that every test be quittable, and a program that leaves a terminal without a
-    cursor is exactly the kind of mess that makes people avoid a tool.
+    ⛔ Quitting is guaranteed: `q`/ESC, Ctrl-C and the `finally` block all restore the
+    cursor and colours and stop the grabber thread. Julien asked specifically that
+    every test be quittable, and a tool that leaves a terminal without a cursor is one
+    people stop reaching for.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     from keyboard import KeyReader  # noqa: PLC0415
 
+    mode = detect_term_mode() if args.term_mode == "auto" else args.term_mode
+    if mode == "kitty":
+        mode = "blocks"          # kitty's graphics protocol is not implemented yet
+    scale = min(1.0, max(0.1, args.scale))
+
     grab = FrameGrabber(cap)
     flip, rotate = args.flip, args.rotate
     shown, t_fps, disp_fps, prev_seq = 0, time.perf_counter(), 0.0, -1
-    sys.stdout.write("\x1b[?25l\x1b[2J")          # hide cursor, clear once
+    draw_ms = 0.0
+    sys.stdout.write("\x1b[?25l\x1b[2J")
     try:
         with KeyReader() as keys:
             while True:
@@ -325,20 +394,30 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                 if r is not None:
                     frame = cv2.rotate(frame, r)
 
-                cols, rows = terminal_grid()
+                h, w = frame.shape[:2]
+                cols, rows = terminal_grid(w / h, scale)
+
                 now = time.perf_counter()
                 if now - t_fps >= 0.5:
                     disp_fps = shown / (now - t_fps)
                     shown, t_fps = 0, now
-                h, w = frame.shape[:2]
-                # \x1b[H homes the cursor instead of clearing, so the picture is
-                # overwritten in place. Clearing every frame flickers badly.
-                sys.stdout.write("\x1b[H" + render_ansi(frame, cols, rows))
+
+                t_draw = time.perf_counter()
+                body = (render_iterm(frame, cols, rows) if mode == "iterm"
+                        else render_ansi(frame, cols, rows))
+                sys.stdout.write("\x1b[H" + body)
                 sys.stdout.write(
-                    f"\x1b[0m{w}x{h}  {disp_fps:4.1f} fps shown / {grab.capture_fps():4.1f} captured"
-                    f"   q quit · f mirror · r rotate · 1-5 resolution\x1b[K"
+                    f"\x1b[0m\n{w}x{h} {mode}  {cols}x{rows} cells  "
+                    f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured  "
+                    f"draw {draw_ms:4.1f} ms\x1b[K\n"
+                    f"q quit · f mirror · r rotate · 1-6 resolution · +/- size · b blocks/image\x1b[K"
                 )
                 sys.stdout.flush()
+                # ⭐ The draw cost is displayed because it is the latency the SOFTWARE
+                # controls. If it approaches the frame interval the terminal cannot
+                # keep up, output backs up in the pipe, and lag grows without any
+                # single component looking wrong. Seeing it makes that diagnosable.
+                draw_ms = (time.perf_counter() - t_draw) * 1000.0
 
                 for k in keys.drain():
                     if k in ("q", "\x1b"):
@@ -347,7 +426,16 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                         flip = not flip
                     elif k == "r":
                         rotate = (rotate + 90) % 360
-                    elif k in "12345":
+                    elif k == "b":
+                        mode = "blocks" if mode == "iterm" else detect_term_mode()
+                        sys.stdout.write("\x1b[2J")
+                    elif k in "+=":
+                        scale = min(1.0, scale + 0.1)
+                        sys.stdout.write("\x1b[2J")
+                    elif k == "-":
+                        scale = max(0.1, scale - 0.1)
+                        sys.stdout.write("\x1b[2J")
+                    elif k in "123456":
                         w2, h2 = SIZES[int(k) - 1]
                         grab.stop()
                         cap = open_camera(args.index, w2, h2, args.fps)
@@ -355,11 +443,12 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                             return 1
                         grab = FrameGrabber(cap)
                         shown, t_fps, prev_seq = 0, time.perf_counter(), -1
+                        sys.stdout.write("\x1b[2J")
     except KeyboardInterrupt:
         pass
     finally:
         grab.stop()
-        sys.stdout.write("\x1b[0m\x1b[?25h\n")   # colours off, cursor back
+        sys.stdout.write("\x1b[0m\x1b[?25h\n")
         sys.stdout.flush()
     return 0
 
@@ -381,6 +470,13 @@ def main() -> int:
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
+    ap.add_argument("--term-mode", default="auto", choices=["auto", "blocks", "iterm"],
+                    help="how to draw in the terminal. auto detects iTerm2/WezTerm and uses "
+                         "their inline-image protocol (full resolution, no pixelation); "
+                         "blocks forces coloured text, which works in any terminal")
+    ap.add_argument("--scale", type=float, default=1.0,
+                    help="fraction of the terminal to fill, 0.1-1.0. Use ~0.4 for a small "
+                         "corner view that keeps the picture's real proportions")
     ap.add_argument("--term", action="store_true",
                     help="⭐ draw the video IN THIS TERMINAL instead of opening a window. "
                          "No window is created, so your macOS window order is never disturbed")
@@ -456,7 +552,7 @@ def main() -> int:
         cv2.resizeWindow(win, 1600, 900)
 
     print("\n  q or ESC quits.   f mirrors.   r rotates 90°.")
-    print("  1..5 switch resolution live: 424x240 / 640x480 / 960x540 / 1280x720 / 1920x1080")
+    print("  1..6 switch resolution: 320x180 / 320x240 / 640x360 / 640x480 / 1280x720 / 1920x1080")
     print("  ⭐ Drive with `teleop_session.py` in another terminal and press v there to put")
     print("     the controls in the TOOL frame — then 'forward' on the puck means forward in")
     print("     THIS picture, which is the point of having the camera.\n")
@@ -504,7 +600,7 @@ def main() -> int:
             elif k == ord("r"):
                 rotate = (rotate + 90) % 360
                 print(f"  rotate {rotate}°")
-            elif k in [ord(c) for c in "12345"]:
+            elif k in [ord(c) for c in "123456"]:
                 w2, h2 = SIZES[int(chr(k)) - 1]
                 grab.stop()
                 cap = open_camera(args.index, w2, h2, args.fps)
