@@ -87,6 +87,47 @@ def list_cameras() -> None:
     print("  the index whose mean brightness collapses is the one on the arm.")
 
 
+def probe_modes(index: int, secs: float = 2.5) -> None:
+    """Measure the REAL frame rate at each resolution, with and without MJPG.
+
+    ⚠️ This exists because the agent cannot run it. macOS grants camera access
+    **per application**, and the permission Julien granted covers his terminal, not
+    the process the agent's shell runs under — so every agent-side attempt returns
+    `not authorized to capture video` no matter what the code does. The measurement
+    therefore has to be a command he runs, which is what this is.
+    """
+    print(f"sweeping camera {index} — real fps, {secs:.0f}s per mode\n")
+    print("%-24s %-12s %-7s %s" % ("requested", "actual", "codec", "measured fps"))
+    for w, h in ((1920, 1080), (1280, 720), (960, 540), (640, 480), (424, 240)):
+        for cc in ("MJPG", None):
+            cap = cv2.VideoCapture(index)
+            if not cap.isOpened():
+                print("  could not open — is camera access granted to this terminal?")
+                return
+            if cc:
+                cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*cc))
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            got = int(cap.get(cv2.CAP_PROP_FOURCC))
+            got_s = "".join(chr((got >> (8 * i)) & 0xFF) for i in range(4)).strip() or "?"
+            aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            for _ in range(5):
+                cap.read()
+            t0 = time.perf_counter()
+            n = 0
+            while time.perf_counter() - t0 < secs:
+                if cap.read()[0]:
+                    n += 1
+            dur = time.perf_counter() - t0
+            cap.release()
+            print("%-24s %-12s %-7s %.1f" % (f"{w}x{h} {cc or 'as-is'}", f"{aw}x{ah}", got_s, n / dur))
+    print("\n  Pick the largest size that still gives ~30 fps and pass it as")
+    print("  --width/--height. If MJPG changes nothing, macOS is ignoring the codec")
+    print("  request and resolution is your only lever — which is why the default is 640x480.")
+
+
 def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
     cap = cv2.VideoCapture(index)
     if not cap.isOpened():
@@ -94,6 +135,12 @@ def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
     # ⭐ MJPG first, THEN the resolution. Setting size before the codec leaves the
     # C920 in uncompressed YUY2, where 1080p does not fit in the USB bandwidth and
     # drops to a few fps — which reads as "lag" but is a bandwidth problem.
+    # ⚠️ UNVERIFIED ON THIS MACHINE: OpenCV's macOS (AVFoundation) backend is widely
+    # reported to IGNORE CAP_PROP_FOURCC, unlike Linux V4L2 and Windows DSHOW. If it
+    # does, this line is a no-op here and resolution is the only lever that works.
+    # `--probe` settles it: if the MJPG and as-is rows report the same fps, it is
+    # being ignored. Either way the 640x480 default is safe, because lowering the
+    # resolution cuts bandwidth under both explanations.
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -125,9 +172,19 @@ def newest_frame(cap):  # noqa: ANN001, ANN201
 def main() -> int:
     ap = argparse.ArgumentParser(description="Live camera view. Touches no robot.")
     ap.add_argument("--list", action="store_true", help="probe every index and report")
+    ap.add_argument("--probe", action="store_true",
+                    help="sweep resolutions and codecs on --index and report the REAL fps "
+                         "for each. Run this once to find the best setting for your link")
     ap.add_argument("--index", type=int, default=0, help="camera index (see --list)")
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
+    # ⛔ 640x480 BY DEFAULT, and the reason is arithmetic rather than taste.
+    # USB 2.0 sustains roughly 24 MB/s for video. One UNCOMPRESSED 1920x1080 frame
+    # is 1920*1080*2 = 4.15 MB, so the link allows 24/4.15 = 5.8 fps -- and Julien
+    # measured exactly 5 fps on 2026-08-11. At 640x480 a frame is 0.61 MB, allowing
+    # ~39 fps, so the sensor's own 30 fps cap becomes the limit instead.
+    # This fix holds whether or not MJPG compression is being applied, which matters
+    # because macOS may be ignoring the codec request entirely (see open_camera).
+    ap.add_argument("--width", type=int, default=640)
+    ap.add_argument("--height", type=int, default=480)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--big", action="store_true", help="open the window large")
     ap.add_argument("--flip", action="store_true",
@@ -141,6 +198,10 @@ def main() -> int:
 
     if args.list:
         list_cameras()
+        return 0
+
+    if args.probe:
+        probe_modes(args.index)
         return 0
 
     cap = open_camera(args.index, args.width, args.height, args.fps)

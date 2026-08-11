@@ -41,6 +41,7 @@ from axis_map import (  # noqa: E402
     ambiguity_note,
     axes_readout,
     dominant_axis,
+    motions_for,
     isolate,
     isolated_axes,
 )
@@ -463,8 +464,7 @@ def test_buttons_do_not_affect_the_axis_mapping() -> None:
 
 def test_store_defaults_to_one_shared_map() -> None:
     s = AxisMapStore()
-    assert s.for_arm("B") is s.shared
-    assert s.for_arm("G") is s.shared
+    assert s.for_arm("B") == s.for_arm("G")
     assert s.is_shared("B") and s.is_shared("G")
     assert "BOTH" in s.scope_note("B")
 
@@ -475,9 +475,9 @@ def test_store_reads_a_legacy_flat_file_as_the_shared_map() -> None:
         p = Path(d) / "m.json"
         p.write_text(LEGACY_FILE_CONTENT)
         s = AxisMapStore.load(p)
-        assert s.per_arm == {}
-        assert s.shared.sign == [1, -1, -1, 1, 1, 1]
-        assert s.shared.source == list(range(N))
+        assert s.tuned_frames("B") == ["world"]
+        assert s.for_arm("B").sign == [1, -1, -1, 1, 1, 1]
+        assert s.for_arm("B").source == list(range(N))
         assert s.for_arm("G").sign == [1, -1, -1, 1, 1, 1]
 
 
@@ -516,7 +516,9 @@ def test_store_fork_isolates_one_arm() -> None:
 
 
 def test_store_fork_seeds_from_what_the_arm_already_used() -> None:
-    s = AxisMapStore(shared=AxisMap(source=[1, 0, 2, 3, 4, 5], sign=[1, -1, 1, 1, 1, 1]))
+    s = AxisMapStore()
+    base = s.for_arm("B"); base.source[:] = [1, 0, 2, 3, 4, 5]; base.sign[:] = [1, -1, 1, 1, 1, 1]
+    s.set("B", base)
     s.fork("G")
     assert s.for_arm("G").source == [1, 0, 2, 3, 4, 5]
     assert s.for_arm("G").sign == [1, -1, 1, 1, 1, 1]
@@ -527,7 +529,7 @@ def test_store_unfork_returns_to_shared() -> None:
     s.fork("G")
     s.unfork("G")
     assert s.is_shared("G")
-    assert s.for_arm("G") is s.shared
+    assert s.for_arm("G") == s.for_arm("B")
 
 
 def test_store_fork_is_idempotent_and_unfork_is_safe() -> None:
@@ -541,10 +543,12 @@ def test_store_fork_is_idempotent_and_unfork_is_safe() -> None:
 
 
 def test_store_round_trips_with_overrides() -> None:
-    s = AxisMapStore(
-        shared=AxisMap(source=[1, 0, 2, 4, 3, 5], sign=[1, 1, -1, 1, 1, -1]),
-        per_arm={"G": AxisMap(source=[0, 1, 2, 3, 4, 5], sign=[-1, -1, 1, 1, 1, 1])},
-    )
+    s = AxisMapStore()
+    w = s.for_arm("B"); w.source[:] = [1, 0, 2, 4, 3, 5]; w.sign[:] = [1, 1, -1, 1, 1, -1]
+    s.set("B", w)
+    s.fork("G")
+    g = s.for_arm("G"); g.source[:] = [0, 1, 2, 3, 4, 5]; g.sign[:] = [-1, -1, 1, 1, 1, 1]
+    s.set("G", g)
     with tempfile.TemporaryDirectory() as d:
         p = Path(d) / "m.json"
         s.save(p)
@@ -678,6 +682,99 @@ def main() -> int:
             print(f"  {name}: {why}")
         return 1
     return 0
+
+
+
+
+# ------------------------------------------------- per-frame control maps ----
+
+
+def test_each_frame_has_its_own_map() -> None:
+    """⭐ Editing the tool-frame controls must not disturb the world-frame ones."""
+    s = AxisMapStore()
+    w = s.for_arm("B", "world")
+    w.flip(0)
+    s.set("B", w, "world")
+    t = s.for_arm("B", "tool")
+    t.flip(1)
+    s.set("B", t, "tool")
+    assert s.for_arm("B", "world").sign[0] == -1
+    assert s.for_arm("B", "world").sign[1] == 1, "a tool edit leaked into the world map"
+    assert s.for_arm("B", "tool").sign[1] == -1
+
+
+def test_an_untuned_frame_is_seeded_from_world_not_blank() -> None:
+    """The tool map must arrive usable, not empty — Julien asked not to redo it all."""
+    s = AxisMapStore()
+    w = s.for_arm("B", "world")
+    w.source[:] = [1, 0, 2, 5, 3, 4]
+    w.sign[:] = [1, 1, -1, -1, 1, -1]          # his real hardware-tuned map
+    s.set("B", w, "world")
+    t = s.for_arm("B", "tool")
+    assert t.source == [2, 0, 1, 4, 3, 5], t.source
+    assert t.sign == [1, 1, 1, 1, 1, -1], t.sign
+    assert UNBOUND not in t.source, "a seeded map must not leave motions dead"
+
+
+def test_the_seed_matches_the_world_map_at_the_home_pose() -> None:
+    """The correspondence is tool X ≈ −world Z, tool Y ≈ +world Y, tool Z ≈ +world X.
+    So the same puck gesture must produce the same PHYSICAL motion in both frames."""
+    w = AxisMap(source=[1, 0, 2, 5, 3, 4], sign=[1, 1, -1, -1, 1, -1])
+    t = w.seeded_from_world()
+    axes = np.array([0.0, 0.0, 0.7, 0.0, 0.0, 0.0])     # push puck z
+    world_out = w.apply(axes)
+    tool_out = t.apply(axes)
+    # world UP (index 2) and tool DOWN (index 0) are opposite directions, so equal
+    # physical motion means equal magnitude and OPPOSITE sign.
+    assert np.isclose(world_out[2], -tool_out[0]), (world_out, tool_out)
+
+
+def test_buttons_are_shared_across_frames() -> None:
+    """They open and close the gripper; there is no direction to reinterpret."""
+    s = AxisMapStore()
+    w = s.for_arm("B", "world")
+    w.learn_button("open", 0x01)
+    w.learn_button("close", 0x02)
+    s.set("B", w, "world")
+    t = s.for_arm("B", "tool")
+    assert t.button_open == 0x01 and t.button_close == 0x02, "buttons must follow you into a new frame"
+
+
+def test_frames_round_trip_through_the_file() -> None:
+    s = AxisMapStore()
+    for frame, sign in (("world", [1] * N), ("tool", [-1] * N), ("camera", [1, -1] * 3)):
+        m = s.for_arm("B", frame)
+        m.sign[:] = sign
+        s.set("B", m, frame)
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "m.json"
+        s.save(p)
+        t = AxisMapStore.load(p)
+    assert t.for_arm("B", "tool").sign == [-1] * N
+    assert t.for_arm("B", "camera").sign == [1, -1] * 3
+    assert t.tuned_frames("B") == ["camera", "tool", "world"]
+
+
+def test_the_live_file_still_loads_and_keeps_its_world_map() -> None:
+    """⛔ The real file, in whatever shape it is on disk today."""
+    s = AxisMapStore.load(REAL_MAP_FILE)
+    w = s.for_arm("B", "world")
+    bound = [x for x in w.source if x != UNBOUND]
+    assert len(bound) == len(set(bound)), f"live world map not injective: {w.source}"
+    t = s.for_arm("B", "tool")
+    assert UNBOUND not in t.source, "the tool frame must be usable straight away"
+
+
+def test_motion_labels_differ_by_frame() -> None:
+    """The whole point: 'm' must describe the frame you are actually in."""
+    assert motions_for("world")[2]["short"] == "UP"
+    assert motions_for("tool")[2]["short"] == "FWD"
+    assert motions_for("camera") == motions_for("tool")
+    assert motions_for("nonsense") == motions_for("world"), "unknown frames fall back safely"
+    m = AxisMap()
+    assert "UP" in m.describe("world") and "FWD" not in m.describe("world")
+    assert "FWD" in m.describe("tool")
+    assert "EVERY pose" in m.explain("tool"), "explain() must say what the axes MEAN"
 
 
 if __name__ == "__main__":

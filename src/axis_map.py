@@ -68,6 +68,75 @@ ROBOT_MOTIONS: list[dict[str, str]] = [
     {"short": "YAW",   "long": "YAW",         "world": "about +Z", "note": "spins the tool about vertical; the tool point stays put"},
 ]
 
+# ⭐⭐ THE SAME SIX COMPONENTS MEAN DIFFERENT PHYSICAL THINGS IN DIFFERENT FRAMES,
+# so their names and descriptions must change with the frame. Julien, 2026-08-11:
+# *"the description in the m mode needs to be suitable for the v mode… they need to
+# be different to when I'm in T mode and press M."*
+#
+# The twist ORDER is fixed — [0,1,2] are the three translations, [3,4,5] the
+# rotations about those same axes — but *which direction* component 0 is depends
+# entirely on the frame the twist gets interpreted in.
+#
+# ⭐ These labels are MEASURED (2026-08-11, at arm B's saved home pose):
+#
+#   tool +Z -> world [0.993, 0.080, 0.088]   dot with "out of the gripper" = +1.000
+#   tool +X -> world [0.082, 0.079, -0.993]  (straight down at a level gripper)
+#   tool +Y -> world [-0.087, 0.994, 0.072]  (left at a level gripper)
+#
+# **+Z out of the gripper holds at EVERY pose** — it is the gripper's own axis, set
+# by the model, not an accident of this pose. "Down" and "left" for X and Y hold
+# only while the gripper is upright and unrolled, which their notes say rather than
+# quietly assume.
+#
+# The rotation names follow from the translation ones: turning about the DOWN axis
+# swings the forward direction sideways, which a camera operator calls a **pan**;
+# turning about the LEFT axis tips it vertically, a **tilt**; turning about the
+# FORWARD axis spins the picture, a **roll**.
+TOOL_MOTIONS: list[dict[str, str]] = [
+    {"short": "DOWN",  "long": "DOWN / UP",    "world": "tool +X",       "note": "down in the picture, when the gripper is upright"},
+    {"short": "LEFT",  "long": "LEFT / RIGHT", "world": "tool +Y",       "note": "left in the picture, when the gripper is upright"},
+    {"short": "FWD",   "long": "FORWARD / BACK", "world": "tool +Z",     "note": "straight out of the gripper, into the picture — true at EVERY pose"},
+    {"short": "PAN",   "long": "PAN",          "world": "about tool +X", "note": "look left / right; the tool point stays put"},
+    {"short": "TILT",  "long": "TILT",         "world": "about tool +Y", "note": "look up / down; the tool point stays put"},
+    {"short": "ROLL",  "long": "ROLL",         "world": "about tool +Z", "note": "spin the picture around its centre; the tool point stays put"},
+]
+
+MOTIONS_BY_FRAME = {
+    "world": ROBOT_MOTIONS,
+    "tool": TOOL_MOTIONS,
+    "camera": TOOL_MOTIONS,   # same axis roles; the camera frame is just canted
+}
+
+
+def motions_for(frame: str) -> list[dict[str, str]]:
+    return MOTIONS_BY_FRAME.get(frame, ROBOT_MOTIONS)
+
+
+# ⭐ HOW A TOOL-FRAME MAP IS SEEDED FROM THE WORLD-FRAME ONE, so Julien does not
+# start from nothing. Julien: *"maybe think about what sensible controls would be
+# for the v mode, like a default mode so that I don't have to do all the edits
+# myself."*
+#
+# Measured at the home pose, the two frames line up like this:
+#
+#     tool X ≈ −world Z        tool Y ≈ +world Y        tool Z ≈ +world X
+#
+# So if each tool component borrows the puck axis that drives its world counterpart
+# — negating where the correspondence is negative — the controls feel **identical
+# to the world map at the home pose**, and only start differing as the wrist turns.
+# That is exactly the wanted behaviour: nothing new to learn on day one, and the
+# controls follow the camera the moment you tilt.
+#
+# Each entry is (world component to borrow from, sign multiplier).
+WORLD_TO_TOOL: list[tuple[int, int]] = [
+    (2, -1),   # tool X  (down)    <- world UP,    negated: tool +X is world −Z
+    (1, +1),   # tool Y  (left)    <- world Y
+    (0, +1),   # tool Z  (forward) <- world X
+    (5, -1),   # about tool X (pan)  <- world YAW,   negated for the same reason
+    (4, +1),   # about tool Y (tilt) <- world PITCH
+    (3, +1),   # about tool Z (roll) <- world ROLL
+]
+
 # As reported by `spacemouse.TwistReader.read()`. ⚠️ No physical gesture is named
 # for these on purpose: which way you have to push the puck to get +z has not been
 # measured, so the teach flow describes the operator's own gesture back to them
@@ -319,29 +388,68 @@ class AxisMap:
 
     # ---- reporting --------------------------------------------------------
 
-    def row(self, motion: int) -> str:
-        src = self.source[motion]
-        m = ROBOT_MOTIONS[motion]
-        if src == UNBOUND:
-            return f"{m['short']:>5}  ({m['world']:>9})  ←  —— nothing ——"
-        direction = "+" if self.sign[motion] > 0 else "−"
-        return f"{m['short']:>5}  ({m['world']:>9})  ←  puck {PUCK_AXES[src]:<5} {direction}"
+    # ⚠️ Every display method takes the FRAME, because the same component index is a
+    # different physical direction in each one. Defaulting to "world" keeps older
+    # callers correct rather than silently mislabelling them.
 
-    def describe(self) -> str:
-        lines = ["  robot motion              driven by", "  " + "-" * 44]
-        lines += ["  " + self.row(i) for i in range(N)]
+    def row(self, motion: int, frame: str = "world") -> str:
+        src = self.source[motion]
+        m = motions_for(frame)[motion]
+        if src == UNBOUND:
+            return f"{m['short']:>5}  ({m['world']:>13})  ←  —— nothing ——"
+        direction = "+" if self.sign[motion] > 0 else "−"
+        return f"{m['short']:>5}  ({m['world']:>13})  ←  puck {PUCK_AXES[src]:<5} {direction}"
+
+    def describe(self, frame: str = "world") -> str:
+        motions = motions_for(frame)
+        lines = [f"  motion ({frame} frame)              driven by", "  " + "-" * 48]
+        lines += ["  " + self.row(i, frame) for i in range(N)]
         missing = self.unbound()
         if missing:
-            names = ", ".join(ROBOT_MOTIONS[i]["short"] for i in missing)
+            names = ", ".join(motions[i]["short"] for i in missing)
             lines.append(f"  ⚠️  UNBOUND (will not move): {names}")
         return "\n".join(lines)
 
-    def one_line(self) -> str:
+    def explain(self, frame: str = "world") -> str:
+        """The full picture: what each motion IS, and which gesture drives it.
+
+        This is what CONTROLS mode shows on entry. `describe()` alone lists the
+        wiring but never says what "FWD" or "UP" physically mean, which is useless
+        the first time you enter a frame you have not driven before.
+        """
+        motions = motions_for(frame)
+        lines = [f"  what the six controls mean in the {frame.upper()} frame:", ""]
+        for i, m in enumerate(motions):
+            lines.append(f"    {i + 1}  {m['short']:<5} {m['world']:<14} {m['note']}")
+        lines += ["", self.describe(frame)]
+        return "\n".join(lines)
+
+    def one_line(self, frame: str = "world") -> str:
+        motions = motions_for(frame)
         return " ".join(
             "—" if self.source[i] == UNBOUND
-            else f"{ROBOT_MOTIONS[i]['short']}←{PUCK_AXES[self.source[i]]}{'+' if self.sign[i] > 0 else '−'}"
+            else f"{motions[i]['short']}←{PUCK_AXES[self.source[i]]}{'+' if self.sign[i] > 0 else '−'}"
             for i in range(N)
         )
+
+    def seeded_from_world(self) -> AxisMap:
+        """A tool/camera-frame map derived from this world-frame one.
+
+        See `WORLD_TO_TOOL` for the measured correspondence and why this is the right
+        starting point: at the home pose the result feels **identical** to the world
+        map, and only diverges as the wrist turns. So there is nothing to re-learn on
+        day one, and the controls follow the camera the moment you tilt.
+
+        Buttons are carried across unchanged — they open and close the gripper and
+        have no direction to reinterpret.
+        """
+        src: list[int] = []
+        sgn: list[int] = []
+        for world_idx, mult in WORLD_TO_TOOL:
+            src.append(self.source[world_idx])
+            sgn.append(self.sign[world_idx] * mult)
+        return AxisMap(source=src, sign=sgn,
+                       button_open=self.button_open, button_close=self.button_close)
 
 
 ISOLATE_HYSTERESIS = 1.3
@@ -470,39 +578,76 @@ def ambiguity_note(axes: Any) -> str | None:
 
 
 class AxisMapStore:
-    """One shared axis map, plus optional per-arm overrides.
+    """Control maps, keyed by **scope** (shared or a single arm) and by **frame**.
 
-    ⭐ Julien's requirement, and his own reasoning: *"it should probably be per arm
-    remapping because maybe one of the directions might want to be different for the
-    arms, but I don't know if that's actually the case. Maybe they're gonna be
-    exactly the same. Probably the same, actually. But maybe that should be options
-    to map them separately."*
+    Two independent reasons a map has to be duplicated, and they compose:
 
-    So the default is **one map for both arms** — his "probably the same" — and an
-    override is created only when he explicitly asks for one. That ordering matters:
-    the alternative (a map per arm from the start) would let the two silently
-    diverge, and then a puck that feels wrong on G is indistinguishable from a
-    map that was never copied across.
+    **Per arm.** Julien: *"maybe one of the directions might want to be different for
+    the arms… Probably the same, actually. But maybe that should be options to map
+    them separately."* So the default is one map for both, and an override is created
+    only when explicitly asked for. A map per arm from the start would let the two
+    silently diverge, after which a puck that feels wrong on G is indistinguishable
+    from a map that was never copied across.
 
-    ⛔ THE ONE HARD REQUIREMENT: whatever reads this must say **which scope it is
-    editing**. Tuning G and silently changing B is the failure mode, and it is
-    the same shape as the bug that destroyed the hand-dialled map — an edit whose
-    blast radius was larger than the operator believed.
+    **Per frame.** Julien, 2026-08-11: *"the controls in the v mode … need to be able
+    to edit with the m mode."* A map says which puck axis drives twist component 0 —
+    but component 0 is "out from the base" in the world frame and "down in the
+    picture" in the tool frame. The same wiring therefore produces two different
+    feels, and tuning one necessarily mis-tunes the other. They must be separate.
+
+    ⛔ **Buttons are NOT per frame.** They open and close the gripper; there is no
+    direction in them to reinterpret. They live on the scope and are mirrored onto
+    whichever map is handed out, so setting them in one frame sets them in all.
+
+    ⛔ **Whatever reads this must state which scope it is editing.** Tuning G while
+    still on the shared map silently changes B — the same shape as the bug that
+    destroyed the hand-dialled map, an edit whose blast radius exceeded what the
+    operator believed.
 
     On disk::
 
-        {"shared": {"source": [...], "sign": [...]},
-         "G":   {"source": [...], "sign": [...]}}     # optional
+        {"shared": {"buttons": {"open": 2, "close": 1},
+                    "frames": {"world":  {"source": [...], "sign": [...]},
+                               "tool":   {"source": [...], "sign": [...]}}},
+         "G": { ... optional, same shape ... }}
 
-    A legacy flat file (`{"sign": [...]}` or `{"source": ..., "sign": ...}`) is read
-    as the shared map, so nothing hand-dialled is lost.
+    ⚠️ Both older shapes still load. A flat `{"sign": [...]}` and the intermediate
+    `{"shared": {"source": ..., "sign": ..., "button_open": ...}}` are both read as
+    the **world** map, with tool/camera seeded from it — so nothing hand-dialled on
+    hardware is ever lost to a format change.
     """
 
     SHARED = "shared"
+    FRAMES = ("world", "tool", "camera")
 
-    def __init__(self, shared: AxisMap | None = None, per_arm: dict[str, AxisMap] | None = None):
-        self.shared = shared if shared is not None else AxisMap()
-        self.per_arm = dict(per_arm) if per_arm else {}
+    def __init__(self, scopes: dict[str, dict[str, AxisMap]] | None = None,
+                 buttons: dict[str, tuple[int | None, int | None]] | None = None):
+        self._scopes: dict[str, dict[str, AxisMap]] = scopes or {self.SHARED: {}}
+        self._buttons: dict[str, tuple[int | None, int | None]] = buttons or {}
+        self._scopes.setdefault(self.SHARED, {})
+
+    # ---- construction ------------------------------------------------------
+
+    @staticmethod
+    def _map_from(d: Any) -> AxisMap:
+        if not isinstance(d, dict):
+            return AxisMap()
+        try:
+            return AxisMap(source=d.get("source"), sign=d.get("sign"))
+        except Exception:  # noqa: BLE001
+            return AxisMap()
+
+    @classmethod
+    def _scope_from(cls, d: Any) -> tuple[dict[str, AxisMap], tuple[int | None, int | None]]:
+        """Read one scope, accepting every historical shape."""
+        if not isinstance(d, dict):
+            return {}, (None, None)
+        if "frames" in d and isinstance(d["frames"], dict):
+            frames = {f: cls._map_from(m) for f, m in d["frames"].items() if f in cls.FRAMES}
+            b = d.get("buttons") or {}
+            return frames, (b.get("open"), b.get("close"))
+        # Older shape: the scope IS the world map, buttons inline.
+        return {"world": cls._map_from(d)}, (d.get("button_open"), d.get("button_close"))
 
     @classmethod
     def load(cls, path: Path) -> AxisMapStore:
@@ -514,80 +659,113 @@ class AxisMapStore:
             return cls()
         if not isinstance(raw, dict):
             return cls()
-        # Legacy flat shape: the whole file IS the shared map.
+        scopes: dict[str, dict[str, AxisMap]] = {}
+        buttons: dict[str, tuple[int | None, int | None]] = {}
         if "source" in raw or "sign" in raw:
-            return cls(shared=AxisMap.load(path))
-        shared = AxisMap()
-        if isinstance(raw.get(cls.SHARED), dict):
-            s = raw[cls.SHARED]
-            try:
-                shared = AxisMap(source=s.get("source"), sign=s.get("sign"),
-                                 button_open=s.get("button_open"), button_close=s.get("button_close"))
-            except Exception:  # noqa: BLE001
-                shared = AxisMap()
-        per_arm: dict[str, AxisMap] = {}
-        for key, val in raw.items():
-            if key == cls.SHARED or not isinstance(val, dict):
-                continue
-            try:
-                per_arm[key] = AxisMap(source=val.get("source"), sign=val.get("sign"),
-                                       button_open=val.get("button_open"),
-                                       button_close=val.get("button_close"))
-            except Exception:  # noqa: BLE001
-                continue
-        return cls(shared=shared, per_arm=per_arm)
+            # Oldest shape: the whole FILE is the world map.
+            frames, b = cls._scope_from(raw)
+            scopes[cls.SHARED] = frames
+            buttons[cls.SHARED] = b
+        else:
+            for key, val in raw.items():
+                if not isinstance(val, dict):
+                    continue
+                frames, b = cls._scope_from(val)
+                scopes[key] = frames
+                buttons[key] = b
+        scopes.setdefault(cls.SHARED, {})
+        return cls(scopes=scopes, buttons=buttons)
 
     def save(self, path: Path) -> None:
-        data: dict[str, Any] = {self.SHARED: self.shared.as_dict()}
-        for arm, m in sorted(self.per_arm.items()):
-            data[arm] = m.as_dict()
+        data: dict[str, Any] = {}
+        for scope in sorted(self._scopes, key=lambda k: (k != self.SHARED, k)):
+            frames = self._scopes[scope]
+            entry: dict[str, Any] = {
+                "frames": {f: {"source": m.source, "sign": m.sign} for f, m in sorted(frames.items())}
+            }
+            b_open, b_close = self._buttons.get(scope, (None, None))
+            if b_open is not None or b_close is not None:
+                entry["buttons"] = {"open": b_open, "close": b_close}
+            data[scope] = entry
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, indent=2) + "\n")
 
     # ---- which map applies -------------------------------------------------
 
-    def for_arm(self, arm: str) -> AxisMap:
-        """The map this arm actually uses — its override if it has one, else shared."""
-        return self.per_arm[arm] if arm in self.per_arm else self.shared
+    def _scope_for(self, arm: str) -> str:
+        return arm if arm in self._scopes and arm != self.SHARED else self.SHARED
+
+    def for_arm(self, arm: str, frame: str = "world") -> AxisMap:
+        """The map this arm uses in this frame, with the scope's buttons attached.
+
+        A frame that has never been tuned is **seeded from the world map** rather
+        than started blank — see `AxisMap.seeded_from_world()` for why that makes the
+        tool frame feel identical to world at the home pose.
+        """
+        scope = self._scope_for(arm)
+        frames = self._scopes.setdefault(scope, {})
+        if frame not in frames:
+            world = frames.get("world") or AxisMap()
+            frames[frame] = world.copy() if frame == "world" else world.seeded_from_world()
+        m = frames[frame]
+        m.button_open, m.button_close = self._buttons.get(scope, (None, None))
+        return m
 
     def is_shared(self, arm: str) -> bool:
-        return arm not in self.per_arm
+        return arm not in self._scopes or arm == self.SHARED
 
     def scope_note(self, arm: str) -> str:
-        """Human-readable statement of blast radius. Print this, always."""
         if self.is_shared(arm):
             return "SHARED — edits here affect BOTH arms"
         return f"{arm} ONLY — arm-specific, the other arm keeps the shared map"
 
     # ---- editing -----------------------------------------------------------
 
-    def set(self, arm: str, m: AxisMap) -> None:
-        """Write a map back into whichever slot this arm reads from."""
-        if arm in self.per_arm:
-            self.per_arm[arm] = m
-        else:
-            self.shared = m
+    def set(self, arm: str, m: AxisMap, frame: str = "world") -> None:
+        scope = self._scope_for(arm)
+        self._scopes.setdefault(scope, {})[frame] = m
+        # Buttons belong to the scope, not to one frame, so lift them back out.
+        self._buttons[scope] = (m.button_open, m.button_close)
 
     def fork(self, arm: str) -> None:
-        """Give `arm` its own map, seeded from whatever it uses today."""
-        if arm not in self.per_arm:
-            self.per_arm[arm] = self.for_arm(arm).copy()
+        """Give `arm` its own maps, copied from whatever it uses today."""
+        if arm in self._scopes and arm != self.SHARED:
+            return
+        src = self._scopes.get(self.SHARED, {})
+        self._scopes[arm] = {f: m.copy() for f, m in src.items()}
+        self._buttons[arm] = self._buttons.get(self.SHARED, (None, None))
 
     def unfork(self, arm: str) -> None:
-        """Drop `arm`'s override and go back to the shared map."""
-        self.per_arm.pop(arm, None)
+        if arm != self.SHARED:
+            self._scopes.pop(arm, None)
+            self._buttons.pop(arm, None)
+
+    def tuned_frames(self, arm: str) -> list[str]:
+        """Which frames this arm has an explicit map for. Useful for reporting."""
+        return sorted(self._scopes.get(self._scope_for(arm), {}))
+
+    def _wiring(self) -> dict[str, dict[str, tuple[list[int], list[int]]]]:
+        """Just the source/sign per scope per frame.
+
+        ⚠️ Deliberately excludes the button fields on the AxisMap objects.
+        `for_arm()` stamps the scope's buttons onto the map it hands back, as a
+        convenience for callers — so those fields are a transient view, not state
+        the scope owns, and comparing them made a store unequal to its own reloaded
+        self depending on which arms had been read.
+        """
+        return {sc: {f: (list(m.source), list(m.sign)) for f, m in fr.items()}
+                for sc, fr in self._scopes.items()}
 
     def __eq__(self, other: object) -> bool:
-        return (
-            isinstance(other, AxisMapStore)
-            and self.shared == other.shared
-            and self.per_arm == other.per_arm
-        )
+        if not isinstance(other, AxisMapStore):
+            return False
+        live = lambda b: {k: v for k, v in b.items() if v != (None, None)}  # noqa: E731
+        return self._wiring() == other._wiring() and live(self._buttons) == live(other._buttons)
 
     def copy(self) -> AxisMapStore:
         return AxisMapStore(
-            shared=self.shared.copy(),
-            per_arm={a: m.copy() for a, m in self.per_arm.items()},
+            scopes={s: {f: m.copy() for f, m in fr.items()} for s, fr in self._scopes.items()},
+            buttons=dict(self._buttons),
         )
 
 

@@ -86,6 +86,7 @@ from axis_map import (  # noqa: E402
     DEFAULT_LINEAR_SCALE,
     PUCK_AXES,
     ROBOT_MOTIONS,
+    motions_for,
     AxisMap,
     axes_readout,
     isolate,
@@ -199,11 +200,11 @@ MAP_HELP = """
 """
 
 
-def map_reference() -> str:
+def map_reference(frame: str = "world") -> str:
     """What the six motions physically are. Measured in simulation, not assumed —
     see `src/axis_map.py` for the numbers and for why "forward" is not claimed."""
     lines = ["  the six motions, in the WORLD frame (they do not change when the wrist turns):"]
-    for i, m in enumerate(ROBOT_MOTIONS):
+    for i, m in enumerate(motions_for(frame)):
         lines.append(f"    {i + 1}  {m['short']:<5} {m['world']:<10}  {m['note']}")
     return "\n".join(lines)
 
@@ -274,7 +275,7 @@ def main() -> int:  # noqa: PLR0915
         map_store.fork(args.arm)
     elif args.share_map:
         map_store.unfork(args.arm)
-    axis_map = map_store.for_arm(args.arm)
+    axis_map = map_store.for_arm(args.arm, control_frame)
     map_store_at_start = map_store.copy()
     axis_map_at_start = axis_map.copy()
     park = load_json(PARK_FILE, {}).get(args.arm)
@@ -304,11 +305,11 @@ def main() -> int:  # noqa: PLR0915
     print(f"  start mode  : {args.start_mode}")
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
-    print(f"  axis map    : {axis_map.one_line()}   (m to change it live)")
+    print(f"  axis map    : {axis_map.one_line(control_frame)}   (m to change it live)")
     print(f"  map scope   : {map_store.scope_note(args.arm)}")
     print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[control_frame]}  (v cycles it live)")
     if axis_map.unbound():
-        names = ", ".join(ROBOT_MOTIONS[i]["short"] for i in axis_map.unbound())
+        names = ", ".join(motions_for(control_frame)[i]["short"] for i in axis_map.unbound())
         print(f"  ⚠️  UNBOUND  : {names} — the arm will NOT perform these until they are bound (m)")
     print(f"  park pose   : {np.round(park, 3).tolist() if park else 'none saved — press s to set one'}")
     print(f"  workspace   : ±{args.box} m box, re-centred whenever TELEOP is entered")
@@ -571,10 +572,19 @@ def main() -> int:  # noqa: PLR0915
                         # stale cached state behind — unlike a mode change, which is
                         # why this does not need resync().
                         order = ["world", "tool", "camera"]
+                        # ⛔ Save the map for the frame being LEFT before switching.
+                        # Each frame owns its own wiring, so carrying one frame's map
+                        # into another would silently overwrite it — the same
+                        # blast-radius bug as editing a shared map believing it was
+                        # per-arm.
+                        map_store.set(args.arm, axis_map, control_frame)
                         control_frame = order[(order.index(control_frame) + 1) % len(order)]
+                        axis_map = map_store.for_arm(args.arm, control_frame)
                         if teleop is not None:
                             teleop.frame = control_frame
-                        print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[control_frame]}\n")
+                        print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[control_frame]}")
+                        print(f"     controls for this frame: {axis_map.one_line(control_frame)}")
+                        print("     press m to edit THESE controls; each frame has its own\n")
                         continue
                     if k == "f" and last_input_kind == "button":
                         # Same key, same meaning everywhere: reverse the control just
@@ -601,7 +611,7 @@ def main() -> int:  # noqa: PLR0915
                             stop_reason = "quit requested"
                         elif k in "tghm":
                             print("\n  controls now:")
-                            print(axis_map.describe())
+                            print(axis_map.describe(control_frame))
                             if k == "t":
                                 mode = "teleop"; enter_teleop()
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
@@ -619,7 +629,7 @@ def main() -> int:  # noqa: PLR0915
                                       f"direction to reverse. Press 1-6 to give it a motion.\n")
                             else:
                                 axis_map.flip(driven)
-                                print(f"\n  ↔ REVERSED → {axis_map.row(driven).strip()}"
+                                print(f"\n  ↔ REVERSED → {axis_map.row(driven, control_frame).strip()}"
                                       f"   (push {PUCK_AXES[active]} again to feel it)\n")
                         elif k in "123456":
                             if active is None:
@@ -634,10 +644,10 @@ def main() -> int:  # noqa: PLR0915
                                     # is also an involution, so pressing the same key
                                     # again undoes it. See AxisMap.swap().
                                     axis_map.swap(driven, target)
-                                    print(f"\n  ⇄ SWAPPED {ROBOT_MOTIONS[driven]['short']} ↔ "
-                                          f"{ROBOT_MOTIONS[target]['short']}")
-                                    print(f"      {axis_map.row(target).strip()}")
-                                    print(f"      {axis_map.row(driven).strip()}")
+                                    print(f"\n  ⇄ SWAPPED {motions_for(control_frame)[driven]['short']} ↔ "
+                                          f"{motions_for(control_frame)[target]['short']}")
+                                    print(f"      {axis_map.row(target, control_frame).strip()}")
+                                    print(f"      {axis_map.row(driven, control_frame).strip()}")
                                     print("      (press the same key again to swap back)\n")
                                 else:
                                     # The active control drove nothing, so there is nothing
@@ -645,10 +655,10 @@ def main() -> int:  # noqa: PLR0915
                                     # becomes this motion's positive sense.
                                     displaced = axis_map.bind(target, active, last_active_value)
                                     print(f"\n  ✓ puck {PUCK_AXES[active]} now drives "
-                                          f"{ROBOT_MOTIONS[target]['short']} → "
-                                          f"{axis_map.row(target).strip()}")
+                                          f"{motions_for(control_frame)[target]['short']} → "
+                                          f"{axis_map.row(target, control_frame).strip()}")
                                     if displaced is not None:
-                                        print(f"  ⚠️  {ROBOT_MOTIONS[displaced]['short']} was using that "
+                                        print(f"  ⚠️  {motions_for(control_frame)[displaced]['short']} was using that "
                                               f"control and is now UNBOUND — it will not move.")
                                     print()
                         elif k == "u":
@@ -656,15 +666,15 @@ def main() -> int:  # noqa: PLR0915
                                 print("\n  that control already drives nothing.\n")
                             else:
                                 axis_map.unbind(driven)
-                                print(f"\n  unbound {ROBOT_MOTIONS[driven]['short']} — it will not move\n")
+                                print(f"\n  unbound {motions_for(control_frame)[driven]['short']} — it will not move\n")
                         elif k == "0":
                             axis_map = axis_map_at_start.copy()
                             print("\n  reverted to the controls this session started with:")
-                            print(axis_map.describe() + "\n")
+                            print(axis_map.describe(control_frame) + "\n")
                         elif k == "?":
-                            print(map_reference())
+                            print(map_reference(control_frame))
                             print(MAP_HELP)
-                            print(axis_map.describe() + "\n")
+                            print(axis_map.describe(control_frame) + "\n")
                         # ⚠️ The rotation pair was MISSING here while the linear pair was
                         # present, so in CONTROLS mode roll/pitch/yaw could not be sped up
                         # or slowed down at all — Julien found it on the arm. The keys were
@@ -711,9 +721,9 @@ def main() -> int:  # noqa: PLR0915
                         mode = "map"; enter_teleop()
                         last_active_axis = None
                         print("\n⭐ MODE: CONTROLS — the arm MOVES, one isolated axis, half speed.\n")
-                        print(map_reference())
+                        print(map_reference(control_frame))
                         print(MAP_HELP)
-                        print(axis_map.describe())
+                        print(axis_map.explain(control_frame))
                         print("\n  Push the puck one way at a time and watch the arm. If a direction is")
                         print("  wrong, press f. If a control should do something else, press 1-6.\n")
                         if not rotation:
@@ -795,16 +805,16 @@ def main() -> int:  # noqa: PLR0915
                         # which is a statement about the arm, not about the device.
                         idx = "xyz".index(k)
                         axis_map.flip(idx)
-                        print(f"\n  {ROBOT_MOTIONS[idx]['short']} flipped → "
-                              f"{axis_map.row(idx).strip()}\n")
+                        print(f"\n  {motions_for(control_frame)[idx]['short']} flipped → "
+                              f"{axis_map.row(idx, control_frame).strip()}\n")
                     elif k in "123":
                         # Rotation motions: 1 roll, 2 pitch, 3 yaw. Digits because every
                         # sensible letter was taken, and because they read as an
                         # ordered triple the way x/y/z do.
                         idx = 3 + "123".index(k)
                         axis_map.flip(idx)
-                        print(f"\n  {ROBOT_MOTIONS[idx]['short']} flipped → "
-                              f"{axis_map.row(idx).strip()}\n")
+                        print(f"\n  {motions_for(control_frame)[idx]['short']} flipped → "
+                              f"{axis_map.row(idx, control_frame).strip()}\n")
                     elif k == "+" or k == "=":
                         args.linear_scale *= 1.25
                         print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
@@ -971,7 +981,7 @@ def main() -> int:  # noqa: PLR0915
                             v = axis_map.apply(isolated_axes(raw_axes, last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
                                     else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
-                            doing = f"→ {ROBOT_MOTIONS[drv]['short']} {unit}"
+                            doing = f"→ {motions_for(control_frame)[drv]['short']} {unit}"
                         print(f"\r[CONTROLS] puck {PUCK_AXES[last_active_axis]:<5} "
                               f"{last_active_value:+.2f}  {doing:<28} {speeds}"
                               f"{' ' * 6}", end="", flush=True)
@@ -1099,7 +1109,7 @@ def main() -> int:  # noqa: PLR0915
         # been produced on real hardware and were only recoverable because the file
         # happened to be committed. Two changes: nothing is written unless the map
         # actually changed, and the previous contents are kept alongside it.
-        map_store.set(args.arm, axis_map)
+        map_store.set(args.arm, axis_map, control_frame)
         if map_store != map_store_at_start:
             try:
                 if MAP_FILE.exists():
@@ -1120,13 +1130,13 @@ def main() -> int:  # noqa: PLR0915
         # idle (31-36 °C) is the pass; a steady climb is the failure, and it is
         # invisible in `hottest` because the shoulder runs hotter all session.
         print(f"hottest the GRIPPER (motor 7) got: {max_jaw_temp_seen:.0f}°C")
-    print(f"axis map: {axis_map.one_line()}")
+    print(f"axis map: {axis_map.one_line(control_frame)}")
     if axis_map != axis_map_at_start:
         print(f"     was: {axis_map_at_start.one_line()}")
     else:
         print("     unchanged — nothing was written.")
     if axis_map.unbound():
-        names = ", ".join(ROBOT_MOTIONS[i]["short"] for i in axis_map.unbound())
+        names = ", ".join(motions_for(control_frame)[i]["short"] for i in axis_map.unbound())
         print(f"  ⚠️  UNBOUND, the arm will not perform these: {names}")
     return 0
 
