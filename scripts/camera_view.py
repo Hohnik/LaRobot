@@ -23,14 +23,16 @@ Three independent reasons, and they all point the same way:
 3. **It survives the bimanual refactor untouched**, because it shares nothing with
    the session.
 
-⭐ **CAMERAS NOW HAVE NAMES.** OpenCV still opens them by INDEX, and this repo has a
-hard-won rule against selecting hardware by index (FINDINGS §0 #5: an adapter chosen
-by index silently retargeted the wrong robot). OpenCV itself offers no name API — but
-**macOS does**, via `system_profiler SPCameraDataType`, so `--camera d405` works and
-`--list` prints a name beside every index. The mapping is positional and therefore an
-inference, so it is **cross-checked against the picture each device actually returns**
-and refused outright when the two lists disagree. See `pair_cameras()` for the whole
-argument, including what would falsify it.
+⭐ **CAMERAS HAVE NAMES, AND THE NAMES ARE MEASURED.** OpenCV opens cameras by INDEX
+and offers no name API at all, while this repo has a hard-won rule against selecting
+hardware by index (FINDINGS §0 #5: an adapter chosen by index silently retargeted the
+wrong robot). macOS *will* name them — but ⛔ **macOS's enumeration order is not
+OpenCV's**, which was learned the expensive way on 2026-08-11 after shipping a
+positional guess that was wrong about two of four cameras.
+
+So identity is established by **asking each index for a resolution only one camera
+supports** and seeing who answers exactly (`identify_indices`). Nothing here uses list
+order for anything. `--camera d405` then means what it says.
 
 LATENCY AND FRAME RATE — WHAT ACTUALLY MATTERED HERE
 -----------------------------------------------------
@@ -90,6 +92,37 @@ MAX_PROBE_INDEX = 6
 SIZES = [(320, 180), (320, 240), (640, 360), (640, 480), (1280, 720), (1920, 1080)]
 
 
+def key_sizes(cam: "MacCamera | None") -> list[tuple[int, int]]:
+    """The six capture sizes bound to keys 1-6 — **this camera's own modes** if known.
+
+    ⛔⭐ THE BUG THIS FIXES, reported by Julien on 2026-08-11: *"the numbers when I
+    press them don't allow for all the quality options. They cycle between about
+    three, and not in the correct order either."*
+
+    `SIZES` above is a list of **C920** modes. Point it at a different camera and a
+    UVC device silently substitutes the nearest mode it does have, so several keys
+    collapse onto the same result. On the MacBook Air camera — whose seven modes are
+    640x480, 1280x720, 1552x1552, 1760x1328, 1328x1760, 1920x1080, 1080x1920 — keys
+    1 to 4 all land on 640x480 and only 5 and 6 differ. **Exactly three distinct
+    sizes, which is exactly what he saw**, and its portrait modes are why the order
+    looked wrong too.
+
+    ⭐ That symptom is also evidence: it says he was driving the built-in camera while
+    the tool told him it was the C920 — the naming bug, showing up in a second place.
+
+    Asking the device for its own modes removes the guesswork. Six spread evenly
+    across the range, always including the smallest and largest, always ascending, so
+    every key does something distinct and `6` is always "as good as this camera gets".
+    """
+    if not (cam and cam.modes):
+        return SIZES
+    modes = sorted({(int(w), int(h)) for w, h in cam.modes}, key=lambda wh: wh[0] * wh[1])
+    if len(modes) <= 6:
+        return modes
+    step = (len(modes) - 1) / 5
+    return [modes[round(i * step)] for i in range(6)]
+
+
 # ============================================================================
 #  CAMERA IDENTITY — which index is which camera
 # ============================================================================
@@ -107,11 +140,18 @@ SIZES = [(320, 180), (320, 240), (640, 360), (640, 480), (1280, 720), (1920, 108
 
 @dataclass(frozen=True)
 class MacCamera:
-    """One camera as macOS reports it, via `system_profiler SPCameraDataType`."""
+    """One camera as macOS reports it.
+
+    `modes` is the set of `(width, height)` this device can actually deliver, read
+    from AVFoundation. ⭐ It is the load-bearing field: it is what lets an OpenCV
+    index be **identified by measurement** instead of guessed at by position.
+    Empty when only `system_profiler` was available.
+    """
 
     name: str
     model_id: str
     unique_id: str
+    modes: frozenset = frozenset()
 
     @property
     def usb(self) -> str | None:
@@ -147,48 +187,86 @@ SHORT_NAMES = {
     "046d:08e5": "C920 webcam",
 }
 
-# ⚠️ The widest frame each device can physically produce. This is the **falsifier**
-# for the name↔index pairing below: a D405 that claims 1920 px is not a D405.
-#
-# The D405's imagers are 1280 px wide and every stream it offers — depth, colour
-# from the left imager, infrared — is at most that. If one ever reports wider, this
-# check is wrong and the pairing needs a different discriminator; say so rather than
-# deleting the check.
-KNOWN_MAX_WIDTH = {"8086:0b5b": 1280}
-
 _MAC_CAMERA_CACHE: list[MacCamera] | None = None
 
 
-def mac_cameras(refresh: bool = False) -> list[MacCamera]:
-    """The cameras macOS knows about, in **its** enumeration order.
+def _av_cameras() -> list[MacCamera]:
+    """Cameras straight from AVFoundation, **with their supported modes**.
 
-    ⭐ `system_profiler` needs no camera permission — it enumerates rather than
-    captures — so unlike everything else in this file, the agent can run it. That is
-    why naming was solvable at all (FINDINGS §21.1: the agent cannot open a stream).
+    Needs no camera permission — enumerating is not capturing — so the agent can run
+    this even though it can never open a stream (FINDINGS §21.1).
 
-    Takes ~1 s, hence the cache. Returns `[]` on any failure — a missing name list
-    must degrade to "indices only", never to a guess.
+    ⚠️ Returns `[]` when the binding is missing (a non-macOS machine, or a checkout
+    that skipped the optional dependency). The caller then falls back to
+    `system_profiler`, which gives names but **no modes**, and without modes there is
+    no way to identify an index — so the tool refuses to name rather than guess.
     """
-    global _MAC_CAMERA_CACHE  # noqa: PLW0603
-    if _MAC_CAMERA_CACHE is not None and not refresh:
-        return _MAC_CAMERA_CACHE
-    cams: list[MacCamera] = []
+    try:
+        import AVFoundation as AV  # noqa: PLC0415
+        import CoreMedia as CM  # noqa: PLC0415
+    except ImportError:
+        return []
+    cams = []
+    for dev in AV.AVCaptureDevice.devicesWithMediaType_(AV.AVMediaTypeVideo) or []:
+        modes = set()
+        for fmt in dev.formats() or []:
+            dims = CM.CMVideoFormatDescriptionGetDimensions(fmt.formatDescription())
+            modes.add((int(dims.width), int(dims.height)))
+        cams.append(MacCamera(str(dev.localizedName()), str(dev.modelID() or ""),
+                              str(dev.uniqueID() or ""), frozenset(modes)))
+    return cams
+
+
+def _profiler_cameras() -> list[MacCamera]:
+    """Names only, from `system_profiler`. The fallback when AVFoundation is absent."""
     try:
         out = subprocess.run(["system_profiler", "-json", "SPCameraDataType"],
                              capture_output=True, text=True, timeout=30, check=False)
-        for entry in json.loads(out.stdout).get("SPCameraDataType", []):
-            cams.append(MacCamera(entry.get("_name", "?"),
-                                  entry.get("spcamera_model-id", ""),
-                                  entry.get("spcamera_unique-id", "")))
+        return [MacCamera(e.get("_name", "?"), e.get("spcamera_model-id", ""),
+                          e.get("spcamera_unique-id", ""))
+                for e in json.loads(out.stdout).get("SPCameraDataType", [])]
     except (OSError, ValueError, subprocess.SubprocessError):
-        cams = []          # not macOS, or the tool changed its output shape
-    _MAC_CAMERA_CACHE = cams
-    return cams
+        return []          # not macOS, or the tool changed its output shape
+
+
+def mac_cameras(refresh: bool = False) -> list[MacCamera]:
+    """Every camera macOS knows about. **The ORDER MEANS NOTHING — see below.**
+
+    ⛔⭐ THE MISTAKE THIS DOCSTRING EXISTS TO PREVENT, because it was made here on
+    2026-08-11 and shipped.
+
+    The first version of this file assumed macOS's n-th camera was OpenCV's n-th
+    index. It said so out loud, cross-checked it, and published a falsification
+    procedure. **Julien ran that procedure and it failed:** covering each camera in
+    turn showed the C920 answering on index 0, where macOS lists the built-in camera,
+    and the built-in one answering on index 2, where macOS lists the C920.
+
+    It is worse than a coincidence of one API. **Three separate macOS enumerations —
+    `system_profiler`, `devicesWithMediaType:`, and an `AVCaptureDeviceDiscoverySession`
+    asked in two different device-type orders — all return the SAME order, and it is
+    not OpenCV's.** (A pattern, offered only as a lead if the measurement below ever
+    fails: OpenCV's order looks like USB cameras sorted by location ID first, then
+    built-in, then Continuity. `0x1120000` (C920) < `0x1210000` (D405), which is the
+    order it used. Do not build on this; it is one observation.)
+
+    ⭐ **So the order is never used.** Identity comes from `identify_indices()`, which
+    asks each index for a resolution only one device supports and sees who answers.
+    """
+    global _MAC_CAMERA_CACHE  # noqa: PLW0603
+    if _MAC_CAMERA_CACHE is None or refresh:
+        _MAC_CAMERA_CACHE = _av_cameras() or _profiler_cameras()
+    return _MAC_CAMERA_CACHE
 
 
 @dataclass
 class ProbeResult:
-    """What one camera index answered when opened."""
+    """What one camera index answered when opened.
+
+    ⚠️ `fps` is **not trustworthy** and is shown only for completeness: the same
+    device reported 1 fps on one run and 30 on the next, so OpenCV is deriving it
+    from frame timing rather than reading the format. `width`/`height` were stable
+    across every run and are.
+    """
 
     index: int
     ok: bool
@@ -197,35 +275,60 @@ class ProbeResult:
     fps: float
     mean: float
     mono: bool | None
+    settle: float = 0.0     # seconds until the camera produced a usable frame
 
 
-def frame_is_mono(frame) -> bool:  # noqa: ANN001
-    """True when the three colour channels are **identical** — i.e. not a colour image.
+def frame_is_mono(frame) -> bool | None:  # noqa: ANN001
+    """True if the colour channels are identical, False if not, **None if the frame
+    cannot say.** That third case is the whole point.
 
-    ⭐ THE DECISIVE TEST FOR THE D405. macOS exposes it as a plain UVC camera whose
-    single entry is named `… 405  Depth`, so what arrives is a depth or infrared
-    stream widened into three equal channels, not a picture. A real colour camera
-    disagrees between channels almost everywhere — white balance alone guarantees it.
+    ⛔⭐ THE BUG THIS FIXES, found by Julien's own `--list` output on 2026-08-11.
+    A **black** frame has three identical channels, so the first version declared it
+    `MONO — depth/IR, not a picture` and pointed that verdict at his **iPhone**,
+    which is neither a depth camera nor an infrared one. The frame was black because
+    the probe read it the instant the camera opened, before the sensor had exposed.
 
-    This matters beyond bookkeeping: a depth stream is useless for *driving* the arm
-    by eye, so knowing which index carries one prevents an afternoon spent wondering
-    why the wrist view looks wrong.
+    **A frame with no variation carries no colour information at all.** The honest
+    answer is "unknown", and dressing it up as a measurement is exactly the confident,
+    plausible, wrong answer of FINDINGS §0 — produced, this time, by the code written
+    to prevent it.
+
+    What it is genuinely for: the D405's UVC entry is a depth stream widened into
+    three equal channels, while a colour camera disagrees between channels almost
+    everywhere — white balance alone guarantees that. On a frame that actually has
+    content, this separates the two.
     """
     if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
-        return True
+        return None
+    if float(frame.std()) < 1.0:
+        return None      # uniform: black, blown out, or a lens cap. It cannot say.
     return bool(np.array_equal(frame[..., 0], frame[..., 1])
                 and np.array_equal(frame[..., 1], frame[..., 2]))
 
 
-def probe_indices(read_frames: bool = True, limit: int | None = None) -> list[ProbeResult]:
+def probe_indices(read_frames: bool = True, limit: int | None = None,
+                  settle: float = 1.5) -> list[ProbeResult]:
     """Open each index in turn and record what answered.
 
-    `read_frames=False` skips the capture, which is the slow part (~0.5-1 s each) —
-    enough for counting devices, not enough to say what they show.
+    ⛔⭐ **THE FIRST FRAME IS NOT THE PICTURE**, and reading it as though it were sent
+    this investigation down a blind alley on 2026-08-11. The original probe took
+    exactly one frame the instant the camera opened. Apple's built-in camera takes
+    roughly half a second to expose, and the iPhone over Continuity takes longer
+    still — so the built-in camera reported brightness 5 while it was looking at a
+    bright room, and the iPhone reported `NO FRAME`. **Both readings were about
+    sensor warm-up and nothing else**, and the brightness column is precisely what
+    the operator is told to use to tell cameras apart.
+
+    So this now reads frames until one actually has variation, or `settle` seconds
+    pass, and reports how long that took — a slow camera is worth knowing about
+    rather than silently averaging away.
+
+    `read_frames=False` skips capture entirely: enough to count devices, not enough
+    to say what they show.
 
     ⚠️ A closed index does **not** end the loop. Assuming indices are contiguous is
     the kind of tidy assumption this rig punishes; an unopenable index in the middle
-    would silently shift every name after it.
+    would silently shift everything after it.
     """
     results: list[ProbeResult] = []
     for idx in range(limit if limit is not None else MAX_PROBE_INDEX):
@@ -233,7 +336,16 @@ def probe_indices(read_frames: bool = True, limit: int | None = None) -> list[Pr
         if not cap.isOpened():
             cap.release()
             continue
-        ok, frame = (cap.read() if read_frames else (False, None))
+        ok, frame, waited = False, None, 0.0
+        if read_frames:
+            t0 = time.perf_counter()
+            while time.perf_counter() - t0 < settle:
+                got, candidate = cap.read()
+                if got and candidate is not None:
+                    ok, frame = True, candidate
+                    if float(candidate.std()) >= 1.0:
+                        break        # real content, not a warm-up frame
+            waited = time.perf_counter() - t0
         results.append(ProbeResult(
             index=idx,
             ok=bool(ok),
@@ -241,66 +353,125 @@ def probe_indices(read_frames: bool = True, limit: int | None = None) -> list[Pr
             height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             fps=float(cap.get(cv2.CAP_PROP_FPS)),
             mean=float(np.mean(frame)) if ok and frame is not None else float("nan"),
-            mono=frame_is_mono(frame) if ok and frame is not None else None,
+            mono=frame_is_mono(frame) if ok else None,
+            settle=waited,
         ))
         cap.release()
     return results
 
 
-def pair_cameras(names: list[MacCamera], probes: list[ProbeResult],
-                 ) -> tuple[list[tuple[ProbeResult, MacCamera | None]], list[str]]:
-    """Attach a name to every openable index — **or refuse, and say why**.
+def discriminating_mode(cam: MacCamera, others: list[MacCamera]) -> tuple[int, int] | None:
+    """A resolution **only this camera can deliver** — the question that identifies it.
 
-    ⭐⭐ READ THIS BEFORE TRUSTING A NAME. The pairing is **positional**: macOS's
-    n-th camera is assumed to be OpenCV's n-th index. That is an inference, and this
-    repo does not accept inferences quietly, so here is the whole argument.
+    Every camera advertises a fixed list of modes, and the lists differ sharply on
+    this rig: the C920 offers 34 including `160x90` and `176x144`, the MacBook Air
+    camera offers 7 including the square `1552x1552`, the D405 offers `848x480`, the
+    iPhone offers `1920x1440`. Ask a camera for a mode it does not have and **it
+    substitutes the nearest one it does** — measured here in session 7, where
+    `424x240` came back as `640x360`. So an *exact* match to a mode only one device
+    owns is that device answering, whatever index it happens to be sitting on.
 
-    **The evidence for it.** OpenCV's AVFoundation backend and `system_profiler`
-    both enumerate the same CoreMedia device list, and on 2026-08-11 the two agreed
-    on **count** — macOS listed 4 cameras and indices 0-3 opened while index 4 was
-    refused by OpenCV itself (`out device of bound (0-3): 4`). Membership matching
-    is real evidence; order is the part still assumed.
+    Returns None when the camera shares every one of its modes with another — which
+    ⚠️ **is exactly what will happen when the second D405 is plugged in.** Two
+    identical cameras cannot be told apart this way, and the tool must say so rather
+    than pick one.
 
-    **What would falsify it, and is therefore checked.** `KNOWN_MAX_WIDTH` says a
-    D405 cannot deliver a frame wider than 1280. On this rig exactly one index
-    reported 1280x720 and every other reported 1920x1080 — so if the order were
-    shuffled, the D405 would have to be sitting on a 1920-wide index, and the check
-    below would fire. It did not, which makes the pairing *survivable* rather than
-    merely plausible.
+    The smallest qualifying mode is chosen: least bandwidth, quickest to negotiate.
+    """
+    shared: set = set()
+    for other in others:
+        shared |= set(other.modes)
+    unique = set(cam.modes) - shared
+    return min(unique, key=lambda wh: wh[0] * wh[1]) if unique else None
 
-    **The third, independent signal** is `frame_is_mono`: the D405's UVC entry is a
-    depth stream, so its channels are identical while a colour camera's are not.
 
-    **When the counts disagree, no name is attached at all.** A wrong name is worse
-    than no name — it is the confident, plausible, wrong answer of FINDINGS §0.
+def identify_indices(cams: list[MacCamera], limit: int | None = None,
+                     ) -> tuple[list[tuple[int, MacCamera | None]], list[str]]:
+    """Work out which OpenCV index is which camera **by measurement**.
+
+    ⛔⭐ THIS REPLACES A POSITIONAL GUESS THAT WAS WRONG. See `mac_cameras()` for the
+    full account: macOS's enumeration order is not OpenCV's, three separate macOS
+    APIs agree with each other and disagree with reality, and Julien's covering test
+    caught it. Position is now never used for anything.
+
+    The method: for each index, ask for every camera's discriminating mode in turn
+    and see which one comes back **exactly**. A camera cannot deliver a mode it does
+    not have, so an exact match is an identification rather than an inference.
+
+    ⚠️ This rests on one measured property of the backend: `cap.get(FRAME_WIDTH)`
+    after a `set` returns what the camera ACTUALLY did, not what was asked for. That
+    is how the 424x240 → 640x360 substitution was discovered in the first place. If a
+    future OpenCV echoes the request instead, every camera would match every mode —
+    which shows up here as *every* index being ambiguous, not as a wrong name.
+
+    Costs one open per index plus a few format changes: a few seconds, paid once at
+    startup. It is deliberately **not cached**: a replug can reorder indices without
+    changing anything a cache could key on, and a stale camera map is the failure
+    this whole section exists to prevent.
     """
     notes: list[str] = []
-    if not names:
-        notes.append("⚠️  macOS reported no camera names (system_profiler failed or this "
-                     "is not macOS) — falling back to indices only.")
-        return [(p, None) for p in probes], notes
-    if len(names) != len(probes):
-        notes.append(f"⛔ macOS lists {len(names)} cameras but {len(probes)} indices opened. "
-                     "The two lists disagree, so NO names are attached — a wrong name is "
-                     "worse than no name. Replug, close other camera apps, and re-run.")
-        return [(p, None) for p in probes], notes
+    if not cams:
+        notes.append("⚠️  macOS reported no cameras at all — nothing to identify against.")
+        return [], notes
 
-    pairs = list(zip(probes, names))
-    notes.append(f"✅ {len(names)} names, {len(probes)} openable indices — paired by position.")
-    for probe, cam in pairs:
-        cap = KNOWN_MAX_WIDTH.get(cam.usb or "")
-        if cap and probe.width > cap:
-            notes.append(f"⛔ index {probe.index} is named {cam.short!r} but reports "
-                         f"{probe.width}px wide, and that device cannot exceed {cap}px. "
-                         "The pairing is WRONG — do not trust these names.")
-        elif cap:
-            notes.append(f"✅ cross-check: index {probe.index} reports {probe.width}px and "
-                         f"{cam.short} tops out at {cap}px — consistent.")
-        if probe.mono is True and cap:
-            notes.append(f"✅ cross-check: index {probe.index} returns identical colour "
-                         "channels, which is a depth/IR stream, not a picture — that is "
-                         "the D405 signature.")
-    return pairs, notes
+    questions: dict[str, tuple[int, int]] = {}
+    for cam in cams:
+        mode = discriminating_mode(cam, [c for c in cams if c.unique_id != cam.unique_id])
+        if mode is None:
+            notes.append(f"⚠️  {cam.short} shares every mode with another camera, so it "
+                         "cannot be identified by measurement. Tell it apart by covering "
+                         "it and watching which index goes dark.")
+        else:
+            questions[cam.unique_id] = mode
+    if not questions:
+        notes.append("⛔ no camera has a mode of its own — identification is impossible "
+                     "here. Use --index and confirm by looking at the picture.")
+        return [], notes
+
+    by_uid = {c.unique_id: c for c in cams}
+    found: list[tuple[int, MacCamera | None]] = []
+    claimed: dict[str, int] = {}
+    for idx in range(limit if limit is not None else len(cams) + 1):
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        hits = []
+        for uid, (want_w, want_h) in questions.items():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
+            got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                   int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+            if got == (want_w, want_h):
+                hits.append(uid)
+        cap.release()
+
+        if len(hits) == 1 and hits[0] not in claimed:
+            cam = by_uid[hits[0]]
+            w, h = questions[hits[0]]
+            claimed[hits[0]] = idx
+            found.append((idx, cam))
+            notes.append(f"✅ index {idx} delivered {w}x{h}, which only {cam.short} offers.")
+        elif len(hits) > 1:
+            found.append((idx, None))
+            notes.append(f"⛔ index {idx} matched {len(hits)} cameras at once "
+                         f"({', '.join(by_uid[u].short for u in hits)}) — ambiguous, so it "
+                         "is left unnamed.")
+        elif hits:
+            found.append((idx, None))
+            notes.append(f"⛔ index {idx} claims to be {by_uid[hits[0]].short}, which index "
+                         f"{claimed[hits[0]]} already answered for. Two indices cannot be "
+                         "one camera — both are left unnamed.")
+        else:
+            found.append((idx, None))
+            notes.append(f"⚠️  index {idx} matched no camera's own mode — unidentified.")
+
+    missing = [c.short for c in cams if c.unique_id not in claimed]
+    if missing:
+        notes.append(f"⚠️  never found on any index: {', '.join(missing)}. A camera macOS "
+                     "lists but OpenCV cannot open is normal for Continuity when the phone "
+                     "is asleep.")
+    return found, notes
 
 
 class CameraLookupError(Exception):
@@ -318,92 +489,108 @@ def _normalise(text: str) -> str:
     return "".join(ch for ch in text.lower() if ch.isalnum())
 
 
-def resolve_camera(spec: str, names: list[MacCamera] | None = None,
-                   probes: list[ProbeResult] | None = None) -> tuple[int, MacCamera | None]:
+def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
+                   identified: list[tuple[int, MacCamera | None]] | None = None,
+                   ) -> tuple[int, MacCamera | None]:
     """Turn `--camera d405` (or `--camera 2`) into an index, or refuse loudly.
 
-    ⛔ Never falls back to index 0. Silently opening *a* camera when the requested
-    one is missing is precisely how the wrong hardware gets driven.
+    ⛔ Never falls back to index 0, and — since 2026-08-11 — never falls back to
+    position either. The index comes from `identify_indices()`, which measures it.
 
-    `names` and `probes` exist to be injected by the tests. ⚠️ They must stay
+    `cams` and `identified` exist to be injected by the tests. ⚠️ They must stay
     injectable: without them every test run would open all four cameras — waking
     Julien's iPhone over Continuity — and a test suite with side effects on hardware
     is one people stop running.
     """
-    names = mac_cameras() if names is None else names
+    cams = mac_cameras() if cams is None else cams
+    if not cams:
+        raise CameraLookupError(
+            "macOS reported no cameras, so --camera cannot be resolved.\n"
+            "  Use --index N instead, and --list to see what is there.")
+
     if spec.isdigit():
         idx = int(spec)
-        return idx, names[idx] if idx < len(names) else None
-
-    if not names:
-        raise CameraLookupError(
-            "macOS would not report camera names, so --camera cannot be resolved.\n"
-            "  Use --index N instead, and --list to see what is there.")
-    # ⭐ Counting devices needs no frame, and reading one costs ~1 s per camera.
-    if probes is None:
-        probes = probe_indices(read_frames=False, limit=len(names) + 1)
-    if len(probes) != len(names):
-        raise CameraLookupError(
-            f"macOS lists {len(names)} cameras but {len(probes)} indices opened, so a "
-            "name cannot be mapped to an index safely.\n"
-            "  Run --list to see both lists, and use --index N deliberately.")
+        if identified is None:
+            identified, _ = identify_indices(cams)
+        for got_idx, cam in identified:
+            if got_idx == idx:
+                return idx, cam
+        return idx, None
 
     want = _normalise(spec)
     want = _normalise(ALIASES.get(want, want)) if want in ALIASES else want
-    hits = [(p.index, cam) for p, cam in zip(probes, names)
-            if want in _normalise(cam.name) or want in _normalise(cam.usb or "")]
-    if not hits:
-        listing = "\n".join(f"    {p.index}  {cam.short}" for p, cam in zip(probes, names))
-        raise CameraLookupError(f"no camera matches {spec!r}. Available:\n{listing}")
-    if len(hits) > 1:
-        listing = "\n".join(f"    {i}  {cam.short}" for i, cam in hits)
+    matches = [c for c in cams
+               if want in _normalise(c.name) or want in _normalise(c.usb or "")]
+    if not matches:
+        listing = "\n".join(f"    {c.short}" for c in cams)
+        raise CameraLookupError(f"no camera matches {spec!r}. macOS lists:\n{listing}")
+    if len(matches) > 1:
+        listing = "\n".join(f"    {c.short}" for c in matches)
         raise CameraLookupError(f"{spec!r} matches more than one camera:\n{listing}\n"
                                 "  Be more specific, or use --index.")
-    return hits[0]
+
+    cam = matches[0]
+    if identified is None:
+        print(f"  finding which index is the {cam.short} — this opens each camera briefly")
+        identified, notes = identify_indices(cams)
+    else:
+        notes = []
+    for idx, got in identified:
+        if got is not None and got.unique_id == cam.unique_id:
+            return idx, cam
+    detail = "\n".join(f"    {n}" for n in notes)
+    raise CameraLookupError(
+        f"macOS lists {cam.short}, but it could not be identified on any OpenCV index.\n"
+        f"{detail}\n"
+        "  Run --list to see what each index actually shows, then use --index N.")
 
 
 def list_cameras() -> None:
-    """Print what macOS says is attached, what each index answered, and whether the
-    two agree — the one command to run after any replug."""
-    names = mac_cameras()
-    if names:
-        print(f"macOS reports {len(names)} camera(s), in this order:\n")
-        for i, cam in enumerate(names):
+    """Everything known about every camera: what macOS lists, which index each one is
+    **measured** to be, and what each index actually shows. Run after any replug."""
+    cams = mac_cameras()
+    if cams:
+        print(f"macOS lists {len(cams)} camera(s). ⚠️ THIS ORDER IS NOT OpenCV's ORDER —")
+        print("   assuming it was is the bug this tool was rewritten to fix.\n")
+        for cam in cams:
             usb = f"   USB {cam.usb}" if cam.usb else ""
-            print(f"    {i}  {cam.short:<28s}{usb}".rstrip())
+            modes = f"   {len(cam.modes)} modes" if cam.modes else "   (no mode list)"
+            print(f"    {cam.short:<28s}{modes}{usb}".rstrip())
         print()
+    else:
+        print("⚠️  macOS reported no cameras at all.\n")
 
-    print("probing camera indices — this opens each one briefly\n")
-    # ⭐ One index PAST the name list, deliberately: if that one opens, OpenCV can
-    # see a device macOS did not list and the pairing must be refused. Probing
-    # exactly len(names) could never discover that.
+    print("identifying indices by measurement — asking each one for a mode only one")
+    print("camera has. This opens every camera briefly.\n")
+    identified, id_notes = identify_indices(cams)
+    for note in id_notes:
+        print(f"  {note}")
+
+    print("\nreading a real frame from each index (waiting out the sensor warm-up)\n")
     probes = probe_indices(read_frames=True,
-                           limit=len(names) + 1 if names else MAX_PROBE_INDEX)
+                           limit=len(cams) + 1 if cams else MAX_PROBE_INDEX)
     if not probes:
         print("  none opened. On macOS the FIRST run must be granted camera access —")
         print("  look for the permission dialog, then run this again.")
         return
 
-    pairs, notes = pair_cameras(names, probes)
-    print(f"  {'idx':>3s}  {'name':<28s} {'resolution':>11s} {'fps':>5s}  "
-          f"{'frame':<8s} {'bright':>7s}  picture")
-    for probe, cam in pairs:
-        name = cam.short if cam else "(unnamed)"
-        picture = "—" if probe.mono is None else ("MONO — depth/IR, not a picture"
-                                                  if probe.mono else "colour")
-        bright = "  n/a" if probe.mean != probe.mean else f"{probe.mean:7.0f}"  # NaN check
+    named = {idx: cam for idx, cam in identified}
+    print(f"  {'idx':>3s}  {'measured identity':<28s} {'resolution':>11s}  "
+          f"{'bright':>6s} {'settle':>7s}  picture")
+    for probe in probes:
+        cam = named.get(probe.index)
+        name = cam.short if cam else "⛔ UNIDENTIFIED"
+        picture = ("cannot say — no variation in the frame" if probe.mono is None
+                   else "MONO — depth/IR, not a picture" if probe.mono else "colour")
+        bright = "   n/a" if probe.mean != probe.mean else f"{probe.mean:6.0f}"  # NaN
         print(f"  {probe.index:>3d}  {name[:28]:<28s} {probe.width:>5d}x{probe.height:<5d} "
-              f"{probe.fps:>5.0f}  {'OK' if probe.ok else 'NO FRAME':<8s} {bright}  {picture}")
-    print()
-    for note in notes:
-        print(f"  {note}")
+              f"{bright} {probe.settle:6.1f}s  {picture}")
 
     print("\n  Select by name — the index moves on replug, the name does not:")
     print("      uv run scripts/camera_view.py --camera c920 --term")
     print("      uv run scripts/camera_view.py --camera d405 --term")
-    print("\n  ⚠️ The names are matched to indices BY POSITION and cross-checked, not")
-    print("     proven. To falsify: unplug one camera, re-run, and check that the index")
-    print("     that vanished is the one that was carrying its name.")
+    print("\n  ⭐ These names are MEASURED, not inferred from any list order. To check")
+    print("     one anyway: cover a camera and re-run — the index that goes dark is it.")
 
 
 def probe_modes(index: int, secs: float = 2.5) -> None:
@@ -809,8 +996,28 @@ def _downscale(frame, max_width: int):  # noqa: ANN001, ANN201
                       interpolation=cv2.INTER_AREA)
 
 
-def render_kitty(frame, cols: int, rows: int, max_width: int = 480, quiet: bool = True) -> str:
+def render_kitty(frame, cols: int, rows: int, max_width: int = 480, quiet: bool = True,
+                 image_id: int | None = None, previous_id: int | None = None) -> str:
     """A real image, drawn by the kitty graphics protocol (kitty, Ghostty, Konsole).
+
+    ⛔⭐ THE FLICKER, reported by Julien 2026-08-11: *"the image in the terminal is
+    flickering because some frames seem to not be drawn."*
+
+    Every frame used to begin `a=d,d=A` — **delete all images** — and only then
+    transmit the new one. Between the delete and the new image being decoded there is
+    nothing on screen, so at 30 fps the picture is blanked 30 times a second. Whether
+    that reads as flicker depends on how fast the terminal decodes, which is why it
+    got worse as the image got bigger.
+
+    The fix is double buffering, the same idea as any graphics pipeline: pass
+    `image_id` and `previous_id`, and the new image is **placed first, over the old
+    one**, then the old id is deleted underneath it. There is no moment with nothing
+    on screen. The caller alternates two ids each frame.
+
+    ⚠️ Deleting still has to happen: `d=I` frees the image data as well as the
+    placement, and without it a 30 fps stream leaks an image per frame into the
+    terminal's memory. Omitting `previous_id` (as `--term-test` does) keeps the old
+    delete-then-draw path, which is correct for a single still image.
 
     ⛔⭐ THE BUG THIS FIXES, and it is a good lesson in reading a spec properly.
 
@@ -845,11 +1052,19 @@ def render_kitty(frame, cols: int, rows: int, max_width: int = 480, quiet: bool 
     data = base64.b64encode(buf.tobytes()).decode("ascii")
     chunks = [data[i:i + 4096] for i in range(0, len(data), 4096)]
     q = "q=2," if quiet else ""
-    out = [f"\x1b_Ga=d,d=A,{q}".rstrip(",") + "\x1b\\"]      # clear the previous placement
+    out: list[str] = []
+    if image_id is None:
+        # One-shot use (--term-test): nothing follows, so clear first and be simple.
+        out.append(f"\x1b_Ga=d,d=A,{q}".rstrip(",") + "\x1b\\")
+    ident = f"i={image_id}," if image_id is not None else ""
     for i, chunk in enumerate(chunks):
         first, last = i == 0, i == len(chunks) - 1
-        ctrl = f"a=T,f=100,c={cols},r={rows},{q}" if first else ""
+        ctrl = f"a=T,f=100,{ident}c={cols},r={rows},{q}" if first else ""
         out.append(f"\x1b_G{ctrl}m={0 if last else 1};{chunk}\x1b\\")
+    if image_id is not None and previous_id is not None:
+        # ⭐ Delete the OLD image only after the new one is on screen. See the
+        # docstring: deleting first is what makes the picture blink.
+        out.append(f"\x1b_Ga=d,d=I,i={previous_id},{q}".rstrip(",") + "\x1b\\")
     return "".join(out)
 
 
@@ -952,11 +1167,12 @@ def render_iterm(frame, cols: int, rows: int, max_width: int = 480, quality: int
             f"preserveAspectRatio=1;doNotMoveCursor=0:{b64}\x07")
 
 
-def run_terminal(cap, args, label: str = "") -> int:  # noqa: ANN001
+def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> int:  # noqa: ANN001
     """Draw the camera into this terminal. Creates no window at all.
 
     `label` is the camera's name, shown in the status line so a two-terminal setup
-    can never be confused about which arm's view is which.
+    can never be confused about which arm's view is which. `cam` supplies that
+    camera's real capture modes for keys 1-6 (see `key_sizes`).
 
     ⛔ Quitting is guaranteed: `q`/ESC, Ctrl-C and the `finally` block all restore the
     cursor and colours and stop the grabber thread. Julien asked specifically that
@@ -980,9 +1196,16 @@ def run_terminal(cap, args, label: str = "") -> int:  # noqa: ANN001
 
     grab = FrameGrabber(cap)
     flip, rotate = args.flip, args.rotate
+    sizes = key_sizes(cam)
     # None = size the image to the pane automatically. A number pins it, either from
     # --image-width or from the [ and ] keys.
     manual_width = args.image_width or None
+    # ⭐ Set whenever a keypress changes what should be on screen, so the frame is
+    # redrawn immediately instead of at the next capture.
+    dirty = True
+    # Two kitty image ids, used alternately. See render_kitty: placing the new image
+    # before deleting the old one is what stops the picture blinking.
+    kitty_id, kitty_prev = 991, 992
     shown, t_fps, disp_fps, prev_seq = 0, time.perf_counter(), 0.0, -1
     draw_ms = 0.0
     sys.stdout.write("\x1b[?25l\x1b[2J")
@@ -1000,73 +1223,90 @@ def run_terminal(cap, args, label: str = "") -> int:  # noqa: ANN001
                         return 0
                     time.sleep(0.01)
                     continue
-                if seq == prev_seq:
-                    time.sleep(0.002)
-                else:
+                fresh = seq != prev_seq
+                if fresh:
                     prev_seq = seq
                     shown += 1
-                if flip:
-                    frame = cv2.flip(frame, 1)
-                r = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
-                     270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(rotate)
-                if r is not None:
-                    frame = cv2.rotate(frame, r)
 
-                h, w = frame.shape[:2]
-                # Re-measured every frame so resizing the window or changing the
-                # font size is picked up live rather than at the next launch.
-                cell = cell_size()
-                cols, rows = terminal_grid(w / h, scale, cell_aspect=cell.aspect)
-                sent_w = min(manual_width or auto_image_width(cols, w, mode, cell), w)
-                sent_h = max(1, round(h * sent_w / w))
-
-                now = time.perf_counter()
-                if now - t_fps >= 0.5:
-                    disp_fps = shown / (now - t_fps)
-                    shown, t_fps = 0, now
-
-                t_draw = time.perf_counter()
-                if mode == "iterm":
-                    body = render_iterm(frame, cols, rows, sent_w)
-                elif mode == "kitty":
-                    body = render_kitty(frame, cols, rows, sent_w)
+                # ⛔⭐ REDRAWING A FRAME THE TERMINAL ALREADY HAS IS PURE HARM, and it
+                # was happening constantly. The display loop runs faster than the
+                # camera delivers — at 30 fps capture and a ~18 ms draw it goes round
+                # about 55 times a second — so nearly half of every second was spent
+                # re-encoding and re-transmitting an identical picture. In kitty mode
+                # each of those redraws also deleted and replaced the image, which is
+                # **the flicker Julien reported**: "some frames seem to not be drawn".
+                # Skipping them halves the terminal's load and removes half the
+                # flashes. `dirty` covers keypresses, which must redraw at once
+                # rather than waiting for the next frame.
+                if not (fresh or dirty):
+                    time.sleep(0.002)
                 else:
-                    body = render_ansi(frame, cols, rows)
-                sys.stdout.write("\x1b[H" + body)
+                    dirty = False
+                    if flip:
+                        frame = cv2.flip(frame, 1)
+                    r = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180,
+                         270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(rotate)
+                    if r is not None:
+                        frame = cv2.rotate(frame, r)
 
-                # ⭐ The status line answers "did that keypress do anything?" — which
-                # is the question that made keys 1-6 look broken. Every number a key
-                # can change is on screen: the capture size, the size actually sent
-                # to the terminal, the cell grid, and what the draw costs.
-                detail = ("blocks — 2 px per cell" if mode == "blocks"
-                          else f"sent {sent_w}x{sent_h}"
-                               f"{' (fixed)' if manual_width else ' (auto)'}")
-                cell_note = (f"cell {cell.width:.0f}x{cell.height:.0f}px"
-                             if cell.measured else
-                             f"cell {cell.width:.0f}x{cell.height:.0f}px ASSUMED")
-                # A draw cost past half the frame interval means the terminal, not
-                # the camera, is now the bottleneck — and it is fixable from here.
-                budget = 1000.0 / max(1.0, grab.capture_fps())
-                warn = "   ⚠️ draw is over half the frame — press [ for less detail" \
-                    if draw_ms > 0.5 * budget else ""
-                sys.stdout.write(
-                    f"\x1b[0m\n{label}capture {w}x{h} · {detail} · {mode} · "
-                    f"{cols}x{rows} cells · {cell_note}\x1b[K\n"
-                    f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured fps · "
-                    f"draw {draw_ms:4.1f} ms{warn}\x1b[K\n"
-                    f"q quit · f mirror · r rotate · b draw mode · +/- pane · "
-                    f"1-6 capture size · [ ] detail · 0 auto\x1b[K"
-                )
-                sys.stdout.flush()
-                # ⭐ The draw cost is displayed because it is the latency the SOFTWARE
-                # controls. If it approaches the frame interval the terminal cannot
-                # keep up, output backs up in the pipe, and lag grows without any
-                # single component looking wrong. Seeing it makes that diagnosable.
-                draw_ms = (time.perf_counter() - t_draw) * 1000.0
+                    h, w = frame.shape[:2]
+                    # Re-measured every frame so resizing the window or changing the
+                    # font size is picked up live rather than at the next launch.
+                    cell = cell_size()
+                    cols, rows = terminal_grid(w / h, scale, cell_aspect=cell.aspect)
+                    sent_w = min(manual_width or auto_image_width(cols, w, mode, cell), w)
+                    sent_h = max(1, round(h * sent_w / w))
+
+                    now = time.perf_counter()
+                    if now - t_fps >= 0.5:
+                        disp_fps = shown / (now - t_fps)
+                        shown, t_fps = 0, now
+
+                    t_draw = time.perf_counter()
+                    if mode == "iterm":
+                        body = render_iterm(frame, cols, rows, sent_w)
+                    elif mode == "kitty":
+                        body = render_kitty(frame, cols, rows, sent_w,
+                                            image_id=kitty_id, previous_id=kitty_prev)
+                        kitty_id, kitty_prev = kitty_prev, kitty_id
+                    else:
+                        body = render_ansi(frame, cols, rows)
+                    sys.stdout.write("\x1b[H" + body)
+
+                    # ⭐ The status line answers "did that keypress do anything?" —
+                    # which is the question that made keys 1-6 look broken. Every
+                    # number a key can change is on screen: the capture size, the size
+                    # actually sent to the terminal, the cell grid, the draw cost.
+                    detail = ("blocks — 2 px per cell" if mode == "blocks"
+                              else f"sent {sent_w}x{sent_h}"
+                                   f"{' (fixed)' if manual_width else ' (auto)'}")
+                    cell_note = (f"cell {cell.width:.0f}x{cell.height:.0f}px"
+                                 if cell.measured else
+                                 f"cell {cell.width:.0f}x{cell.height:.0f}px ASSUMED")
+                    # A draw cost past half the frame interval means the terminal, not
+                    # the camera, is the bottleneck — and it is fixable from here.
+                    budget = 1000.0 / max(1.0, grab.capture_fps())
+                    warn = "   ⚠️ draw is over half the frame — press [ for less detail" \
+                        if draw_ms > 0.5 * budget else ""
+                    sys.stdout.write(
+                        f"\x1b[0m\n{label}capture {w}x{h} · {detail} · {mode} · "
+                        f"{cols}x{rows} cells · {cell_note}\x1b[K\n"
+                        f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured fps · "
+                        f"draw {draw_ms:4.1f} ms{warn}\x1b[K\n"
+                        f"q quit · f mirror · r rotate · b draw mode · +/- pane · "
+                        f"1-6 capture size · [ ] detail · 0 auto\x1b[K"
+                    )
+                    sys.stdout.flush()
+                    # ⭐ The draw cost is displayed because it is the latency the
+                    # SOFTWARE controls. If it approaches the frame interval the
+                    # terminal cannot keep up, output backs up in the pipe, and lag
+                    # grows without any single component looking wrong.
+                    draw_ms = (time.perf_counter() - t_draw) * 1000.0
 
                 for k in keys.drain():
                     if k in ("q", "\x1b"):
                         return 0
+                    dirty = True      # any recognised key changes what should be shown
                     if k == "f":
                         flip = not flip
                     elif k == "r":
@@ -1087,8 +1327,11 @@ def run_terminal(cap, args, label: str = "") -> int:  # noqa: ANN001
                     elif k == "-":
                         scale = max(0.1, scale - 0.1)
                         sys.stdout.write("\x1b[2J")
-                    elif k in "123456":
-                        w2, h2 = SIZES[int(k) - 1]
+                    elif k in "123456" and int(k) <= len(sizes):
+                        # ⚠️ Bounds-checked: a camera with fewer than six distinct
+                        # modes gets a shorter list, and an unbound key must do
+                        # nothing rather than crash the viewer mid-session.
+                        w2, h2 = sizes[int(k) - 1]
                         grab.stop()
                         # ⚠️ A camera released a moment ago is not always instantly
                         # re-openable. One retry, rather than killing the viewer and
@@ -1196,17 +1439,18 @@ def main() -> int:
     # act on the camera that was asked for. Resolution refuses rather than guessing,
     # and it prints what it chose: FINDINGS §0 #5 is about an adapter picked by index
     # that silently drove the other robot.
-    label = ""
+    label, chosen = "", None
     if args.camera:
         try:
-            args.index, cam = resolve_camera(args.camera)
+            args.index, chosen = resolve_camera(args.camera)
         except CameraLookupError as exc:
             print(f"⛔ {exc}")
             return 1
-        if cam is not None:
+        if chosen is not None:
+            cam = chosen
             label = f"{cam.short} · "
-            print(f"  {args.camera!r} → index {args.index}: {cam.short}")
-            if cam.usb in KNOWN_MAX_WIDTH:
+            print(f"  {args.camera!r} → index {args.index}: {cam.short}  (measured)")
+            if "depth" in cam.name.lower():
                 print("  ⚠️ macOS exposes only this camera's DEPTH stream over plain UVC, "
                       "so expect\n     a depth/infrared picture rather than colour. "
                       "`--list` shows which it is.")
@@ -1258,15 +1502,17 @@ def main() -> int:
         return 0
 
     if args.term:
-        return run_terminal(cap, args, label)
+        return run_terminal(cap, args, label, chosen)
 
     win = "wrist camera — q or ESC to quit"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     if args.big:
         cv2.resizeWindow(win, 1600, 900)
 
+    sizes = key_sizes(chosen)
     print("\n  q or ESC quits.   f mirrors.   r rotates 90°.")
-    print("  1..6 switch resolution: 320x180 / 320x240 / 640x360 / 640x480 / 1280x720 / 1920x1080")
+    print("  1..%d switch resolution: %s" % (len(sizes),
+                                             " / ".join(f"{w}x{h}" for w, h in sizes)))
     print("  ⭐ Drive with `teleop_session.py` in another terminal and press v there to put")
     print("     the controls in the TOOL frame — then 'forward' on the puck means forward in")
     print("     THIS picture, which is the point of having the camera.\n")
@@ -1314,8 +1560,8 @@ def main() -> int:
             elif k == ord("r"):
                 rotate = (rotate + 90) % 360
                 print(f"  rotate {rotate}°")
-            elif k in [ord(c) for c in "123456"]:
-                w2, h2 = SIZES[int(chr(k)) - 1]
+            elif k in [ord(c) for c in "123456"] and int(chr(k)) <= len(sizes):
+                w2, h2 = sizes[int(chr(k)) - 1]
                 grab.stop()
                 cap = open_camera(args.index, w2, h2, args.fps)
                 if cap is None:

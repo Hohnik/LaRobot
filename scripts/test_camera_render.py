@@ -123,14 +123,13 @@ def test_render_emits_a_colour_code_only_when_the_colour_changes() -> None:
 def test_every_offered_size_is_a_real_camera_mode() -> None:
     """⚠️ A UVC camera silently substitutes the nearest supported mode for anything
     it does not have. Julien saw 424x240 become 640x360. These are all genuine C920
-    modes, so what is asked for is what arrives."""
-    c920_modes = {
-        (160, 90), (160, 120), (176, 144), (320, 180), (320, 240), (352, 288),
-        (432, 240), (640, 360), (640, 480), (800, 448), (800, 600), (864, 480),
-        (960, 540), (1024, 576), (1280, 720), (1600, 896), (1920, 1080),
-    }
+    modes, so what is asked for is what arrives.
+
+    ⚠️ The mode set is now **measured** through AVFoundation rather than copied from
+    a datasheet. The guessed version listed 960x540, which this C920 does not have,
+    and missed 960x720 and 2560x1472, which it does."""
     for size in C.SIZES:
-        assert tuple(size) in c920_modes, f"{size} is not a C920 mode; it will be substituted"
+        assert tuple(size) in C920_MODES, f"{size} is not a C920 mode; it will be substituted"
 
 
 def test_the_size_list_spans_small_to_large() -> None:
@@ -316,27 +315,106 @@ def test_errors_can_be_unsuppressed_for_diagnosis() -> None:
 
 # -------------------------------------------------------- camera identity ----
 #
-# ⭐ These fixtures are the REAL rig, recorded on 2026-08-11: the four cameras macOS
-# listed, and exactly what Julien's `--list` printed for indices 0-3. Testing against
-# invented data would prove only that the code agrees with itself.
+# ⭐ These fixtures are the REAL rig, measured on 2026-08-11 through AVFoundation:
+# the four cameras macOS lists and the modes each one actually offers. Testing
+# against invented data would prove only that the code agrees with itself.
+#
+# ⛔ AND THE GROUND TRUTH THEY ARE TESTED AGAINST IS THE HARD-WON PART. macOS lists
+# these four in the order below. **OpenCV does not use that order.** Julien covered
+# each camera in turn and watched which index went dark: the C920 answers on index 0,
+# where macOS lists the built-in camera, and the built-in camera answers on index 2.
+# `FAKE_WIRING` encodes that measured reality, and every test here runs against it.
+
+MACBOOK_MODES = frozenset({(640, 480), (1280, 720), (1920, 1080), (1080, 1920),
+                           (1760, 1328), (1328, 1760), (1552, 1552)})
+D405_MODES = frozenset({(424, 240), (480, 270), (640, 360), (640, 480), (848, 480),
+                        (1280, 720)})
+C920_MODES = frozenset({(160, 90), (160, 120), (176, 144), (320, 180), (320, 240),
+                        (352, 288), (432, 240), (640, 360), (640, 480), (800, 448),
+                        (864, 480), (800, 600), (1024, 576), (960, 720), (1280, 720),
+                        (1600, 896), (1920, 1080), (2560, 1472)})
+IPHONE_MODES = frozenset({(640, 480), (1280, 720), (1920, 1080), (1920, 1440)})
 
 FAKE_NAMES = [
     C.MacCamera("MacBook Air Camera", "MacBook Air Camera",
-                "6C707041-05AC-0010-000D-000000000001"),
+                "6C707041-05AC-0010-000D-000000000001", MACBOOK_MODES),
     C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
-                "UVC Camera VendorID_32902 ProductID_2907", "0x121000080860b5b"),
+                "UVC Camera VendorID_32902 ProductID_2907", "0x121000080860b5b",
+                D405_MODES),
     C.MacCamera("HD Pro Webcam C920",
-                "UVC Camera VendorID_1133 ProductID_2277", "0x1120000046d08e5"),
+                "UVC Camera VendorID_1133 ProductID_2277", "0x1120000046d08e5",
+                C920_MODES),
     C.MacCamera("Julien's iPhone Camera", "iPhone12,3",
-                "AB331AB3-1E3B-4DC2-A78D-8B8200000001"),
+                "AB331AB3-1E3B-4DC2-A78D-8B8200000001", IPHONE_MODES),
 ]
 
-FAKE_PROBES = [
-    C.ProbeResult(0, True, 1920, 1080, 24, 127, False),
-    C.ProbeResult(1, True, 1280, 720, 5, 29, True),      # the D405's depth stream
-    C.ProbeResult(2, True, 1920, 1080, 15, 6, False),
-    C.ProbeResult(3, True, 1920, 1080, 30, 0, False),    # iPhone, lying face down
-]
+# index -> which camera really answers there. NOT the macOS order. See above.
+FAKE_WIRING = [C920_MODES, D405_MODES, MACBOOK_MODES, IPHONE_MODES]
+TRUE_INDEX = {"HD Pro Webcam C920": 0, "Intel(R) RealSense(TM) Depth Camera 405  Depth": 1,
+              "MacBook Air Camera": 2, "Julien's iPhone Camera": 3}
+
+
+class FakeCapture:
+    """A `cv2.VideoCapture` that behaves like a real UVC camera on this Mac.
+
+    The one behaviour that matters: **ask for a mode it does not have and it gives
+    you the nearest one it does**, silently. That was measured here in session 7
+    (424x240 came back as 640x360) and it is the property the whole identification
+    scheme rests on.
+    """
+
+    def __init__(self, modes):
+        self.modes = sorted(modes, key=lambda wh: wh[0] * wh[1])
+        self.w, self.h = self.modes[-1]
+        self._want_w = None
+
+    def isOpened(self):  # noqa: N802
+        return True
+
+    def set(self, prop, value):
+        if prop == 3:                      # CAP_PROP_FRAME_WIDTH
+            self._want_w = int(value)
+        elif prop == 4 and self._want_w:   # CAP_PROP_FRAME_HEIGHT
+            want = (self._want_w, int(value))
+            if want in self.modes:
+                self.w, self.h = want
+            else:                          # nearest by pixel count, like a real UVC cam
+                self.w, self.h = min(self.modes,
+                                     key=lambda m: abs(m[0] * m[1] - want[0] * want[1]))
+        return True
+
+    def get(self, prop):
+        return {3: self.w, 4: self.h, 5: 30.0}.get(prop, 0.0)
+
+    def read(self):
+        return True, np.zeros((self.h, self.w, 3), np.uint8)
+
+    def release(self):
+        pass
+
+
+class FakeBus:
+    """Patch `cv2.VideoCapture` so tests never touch a real camera."""
+
+    def __init__(self, wiring):
+        self.wiring = wiring
+
+    def __enter__(self):
+        self._real = C.cv2.VideoCapture
+        C.cv2.VideoCapture = lambda idx, *a, **k: (
+            FakeCapture(self.wiring[idx]) if idx < len(self.wiring) else _Closed())
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        C.cv2.VideoCapture = self._real
+
+
+class _Closed:
+    def isOpened(self):  # noqa: N802
+        return False
+
+    def release(self):
+        pass
 
 
 def test_usb_ids_are_converted_out_of_the_decimal_macos_prints() -> None:
@@ -348,36 +426,57 @@ def test_usb_ids_are_converted_out_of_the_decimal_macos_prints() -> None:
     assert FAKE_NAMES[0].usb is None, "the built-in camera is not a USB device"
 
 
-def test_names_are_paired_to_indices_and_cross_checked() -> None:
-    """The pairing is positional, so it is only worth having if it is checked."""
-    pairs, notes = C.pair_cameras(FAKE_NAMES, FAKE_PROBES)
-    assert [cam.short for _, cam in pairs][1] == "RealSense D405 (depth)"
-    assert [p.index for p, _ in pairs] == [0, 1, 2, 3]
-    assert any("cross-check" in n and "1280px" in n for n in notes), notes
+def test_every_camera_has_a_mode_that_is_its_alone() -> None:
+    """The question each camera can be identified by. If a camera has no mode of its
+    own it must return None rather than something merely likely."""
+    for cam in FAKE_NAMES:
+        others = [c for c in FAKE_NAMES if c is not cam]
+        mode = C.discriminating_mode(cam, others)
+        assert mode is not None, f"{cam.short} has no distinguishing mode"
+        assert mode in cam.modes
+        assert not any(mode in o.modes for o in others), f"{mode} is not unique"
+
+
+def test_two_identical_cameras_cannot_be_told_apart_and_it_says_so() -> None:
+    """⚠️ THIS IS COMING: the second D405 is on the desk waiting to be plugged in.
+    Two of the same model share every mode, so measurement cannot separate them and
+    the honest answer is None — not a guess with a 50% chance of driving the wrong
+    arm's view."""
+    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+                       "UVC Camera VendorID_32902 ProductID_2907", "0xOTHER", D405_MODES)
+    assert C.discriminating_mode(FAKE_NAMES[1], [twin]) is None
+
+
+def test_indices_are_identified_by_measurement_not_by_list_order() -> None:
+    """⛔⭐ THE REGRESSION TEST FOR THE BUG THAT SHIPPED, 2026-08-11.
+
+    The wiring here is the real one Julien measured by covering each camera: the C920
+    answers on index 0 and the built-in camera on index 2, while macOS lists them the
+    other way round. A positional pairing gets both wrong and is confident about it.
+    Identification by mode must get all four right.
+    """
+    with FakeBus(FAKE_WIRING):
+        found, notes = C.identify_indices(FAKE_NAMES)
+    got = {cam.name: idx for idx, cam in found if cam}
+    assert got == TRUE_INDEX, f"identified {got}, truth is {TRUE_INDEX}\n" + "\n".join(notes)
     assert not any(n.startswith("⛔") for n in notes), notes
 
 
-def test_a_pairing_that_contradicts_the_hardware_is_caught() -> None:
-    """⭐⭐ THE FALSIFIER. If macOS's order were not OpenCV's order, the D405 would
-    land on an index reporting 1920 px — and a D405's imagers are 1280 px wide, so
-    that is impossible. This is what makes the pairing survivable rather than merely
-    plausible, and it is the check that must never be quietly deleted."""
-    shuffled = [FAKE_NAMES[0], FAKE_NAMES[2], FAKE_NAMES[1], FAKE_NAMES[3]]
-    _, notes = C.pair_cameras(shuffled, FAKE_PROBES)
-    assert any(n.startswith("⛔") and "cannot exceed" in n for n in notes), notes
+def test_an_index_that_matches_nothing_is_left_unnamed() -> None:
+    """A camera macOS never listed must not inherit somebody else's name."""
+    stranger = frozenset({(1024, 768), (2048, 1536)})
+    with FakeBus([*FAKE_WIRING, stranger]):
+        found, notes = C.identify_indices(FAKE_NAMES, limit=5)
+    assert found[4][1] is None, "an unknown camera was given a name"
+    assert any("matched no camera" in n for n in notes), notes
 
 
-def test_no_name_is_attached_when_the_two_lists_disagree() -> None:
-    """⛔ A wrong name is worse than no name — it is the confident, plausible, wrong
-    answer of FINDINGS §0, and it would send the operator to the wrong camera."""
-    extra = [*FAKE_PROBES, C.ProbeResult(4, True, 640, 480, 30, 50, False)]
-    pairs, notes = C.pair_cameras(FAKE_NAMES, extra)
-    assert all(cam is None for _, cam in pairs)
-    assert any("disagree" in n for n in notes), notes
-
-    pairs, notes = C.pair_cameras([], FAKE_PROBES)
-    assert all(cam is None for _, cam in pairs)
-    assert any("indices only" in n for n in notes), notes
+def test_a_camera_macos_lists_but_no_index_answers_for_is_reported() -> None:
+    """Continuity drops out when the phone sleeps. That is normal and must be said,
+    not silently swallowed."""
+    with FakeBus(FAKE_WIRING[:3]):
+        _, notes = C.identify_indices(FAKE_NAMES)
+    assert any("never found on any index" in n and "iPhone" in n for n in notes), notes
 
 
 def test_a_depth_stream_is_told_apart_from_a_picture() -> None:
@@ -390,11 +489,22 @@ def test_a_depth_stream_is_told_apart_from_a_picture() -> None:
     assert C.frame_is_mono(colour) is False
 
 
+def test_a_frame_with_no_content_says_it_cannot_tell() -> None:
+    """⛔⭐ THE BUG JULIEN'S OUTPUT EXPOSED: a black frame has three identical
+    channels, so it was declared `MONO — depth/IR` — about his **iPhone**. It was
+    black only because the probe read it before the sensor had exposed. An
+    information-free frame must answer "unknown", never a measurement."""
+    assert C.frame_is_mono(np.zeros((40, 60, 3), np.uint8)) is None
+    assert C.frame_is_mono(np.full((40, 60, 3), 255, np.uint8)) is None
+
+
 def test_a_camera_can_be_selected_by_name() -> None:
     """The whole point: indices move on replug, names do not."""
-    for spec, want_index in (("d405", 1), ("realsense", 1), ("c920", 2),
-                             ("iphone", 3), ("builtin", 0), ("8086:0b5b", 1)):
-        idx, cam = C.resolve_camera(spec, FAKE_NAMES, FAKE_PROBES)
+    with FakeBus(FAKE_WIRING):
+        identified, _ = C.identify_indices(FAKE_NAMES)
+    for spec, want_index in (("d405", 1), ("realsense", 1), ("c920", 0),
+                             ("iphone", 3), ("builtin", 2), ("8086:0b5b", 1)):
+        idx, cam = C.resolve_camera(spec, FAKE_NAMES, identified)
         assert idx == want_index, f"{spec!r} resolved to {idx}, expected {want_index}"
         assert cam is not None
 
@@ -402,19 +512,100 @@ def test_a_camera_can_be_selected_by_name() -> None:
 def test_an_unknown_or_ambiguous_name_is_refused_never_guessed() -> None:
     """⛔ FINDINGS §0 #5: an adapter chosen by index silently drove the OTHER robot.
     Falling back to index 0 when a name does not match is the same failure."""
+    with FakeBus(FAKE_WIRING):
+        identified, _ = C.identify_indices(FAKE_NAMES)
     for spec in ("d435", "nikon"):
         try:
-            C.resolve_camera(spec, FAKE_NAMES, FAKE_PROBES)
+            C.resolve_camera(spec, FAKE_NAMES, identified)
         except C.CameraLookupError as exc:
             assert "no camera matches" in str(exc)
         else:
             raise AssertionError(f"{spec!r} resolved to something instead of refusing")
     try:
-        C.resolve_camera("camera", FAKE_NAMES, FAKE_PROBES)   # matches three of them
+        C.resolve_camera("camera", FAKE_NAMES, identified)   # matches three of them
     except C.CameraLookupError as exc:
         assert "more than one" in str(exc)
     else:
         raise AssertionError("an ambiguous name was resolved instead of refused")
+
+
+def test_a_listed_camera_that_no_index_answers_for_is_refused() -> None:
+    """macOS listing a camera is not the same as OpenCV being able to open it."""
+    with FakeBus(FAKE_WIRING[:3]):
+        identified, _ = C.identify_indices(FAKE_NAMES)
+    try:
+        C.resolve_camera("iphone", FAKE_NAMES, identified)
+    except C.CameraLookupError as exc:
+        assert "could not be identified" in str(exc)
+    else:
+        raise AssertionError("a camera that never answered was resolved anyway")
+
+
+# ------------------------------------------- what the number keys are bound to ----
+
+
+def test_the_number_keys_offer_the_cameras_OWN_modes() -> None:
+    """⛔⭐ JULIEN, 2026-08-11: *"the numbers don't allow for all the quality options.
+    They cycle between about three, and not in the correct order either."*
+
+    `SIZES` is a list of C920 modes. On the MacBook Air camera, keys 1-4 all land on
+    640x480 because a UVC camera substitutes the nearest mode it has — three distinct
+    results out of six keys, which is exactly what he saw. Bound to the device's own
+    modes, every key does something different.
+    """
+    macbook = FAKE_NAMES[0]
+    collapsed = {min(macbook.modes, key=lambda m: abs(m[0] * m[1] - w * h))
+                 for w, h in C.SIZES}
+    assert len(collapsed) <= 3, "the old bug should reproduce with the old list"
+
+    sizes = C.key_sizes(macbook)
+    assert len(set(sizes)) == len(sizes), "two keys would give the same size"
+    assert sizes == sorted(sizes, key=lambda wh: wh[0] * wh[1]), "keys must ascend"
+    assert all(s in macbook.modes for s in sizes), "offered a mode this camera lacks"
+    assert sizes[-1] == max(macbook.modes, key=lambda wh: wh[0] * wh[1]), (
+        "the last key should be the best this camera can do")
+
+
+def test_the_number_keys_fall_back_when_the_modes_are_unknown() -> None:
+    """No AVFoundation (a Linux checkout, or the optional dependency missing) means no
+    mode list. The C920 defaults are a reasonable guess and must not crash."""
+    assert C.key_sizes(None) == C.SIZES
+    assert C.key_sizes(C.MacCamera("x", "", "", frozenset())) == C.SIZES
+
+
+def test_a_camera_with_few_modes_gets_a_short_key_list() -> None:
+    """And the viewer must bounds-check it rather than crash on key 6."""
+    sparse = C.MacCamera("tiny", "", "", frozenset({(320, 240), (640, 480)}))
+    assert C.key_sizes(sparse) == [(320, 240), (640, 480)]
+
+
+# --------------------------------------------------------------- the flicker ----
+
+
+def test_the_new_image_is_placed_before_the_old_one_is_deleted() -> None:
+    """⛔⭐ THE FLICKER Julien reported. Every frame began with `a=d,d=A` — delete
+    ALL images — and only then transmitted the new one, so the screen was blank for
+    however long the terminal took to decode, 30 times a second.
+
+    Double buffering: place the new image over the old, then delete the old from
+    underneath. There must be no moment with nothing on screen.
+    """
+    img = np.zeros((90, 160, 3), np.uint8)
+    img[:] = (30, 120, 200)
+    out = C.render_kitty(img, 40, 12, image_id=991, previous_id=992)
+    assert not out.startswith("\x1b_Ga=d"), "still deleting before drawing — that blinks"
+    place, delete = out.find("a=T"), out.find("a=d")
+    assert place != -1 and delete != -1, "must both place and delete"
+    assert place < delete, "the delete must come after the placement, not before"
+    assert "i=991" in out and "i=992" in out
+    assert "d=I" in out, "d=I frees the image data; without it the terminal leaks one per frame"
+
+
+def test_the_first_frame_has_no_previous_image_to_delete() -> None:
+    img = np.zeros((90, 160, 3), np.uint8)
+    out = C.render_kitty(img, 40, 12, image_id=991, previous_id=None)
+    assert "a=d" not in out, "there is nothing to delete yet"
+    assert "i=991" in out
 
 
 # ------------------------------------------------ how much detail is sent ----
