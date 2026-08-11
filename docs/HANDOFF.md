@@ -1,11 +1,12 @@
 # Handoff — start here if you have no context
 
-> **Written 2026-08-10 ~14:00 CEST, end of session 2.** This file exists so a fresh agent, or Julien in a
-> month, can rebuild the *whole* picture without reading the chat that produced it.
+> **Written 2026-08-10, kept current — last updated 2026-08-11, end of session 9.** This file exists so a
+> fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) →
-> [ROADMAP.md](ROADMAP.md). The README is the live state; `git log` carries the reasoning for every change,
-> and the commit messages are deliberately long because they hold the *why*.
+> [ROADMAP.md](ROADMAP.md). ⚠️ **§2 below is the live state, not the README** — the README's "what works
+> right now" is session 2's snapshot and says so. `git log` carries the reasoning for every change, and the
+> commit messages are deliberately long because they hold the *why*.
 >
 > ## ⭐ If you are a fresh agent, the four things that matter most
 >
@@ -20,7 +21,7 @@
 >    one raised an exception. Check values for plausibility, never merely for the absence of an exception.
 > 4. **§5.5 is the task list**, ordered, with the reasoning for the order. Item 1 is the next thing to build.
 >
-> Run `uv run scripts/test_*.py` first — **143 headless tests, no hardware needed** — to confirm the tree
+> Run `uv run scripts/test_*.py` first — **156 headless tests, no hardware needed** — to confirm the tree
 > is sound before changing anything.
 
 ---
@@ -61,6 +62,14 @@ learning programme, this is an engineering build with hardware and deadlines. It
   ⚠️ The agent physically cannot test anything camera-related — see [FINDINGS §21.1](FINDINGS.md).
 - **Mirror-mode engagement logic** (`src/mirror.py`) — copy or mirror, staged engagement,
   14 tests. ⚠️ **The script that opens both arms and runs it does not exist yet.**
+- ⭐ **Cameras have names.** `--camera d405` / `--camera c920` selects by name instead of an
+  index that moves on replug, because macOS reports names even though OpenCV does not. The
+  name↔index pairing is *positional*, so it is cross-checked three ways and refused when the
+  checks disagree — the argument, and what would falsify it, is [FINDINGS §22](FINDINGS.md).
+- **The terminal view can get sharper**, and its keys are no longer invisible: the image sent
+  is sized from the pane, the capture and the protocol budget instead of a fixed 480 px.
+  ⛔ **The kitty protocol is PNG-only** (~25x iTerm2's JPEG cost), which is the real ceiling
+  on detail in Ghostty — measured table in [FINDINGS §21.4](FINDINGS.md).
 
 **⛔⭐ READ THIS FIRST — the arm fell on 2026-08-10, and the cause was advice in these docs.**
 
@@ -201,7 +210,7 @@ work, not repair. In the order I would do it, with the reasoning:
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
-| 6 | ⭐⭐ **The D405 wrist cameras — THEY HAVE ARRIVED. This is the next big piece** | Julien mounted one on **arm B** provisionally, the other is with **arm G**. ⚠️ **Neither is plugged in** — verified 2026-08-11 by an unbounded scan of all 14 USB devices: two CANables, two SpaceMice, the C920, an ethernet adapter and five hubs, and **no Intel/RealSense device at all**. So the first step is physical, not software. He gave the manual's link: `intelrealsense.com/get-started`. See §8 below for what to research and what to expect |
+| 6 | ⭐⭐ **The D405 wrist cameras — the next big piece, and the cheap shortcut is now closed** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **NEW 2026-08-11 (session 9): the "just use OpenCV over UVC, no SDK" shortcut gives DEPTH ONLY.** macOS lists exactly one entry for it, named `… Depth`, and no second RealSense device — so there is no colour stream to open without the SDK, and a depth picture is useless for the thing the wrist camera is *for* (driving by eye in the tool frame, §19). **So rung 2 of §8's ladder is now the real next step: `brew install librealsense`**, then `rs-enumerate-devices` to confirm firmware and `realsense-viewer` to see what the colour stream actually looks like. ⚠️ Confirm first with `--list`: the `picture` column reads `MONO` if this conclusion holds, `colour` if it is wrong. He gave the manual's link: `intelrealsense.com/get-started`. Full account: [FINDINGS §22](FINDINGS.md) |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **Give this repo a git remote** | ~57 commits exist on one Mac only. Julien has deliberately deferred pushing; not forgotten |
 
@@ -224,18 +233,19 @@ fix, and the camera at 30 fps in both window and terminal.
 
 ## 6. What to do next
 
-**Immediately:**
+⛔ **§5.5 is the task list. This section does not repeat it** — it used to, and the copy went stale within a
+day: it was still asking for PARK and the gripper to be verified on hardware after Julien had confirmed both.
+**Two ordered task lists in one file is not thoroughness, it is a second thing to keep true.** The lesson is
+the same one this repo keeps relearning about guards: anything written once and never re-derived against what
+it describes will quietly start lying.
 
-1. ⭐ **Give this repo a git remote.** ~40 commits exist only on one Mac, including everything above.
-   Julien's own private GitHub first; `Hohnik/LaRobot` is planned separately — see README §7.5 for the
-   fork-and-PR approach and the "clean" checklist. **Do not push to a collaborator's `main`.**
-2. **Work the §5.5 task list** — the axis map first (no hardware needed, so it costs nothing), then
-   verify PARK and the gripper **on hardware**, in that order. Run the tests first; they are 2 seconds:
-   `uv run scripts/test_axis_map.py && uv run scripts/test_park_target.py`
+**The one item that is not in §5.5 because it is not engineering work:**
 
-**Then, in roadmap order:** simultaneous bimanual teleop (the hard half is proven) → **recorder → MCAP in
-ABC's exact schema** (get this right and the whole training half works unmodified; get it wrong and every
-demo must be re-collected) → cameras.
+⭐ **Give this repo a git remote.** ~57 commits exist only on one Mac, including every hardware finding
+above and four documents written specifically so a contextless reader could recover them. Julien's own
+private GitHub first; `Hohnik/LaRobot` is planned separately — see README §7.5 for the fork-and-PR approach
+and the "clean" checklist. **Do not push to a collaborator's `main`.** He has deliberately deferred this;
+it is not forgotten, and it is the only single-point-of-failure left in the project.
 
 ## 7. Session log
 
@@ -246,13 +256,20 @@ demo must be re-collected) → cameras.
 | 3 | 2026-08-10, ~14:25-15:xx CEST | **No hardware touched.** Full axis remapping built (`src/axis_map.py`, `scripts/map_axes.py`) with 25 tests. Four defects found **by reading** and fixed — see FINDINGS §9. The world-frame axis semantics measured in simulation instead of assumed. 34 headless tests now exist where there were none. |
 | 4 | 2026-08-10, ~15:20-16:xx CEST | ⛔ **First hardware run of session-3 code, and it went badly.** `mjpython --view` could not start; **the arm fell** in GUIDE because `--no-gripper` swaps the gravity model; and the new MAP mode **destroyed the hand-dialled axis map** (recovered from git). All three diagnosed to root cause and fixed, all three documented in [FINDINGS §11](FINDINGS.md). MAP mode replaced by **CONTROLS mode**, designed by Julien: the arm moves, one isolated axis at a time, and only keys edit the map. 43 headless tests. |
 | 5 | 2026-08-11, morning | Hardware re-checked after an overnight power cycle (all clean, no recalibration needed). **PARK confirmed working by Julien.** Fixed: the gripper buttons, which shipped broken (`b` only worked in one mode while its own hint printed in another); `q` now offers **`p` park** and the park pose defaults to the session's starting pose, making `q p d` hands-free. ⭐ **Diagnosed and fixed the "incoherent motion":** pure rotation was translating the tool point **44 cm**. The obvious singularity hypothesis was **refuted by measurement**; the cause was an unconditionally-integrated orientation goal plus an `orientation_cost` that was 10× too high — which was making rotation *worse* as well. 92 headless tests. |
-| 8 | 2026-08-11, evening | **Kitty images fixed** — they showed nothing because `f=100` means PNG and the renderer sent JPEG, with `q=2` suppressing the error that would have said so. `--term-test` added to make a silent display path speak. ⭐ **The D405 arrived and was measured**: serial `255323071773` (a real one, unlike the SpaceMice), USB SuperSpeed, and **it also enumerates as a plain UVC camera** — so OpenCV may open it with no SDK at all. `pyrealsense2` has no macOS wheels at any version (verified), but `librealsense` is a prebuilt Homebrew bottle. 143 headless tests. |
-| 7 | 2026-08-11, afternoon | **Camera terminal view** — aspect-ratio stretch fixed (it ignored the source aspect entirely), real C920 modes offered down to 320×180 (a UVC camera silently substitutes the nearest mode, which is why 424×240 became 640×360), and **iTerm2/kitty inline images implemented** so the block renderer is a fallback rather than the only option. `b` had been a two-way toggle whose sides could be identical, so it looked broken. **Latency measured at ~2 ms of draw cost — the rest is the camera hardware.** ⭐ **Mirror-mode logic built** (`src/mirror.py`), whose own tests caught a hidden 5 rad/s jump at the guard handover and a length mismatch. 123 → 138 headless tests. |
-| 6 | 2026-08-11, midday | Arms **renamed B and G** to match their physical labels, config migrated with every value verified byte-identical. **Per-frame control maps** — each frame owns its wiring and `m` describes the frame you are actually in, with tool-frame labels measured from the model. New frames are **seeded from the world map** so nothing is re-tuned from scratch. **Camera fixed: the 5 fps was my own frame-draining loop**, not USB bandwidth — `grab()` blocks on macOS, so "draining" waited for five frames. **Speed lag diagnosed as a singularity problem**, not a speed problem, and throttled at the source. 109 headless tests. |
+| 6 | 2026-08-11, ~14:00-14:35 | Arms **renamed B and G** to match their physical labels, config migrated with every value verified byte-identical. **Per-frame control maps** — each frame owns its wiring and `m` describes the frame you are actually in, with tool-frame labels measured from the model. New frames are **seeded from the world map** so nothing is re-tuned from scratch. **Camera fixed: the 5 fps was my own frame-draining loop**, not USB bandwidth — `grab()` blocks on macOS, so "draining" waited for five frames. **Speed lag diagnosed as a singularity problem**, not a speed problem, and throttled at the source. 109 headless tests. |
+| 7 | 2026-08-11, ~15:00-15:47 | **Camera terminal view** — aspect-ratio stretch fixed (it ignored the source aspect entirely), real C920 modes offered down to 320×180 (a UVC camera silently substitutes the nearest mode, which is why 424×240 became 640×360), and **iTerm2/kitty inline images implemented** so the block renderer is a fallback rather than the only option. `b` had been a two-way toggle whose sides could be identical, so it looked broken. **Latency measured at ~2 ms of draw cost — the rest is the camera hardware.** ⭐ **Mirror-mode logic built** (`src/mirror.py`), whose own tests caught a hidden 5 rad/s jump at the guard handover and a length mismatch. 123 → 138 headless tests. |
+| 8 | 2026-08-11, ~16:10-16:29 | **Kitty images fixed** — they showed nothing because `f=100` means PNG and the renderer sent JPEG, with `q=2` suppressing the error that would have said so. `--term-test` added to make a silent display path speak. ⭐ **The D405 arrived and was measured**: serial `255323071773` (a real one, unlike the SpaceMice), USB SuperSpeed, and **it also enumerates as a plain UVC camera** — so OpenCV may open it with no SDK at all. `pyrealsense2` has no macOS wheels at any version (verified), but `librealsense` is a prebuilt Homebrew bottle. 143 headless tests. |
+| 9 | 2026-08-11, ~16:30 CEST | **No hardware touched.** ⭐ **Cameras have names** — `--camera d405` works, because macOS reports what OpenCV will not. The pairing is *positional*, so it is cross-checked three ways and refused outright when the checks disagree ([FINDINGS §22](FINDINGS.md)). ⭐ **The D405's UVC shortcut turns out to be DEPTH ONLY** — macOS exposes one entry, named `… Depth` — which closes the "no SDK needed" path for teleop and makes `brew install librealsense` the next real step rather than an upgrade. Fixed Julien's *"the resolution is stuck … pressing the numbers doesn't do anything"*: keys 1-6 changed the **capture** while the image sent to the terminal stayed pinned at 480 px, so they were **working perfectly and invisible**. Measured the PNG-vs-JPEG gap that makes kitty mode soft (~25x on both time and bytes) — the kitty protocol has no JPEG at all. 143 → 156 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed
 instead of wall-clock read. Read the clock.
+
+⭐ **Sessions 6-9 are timed from the commit clock (`git log --date=format:'%H:%M'`), not from memory** — and
+doing that turned up two defects in this very table. Sessions 6, 7 and 8 were logged **out of order** (8, 7,
+6), and session 8 was labelled *"evening"* when its commits are 16:13-16:29, which would have made session 9
+at 16:30 look like it came first. **A log that is complete and mis-ordered still misleads** — the placement
+lesson again, in the one table whose entire job is sequence.
 
 ⭐ **Session 3's lesson: the bench is not where the cheap defects are.** Nothing was plugged in, and it
 still turned up a path that would have released a raised arm (PARK with `--no-gripper`), a thermal test
@@ -290,18 +307,23 @@ one of which dropped 4.3 kg. Two specific process faults worth carrying:
 | **link speed** | **SuperSpeed (5 Gbps), `Device Speed = 3`** | ⭐ it negotiated **USB 3**, not USB 2. Bandwidth is not a problem for one camera. Re-check when the second is added |
 | **UVC** | `Intel(R) RealSense(TM) Depth Camera 405  Depth` → `UVC Camera VendorID_32902 ProductID_2907` | ⭐⭐ **see below — this is the shortcut** |
 
-### ⭐⭐ The shortcut: it is also a plain UVC camera
+### ⛔ The shortcut was real but it is DEPTH ONLY — measured 2026-08-11, session 9
 
-macOS lists the D405 as a standard **UVC camera**, which means **OpenCV can open it with no SDK at all**.
-`scripts/camera_view.py --list` should now show it as an extra index.
+macOS lists the D405 as a standard **UVC camera**, so OpenCV opens it with no SDK at all, and
+`camera_view.py --list` shows it as index 1 on the current rig.
 
-**That is very likely enough for teleop today.** Driving the arm from the camera's point of view needs a
-*picture*, not a point cloud — and the whole control-frame machinery (`v` → tool frame) is already built and
-waiting. ⭐ **Try this before spending an hour on the SDK.**
+**The question this section used to leave open — "whether the RGB stream appears as a separate index" — is
+now answered: it does not.** macOS lists exactly **one** entry for the D405, named `… Depth`, and there is no
+second RealSense device on the bus. So what OpenCV can open without the SDK is a 16-bit depth stream widened
+into three identical channels, which `--list` reports in its `picture` column as `MONO`.
 
-⚠️ Caveats: the entry macOS shows is the **Depth** stream, which over UVC is 16-bit and will look wrong
-rendered as ordinary colour. Whether the RGB stream appears as a separate index is **not yet known** — check
-`--list`. And a UVC-only path gives no depth alignment, no intrinsics and no camera controls.
+⛔ **That closes the cheap path for teleop.** Driving the arm from the camera's point of view needs a
+*picture* — the control-frame machinery (`v` → tool frame) is built and waiting for one — and depth is not it.
+**Rung 2 of the ladder below is therefore the next real step, not an optional upgrade.**
+
+⚠️ Re-check rather than inherit this: run `--list` and read the `picture` column. `colour` there would mean
+this conclusion is wrong and the shortcut lives. A UVC-only path would in any case give no depth alignment,
+no intrinsics and no camera controls.
 
 ### The SDK situation — measured, and the prediction held
 
@@ -322,9 +344,14 @@ realsense-viewer               # GUI: streams, depth, and the camera's own contr
 ⚠️ **The Homebrew formula does not necessarily build the PYTHON bindings** — those usually need a source
 build with `-DBUILD_PYTHON_BINDINGS=ON`. So the likely ladder, cheapest first:
 
-1. **UVC via OpenCV** — nothing to install. Probably enough for teleop.
-2. **`brew install librealsense`** — prebuilt tools, confirms hardware and firmware, gives a viewer.
-3. **Source build with Python bindings** — only if depth data is genuinely needed in Python.
+1. ~~**UVC via OpenCV**~~ — **tried, and it reaches depth only** (see above). Still worth keeping: it is
+   how the camera is identified and named. It is not a route to a picture.
+2. ⭐ **`brew install librealsense`** — **now the next real step, not an optional upgrade.** Prebuilt
+   tools, confirms hardware and firmware, and `realsense-viewer` shows what the colour stream looks like
+   before any code is written against it.
+3. **Source build with Python bindings** — only if depth data, or colour *inside Python*, is genuinely
+   needed. ⚠️ Find out in step 2 whether the viewer's colour stream is the left imager's mono image or a
+   real RGB picture; the D405 has no separate colour sensor, and that decides how useful this path is.
 
 ⭐ **This is the same shape as the CAN SDK problem** ([FINDINGS §2](FINDINGS.md)): a vendor SDK that assumes
 a platform we are not on. That was solved by patching from *outside* while keeping `third_party/` a clean

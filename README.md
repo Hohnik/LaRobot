@@ -92,6 +92,17 @@ Enumerated on 2026-08-07 via `ioreg`, `system_profiler` and `hid.enumerate()`.
 **No USB-serial devices exist** (`/dev/cu.*` holds only Bluetooth and the debug console). The arm is
 therefore **not** a serial device — it is CAN, reached through the CANable.
 
+> **⭐ Attached SINCE that snapshot** — the table above is dated on purpose and is left as it was measured:
+>
+> | Device | ID | State |
+> |---|---|---|
+> | **second CANable + second YAM arm** | `1d50:606f` ×2 | ✅ both arms driven; adapters resolved **by serial**, `B` = `2081337C594E5018`, `G` = `20593383594E5018` |
+> | **second SpaceMouse** | `256f:c635` ×2 | ✅ both usable. ⚠️ **Both report empty serials**, so they are assigned by asking the operator to wiggle one |
+> | **Intel RealSense D405** *(mounted on arm B)* | `8086:0b5b`, serial `255323071773` | ✅ present, USB SuperSpeed, opens over plain UVC — but ⛔ **depth stream only**, no colour without `librealsense` ([FINDINGS §22](docs/FINDINGS.md)) |
+> | **second D405** *(with arm G)* | — | ⚠️ not plugged in; only one serial is on the bus |
+>
+> Cameras are now selected **by name** (`--camera d405`), not by an index that moves on replug.
+
 ⚠️ **No 3Dconnexion driver is installed or running**, which is *good*: nothing claims the HID device
 exclusively, so raw access works with no vendor software and no permission prompt.
 
@@ -183,6 +194,12 @@ here, and 7 motors × 2 frames × 100 Hz is a real load.
   SpaceMouse. Irrelevant for the MVP.
 
 ## 4. What works right now
+
+> ⚠️ **This section is session 2's snapshot, and it is no longer the live state** — it lists the probe
+> scripts that existed when the arm had never been driven. Everything since (teleop, gravity compensation,
+> PARK, the gripper, control frames, mirror logic, the camera view) is in
+> **[docs/HANDOFF.md](docs/HANDOFF.md) §2**, which separates what is *confirmed on hardware* from what is
+> only verified in simulation. **Two "what works" lists is one too many; that one is authoritative.**
 
 ```bash
 uv run scripts/probe_hardware.py    # enumerate everything, open the SpaceMouse, listen 5 s

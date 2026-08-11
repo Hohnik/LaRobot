@@ -1068,3 +1068,162 @@ hardware; the D405 wrist cameras, when they arrive, are the real answer.
 ⚠️ **Do not spend more time optimising the software path.** It was measured at 2 ms
 against a ~200 ms budget. The next person to look at this should confirm that number
 is still ~2 ms and then stop.
+
+### 21.4 ⛔⭐ "The resolution is stuck and the number keys do nothing" — 2026-08-11
+
+Julien, session 9: *"the resolution is not great. It definitely doesn't let me go back
+up to 1920x1080 … When pressing the numbers, that doesn't matter. It doesn't do
+anything."*
+
+**The keys were working perfectly. They were invisible.** `1`-`6` change the **capture**
+resolution — what the camera sends the Mac — and the viewer then handed the terminal an
+image resized to `--image-width`, which defaulted to a **fixed 480 px**. So a 1080p
+capture and a 480p capture produced a pixel-identical picture, and the only evidence
+anything had happened was a `1280x720` → `1920x1080` string in a status line nobody
+reads while looking at a picture.
+
+⚠️ **This is the same defect shape as `b` toggling between two identical states
+([21.2](#212-a-two-way-toggle-whose-sides-can-be-identical-is-not-a-toggle)), and it is
+worth naming as a class: a control whose effect is not observable is indistinguishable
+from a broken one.** The fix is never only "make it work" — it is "make the effect
+visible". Every number a key can now change is on the status line.
+
+**The fix: three ceilings, smallest wins.** The image sent to the terminal is now
+`min(pane in real pixels, what was actually captured, the protocol's budget)`:
+
+1. **The pane.** Pixels beyond what the terminal can display are scaled straight back
+   out again — pure cost.
+2. **The capture.** Upscaling before transmission invents nothing and costs bytes. This
+   is the ceiling that makes keys `1`-`6` visible: a bigger capture now genuinely
+   produces a bigger image.
+3. **The protocol's budget**, which is the interesting one.
+
+#### The budget, measured — and why Ghostty is soft where iTerm2 would not be
+
+⛔ **The kitty graphics protocol has exactly one compressed format, and it is PNG.**
+`f` takes `24` (raw RGB), `32` (raw RGBA) or `100` (PNG). **There is no JPEG.** iTerm2's
+inline-image escape, by contrast, carries whatever the image is — JPEG included.
+
+MEASURED 2026-08-11, best of five, on a synthetic but realistic 16:9 frame (gradients,
+hard edges, text and sensor grain; a flat wall is cheaper, pure noise dearer):
+
+| width | kitty: PNG level 1 | iTerm2: JPEG q60 | PNG as % of a 33 ms frame |
+|---|---|---|---|
+| 480 px | 3.8 ms, 277 KB/frame | 0.1 ms, 16 KB | 11% |
+| 640 px | 6.7 ms, 391 KB | 0.3 ms, 26 KB | 20% |
+| 960 px | 16.1 ms, 1266 KB | 0.6 ms, 46 KB | 48% |
+| 1280 px | 28.8 ms, 2259 KB | 1.1 ms, 70 KB | 87% |
+
+**~25x on time, ~30x on bytes.** That single protocol fact is the whole reason the
+terminal view is soft, and it is not a bug anyone can fix in this repo. Hence the caps:
+**720 px for kitty/Ghostty, 1280 px for iTerm2.** Sizes are `KB/frame`; multiply by 30
+for the per-second load into a pty that also has to draw them.
+
+⚠️ Compression level is **not** the lever. At 640 px: level 0 = 2.1 ms but 676 KB;
+level 1 = 6.7 ms, 391 KB; level 6 = 28.8 ms for 371 KB. Level 6 costs 4x the time for
+5% of the size. Level 1 stays.
+
+⭐ **The open question worth ten seconds:** does Ghostty also accept iTerm2's escape?
+If it does, the sharpness ceiling doubles for free. `--term-test` now sends **one image
+in each protocol** so the answer is a look at the screen rather than a guess.
+
+#### The second silent guess: the character cell was assumed to be exactly 2:1
+
+The grid geometry needs to know how tall a character cell is relative to its width, and
+it hard-coded `2`. Whenever the font disagrees, a 16:9 picture is displayed stretched —
+**the same bug Julien caught in a screenshot in session 7, in a second disguise.**
+
+Terminals already know: `TIOCGWINSZ` returns `ws_xpixel`/`ws_ypixel` beside the row and
+column counts. kitty and Ghostty fill them in; Apple Terminal reports zeros; a piped or
+captured run has no terminal at all. So the cell is now **measured** where possible, and
+where it is not, the status line prints `ASSUMED` — because a fallback you cannot see is
+indistinguishable from a bug, which is this section's whole theme.
+
+---
+
+## 22. ⭐ Which camera is which — names, and exactly how far they can be trusted
+
+**The problem.** Four cameras are visible on this Mac: the built-in one, the D405 on
+arm B, the C920, and Julien's iPhone over Continuity. **OpenCV opens them by integer
+index and reports no name at all** — verified on OpenCV 5.0, where `cv2.videoio_registry`
+enumerates *backends* and never *devices*. Indices also move: they are an AVFoundation
+artefact and change when something is replugged, which is [§0 #5](#0-the-one-thing-to-internalise-before-touching-anything)
+— *an adapter chosen by index silently retargeted the other robot* — with a different
+cable.
+
+**The way out: macOS will say what OpenCV will not.**
+
+```bash
+system_profiler -json SPCameraDataType
+```
+
+gives, in enumeration order, each camera's name, model ID and — for USB devices — its
+vendor and product ID. ⭐ **It needs no camera permission**, because it enumerates
+rather than captures, so unlike everything else in [§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)
+**the agent can run it.** That is the only reason naming was solvable at all.
+
+⚠️ **macOS prints the USB IDs in decimal**: `VendorID_32902 ProductID_2907` is
+`8086:0b5b`. Every datasheet and USB tool speaks hex. Converted once, in `MacCamera.usb`.
+
+### What is actually attached, 2026-08-11
+
+| # | name macOS reports | USB | what `--list` saw |
+|---|---|---|---|
+| 0 | MacBook Air Camera | *(built-in)* | 1920x1080 @ 24 fps, bright |
+| 1 | `Intel(R) RealSense(TM) Depth Camera 405  Depth` | `8086:0b5b` | **1280x720** @ 5 fps |
+| 2 | HD Pro Webcam C920 | `046d:08e5` | 1920x1080 @ 15 fps, nearly black |
+| 3 | Julien's iPhone Camera (`iPhone12,3`) | *(Continuity)* | 1920x1080, **no frame on the first run**, then 30 fps at brightness 0 |
+
+### ⛔ The pairing is POSITIONAL — an inference — so here is the whole argument
+
+macOS's n-th camera is assumed to be OpenCV's n-th index. This repo does not accept
+inferences quietly, so the assumption is stated, checked three ways, and refused when
+any check fails.
+
+1. **Membership agrees.** macOS listed 4 cameras and indices 0-3 opened, while OpenCV
+   itself refused index 4 with `out device of bound (0-3): 4` — its own error message
+   is a device count, and it matches. `--list` deliberately probes **one index past the
+   name list** so that a disagreement is discoverable at all.
+2. ⭐ **A falsifier that could have fired and did not.** A D405's imagers are **1280 px
+   wide** and every stream it offers is at most that. On this rig exactly one index
+   reported 1280x720 and every other reported 1920x1080 — so if the order were shuffled,
+   the D405 would have to be sitting on a 1920-wide index, and `KNOWN_MAX_WIDTH` would
+   fire. There is a test that shuffles the order and demands the ⛔.
+3. **An independent signal from the picture itself.** `frame_is_mono()` reports whether
+   the three colour channels are identical. The D405's UVC entry carries depth, so they
+   are; a colour camera's never are, because white balance alone separates them.
+
+⛔ **When the counts disagree, no name is attached at all.** A wrong name is worse than
+no name — it is the confident, plausible, wrong answer of §0 pointed at a camera.
+
+**To falsify it yourself:** unplug one camera, re-run `--list`, and check that the index
+that vanished is the one that was carrying its name.
+
+### ⭐ The D405 answer §8 of the handoff was waiting for: UVC gives DEPTH ONLY
+
+`HANDOFF.md` §8 recorded that the D405 also enumerates as a plain UVC camera and asked
+whether its **colour** stream appears as a separate index. **It does not.** macOS lists
+exactly one entry for it, named `… Depth`, and there is no second RealSense device on
+the bus.
+
+**Consequence, and it matters for the roadmap:** the "just use OpenCV, no SDK needed"
+shortcut gets a **depth/infrared** stream, not a picture. Depth is not useless — but it
+is useless for the thing the wrist camera exists for, which is *driving the arm by eye*
+in the tool frame ([§19](#19--driving-from-the-cameras-point-of-view-is-a-frame-question-not-a-camera-question)).
+So a colour picture from the D405 needs the librealsense route after all
+(`brew install librealsense`, HANDOFF §8's ladder rung 2), and the UVC shortcut is
+**not** the free win it looked like.
+
+⚠️ Confirm before building on it: run `--list` and read the `picture` column. `MONO`
+confirms depth; `colour` would mean this conclusion is wrong and the shortcut lives.
+
+### Using it
+
+```bash
+uv run scripts/camera_view.py --list                    # names, indices, and the checks
+uv run scripts/camera_view.py --camera c920 --term      # select by name, not index
+```
+
+`--camera` accepts any part of the name, plus the aliases `d405`, `realsense`, `c920`,
+`iphone`, `builtin`, and a `vid:pid`. It **refuses** on no match or an ambiguous one and
+never falls back to index 0.

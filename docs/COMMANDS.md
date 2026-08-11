@@ -150,9 +150,32 @@ report an empty serial number, so there is nothing else to key an assignment off
 Two terminals. Neither the camera process nor the frame setting can move a motor on its own.
 
 ```bash
-uv run scripts/camera_view.py --list            # which index is the arm-mounted camera?
-uv run scripts/camera_view.py --index 1 --big   # the live view
+uv run scripts/camera_view.py --list                  # names, indices, and the checks
+uv run scripts/camera_view.py --camera c920 --term    # ⭐ by NAME, drawn in this terminal
+uv run scripts/camera_view.py --camera c920 --big     # by name, in a window
 ```
+
+⭐ **Select by name, not by index.** The index is an AVFoundation artefact that moves on replug; the name
+does not. `--camera` takes any part of the name plus the aliases `d405`, `realsense`, `c920`, `iphone`,
+`builtin`, or a `vid:pid`. It **refuses** when a name matches nothing or matches more than one camera, and
+never falls back to index 0 — [FINDINGS §22](FINDINGS.md) has the argument for how far the name↔index
+pairing can be trusted, and what would falsify it.
+
+**Keys in the terminal view** (`--term`):
+
+```
+q quit · f mirror · r rotate · b draw mode (blocks / iterm / kitty)
++ / -   how much of the pane the picture fills
+1-6     CAPTURE size — what the camera sends the Mac
+[ ]     DETAIL — what the Mac sends the terminal;  0 back to automatic
+```
+
+⚠️ **Capture size and detail are different knobs, and the second one is the one that bites.** The image sent
+to the terminal is automatically `min(pane, capture, protocol budget)`. In **kitty/Ghostty** that budget is
+tight because the kitty graphics protocol has **no JPEG** — PNG only, ~25x the encode time and ~30x the bytes
+— so detail there costs frame rate in a way it does not in iTerm2. Watch the `draw ms` readout: past half a
+frame it warns, and `[` is the fix. ⭐ `--term-test` sends one image in **each** protocol, so if your
+terminal happens to take iTerm2's escape as well, you can have a much sharper picture for free.
 
 Then in the session, press **`v`** to cycle the control frame, or start with `--frame tool`:
 
