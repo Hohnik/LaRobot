@@ -44,14 +44,15 @@ class FakeTerminal:
         shutil.get_terminal_size = self._real
 
 
-def displayed_aspect(cols: int, rows: int) -> float:
+def displayed_aspect(cols: int, rows: int, cell_aspect: float = 2.0) -> float:
     """What the grid actually looks like on screen.
 
-    A monospace cell is ~2x taller than wide, and the half-block trick stacks two
-    pixels per cell — so one rendered pixel is roughly square and the picture's
-    on-screen aspect is `cols / (2 * rows)`.
+    A cell is `cell_aspect` times taller than it is wide, so a `cols x rows` grid
+    occupies a box of aspect `cols / (rows * cell_aspect)`. The default 2.0 is the
+    typical font shape, and was hard-coded everywhere until the terminal's real
+    pixel geometry became measurable.
     """
-    return cols / (2 * rows)
+    return cols / (rows * cell_aspect)
 
 
 def test_the_picture_keeps_its_aspect_ratio() -> None:
@@ -311,6 +312,172 @@ def test_errors_can_be_unsuppressed_for_diagnosis() -> None:
     img = np.zeros((90, 160, 3), np.uint8)
     assert "q=2" in C.render_kitty(img, 20, 6, quiet=True)
     assert "q=2" not in C.render_kitty(img, 20, 6, quiet=False)
+
+
+# -------------------------------------------------------- camera identity ----
+#
+# ⭐ These fixtures are the REAL rig, recorded on 2026-08-11: the four cameras macOS
+# listed, and exactly what Julien's `--list` printed for indices 0-3. Testing against
+# invented data would prove only that the code agrees with itself.
+
+FAKE_NAMES = [
+    C.MacCamera("MacBook Air Camera", "MacBook Air Camera",
+                "6C707041-05AC-0010-000D-000000000001"),
+    C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+                "UVC Camera VendorID_32902 ProductID_2907", "0x121000080860b5b"),
+    C.MacCamera("HD Pro Webcam C920",
+                "UVC Camera VendorID_1133 ProductID_2277", "0x1120000046d08e5"),
+    C.MacCamera("Julien's iPhone Camera", "iPhone12,3",
+                "AB331AB3-1E3B-4DC2-A78D-8B8200000001"),
+]
+
+FAKE_PROBES = [
+    C.ProbeResult(0, True, 1920, 1080, 24, 127, False),
+    C.ProbeResult(1, True, 1280, 720, 5, 29, True),      # the D405's depth stream
+    C.ProbeResult(2, True, 1920, 1080, 15, 6, False),
+    C.ProbeResult(3, True, 1920, 1080, 30, 0, False),    # iPhone, lying face down
+]
+
+
+def test_usb_ids_are_converted_out_of_the_decimal_macos_prints() -> None:
+    """⚠️ macOS writes `VendorID_32902 ProductID_2907`; every datasheet and USB tool
+    says `8086:0b5b`. Two number bases for one identifier is how the wrong device
+    gets matched."""
+    assert FAKE_NAMES[1].usb == "8086:0b5b"
+    assert FAKE_NAMES[2].usb == "046d:08e5"
+    assert FAKE_NAMES[0].usb is None, "the built-in camera is not a USB device"
+
+
+def test_names_are_paired_to_indices_and_cross_checked() -> None:
+    """The pairing is positional, so it is only worth having if it is checked."""
+    pairs, notes = C.pair_cameras(FAKE_NAMES, FAKE_PROBES)
+    assert [cam.short for _, cam in pairs][1] == "RealSense D405 (depth)"
+    assert [p.index for p, _ in pairs] == [0, 1, 2, 3]
+    assert any("cross-check" in n and "1280px" in n for n in notes), notes
+    assert not any(n.startswith("⛔") for n in notes), notes
+
+
+def test_a_pairing_that_contradicts_the_hardware_is_caught() -> None:
+    """⭐⭐ THE FALSIFIER. If macOS's order were not OpenCV's order, the D405 would
+    land on an index reporting 1920 px — and a D405's imagers are 1280 px wide, so
+    that is impossible. This is what makes the pairing survivable rather than merely
+    plausible, and it is the check that must never be quietly deleted."""
+    shuffled = [FAKE_NAMES[0], FAKE_NAMES[2], FAKE_NAMES[1], FAKE_NAMES[3]]
+    _, notes = C.pair_cameras(shuffled, FAKE_PROBES)
+    assert any(n.startswith("⛔") and "cannot exceed" in n for n in notes), notes
+
+
+def test_no_name_is_attached_when_the_two_lists_disagree() -> None:
+    """⛔ A wrong name is worse than no name — it is the confident, plausible, wrong
+    answer of FINDINGS §0, and it would send the operator to the wrong camera."""
+    extra = [*FAKE_PROBES, C.ProbeResult(4, True, 640, 480, 30, 50, False)]
+    pairs, notes = C.pair_cameras(FAKE_NAMES, extra)
+    assert all(cam is None for _, cam in pairs)
+    assert any("disagree" in n for n in notes), notes
+
+    pairs, notes = C.pair_cameras([], FAKE_PROBES)
+    assert all(cam is None for _, cam in pairs)
+    assert any("indices only" in n for n in notes), notes
+
+
+def test_a_depth_stream_is_told_apart_from_a_picture() -> None:
+    """The D405's UVC entry carries depth, not colour, so its three channels are
+    identical. A colour camera's never are — white balance alone sees to that."""
+    rng = np.random.default_rng(0)
+    grey = np.repeat(rng.integers(0, 255, (40, 60, 1), dtype=np.uint8), 3, axis=2)
+    colour = rng.integers(0, 255, (40, 60, 3), dtype=np.uint8)
+    assert C.frame_is_mono(grey) is True
+    assert C.frame_is_mono(colour) is False
+
+
+def test_a_camera_can_be_selected_by_name() -> None:
+    """The whole point: indices move on replug, names do not."""
+    for spec, want_index in (("d405", 1), ("realsense", 1), ("c920", 2),
+                             ("iphone", 3), ("builtin", 0), ("8086:0b5b", 1)):
+        idx, cam = C.resolve_camera(spec, FAKE_NAMES, FAKE_PROBES)
+        assert idx == want_index, f"{spec!r} resolved to {idx}, expected {want_index}"
+        assert cam is not None
+
+
+def test_an_unknown_or_ambiguous_name_is_refused_never_guessed() -> None:
+    """⛔ FINDINGS §0 #5: an adapter chosen by index silently drove the OTHER robot.
+    Falling back to index 0 when a name does not match is the same failure."""
+    for spec in ("d435", "nikon"):
+        try:
+            C.resolve_camera(spec, FAKE_NAMES, FAKE_PROBES)
+        except C.CameraLookupError as exc:
+            assert "no camera matches" in str(exc)
+        else:
+            raise AssertionError(f"{spec!r} resolved to something instead of refusing")
+    try:
+        C.resolve_camera("camera", FAKE_NAMES, FAKE_PROBES)   # matches three of them
+    except C.CameraLookupError as exc:
+        assert "more than one" in str(exc)
+    else:
+        raise AssertionError("an ambiguous name was resolved instead of refused")
+
+
+# ------------------------------------------------ how much detail is sent ----
+
+
+def test_a_bigger_capture_now_produces_a_bigger_image() -> None:
+    """⭐⭐ THE BUG JULIEN REPORTED, 2026-08-11: *"the resolution is stuck … pressing
+    the numbers doesn't do anything."*
+
+    Keys 1-6 changed the CAPTURE size while the image handed to the terminal stayed
+    pinned at 480 px, so a sharper capture produced a pixel-identical picture. The
+    keys were working perfectly and were invisible, which is indistinguishable from
+    broken — the same shape of defect as `b` toggling between two identical states.
+    """
+    pane = 160  # columns, i.e. a wide terminal
+    small = C.auto_image_width(pane, 320, "kitty", C.ASSUMED_CELL)
+    large = C.auto_image_width(pane, 1280, "kitty", C.ASSUMED_CELL)
+    assert large > small, "capturing more must now show more"
+
+
+def test_the_image_sent_never_exceeds_the_pane_or_the_capture() -> None:
+    """Both ceilings are pure waste past their limit: pixels beyond the pane are
+    scaled straight back out, and pixels beyond the capture were invented."""
+    tiny_pane = C.auto_image_width(40, 1920, "kitty", C.ASSUMED_CELL)
+    assert tiny_pane <= 40 * C.ASSUMED_CELL.width, "sent more than the pane can show"
+    small_capture = C.auto_image_width(200, 320, "kitty", C.ASSUMED_CELL)
+    assert small_capture <= 320, "upscaled before transmitting, which invents nothing"
+
+
+def test_kitty_gets_a_tighter_budget_than_iterm_because_png() -> None:
+    """⛔ The kitty protocol's `f` accepts 24/32/100 — raw, raw+alpha, and PNG. There
+    is no JPEG. MEASURED at 640 px: PNG level 1 is 6.7 ms and 391 KB per frame,
+    JPEG q60 is 0.3 ms and 26 KB. Roughly 25x, which is why the two protocols cannot
+    carry the same amount of detail at the same frame rate."""
+    assert C.IMAGE_WIDTH_CAP["kitty"] < C.IMAGE_WIDTH_CAP["iterm"]
+
+
+def test_the_cell_size_is_reported_as_measured_or_assumed_never_silently() -> None:
+    """A fallback you cannot see is indistinguishable from a bug. Under the test
+    harness there is no terminal at all, so this must report the assumed cell."""
+    cell = C.cell_size()
+    assert cell.measured is False, "no tty here, so nothing can have been measured"
+    assert abs(cell.aspect - 2.0) < 0.01, "the assumed cell should be the classic 2:1"
+
+
+def test_a_non_2to1_cell_changes_the_grid_so_the_picture_stays_square() -> None:
+    """⭐ The grid assumed every font was exactly 2:1. When it is not — and Retina
+    cells often are not — a 16:9 picture comes out stretched, which is the bug
+    Julien caught in a screenshot, in a second disguise."""
+    for k in (1.8, 2.0, 2.4):
+        with FakeTerminal(200, 60):
+            cols, rows = C.terminal_grid(16 / 9, cell_aspect=k)
+        got = displayed_aspect(cols, rows, k)
+        assert abs(got - 16 / 9) / (16 / 9) < 0.10, (
+            f"cell aspect {k}: grid {cols}x{rows} displays as {got:.2f}, not 1.78")
+
+
+def test_the_grid_leaves_room_for_the_status_lines() -> None:
+    """Three lines of status live under the picture. Reserve too few and the picture
+    pushes them off the bottom — or scrolls the whole view, every frame."""
+    with FakeTerminal(100, 30):
+        _, rows = C.terminal_grid(16 / 9)
+    assert rows <= 30 - 3, f"{rows} rows leaves no room for the status lines"
 
 
 if __name__ == "__main__":

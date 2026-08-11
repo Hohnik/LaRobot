@@ -23,11 +23,14 @@ Three independent reasons, and they all point the same way:
 3. **It survives the bimanual refactor untouched**, because it shares nothing with
    the session.
 
-⚠️ **OpenCV on macOS selects cameras by INDEX, not by name**, and this repo has a
-hard-won rule against selecting hardware by index (FINDINGS §0 #5: an adapter
-chosen by index silently retargeted the wrong robot). AVFoundation gives no way
-around it, so instead of pretending, `--list` makes the ambiguity visible: it opens
-each index and reports what answered. Check it after any replug.
+⭐ **CAMERAS NOW HAVE NAMES.** OpenCV still opens them by INDEX, and this repo has a
+hard-won rule against selecting hardware by index (FINDINGS §0 #5: an adapter chosen
+by index silently retargeted the wrong robot). OpenCV itself offers no name API — but
+**macOS does**, via `system_profiler SPCameraDataType`, so `--camera d405` works and
+`--list` prints a name beside every index. The mapping is positional and therefore an
+inference, so it is **cross-checked against the picture each device actually returns**
+and refused outright when the two lists disagree. See `pair_cameras()` for the whole
+argument, including what would falsify it.
 
 LATENCY AND FRAME RATE — WHAT ACTUALLY MATTERED HERE
 -----------------------------------------------------
@@ -54,11 +57,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
+import json
 import os
 import shutil
+import struct
+import subprocess
 import sys
+import termios
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -81,36 +90,320 @@ MAX_PROBE_INDEX = 6
 SIZES = [(320, 180), (320, 240), (640, 360), (640, 480), (1280, 720), (1920, 1080)]
 
 
-def list_cameras() -> None:
-    """Open each index in turn and report what answers.
+# ============================================================================
+#  CAMERA IDENTITY — which index is which camera
+# ============================================================================
+#
+# ⭐ WHY THIS SECTION EXISTS. Four cameras are visible on this Mac — the built-in
+# one, the D405 on arm B, the C920, and Julien's iPhone over Continuity — their
+# indices move on replug, and OpenCV reports **no name at all** (verified on OpenCV
+# 5.0: `cv2.videoio_registry` exposes backends, never devices). Driving the arm from
+# the wrong camera's point of view is exactly the class of mistake FINDINGS §0 #5
+# was written about, where an adapter chosen by index silently retargeted the other
+# robot.
+#
+# The way out is that **macOS will tell us the names** even though OpenCV will not.
 
-    ⚠️ Indices are an OpenCV/AVFoundation artefact and **can change on replug**.
-    This is deliberately a report rather than an auto-pick: the operator can tell
-    the built-in FaceTime camera from a C920 by looking at the picture, and no
-    property reliably does it for them.
+
+@dataclass(frozen=True)
+class MacCamera:
+    """One camera as macOS reports it, via `system_profiler SPCameraDataType`."""
+
+    name: str
+    model_id: str
+    unique_id: str
+
+    @property
+    def usb(self) -> str | None:
+        """`vid:pid` in hex, or None for a camera that is not USB.
+
+        ⚠️ macOS writes the IDs in **decimal** inside the model string:
+        `UVC Camera VendorID_32902 ProductID_2907` is `8086:0b5b`. Every datasheet,
+        `ioreg` dump and USB tool speaks hex, so convert once here rather than
+        leaving two number bases loose in the codebase.
+        """
+        vid = pid = None
+        for token in self.model_id.split():
+            if token.startswith("VendorID_"):
+                vid = token.removeprefix("VendorID_")
+            elif token.startswith("ProductID_"):
+                pid = token.removeprefix("ProductID_")
+        if not (vid and pid and vid.isdigit() and pid.isdigit()):
+            return None
+        return f"{int(vid):04x}:{int(pid):04x}"
+
+    @property
+    def short(self) -> str:
+        """A name that fits on a status line without pushing the numbers off it."""
+        tidy = " ".join(self.name.replace("(R)", "").replace("(TM)", "").split())
+        return SHORT_NAMES.get(self.usb or "", tidy)
+
+
+# Friendly names for the hardware actually on this rig. Keyed by USB id because
+# that is stable — the marketing string is not (`HD Pro Webcam C920` is one of
+# several names Logitech ships for the same camera).
+SHORT_NAMES = {
+    "8086:0b5b": "RealSense D405 (depth)",
+    "046d:08e5": "C920 webcam",
+}
+
+# ⚠️ The widest frame each device can physically produce. This is the **falsifier**
+# for the name↔index pairing below: a D405 that claims 1920 px is not a D405.
+#
+# The D405's imagers are 1280 px wide and every stream it offers — depth, colour
+# from the left imager, infrared — is at most that. If one ever reports wider, this
+# check is wrong and the pairing needs a different discriminator; say so rather than
+# deleting the check.
+KNOWN_MAX_WIDTH = {"8086:0b5b": 1280}
+
+_MAC_CAMERA_CACHE: list[MacCamera] | None = None
+
+
+def mac_cameras(refresh: bool = False) -> list[MacCamera]:
+    """The cameras macOS knows about, in **its** enumeration order.
+
+    ⭐ `system_profiler` needs no camera permission — it enumerates rather than
+    captures — so unlike everything else in this file, the agent can run it. That is
+    why naming was solvable at all (FINDINGS §21.1: the agent cannot open a stream).
+
+    Takes ~1 s, hence the cache. Returns `[]` on any failure — a missing name list
+    must degrade to "indices only", never to a guess.
     """
-    print("probing camera indices — this opens each one briefly\n")
-    found = 0
-    for idx in range(MAX_PROBE_INDEX):
+    global _MAC_CAMERA_CACHE  # noqa: PLW0603
+    if _MAC_CAMERA_CACHE is not None and not refresh:
+        return _MAC_CAMERA_CACHE
+    cams: list[MacCamera] = []
+    try:
+        out = subprocess.run(["system_profiler", "-json", "SPCameraDataType"],
+                             capture_output=True, text=True, timeout=30, check=False)
+        for entry in json.loads(out.stdout).get("SPCameraDataType", []):
+            cams.append(MacCamera(entry.get("_name", "?"),
+                                  entry.get("spcamera_model-id", ""),
+                                  entry.get("spcamera_unique-id", "")))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        cams = []          # not macOS, or the tool changed its output shape
+    _MAC_CAMERA_CACHE = cams
+    return cams
+
+
+@dataclass
+class ProbeResult:
+    """What one camera index answered when opened."""
+
+    index: int
+    ok: bool
+    width: int
+    height: int
+    fps: float
+    mean: float
+    mono: bool | None
+
+
+def frame_is_mono(frame) -> bool:  # noqa: ANN001
+    """True when the three colour channels are **identical** — i.e. not a colour image.
+
+    ⭐ THE DECISIVE TEST FOR THE D405. macOS exposes it as a plain UVC camera whose
+    single entry is named `… 405  Depth`, so what arrives is a depth or infrared
+    stream widened into three equal channels, not a picture. A real colour camera
+    disagrees between channels almost everywhere — white balance alone guarantees it.
+
+    This matters beyond bookkeeping: a depth stream is useless for *driving* the arm
+    by eye, so knowing which index carries one prevents an afternoon spent wondering
+    why the wrist view looks wrong.
+    """
+    if frame is None or frame.ndim != 3 or frame.shape[2] != 3:
+        return True
+    return bool(np.array_equal(frame[..., 0], frame[..., 1])
+                and np.array_equal(frame[..., 1], frame[..., 2]))
+
+
+def probe_indices(read_frames: bool = True, limit: int | None = None) -> list[ProbeResult]:
+    """Open each index in turn and record what answered.
+
+    `read_frames=False` skips the capture, which is the slow part (~0.5-1 s each) —
+    enough for counting devices, not enough to say what they show.
+
+    ⚠️ A closed index does **not** end the loop. Assuming indices are contiguous is
+    the kind of tidy assumption this rig punishes; an unopenable index in the middle
+    would silently shift every name after it.
+    """
+    results: list[ProbeResult] = []
+    for idx in range(limit if limit is not None else MAX_PROBE_INDEX):
         cap = cv2.VideoCapture(idx)
         if not cap.isOpened():
             cap.release()
             continue
-        ok, frame = cap.read()
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        mean = float(np.mean(frame)) if ok and frame is not None else float("nan")
-        print(f"  index {idx}: {w}x{h} @ {fps:.0f} fps   "
-              f"{'frame OK' if ok else 'NO FRAME'}   mean brightness {mean:.0f}")
+        ok, frame = (cap.read() if read_frames else (False, None))
+        results.append(ProbeResult(
+            index=idx,
+            ok=bool(ok),
+            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            fps=float(cap.get(cv2.CAP_PROP_FPS)),
+            mean=float(np.mean(frame)) if ok and frame is not None else float("nan"),
+            mono=frame_is_mono(frame) if ok and frame is not None else None,
+        ))
         cap.release()
-        found += 1
-    if not found:
+    return results
+
+
+def pair_cameras(names: list[MacCamera], probes: list[ProbeResult],
+                 ) -> tuple[list[tuple[ProbeResult, MacCamera | None]], list[str]]:
+    """Attach a name to every openable index — **or refuse, and say why**.
+
+    ⭐⭐ READ THIS BEFORE TRUSTING A NAME. The pairing is **positional**: macOS's
+    n-th camera is assumed to be OpenCV's n-th index. That is an inference, and this
+    repo does not accept inferences quietly, so here is the whole argument.
+
+    **The evidence for it.** OpenCV's AVFoundation backend and `system_profiler`
+    both enumerate the same CoreMedia device list, and on 2026-08-11 the two agreed
+    on **count** — macOS listed 4 cameras and indices 0-3 opened while index 4 was
+    refused by OpenCV itself (`out device of bound (0-3): 4`). Membership matching
+    is real evidence; order is the part still assumed.
+
+    **What would falsify it, and is therefore checked.** `KNOWN_MAX_WIDTH` says a
+    D405 cannot deliver a frame wider than 1280. On this rig exactly one index
+    reported 1280x720 and every other reported 1920x1080 — so if the order were
+    shuffled, the D405 would have to be sitting on a 1920-wide index, and the check
+    below would fire. It did not, which makes the pairing *survivable* rather than
+    merely plausible.
+
+    **The third, independent signal** is `frame_is_mono`: the D405's UVC entry is a
+    depth stream, so its channels are identical while a colour camera's are not.
+
+    **When the counts disagree, no name is attached at all.** A wrong name is worse
+    than no name — it is the confident, plausible, wrong answer of FINDINGS §0.
+    """
+    notes: list[str] = []
+    if not names:
+        notes.append("⚠️  macOS reported no camera names (system_profiler failed or this "
+                     "is not macOS) — falling back to indices only.")
+        return [(p, None) for p in probes], notes
+    if len(names) != len(probes):
+        notes.append(f"⛔ macOS lists {len(names)} cameras but {len(probes)} indices opened. "
+                     "The two lists disagree, so NO names are attached — a wrong name is "
+                     "worse than no name. Replug, close other camera apps, and re-run.")
+        return [(p, None) for p in probes], notes
+
+    pairs = list(zip(probes, names))
+    notes.append(f"✅ {len(names)} names, {len(probes)} openable indices — paired by position.")
+    for probe, cam in pairs:
+        cap = KNOWN_MAX_WIDTH.get(cam.usb or "")
+        if cap and probe.width > cap:
+            notes.append(f"⛔ index {probe.index} is named {cam.short!r} but reports "
+                         f"{probe.width}px wide, and that device cannot exceed {cap}px. "
+                         "The pairing is WRONG — do not trust these names.")
+        elif cap:
+            notes.append(f"✅ cross-check: index {probe.index} reports {probe.width}px and "
+                         f"{cam.short} tops out at {cap}px — consistent.")
+        if probe.mono is True and cap:
+            notes.append(f"✅ cross-check: index {probe.index} returns identical colour "
+                         "channels, which is a depth/IR stream, not a picture — that is "
+                         "the D405 signature.")
+    return pairs, notes
+
+
+class CameraLookupError(Exception):
+    """Raised when `--camera` cannot be resolved to exactly one index."""
+
+
+# Words worth accepting that do not appear in the macOS name string. `d405` is the
+# obvious one: the device calls itself "Depth Camera 405".
+ALIASES = {"d405": "405", "realsense": "realsense", "intel": "realsense",
+           "c920": "c920", "logitech": "c920", "webcam": "webcam",
+           "iphone": "iphone", "builtin": "macbook", "internal": "macbook"}
+
+
+def _normalise(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def resolve_camera(spec: str, names: list[MacCamera] | None = None,
+                   probes: list[ProbeResult] | None = None) -> tuple[int, MacCamera | None]:
+    """Turn `--camera d405` (or `--camera 2`) into an index, or refuse loudly.
+
+    ⛔ Never falls back to index 0. Silently opening *a* camera when the requested
+    one is missing is precisely how the wrong hardware gets driven.
+
+    `names` and `probes` exist to be injected by the tests. ⚠️ They must stay
+    injectable: without them every test run would open all four cameras — waking
+    Julien's iPhone over Continuity — and a test suite with side effects on hardware
+    is one people stop running.
+    """
+    names = mac_cameras() if names is None else names
+    if spec.isdigit():
+        idx = int(spec)
+        return idx, names[idx] if idx < len(names) else None
+
+    if not names:
+        raise CameraLookupError(
+            "macOS would not report camera names, so --camera cannot be resolved.\n"
+            "  Use --index N instead, and --list to see what is there.")
+    # ⭐ Counting devices needs no frame, and reading one costs ~1 s per camera.
+    if probes is None:
+        probes = probe_indices(read_frames=False, limit=len(names) + 1)
+    if len(probes) != len(names):
+        raise CameraLookupError(
+            f"macOS lists {len(names)} cameras but {len(probes)} indices opened, so a "
+            "name cannot be mapped to an index safely.\n"
+            "  Run --list to see both lists, and use --index N deliberately.")
+
+    want = _normalise(spec)
+    want = _normalise(ALIASES.get(want, want)) if want in ALIASES else want
+    hits = [(p.index, cam) for p, cam in zip(probes, names)
+            if want in _normalise(cam.name) or want in _normalise(cam.usb or "")]
+    if not hits:
+        listing = "\n".join(f"    {p.index}  {cam.short}" for p, cam in zip(probes, names))
+        raise CameraLookupError(f"no camera matches {spec!r}. Available:\n{listing}")
+    if len(hits) > 1:
+        listing = "\n".join(f"    {i}  {cam.short}" for i, cam in hits)
+        raise CameraLookupError(f"{spec!r} matches more than one camera:\n{listing}\n"
+                                "  Be more specific, or use --index.")
+    return hits[0]
+
+
+def list_cameras() -> None:
+    """Print what macOS says is attached, what each index answered, and whether the
+    two agree — the one command to run after any replug."""
+    names = mac_cameras()
+    if names:
+        print(f"macOS reports {len(names)} camera(s), in this order:\n")
+        for i, cam in enumerate(names):
+            usb = f"   USB {cam.usb}" if cam.usb else ""
+            print(f"    {i}  {cam.short:<28s}{usb}".rstrip())
+        print()
+
+    print("probing camera indices — this opens each one briefly\n")
+    # ⭐ One index PAST the name list, deliberately: if that one opens, OpenCV can
+    # see a device macOS did not list and the pairing must be refused. Probing
+    # exactly len(names) could never discover that.
+    probes = probe_indices(read_frames=True,
+                           limit=len(names) + 1 if names else MAX_PROBE_INDEX)
+    if not probes:
         print("  none opened. On macOS the FIRST run must be granted camera access —")
         print("  look for the permission dialog, then run this again.")
         return
-    print("\n  Which is which: cover the wrist camera with your hand and re-run —")
-    print("  the index whose mean brightness collapses is the one on the arm.")
+
+    pairs, notes = pair_cameras(names, probes)
+    print(f"  {'idx':>3s}  {'name':<28s} {'resolution':>11s} {'fps':>5s}  "
+          f"{'frame':<8s} {'bright':>7s}  picture")
+    for probe, cam in pairs:
+        name = cam.short if cam else "(unnamed)"
+        picture = "—" if probe.mono is None else ("MONO — depth/IR, not a picture"
+                                                  if probe.mono else "colour")
+        bright = "  n/a" if probe.mean != probe.mean else f"{probe.mean:7.0f}"  # NaN check
+        print(f"  {probe.index:>3d}  {name[:28]:<28s} {probe.width:>5d}x{probe.height:<5d} "
+              f"{probe.fps:>5.0f}  {'OK' if probe.ok else 'NO FRAME':<8s} {bright}  {picture}")
+    print()
+    for note in notes:
+        print(f"  {note}")
+
+    print("\n  Select by name — the index moves on replug, the name does not:")
+    print("      uv run scripts/camera_view.py --camera c920 --term")
+    print("      uv run scripts/camera_view.py --camera d405 --term")
+    print("\n  ⚠️ The names are matched to indices BY POSITION and cross-checked, not")
+    print("     proven. To falsify: unplug one camera, re-run, and check that the index")
+    print("     that vanished is the one that was carrying its name.")
 
 
 def probe_modes(index: int, secs: float = 2.5) -> None:
@@ -298,28 +591,137 @@ def render_ansi(frame, cols: int, rows: int) -> str:
     return "".join(out)
 
 
-def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 2) -> tuple[int, int]:
+@dataclass(frozen=True)
+class CellSize:
+    """How many screen pixels one character cell occupies."""
+
+    width: float
+    height: float
+    measured: bool
+
+    @property
+    def aspect(self) -> float:
+        """Height divided by width. ~2 for most fonts, but not exactly, and the
+        difference is a visible stretch."""
+        return self.height / self.width
+
+
+# Used when the terminal will not say. A 2:1 cell is the usual shape and the value
+# the geometry always silently assumed before it was measurable.
+ASSUMED_CELL = CellSize(8.0, 16.0, measured=False)
+
+
+def cell_size() -> CellSize:
+    """Measure the character cell in pixels, or fall back and **say so**.
+
+    ⭐ WHY THIS EXISTS. Two things were being guessed at once, and both were visible
+    on screen. The grid geometry assumed a cell is exactly twice as tall as it is
+    wide, which stretches the picture whenever the font disagrees; and the image sent
+    in kitty/iTerm2 mode was a fixed 480 px regardless of how large the pane was, so
+    on a big terminal it was upscaled into a soft mess — **which is exactly what
+    Julien reported on 2026-08-11: "the resolution is not great … pressing the
+    numbers doesn't do anything."**
+
+    Both are answered by one number the terminal already knows. `TIOCGWINSZ` returns
+    `ws_xpixel`/`ws_ypixel` alongside the row and column count, so the cell is simply
+    pixels ÷ cells. kitty and Ghostty fill those fields in; Apple Terminal reports
+    zeros, and a piped or captured run has no terminal at all.
+
+    ⚠️ `measured` is returned, never hidden. An assumed cell size is a fine default
+    and a terrible silent one — the status line prints which it used, because a
+    fallback you cannot see is indistinguishable from a bug (the same lesson as `b`
+    silently doing nothing).
+    """
+    for stream in (sys.stdout, sys.stdin, sys.stderr):
+        try:
+            buf = fcntl.ioctl(stream.fileno(), termios.TIOCGWINSZ, b"\0" * 8)
+        except (OSError, ValueError, AttributeError):
+            continue
+        rows, cols, xpix, ypix = struct.unpack("HHHH", buf)
+        if rows and cols and xpix and ypix:
+            return CellSize(xpix / cols, ypix / rows, measured=True)
+    return ASSUMED_CELL
+
+
+# ⭐ How many pixels wide the image sent to the terminal may get, per protocol.
+# MEASURED 2026-08-11 on this Mac, encoding a detailed 16:9 frame (gradients, hard
+# edges, text and grain — a realistic camera picture), best of five:
+#
+#     width   kitty: PNG level 1      iTerm2: JPEG q60
+#      480     3.8 ms   277 KB/frame    0.1 ms    16 KB/frame
+#      640     6.7 ms   521 KB          0.3 ms    26 KB
+#      720    ~8   ms  ~650 KB          ~0.4 ms   ~32 KB
+#      960    16.1 ms  1266 KB          0.6 ms    46 KB
+#     1280    28.8 ms  2259 KB          1.1 ms    70 KB
+#
+# ⛔ **The kitty protocol has exactly one compressed format, and it is PNG** — `f`
+# takes 24 (raw RGB), 32 (raw RGBA) or 100 (PNG). There is no JPEG. That single
+# protocol fact is why the terminal view is soft: PNG of a photo is ~20x the bytes
+# of a JPEG and ~25x the encode time, so detail costs frame rate in Ghostty/kitty in
+# a way it simply does not in iTerm2. 720 px keeps encoding to ~25% of a 33 ms frame
+# budget; 1280 px would spend 87% of it before a single byte is written.
+#
+# The numbers above are the *floor*: the terminal must also read and draw them, and
+# writing ~650 KB into a pty every frame is not free. The live `draw ms` readout is
+# the real measurement — these values only pick a sane starting point.
+IMAGE_WIDTH_CAP = {"kitty": 720, "iterm": 1280}
+
+
+def auto_image_width(cols: int, capture_width: int, mode: str, cell: CellSize) -> int:
+    """Pixels wide to send, when the operator has not fixed it by hand.
+
+    Three ceilings, and the smallest wins:
+
+    1. **The box on screen** — `cols x cell.width` pixels. Sending more than the
+       terminal can display is pure cost; the extra pixels are scaled straight back
+       out again.
+    2. **What the camera captured** — upscaling before transmission invents nothing
+       and costs bytes.
+    3. **The protocol's budget** — see `IMAGE_WIDTH_CAP`.
+
+    ⭐ This is what makes keys 1-6 do something visible. They change the *capture*
+    size, and previously the sent image was pinned at 480 px, so a sharper capture
+    changed nothing on screen and the keys looked dead. With ceiling 2 in place, a
+    bigger capture genuinely produces a bigger image — up to what the pane can show.
+    """
+    box = int(cols * cell.width)
+    return max(64, min(box, capture_width, IMAGE_WIDTH_CAP.get(mode, 720)))
+
+
+def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 4,
+                  cell_aspect: float | None = None) -> tuple[int, int]:
     """Character columns and rows to use, **preserving the picture's aspect ratio**.
 
     ⛔ THE BUG THIS FIXES. The first version returned the whole terminal and let
     `render_ansi` squash the frame into it, so a 16:9 camera came out stretched to
     whatever shape the pane happened to be. Julien's screenshot showed it clearly.
 
-    The geometry: a monospace cell is about twice as tall as it is wide, and the
-    half-block trick puts **two** stacked pixels in each cell — so one rendered pixel
-    is roughly square, and a grid of `C` columns by `R` rows displays with an aspect
-    ratio of `C / (2R)`. To match a source of aspect `A` we therefore need
-    `C = 2 · R · A`, and we take the largest such grid that fits inside the terminal.
+    The geometry: a cell is `k` times taller than it is wide, so a grid of `C`
+    columns by `R` rows occupies a box whose aspect is `C / (R · k)`. To display a
+    source of aspect `A` undistorted we therefore need `C = A · R · k`, and we take
+    the largest such grid that fits inside the terminal.
+
+    ⭐ `k` used to be hard-coded to 2 — right for a typical font, wrong for any
+    other, and a silent stretch when wrong. It is now **measured** from the
+    terminal's own pixel geometry (`cell_size()`) and passed in, falling back to 2
+    only when the terminal will not say. This matters in both drawing modes: blocks
+    mode paints two stacked pixels per cell, and image mode hands the terminal a
+    `C x R` cell box that it scales the picture into.
 
     `scale` shrinks it below the maximum, for a small corner view rather than a
     full-pane one.
+
+    ⚠️ `margin_rows` reserves space for the status lines underneath. Reserve too
+    little and the picture pushes them off the bottom, or worse, scrolls the whole
+    view every frame.
     """
+    k = cell_aspect if cell_aspect and cell_aspect > 0 else ASSUMED_CELL.aspect
     size = shutil.get_terminal_size(fallback=(100, 30))
     max_cols = max(20, int(size.columns * scale))
     max_rows = max(6, int((size.lines - margin_rows) * scale))
-    rows = min(max_rows, int(max_cols / (2 * frame_aspect)))
+    rows = min(max_rows, int(max_cols / (k * frame_aspect)))
     rows = max(6, rows)
-    cols = min(max_cols, int(2 * rows * frame_aspect))
+    cols = min(max_cols, int(k * rows * frame_aspect))
     return max(20, cols), rows
 
 
@@ -452,7 +854,7 @@ def render_kitty(frame, cols: int, rows: int, max_width: int = 480, quiet: bool 
 
 
 def term_test(cols: int = 40, rows: int = 12) -> int:
-    """Send ONE small image with errors ENABLED, and report what the terminal says.
+    """Send a test image in **each** protocol, errors ENABLED, and report the replies.
 
     ⭐ This exists because `q=2` — correct for a 30 fps loop — silently swallowed the
     error that would have identified the JPEG-labelled-as-PNG bug immediately. One
@@ -461,19 +863,32 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
     kitty replies `ESC _G i=<id>;OK ESC \\` on success, or `ESC _G i=<id>;<ERROR>
     ESC \\` on failure. Anything else — including silence — means the terminal does
     not implement the protocol at all.
+
+    ⭐⭐ It now tests **iTerm2's protocol too**, and the reason is worth stating: that
+    one carries JPEG, and JPEG is ~25x cheaper than the PNG the kitty protocol
+    forces. If a terminal happens to speak both — Ghostty is the open question on
+    this rig — then the sharpness ceiling on the terminal view moves by a factor of
+    two. That is worth ten seconds of looking at the screen. iTerm2's protocol
+    defines no reply, so this half is a question to a human, not a measurement.
     """
     import select
     import termios
     import tty
 
-    img = np.zeros((180, 320, 3), np.uint8)
-    img[:60] = (60, 60, 220); img[60:120] = (60, 220, 60); img[120:] = (220, 120, 60)
-    cv2.putText(img, "KITTY TEST", (40, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    def bars(label: str):  # noqa: ANN202
+        img = np.zeros((180, 320, 3), np.uint8)
+        img[:60] = (60, 60, 220); img[60:120] = (60, 220, 60); img[120:] = (220, 120, 60)
+        cv2.putText(img, label, (30, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+        return img
 
-    print("Sending one test image with error reporting ON.")
-    print("You should see three colour bars and the words KITTY TEST.\n")
-    payload = render_kitty(img, cols, rows, quiet=False)
+    cellinfo = cell_size()
+    origin = ("measured from the terminal" if cellinfo.measured else
+              "ASSUMED — this terminal does not report ws_xpixel, so the image size "
+              "is a guess")
+    print(term_diagnosis())
+    print(f"\n  cell size: {cellinfo.width:.1f}x{cellinfo.height:.1f} px ({origin})\n")
 
+    print("Sending TWO test images: one in each protocol, errors ON.\n")
     fd = sys.stdin.fileno()
     try:
         saved = termios.tcgetattr(fd)
@@ -482,7 +897,7 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
         return 1
     try:
         tty.setcbreak(fd)
-        sys.stdout.write(payload)
+        sys.stdout.write(render_kitty(bars("KITTY"), cols, rows, quiet=False))
         sys.stdout.flush()
         reply = ""
         deadline = time.time() + 2.0
@@ -491,20 +906,33 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
                 reply += sys.stdin.read(1)
                 if reply.endswith("\x1b\\"):
                     break
+        # ⭐ And now the OTHER protocol. It is worth knowing whether this terminal
+        # takes iTerm2's escape as well, because that one carries **JPEG**: measured
+        # 0.3 ms and 26 KB per 640px frame against PNG's 6.7 ms and 391 KB. A
+        # terminal that speaks both should be driven with iterm mode, not kitty.
+        # ⚠️ iTerm2's protocol defines no reply, so only a human can answer this.
+        sys.stdout.write("\n")
+        sys.stdout.write(render_iterm(bars("ITERM2"), cols, rows))
+        sys.stdout.flush()
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
 
-    print("\n\n--- what the terminal replied ---")
+    print("\n\n--- 1. kitty graphics protocol (PNG) ---")
+    kitty_ok = ";OK" in reply
     if not reply:
-        print("  (nothing)  -> this terminal does not implement the kitty graphics protocol")
-        return 1
-    printable = reply.replace("\x1b", "<ESC>")
-    print(f"  {printable!r}")
-    if ";OK" in reply:
-        print("\n  ✅ OK — the protocol works and the image above should be visible.")
-        return 0
-    print("\n  ⛔ the terminal reported an ERROR. The text after ';' is the reason.")
-    return 1
+        print("  the terminal said NOTHING -> it does not implement this protocol")
+    else:
+        print(f"  it replied: {reply.replace(chr(27), '<ESC>')!r}")
+        print("  ✅ OK — the protocol works." if kitty_ok else
+              "  ⛔ ERROR — the text after ';' is the reason.")
+
+    print("\n--- 2. iTerm2 inline-image protocol (JPEG) ---")
+    print("  This protocol never replies, so look at the screen: did a SECOND set of")
+    print("  bars appear, labelled ITERM2?")
+    print("     yes -> use --term-mode iterm. It is ~25x cheaper than PNG, so the")
+    print("            picture can be much sharper at the same frame rate.")
+    print("     no  -> stay on kitty mode; detail is capped by PNG encode cost.")
+    return 0 if (kitty_ok or reply) else 1
 
 
 
@@ -524,8 +952,11 @@ def render_iterm(frame, cols: int, rows: int, max_width: int = 480, quality: int
             f"preserveAspectRatio=1;doNotMoveCursor=0:{b64}\x07")
 
 
-def run_terminal(cap, args) -> int:  # noqa: ANN001
+def run_terminal(cap, args, label: str = "") -> int:  # noqa: ANN001
     """Draw the camera into this terminal. Creates no window at all.
+
+    `label` is the camera's name, shown in the status line so a two-terminal setup
+    can never be confused about which arm's view is which.
 
     ⛔ Quitting is guaranteed: `q`/ESC, Ctrl-C and the `finally` block all restore the
     cursor and colours and stop the grabber thread. Julien asked specifically that
@@ -549,6 +980,9 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
 
     grab = FrameGrabber(cap)
     flip, rotate = args.flip, args.rotate
+    # None = size the image to the pane automatically. A number pins it, either from
+    # --image-width or from the [ and ] keys.
+    manual_width = args.image_width or None
     shown, t_fps, disp_fps, prev_seq = 0, time.perf_counter(), 0.0, -1
     draw_ms = 0.0
     sys.stdout.write("\x1b[?25l\x1b[2J")
@@ -557,6 +991,13 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
             while True:
                 frame, seq = grab.newest()
                 if frame is None:
+                    # ⛔ Keys must still be read here. Before the first frame arrives
+                    # this branch skipped the key handler entirely, so a camera that
+                    # never delivered one left `q` dead and Ctrl-C as the only way
+                    # out — against Julien's standing requirement that every test be
+                    # quittable.
+                    if any(k in ("q", "\x1b") for k in keys.drain()):
+                        return 0
                     time.sleep(0.01)
                     continue
                 if seq == prev_seq:
@@ -572,7 +1013,12 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                     frame = cv2.rotate(frame, r)
 
                 h, w = frame.shape[:2]
-                cols, rows = terminal_grid(w / h, scale)
+                # Re-measured every frame so resizing the window or changing the
+                # font size is picked up live rather than at the next launch.
+                cell = cell_size()
+                cols, rows = terminal_grid(w / h, scale, cell_aspect=cell.aspect)
+                sent_w = min(manual_width or auto_image_width(cols, w, mode, cell), w)
+                sent_h = max(1, round(h * sent_w / w))
 
                 now = time.perf_counter()
                 if now - t_fps >= 0.5:
@@ -581,17 +1027,35 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
 
                 t_draw = time.perf_counter()
                 if mode == "iterm":
-                    body = render_iterm(frame, cols, rows, args.image_width)
+                    body = render_iterm(frame, cols, rows, sent_w)
                 elif mode == "kitty":
-                    body = render_kitty(frame, cols, rows, args.image_width)
+                    body = render_kitty(frame, cols, rows, sent_w)
                 else:
                     body = render_ansi(frame, cols, rows)
                 sys.stdout.write("\x1b[H" + body)
+
+                # ⭐ The status line answers "did that keypress do anything?" — which
+                # is the question that made keys 1-6 look broken. Every number a key
+                # can change is on screen: the capture size, the size actually sent
+                # to the terminal, the cell grid, and what the draw costs.
+                detail = ("blocks — 2 px per cell" if mode == "blocks"
+                          else f"sent {sent_w}x{sent_h}"
+                               f"{' (fixed)' if manual_width else ' (auto)'}")
+                cell_note = (f"cell {cell.width:.0f}x{cell.height:.0f}px"
+                             if cell.measured else
+                             f"cell {cell.width:.0f}x{cell.height:.0f}px ASSUMED")
+                # A draw cost past half the frame interval means the terminal, not
+                # the camera, is now the bottleneck — and it is fixable from here.
+                budget = 1000.0 / max(1.0, grab.capture_fps())
+                warn = "   ⚠️ draw is over half the frame — press [ for less detail" \
+                    if draw_ms > 0.5 * budget else ""
                 sys.stdout.write(
-                    f"\x1b[0m\n{w}x{h} {mode}  {cols}x{rows} cells  "
-                    f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured  "
-                    f"draw {draw_ms:4.1f} ms\x1b[K\n"
-                    f"q quit · f mirror · r rotate · 1-6 resolution · +/- size · b cycle draw mode\x1b[K"
+                    f"\x1b[0m\n{label}capture {w}x{h} · {detail} · {mode} · "
+                    f"{cols}x{rows} cells · {cell_note}\x1b[K\n"
+                    f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured fps · "
+                    f"draw {draw_ms:4.1f} ms{warn}\x1b[K\n"
+                    f"q quit · f mirror · r rotate · b draw mode · +/- pane · "
+                    f"1-6 capture size · [ ] detail · 0 auto\x1b[K"
                 )
                 sys.stdout.flush()
                 # ⭐ The draw cost is displayed because it is the latency the SOFTWARE
@@ -626,12 +1090,29 @@ def run_terminal(cap, args) -> int:  # noqa: ANN001
                     elif k in "123456":
                         w2, h2 = SIZES[int(k) - 1]
                         grab.stop()
+                        # ⚠️ A camera released a moment ago is not always instantly
+                        # re-openable. One retry, rather than killing the viewer and
+                        # the operator's terminal layout with it.
                         cap = open_camera(args.index, w2, h2, args.fps)
                         if cap is None:
+                            time.sleep(0.3)
+                            cap = open_camera(args.index, w2, h2, args.fps)
+                        if cap is None:
+                            sys.stdout.write("\x1b[0m\x1b[?25h\n  could not reopen "
+                                             f"camera {args.index} at {w2}x{h2}\n")
                             return 1
                         grab = FrameGrabber(cap)
                         shown, t_fps, prev_seq = 0, time.perf_counter(), -1
                         sys.stdout.write("\x1b[2J")
+                    # ⭐ Detail, separate from capture size. Capture is what the
+                    # camera sends the Mac; this is what the Mac sends the terminal,
+                    # and in kitty/Ghostty it is the expensive one — PNG only.
+                    elif k == "]":
+                        manual_width = min(1920, (manual_width or sent_w) + 160)
+                    elif k == "[":
+                        manual_width = max(160, (manual_width or sent_w) - 160)
+                    elif k == "0":
+                        manual_width = None
     except KeyboardInterrupt:
         pass
     finally:
@@ -648,6 +1129,11 @@ def main() -> int:
                     help="sweep resolutions and codecs on --index and report the REAL fps "
                          "for each. Run this once to find the best setting for your link")
     ap.add_argument("--index", type=int, default=0, help="camera index (see --list)")
+    ap.add_argument("--camera", default="",
+                    help="⭐ select by NAME instead of index — 'c920', 'd405', 'iphone', "
+                         "'builtin', or any part of the name --list prints. The index "
+                         "moves when something is replugged; the name does not. Refuses "
+                         "rather than guessing if the name cannot be pinned to one index")
     # ⭐ 1280x720 by default. An earlier version defaulted to 640x480 on the theory
     # that USB 2.0 bandwidth capped an uncompressed 1080p stream at ~5.8 fps, which
     # matched the 5 fps Julien saw. **That theory was REFUTED by --probe on
@@ -659,13 +1145,17 @@ def main() -> int:
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--term-test", action="store_true",
-                    help="⭐ send ONE image with error reporting ON and print what the terminal "
-                         "says. Use this when image mode shows nothing — it turns a blank "
-                         "screen into the terminal's actual error message")
-    ap.add_argument("--image-width", type=int, default=480,
-                    help="longest side of the image sent in iterm/kitty mode. Payload is "
-                         "latency: 480 is ~180 KB/frame, 320 is ~104 KB, 720p is 1.3 MB and "
-                         "will not keep up. Watch the draw-ms readout and tune")
+                    help="⭐ send one image in EACH protocol with error reporting ON and print "
+                         "what the terminal says. Use this when image mode shows nothing — it "
+                         "turns a blank screen into the terminal's actual error message — and "
+                         "to find out whether this terminal also takes iTerm2's JPEG escape, "
+                         "which is ~25x cheaper than the PNG kitty mode forces")
+    ap.add_argument("--image-width", type=int, default=0,
+                    help="pixels wide to send in iterm/kitty mode. ⭐ Default 0 = AUTO: "
+                         "fit the pane, never exceed what was captured, and stay inside "
+                         "the protocol's budget (kitty is PNG-only and costs ~25x what "
+                         "iTerm2's JPEG does). A number pins it; [ and ] change it live "
+                         "against the on-screen draw-ms readout")
     ap.add_argument("--term-info", action="store_true",
                     help="print what this terminal is and whether it can draw images, then exit")
     ap.add_argument("--term-mode", default="auto", choices=["auto", "blocks", "iterm", "kitty"],
@@ -701,6 +1191,25 @@ def main() -> int:
     if args.list:
         list_cameras()
         return 0
+
+    # ⭐ Name → index BEFORE anything opens a device, so --probe and the viewer both
+    # act on the camera that was asked for. Resolution refuses rather than guessing,
+    # and it prints what it chose: FINDINGS §0 #5 is about an adapter picked by index
+    # that silently drove the other robot.
+    label = ""
+    if args.camera:
+        try:
+            args.index, cam = resolve_camera(args.camera)
+        except CameraLookupError as exc:
+            print(f"⛔ {exc}")
+            return 1
+        if cam is not None:
+            label = f"{cam.short} · "
+            print(f"  {args.camera!r} → index {args.index}: {cam.short}")
+            if cam.usb in KNOWN_MAX_WIDTH:
+                print("  ⚠️ macOS exposes only this camera's DEPTH stream over plain UVC, "
+                      "so expect\n     a depth/infrared picture rather than colour. "
+                      "`--list` shows which it is.")
 
     if args.probe:
         probe_modes(args.index)
@@ -749,7 +1258,7 @@ def main() -> int:
         return 0
 
     if args.term:
-        return run_terminal(cap, args)
+        return run_terminal(cap, args, label)
 
     win = "wrist camera — q or ESC to quit"
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
