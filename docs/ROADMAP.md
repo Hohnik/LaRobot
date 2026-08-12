@@ -262,6 +262,76 @@ and a simulated IK loop produced three failures on first hardware contact, one o
 3. `--arms B,G`, starting in HOLD, gripper enabled, desk clear.
 4. Only then GUIDE and CONTROLS on two arms.
 
+## Step 6.5 — ⭐ Saved positions, sequences, and smooth motion between them
+
+**Julien's idea, 2026-08-12**, and it is a better one than it first looks: *"it would
+make sense to have more options to save more positions … hit `s` and then a number every
+time we wanna save a position, and then hitting `p` and then the number would park to
+that position. And then if we would hit `p` and multiple numbers following each other,
+then the robot arm could go from each position to each next position … we also wanted to
+include the smoother motions, so we would have to have an option to increase the speed
+between the positions."*
+
+⭐ **Why this is on the critical path rather than a nicety.** A named list of poses the
+arm can be driven through, repeatably, is the first half of **demo collection** — step 5,
+which is the professor's SFT milestone. It is also the first thing in this repo that
+moves the arm through a plan rather than under a hand. Build it as if the recorder will
+be attached to it, because it will be.
+
+### What is already done (2026-08-12)
+
+✅ **Storage**, pure and tested in `src/yam_robot.py`: `park_slots()` and
+`with_park_slot()`, 6 tests. ⚠️ **The legacy file shape is read, not replaced** —
+`config/park_pose.json` is `{"B": [q…]}` on the rig right now, it is *measured
+calibration*, and `q p d` depends on it. A bare list is read as the `default` slot, so
+nothing that works today stops working.
+
+### The interaction — decided, with the reasoning
+
+| question | decision | why |
+|---|---|---|
+| Do bare digits conflict? | **No, and this is why two-key sequences are right.** `1 2 3` already flip rotation axes in the drive modes and `x y z` flip translation; `4 5 6` are free. A digit *after* `s` or `p` is an argument, not a command | Julien proposed exactly this shape unprompted, and it is the only one that does not fight the existing map |
+| `p` with no digit | **Still parks to the default**, unchanged | ⛔ `q p d` is the hands-free shutdown and Ctrl-C now depends on the same pose. Muscle memory here is a safety property, not a preference |
+| How does a sequence end? | Digits accumulate, **Enter or space runs it**, `q`/Esc cancels, and the queue is echoed as it builds (`sequence: 1 → 3 → 2 … Enter to run`) | A modal state in a loop that drives 4.3 kg must be *visible* at every keystroke |
+| Which park loop runs a sequence? | ⭐ **The interleaved one** (`mode == "park"`), extended with a queue — on arrival, pop the next target instead of dropping to HOLD | ⛔ Load-bearing. `park_and_wait()` **blocks**, so it does not run the thermal guard or read keys. A multi-leg sequence is minutes of motion; running it blind on temperature would re-open the hole [FINDINGS §24.1](FINDINGS.md) just closed |
+| Speed between poses | `+` / `-` adjust **park speed while in PARK mode** (they mean linear teleop scale elsewhere, which is meaningless there), shown in the status line | Context-dependent keys are already the pattern — `1-6` mean different things in CONTROLS mode — and the status line makes it visible rather than surprising |
+| Abort | **Any key** stops a sequence, as it already stops a park | Unchanged from the behaviour he knows |
+
+### The smoothing — the part that needs care
+
+Today `advance_park_command()` moves every joint at a **constant** rate until it arrives:
+a trapezoid with no ramps, so it starts and stops abruptly. That is fine for one short
+move to a park pose and it is *not* fine for a sequence, where every waypoint becomes a
+jerk in the middle of a motion someone is watching.
+
+**The recommendation: a trapezoidal velocity profile** — ease in over a fixed distance,
+cruise, ease out into the target — implemented as an optional `ease` argument so the
+default stays bit-for-bit what is on hardware today:
+
+```
+speed_factor = min(1, travelled / ramp, remaining / ramp)     # clamped to [floor, 1]
+```
+
+⚠️ **Three reasons to keep it opt-in at first.** `advance_park_command()` is pure with
+15 tests and its behaviour is *confirmed on the arm*; the ramp distance is a feel
+question only Julien can answer; and a deceleration bug shows up as **overshoot**, which
+in park is the arm arriving somewhere it was not aimed. Ship it behind a flag, tune the
+ramp on hardware, then make it the default.
+
+⭐ **Deliberately NOT doing: spline/blended waypoints** — smoothing *through* a waypoint
+rather than stopping at each. It is the obviously nicer motion and it is a much larger
+change: it needs a real trajectory representation, it makes "which pose is the arm at"
+ambiguous, and it removes the per-leg stall check that currently catches an obstruction.
+Stop-at-each-waypoint first, blended later, and only if the motion genuinely needs it.
+
+### Order of work
+
+1. ✅ Storage + tests *(done)*.
+2. `s`+digit and `p`+digit, single slot, using the interleaved park. No sequences yet.
+3. Sequences: the queue, the echo, the abort.
+4. Park speed on `+`/`-` in PARK mode.
+5. Easing behind a flag; tune the ramp with Julien on the arm; then default it on.
+
 ## Step 7 — Cameras
 
 C920 plus the wrist D405s. Needed for data collection, not for teleop. Deliberately last of the near-term set

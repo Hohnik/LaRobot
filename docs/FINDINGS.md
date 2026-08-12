@@ -1464,3 +1464,94 @@ The pattern worth repeating on any file that guards hardware:
    that substitutes a safe-looking default has silently answered a safety question.
 3. For each guard, ask **which exits skip it** — `break`, `return`, exceptions, and
    signals. Signals are the one people forget, because they do not appear in the code.
+
+---
+
+## 25. ⭐ The camera identification held up, and four things around it did not
+
+**2026-08-12. First, the good news, because it is the part worth trusting.** Julien ran
+`--list` and the measurement reproduced his hand experiment exactly:
+
+```
+✅ index 0 delivered 160x90,     which only C920 webcam offers.
+✅ index 1 delivered 424x240,    which only RealSense D405 offers.
+✅ index 2 delivered 1080x1920,  which only MacBook Air Camera offers.
+✅ index 3 delivered 1920x1440,  which only Julien's iPhone Camera offers.
+```
+
+That is the wiring he found by covering each camera, and the exact opposite of what
+three macOS enumerations claim ([§22](#22--which-camera-is-which--and-how-a-careful-checked-published-inference-was-still-wrong)).
+**Ask the hardware a question only one device can answer.** It works, it is fast, and it
+needs no list to be correct.
+
+Everything below is a defect he found by *using* it.
+
+### 25.1 A 2 fps stills mode was offered as "the best this camera can do"
+
+*"When I press number six the frame rate drops to like two frames per second."*
+
+MEASURED: the C920 advertises **2560x1472 at 2.0 fps**. Every other mode it has runs at
+30. `key_sizes()` sorted modes by pixel count and put the largest on key 6, which for a
+**live view** is the wrong idea entirely — the right one is *the sharpest mode that still
+moves*. AVFoundation reports a max frame rate per format, so this is a measurement and
+not a matter of taste: modes below `MIN_LIVE_FPS` (15) are now excluded.
+
+⭐ The general shape: **"biggest" and "best" are the same only when one dimension
+matters.** Here there were two, and the code only knew about one.
+
+### 25.2 `--camera c920` took ~20 seconds to open one named camera
+
+*"It takes like twenty seconds for the camera to start running, which shouldn't be the
+case because I deliberately said which camera I want."*
+
+Correct. `--camera` called the full `identify_indices()`, which opens **every** camera
+and asks **every** camera's question at **every** index — 4 opens and 16 reconfigurations
+to answer a question about one device. It also woke his iPhone over Continuity every
+single time, which is the slowest thing on the bus and was never wanted.
+
+**Now:** one question per index, stopping at the first exact match (safe *because* the
+mode is unique to one camera), plus `config/camera_index_hint.json` remembering where
+that camera was last found.
+
+⚠️ **The hint is an ordering of the search, not a cached answer**, and that distinction
+is what keeps it consistent with §22's refusal to cache identity. The camera at the
+remembered index is asked the same question as any other; a stale hint costs one extra
+open and falls through to the scan. **A cache that is verified on every use is not a
+cache of the answer.**
+
+### 25.3 The detail cap was a constant where it needed to be a measurement
+
+*"The max resolution that can be sent is 720x405 … it doesn't really make any sort of
+difference."*
+
+720 px came from the PNG encode benchmark in [§21.4](#214--the-resolution-is-stuck-and-the-number-keys-do-nothing--2026-08-11). That
+benchmark was right and the conclusion drawn from it was too narrow: on his machine
+encoding is ~8 ms of a ~40 ms draw, and **the rest is writing ~650 KB into a pty**. That
+ratio depends on the terminal, the font size, the window and the machine's load — none
+of which a constant measured on one afternoon can know.
+
+The viewer now **climbs toward what it actually sustains**: spend at most half the frame
+interval drawing, back off quickly (×0.85), climb slowly (×1.15), with the ceiling set by
+the pane and the capture rather than by any protocol budget. Same discipline as the rest
+of the rig — *measure the consequence rather than predicting it*.
+
+### 25.4 ⛔ The diagnostic itself produced a confident wrong answer
+
+`--term-test` reported **"the terminal said NOTHING → it does not implement this
+protocol"** about Ghostty 1.3.1 — which was, at that moment, drawing the camera view in
+kitty mode.
+
+**The kitty protocol keys its response to an image id** (`i=`) or number (`I=`). The test
+sent neither, so the terminal had nothing to answer *about* and correctly stayed silent.
+The test then read silence as absence.
+
+⭐ Worth keeping for its own sake: **silence is not evidence unless you asked a question
+that requires an answer.** The same shape as [§23](#23--system_profiler-spusbdatatype-reports-an-empty-bus-while-15-devices-are-plugged-in)'s
+empty USB list, and it appeared here in the code written to diagnose exactly this class
+of problem. Fixed by giving the test image an id; "no reply" now says plainly that it
+proves nothing and asks the operator to look at the screen.
+
+⚠️ **Still unanswered:** whether Ghostty draws the **iTerm2** inline image. If it does,
+that protocol carries JPEG — ~25× cheaper in time and ~30× in bytes than the PNG the
+kitty protocol forces — and the sharpness ceiling roughly doubles for free. One look at
+the screen settles it.

@@ -291,6 +291,41 @@ def park_target_from(
     return target, warning
 
 
+def park_slots(data: dict, arm: str) -> dict[str, list]:
+    """Every saved pose for `arm`, keyed by slot name.
+
+    ⭐ Julien's design, 2026-08-12: *"it would also make sense to have more options to
+    save more positions … hit s and then a number every time we wanna save a position,
+    and then hitting p and then the number would park to that position."*
+
+    ⚠️ **Accepts the legacy shape.** `config/park_pose.json` used to be
+    `{"B": [q0, q1, …]}` — one pose per arm, no slots — and that file is *measured
+    calibration* that exists on the rig right now. A format change that silently
+    dropped it would cost bench time to recreate, so a bare list is read as the
+    `default` slot and keeps working exactly as before. `q p d` is unaffected.
+    """
+    entry = data.get(arm)
+    if entry is None:
+        return {}
+    if isinstance(entry, list):
+        return {"default": entry}                      # the pre-slots format
+    return {k: v for k, v in entry.items() if isinstance(v, list) and v}
+
+
+def with_park_slot(data: dict, arm: str, slot: str, pose: list) -> dict:
+    """`data` with `pose` stored in `slot` for `arm`, migrating the legacy shape.
+
+    Returns a new dict rather than mutating, so a caller can compare before writing —
+    the axis-map file was once overwritten with mangled values, and the lesson taken
+    from it was to make "did this actually change?" answerable.
+    """
+    updated = dict(data)
+    slots = dict(park_slots(data, arm))
+    slots[slot] = list(pose)
+    updated[arm] = slots
+    return updated
+
+
 def motor_temperatures(states: Any, gripper_index: int) -> tuple[list[float], float | None, float | None]:
     """`(temps, hottest, jaw)` from a chain's state list. Pure, so it can be tested.
 

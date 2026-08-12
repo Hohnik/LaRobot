@@ -23,7 +23,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from yam_robot import advance_park_command, park_target_from  # noqa: E402
+from yam_robot import (  # noqa: E402
+    advance_park_command,
+    park_slots,
+    park_target_from,
+    with_park_slot,
+)
 
 N_ARM = 6
 GRIPPER_MIN, GRIPPER_MAX = 0.02, 0.98
@@ -178,6 +183,57 @@ def test_advance_does_not_run_away_from_an_arm_that_follows() -> None:
 
 def test_advance_handles_an_already_reached_target() -> None:
     assert np.allclose(advance_park_command([1.0, 2.0], [1.0, 2.0], 0.1), [1.0, 2.0])
+
+
+# --------------------------------------------------- saved pose slots ----
+
+
+LEGACY = {"B": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.5]}
+
+
+def test_the_pose_already_on_the_rig_still_loads() -> None:
+    """⛔⭐ config/park_pose.json is MEASURED CALIBRATION and it exists on the arm
+    right now, in the pre-slots shape `{"B": [q…]}`. A format change that quietly
+    dropped it would cost bench time to recreate — and `q p d`, the hands-free
+    shutdown, depends on it. A bare list reads as the `default` slot."""
+    slots = park_slots(LEGACY, "B")
+    assert slots == {"default": LEGACY["B"]}
+    assert park_slots(LEGACY, "G") == {}, "an arm with nothing saved has no slots"
+
+
+def test_saving_a_slot_migrates_the_legacy_file_without_losing_it() -> None:
+    updated = with_park_slot(LEGACY, "B", "3", [1.0] * 7)
+    slots = park_slots(updated, "B")
+    assert slots["default"] == LEGACY["B"], "the original pose must survive the migration"
+    assert slots["3"] == [1.0] * 7
+
+
+def test_saving_does_not_mutate_what_it_was_given() -> None:
+    """So a caller can compare before and after and only write when something
+    changed — the axis-map file was once overwritten with mangled values, and the
+    lesson taken from it was to make "did this actually change?" answerable."""
+    before = {"B": [0.0] * 7}
+    after = with_park_slot(before, "B", "1", [9.0] * 7)
+    assert before == {"B": [0.0] * 7}, "the input was mutated"
+    assert park_slots(after, "B")["1"] == [9.0] * 7
+
+
+def test_slots_are_per_arm() -> None:
+    data = with_park_slot(with_park_slot({}, "B", "1", [1.0]), "G", "1", [2.0])
+    assert park_slots(data, "B")["1"] == [1.0]
+    assert park_slots(data, "G")["1"] == [2.0], "arms must not share slots"
+
+
+def test_a_slot_can_be_overwritten() -> None:
+    data = with_park_slot(with_park_slot({}, "B", "2", [1.0]), "B", "2", [5.0])
+    assert park_slots(data, "B")["2"] == [5.0]
+
+
+def test_junk_in_the_file_is_ignored_rather_than_crashing_the_session() -> None:
+    """⚠️ This file is hand-editable and lives in git. A malformed entry must not
+    take down a session that is holding a raised arm."""
+    data = {"B": {"1": [1.0, 2.0], "2": "not a pose", "3": [], "4": None}}
+    assert park_slots(data, "B") == {"1": [1.0, 2.0]}
 
 
 def main() -> int:
