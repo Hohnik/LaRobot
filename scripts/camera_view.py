@@ -76,6 +76,7 @@ import cv2
 import numpy as np
 
 MAX_PROBE_INDEX = 6
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Live-switchable capture sizes, bound to keys 1..6.
 #
@@ -90,6 +91,9 @@ MAX_PROBE_INDEX = 6
 # right choice for the lowest-latency terminal view, and the large sizes are for the
 # windowed view or for recording.
 SIZES = [(320, 180), (320, 240), (640, 360), (640, 480), (1280, 720), (1920, 1080)]
+
+# A capture mode slower than this is a stills mode, not a view. See `key_sizes`.
+MIN_LIVE_FPS = 15.0
 
 
 def key_sizes(cam: "MacCamera | None") -> list[tuple[int, int]]:
@@ -116,7 +120,17 @@ def key_sizes(cam: "MacCamera | None") -> list[tuple[int, int]]:
     """
     if not (cam and cam.modes):
         return SIZES
-    modes = sorted({(int(w), int(h)) for w, h in cam.modes}, key=lambda wh: wh[0] * wh[1])
+    # ⛔⭐ SLOW MODES ARE NOT "BETTER". The C920 advertises 2560x1472 at a **measured
+    # 2 fps** — a stills mode. The first version of this function offered it on key 6
+    # as "the best this camera can do", and Julien found the obvious consequence:
+    # *"the frame rate drops to like two frames per second"*. It also bought nothing,
+    # because what reaches the terminal is capped far below that anyway.
+    #
+    # A live view wants the sharpest mode that still MOVES. AVFoundation reports a
+    # max frame rate per format, so this is a measurement rather than a judgement.
+    usable = {(w, h) for w, h, fps in cam.mode_rates if fps >= MIN_LIVE_FPS}
+    pool = (cam.modes & usable) if usable else cam.modes
+    modes = sorted({(int(w), int(h)) for w, h in pool}, key=lambda wh: wh[0] * wh[1])
     # ⚠️ Landscape only, when there is a real choice. Apple's camera advertises
     # 1080x1920 and 1552x1552 — Center Stage crop modes — which by pixel count sort
     # ABOVE 1920x1080 and would put a portrait or square frame on key 6, where the
@@ -159,6 +173,11 @@ class MacCamera:
     model_id: str
     unique_id: str
     modes: frozenset = frozenset()
+    # (width, height, max_fps) per mode. ⛔ Load-bearing for a LIVE view: the C920
+    # advertises 2560x1472 and it is a **2 fps** mode. Offering it as "the best this
+    # camera can do" is how a viewer ends up at 2 fps — measured 2026-08-12, after
+    # Julien hit exactly that.
+    mode_rates: frozenset = frozenset()
 
     @property
     def usb(self) -> str | None:
@@ -215,12 +234,18 @@ def _av_cameras() -> list[MacCamera]:
         return []
     cams = []
     for dev in AV.AVCaptureDevice.devicesWithMediaType_(AV.AVMediaTypeVideo) or []:
-        modes = set()
+        rates: dict[tuple[int, int], float] = {}
         for fmt in dev.formats() or []:
             dims = CM.CMVideoFormatDescriptionGetDimensions(fmt.formatDescription())
-            modes.add((int(dims.width), int(dims.height)))
+            key = (int(dims.width), int(dims.height))
+            best = max((float(r.maxFrameRate())
+                        for r in fmt.videoSupportedFrameRateRanges() or []), default=0.0)
+            # The same size can appear several times with different pixel formats;
+            # keep the fastest, because that is what the mode can actually do.
+            rates[key] = max(rates.get(key, 0.0), best)
         cams.append(MacCamera(str(dev.localizedName()), str(dev.modelID() or ""),
-                              str(dev.uniqueID() or ""), frozenset(modes)))
+                              str(dev.uniqueID() or ""), frozenset(rates),
+                              frozenset((w, h, f) for (w, h), f in rates.items())))
     return cams
 
 
@@ -485,6 +510,94 @@ class CameraLookupError(Exception):
     """Raised when `--camera` cannot be resolved to exactly one index."""
 
 
+HINT_FILE = REPO_ROOT / "config" / "camera_index_hint.json"
+
+
+def _load_hints() -> dict:
+    try:
+        return json.loads(HINT_FILE.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_hint(unique_id: str, index: int) -> None:
+    hints = _load_hints()
+    if hints.get(unique_id) == index:
+        return
+    hints[unique_id] = index
+    try:
+        HINT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        HINT_FILE.write_text(json.dumps(hints, indent=2) + "\n")
+    except OSError:
+        pass          # a hint that cannot be written just makes the next run slower
+
+
+def find_camera_index(cam: MacCamera, others: list[MacCamera],
+                      limit: int = MAX_PROBE_INDEX) -> tuple[int | None, list[str]]:
+    """Which index is **this one** camera? Fast path for `--camera`.
+
+    ⛔⭐ WHY THIS EXISTS, AND IT IS JULIEN'S COMPLAINT VERBATIM: *"when I enter that
+    command, then it takes ages to choose the camera … it takes like twenty seconds
+    for the camera to start running, which shouldn't be the case because I
+    deliberately said which camera I want."*
+
+    He is right, and the first version deserved it. `--camera c920` called the full
+    `identify_indices()`, which opens **every** camera and asks **every** camera's
+    question at each index — 4 opens and 16 reconfigurations to answer a question
+    about one device. Worse, it woke his iPhone over Continuity every single time,
+    which is the slowest device on the bus and was never wanted.
+
+    Two changes, and together they turn ~20 s into about one open:
+
+    1. **One question, not N.** Only this camera's discriminating mode is asked at
+       each index. Stopping at the first exact match is safe *because* the mode is
+       unique to this camera — and if it were not unique, `discriminating_mode()`
+       returns None and we refuse before probing anything (two D405s, when the
+       second arrives).
+    2. ⭐ **A remembered index, always re-verified.** `config/camera_index_hint.json`
+       records where this camera was last found and that index is tried first.
+
+    ⚠️ **The hint is a place to look first, NOT a cached answer** — and that
+    distinction is the whole reason it is safe. FINDINGS §22 argues against caching
+    the identity, because a replug can reorder indices without changing anything a
+    cache could key on. Nothing here trusts the hint: the camera at that index is
+    still asked the same question, and a wrong hint costs one extra open and then
+    falls through to the scan. A cache you verify on every use is not a cache of the
+    answer; it is an ordering of the search.
+    """
+    notes: list[str] = []
+    mode = discriminating_mode(cam, others)
+    if mode is None:
+        return None, [f"⛔ {cam.short} shares every capture mode with another camera, so "
+                      "it cannot be identified by measurement. Use --index, and confirm "
+                      "by covering one of them."]
+    want_w, want_h = mode
+    hint = _load_hints().get(cam.unique_id)
+    order = ([hint] if hint is not None else []) + [i for i in range(limit) if i != hint]
+
+    for idx in order:
+        cap = cv2.VideoCapture(idx)
+        if not cap.isOpened():
+            cap.release()
+            continue
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
+        got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        cap.release()
+        if got == (want_w, want_h):
+            if idx == hint:
+                notes.append(f"✅ {cam.short} is on index {idx}, where it was last time "
+                             f"(confirmed by asking it for {want_w}x{want_h}).")
+            else:
+                notes.append(f"✅ {cam.short} found on index {idx} — it answered "
+                             f"{want_w}x{want_h}, which only it offers.")
+            _save_hint(cam.unique_id, idx)
+            return idx, notes
+    notes.append(f"⛔ no index delivered {want_w}x{want_h}, so {cam.short} is not "
+                 "openable right now. Continuity cameras drop off when the phone sleeps.")
+    return None, notes
+
+
 # Words worth accepting that do not appear in the macOS name string. `d405` is the
 # obvious one: the device calls itself "Depth Camera 405".
 ALIASES = {"d405": "405", "realsense": "realsense", "intel": "realsense",
@@ -537,19 +650,26 @@ def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
                                 "  Be more specific, or use --index.")
 
     cam = matches[0]
-    if identified is None:
-        print(f"  finding which index is the {cam.short} — this opens each camera briefly")
-        identified, notes = identify_indices(cams)
-    else:
-        notes = []
-    for idx, got in identified:
-        if got is not None and got.unique_id == cam.unique_id:
-            return idx, cam
-    detail = "\n".join(f"    {n}" for n in notes)
-    raise CameraLookupError(
-        f"macOS lists {cam.short}, but it could not be identified on any OpenCV index.\n"
-        f"{detail}\n"
-        "  Run --list to see what each index actually shows, then use --index N.")
+    # ⭐ When the tests inject an identification, honour it. Otherwise ask about THIS
+    # camera only — see find_camera_index for why the full scan was the wrong tool
+    # for a question about one device.
+    if identified is not None:
+        for idx, got in identified:
+            if got is not None and got.unique_id == cam.unique_id:
+                return idx, cam
+        raise CameraLookupError(
+            f"macOS lists {cam.short}, but no index answered for it.\n"
+            "  Run --list to see what each index actually shows, then use --index N.")
+
+    others = [c for c in cams if c.unique_id != cam.unique_id]
+    idx, notes = find_camera_index(cam, others)
+    for note in notes:
+        print(f"  {note}")
+    if idx is None:
+        raise CameraLookupError(
+            f"could not find {cam.short} on any camera index.\n"
+            "  Run --list to see what each index actually shows, then use --index N.")
+    return idx, cam
 
 
 def list_cameras() -> None:
@@ -882,6 +1002,25 @@ def auto_image_width(cols: int, capture_width: int, mode: str, cell: CellSize) -
     return max(64, min(box, capture_width, IMAGE_WIDTH_CAP.get(mode, 720)))
 
 
+def useful_image_width(cols: int, capture_width: int, cell: CellSize) -> int:
+    """The largest image that could ever be worth sending — the pane, bounded by
+    what the camera actually captured. **No protocol budget here**: this is the
+    ceiling the adaptive controller in `run_terminal` is allowed to climb toward.
+
+    ⭐ Why a controller and not a constant. `IMAGE_WIDTH_CAP` was measured from PNG
+    *encode* time, and on Julien's machine encode is not the wall: at 720 px he
+    measured a ~40 ms draw where encoding accounts for perhaps 8 ms. The rest is
+    writing ~650 KB into a pty every frame. That ratio depends on the terminal, the
+    font size, the window, and what else the machine is doing — none of which a
+    constant chosen on one afternoon can know.
+
+    So the viewer measures its own draw cost and climbs to whatever this terminal
+    actually sustains, which is the same discipline the rest of this repo applies to
+    the hardware: **measure the consequence rather than predicting it.**
+    """
+    return max(64, min(int(cols * cell.width), capture_width))
+
+
 def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 4,
                   cell_aspect: float | None = None) -> tuple[int, int]:
     """Character columns and rows to use, **preserving the picture's aspect ratio**.
@@ -1119,7 +1258,17 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
         return 1
     try:
         tty.setcbreak(fd)
-        sys.stdout.write(render_kitty(bars("KITTY"), cols, rows, quiet=False))
+        # ⛔⭐ `image_id` IS WHAT MAKES A REPLY POSSIBLE, and leaving it out is why
+        # this test reported a false negative on 2026-08-12. The kitty protocol keys
+        # its response to an image **id** (`i=`) or number (`I=`); with neither, the
+        # terminal has nothing to answer *about* and correctly says nothing. Ghostty
+        # 1.3.1 was accordingly declared "does not implement this protocol" while it
+        # was, at that very moment, drawing the camera view in kitty mode.
+        #
+        # A test that says "unsupported" when it means "I asked a question that has
+        # no addressee" is the same confident-wrong-answer this file keeps being
+        # rewritten to avoid — this time in the diagnostic itself.
+        sys.stdout.write(render_kitty(bars("KITTY"), cols, rows, quiet=False, image_id=771))
         sys.stdout.flush()
         reply = ""
         deadline = time.time() + 2.0
@@ -1142,7 +1291,10 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
     print("\n\n--- 1. kitty graphics protocol (PNG) ---")
     kitty_ok = ";OK" in reply
     if not reply:
-        print("  the terminal said NOTHING -> it does not implement this protocol")
+        print("  the terminal said nothing.")
+        print("  ⚠️ That does NOT prove the protocol is missing — some terminals draw")
+        print("     images perfectly well and never answer. **Look at the screen**: if")
+        print("     bars labelled KITTY appeared, kitty mode works regardless of silence.")
     else:
         print(f"  it replied: {reply.replace(chr(27), '<ESC>')!r}")
         print("  ✅ OK — the protocol works." if kitty_ok else
@@ -1204,9 +1356,14 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
     grab = FrameGrabber(cap)
     flip, rotate = args.flip, args.rotate
     sizes = key_sizes(cam)
-    # None = size the image to the pane automatically. A number pins it, either from
-    # --image-width or from the [ and ] keys.
+    # None = size the image automatically. A number pins it, from --image-width or
+    # the [ and ] keys.
     manual_width = args.image_width or None
+    # ⭐ The adaptive detail level, in pixels of image width. It starts at the
+    # measured-safe cap and then climbs or backs off against the real draw cost —
+    # see useful_image_width() for why a constant could not do this job.
+    auto_w = float(IMAGE_WIDTH_CAP.get(mode, 720))
+    next_tune = 0.0
     # ⭐ Set whenever a keypress changes what should be on screen, so the frame is
     # redrawn immediately instead of at the next capture.
     dirty = True
@@ -1261,7 +1418,8 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
                     # font size is picked up live rather than at the next launch.
                     cell = cell_size()
                     cols, rows = terminal_grid(w / h, scale, cell_aspect=cell.aspect)
-                    sent_w = min(manual_width or auto_image_width(cols, w, mode, cell), w)
+                    ceiling = useful_image_width(cols, w, cell)
+                    sent_w = int(min(manual_width or auto_w, ceiling))
                     sent_h = max(1, round(h * sent_w / w))
 
                     now = time.perf_counter()
@@ -1285,16 +1443,22 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
                     # number a key can change is on screen: the capture size, the size
                     # actually sent to the terminal, the cell grid, the draw cost.
                     detail = ("blocks — 2 px per cell" if mode == "blocks"
-                              else f"sent {sent_w}x{sent_h}"
-                                   f"{' (fixed)' if manual_width else ' (auto)'}")
+                              else f"sent {sent_w}x{sent_h} "
+                                   f"{'fixed' if manual_width else 'auto'}/{ceiling} max")
                     cell_note = (f"cell {cell.width:.0f}x{cell.height:.0f}px"
                                  if cell.measured else
                                  f"cell {cell.width:.0f}x{cell.height:.0f}px ASSUMED")
                     # A draw cost past half the frame interval means the terminal, not
                     # the camera, is the bottleneck — and it is fixable from here.
                     budget = 1000.0 / max(1.0, grab.capture_fps())
-                    warn = "   ⚠️ draw is over half the frame — press [ for less detail" \
-                        if draw_ms > 0.5 * budget else ""
+                    if manual_width and draw_ms > 0.5 * budget:
+                        warn = "   ⚠️ draw is over half the frame — press 0 for auto detail"
+                    elif w > 1.7 * sent_w:
+                        # ⭐ Decoding pixels that are then thrown away costs USB
+                        # bandwidth, CPU and latency for nothing visible.
+                        warn = "   ⚠️ capturing far more than is sent — a smaller capture looks the same"
+                    else:
+                        warn = ""
                     sys.stdout.write(
                         f"\x1b[0m\n{label}capture {w}x{h} · {detail} · {mode} · "
                         f"{cols}x{rows} cells · {cell_note}\x1b[K\n"
@@ -1309,6 +1473,25 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
                     # terminal cannot keep up, output backs up in the pipe, and lag
                     # grows without any single component looking wrong.
                     draw_ms = (time.perf_counter() - t_draw) * 1000.0
+
+                    # ⭐⭐ CLIMB TO WHAT THIS TERMINAL ACTUALLY SUSTAINS. Julien:
+                    # *"the max resolution that can be sent is 720x405 … it doesn't
+                    # really make any sort of difference"* — because 720 was a
+                    # constant picked from PNG encode cost on one machine, and on his
+                    # the cost is dominated by writing the bytes, not encoding them.
+                    #
+                    # Spend at most half the frame interval drawing, and use the
+                    # measured draw to decide. Backs off fast (×0.85) and climbs
+                    # slowly (×1.15) with a dead band between, because overshooting
+                    # costs frame rate the operator notices and undershooting only
+                    # costs detail they can ask for with `]`.
+                    if manual_width is None and now >= next_tune:
+                        next_tune = now + 0.4
+                        target = 0.5 * (1000.0 / max(1.0, grab.capture_fps()))
+                        if draw_ms > target:
+                            auto_w = max(240.0, auto_w * 0.85)
+                        elif draw_ms < 0.6 * target and auto_w < ceiling:
+                            auto_w = min(float(ceiling), auto_w * 1.15)
 
                 for k in keys.drain():
                     if k in ("q", "\x1b"):

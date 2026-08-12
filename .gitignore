@@ -9,6 +9,12 @@ third_party/
 # can be undone. It is a local safety net, not shared state.
 config/spacemouse_map.prev.json
 
+# Where each camera was last found. ⚠️ Derived, machine-specific and self-healing:
+# it is only ever used to decide which index to TRY FIRST, and the camera there is
+# re-verified before it is used. Committing it would share one machine's USB
+# enumeration order with every other machine, which is meaningless at best.
+config/camera_index_hint.json
+
 # ⚠️ NOT ignored, on purpose, so do not "tidy" these away:
 #   uv.lock          — the whole point of a lock file is that it is committed
 #   .python-version  — pins the interpreter for everyone

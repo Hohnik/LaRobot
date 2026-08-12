@@ -16,6 +16,7 @@ terminal happened to be — was exactly such a part, and would have been caught 
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -536,9 +537,108 @@ def test_a_listed_camera_that_no_index_answers_for_is_refused() -> None:
     try:
         C.resolve_camera("iphone", FAKE_NAMES, identified)
     except C.CameraLookupError as exc:
-        assert "could not be identified" in str(exc)
+        assert "no index answered" in str(exc), exc
     else:
         raise AssertionError("a camera that never answered was resolved anyway")
+
+
+# ------------------------------------------- finding ONE camera, quickly ----
+
+
+class FakeHints:
+    """Redirect the index-hint file so tests never write into config/."""
+
+    def __init__(self, initial=None):  # noqa: ANN001
+        self.initial = initial or {}
+
+    def __enter__(self):  # noqa: ANN204
+        import tempfile
+        self._dir = tempfile.TemporaryDirectory()
+        self._real = C.HINT_FILE
+        C.HINT_FILE = Path(self._dir.name) / "camera_index_hint.json"
+        if self.initial:
+            C.HINT_FILE.write_text(json.dumps(self.initial))
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        C.HINT_FILE = self._real
+        self._dir.cleanup()
+
+
+class CountingBus(FakeBus):
+    """A FakeBus that records how many times each index was opened."""
+
+    def __enter__(self):  # noqa: ANN204
+        self.opens: list[int] = []
+        self._real = C.cv2.VideoCapture
+
+        def factory(idx, *a, **k):  # noqa: ANN001, ANN202
+            self.opens.append(idx)
+            return (FakeCapture(self.wiring[idx]) if idx < len(self.wiring) else _Closed())
+
+        C.cv2.VideoCapture = factory
+        return self
+
+
+def test_finding_one_camera_asks_only_about_that_camera() -> None:
+    """⛔⭐ JULIEN, 2026-08-12: *"it takes like twenty seconds for the camera to start
+    running, which shouldn't be the case because I deliberately said which camera I
+    want."* He was right. `--camera c920` ran the FULL identification — every camera
+    opened, every camera's question asked at every index — to answer a question about
+    one device, waking his iPhone over Continuity every time."""
+    c920 = FAKE_NAMES[2]
+    others = [c for c in FAKE_NAMES if c is not c920]
+    with FakeHints(), CountingBus(FAKE_WIRING) as bus:
+        idx, notes = C.find_camera_index(c920, others)
+    assert idx == 0, f"{notes}"
+    assert bus.opens == [0], f"opened {bus.opens} — it should have stopped at the first hit"
+
+
+def test_a_remembered_index_is_tried_first_and_still_verified() -> None:
+    """⭐ The hint is an ORDERING OF THE SEARCH, never a cached answer. The camera at
+    the remembered index is asked the same question as any other; a right hint costs
+    one open, and a wrong one costs one extra."""
+    macbook = FAKE_NAMES[0]
+    others = [c for c in FAKE_NAMES if c is not macbook]
+    with FakeHints({macbook.unique_id: 2}), CountingBus(FAKE_WIRING) as bus:
+        idx, _ = C.find_camera_index(macbook, others)
+    assert idx == 2
+    assert bus.opens == [2], "a correct hint should mean exactly one open"
+
+
+def test_a_WRONG_remembered_index_is_caught_not_trusted() -> None:
+    """⛔ The whole safety argument for keeping a hint at all. If a replug moved the
+    camera, the hint points at the wrong device — and that device fails the question,
+    so the search carries on rather than driving the wrong camera."""
+    c920 = FAKE_NAMES[2]
+    others = [c for c in FAKE_NAMES if c is not c920]
+    with FakeHints({c920.unique_id: 3}), CountingBus(FAKE_WIRING) as bus:
+        idx, _ = C.find_camera_index(c920, others)
+    assert idx == 0, "a stale hint must not win"
+    assert bus.opens[0] == 3, "the hint should still have been tried first"
+
+
+def test_the_hint_is_written_so_the_next_run_is_fast() -> None:
+    d405 = FAKE_NAMES[1]
+    others = [c for c in FAKE_NAMES if c is not d405]
+    with FakeHints() as hints, FakeBus(FAKE_WIRING):
+        C.find_camera_index(d405, others)
+        saved = json.loads(C.HINT_FILE.read_text())
+    assert saved[d405.unique_id] == 1, saved
+    assert hints is not None
+
+
+def test_two_identical_cameras_are_refused_before_anything_is_opened() -> None:
+    """⚠️ The second D405. Two of a model share every mode, so there is no question
+    that separates them — and guessing would be a coin flip on which arm's view you
+    are driving."""
+    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+                       "UVC Camera VendorID_32902 ProductID_2907", "0xTWIN", D405_MODES)
+    with FakeHints(), CountingBus(FAKE_WIRING) as bus:
+        idx, notes = C.find_camera_index(FAKE_NAMES[1], [twin])
+    assert idx is None
+    assert bus.opens == [], "it must refuse without touching a camera"
+    assert any("shares every capture mode" in n for n in notes), notes
 
 
 # ------------------------------------------- what the number keys are bound to ----
@@ -576,6 +676,40 @@ def test_the_number_keys_do_not_offer_portrait_modes_for_a_video_view() -> None:
     sizes = C.key_sizes(FAKE_NAMES[0])
     assert all(w >= h for w, h in sizes), f"a portrait or square mode was offered: {sizes}"
     assert sizes[-1] == (1760, 1328), f"key 6 should be the largest landscape mode, got {sizes[-1]}"
+
+
+def test_a_slow_capture_mode_is_never_offered_as_the_best() -> None:
+    """⛔⭐ JULIEN, 2026-08-12: pressing 6 dropped him to *"like two frames per
+    second"*. MEASURED: the C920's 2560x1472 is a **2 fps** mode — a stills format.
+    "The best this camera can do" is the wrong idea for a live view; the right one is
+    the sharpest mode that still MOVES, and AVFoundation reports the rate per mode so
+    this is a measurement rather than a judgement."""
+    fast = {m for m in C920_MODES if m != (2560, 1472)}
+    c920 = C.MacCamera("HD Pro Webcam C920", "", "x", frozenset(C920_MODES),
+                       frozenset({(w, h, 30.0) for w, h in fast} | {(2560, 1472, 2.0)}))
+    sizes = C.key_sizes(c920)
+    assert (2560, 1472) not in sizes, "a 2 fps stills mode was offered for a live view"
+    assert sizes[-1] == (1920, 1080), f"key 6 should be the best mode that moves, got {sizes[-1]}"
+
+
+def test_without_rate_information_every_mode_is_still_offered() -> None:
+    """No AVFoundation means no rates. Silently dropping every mode would be worse
+    than offering one that turns out slow — and the fps readout shows the truth."""
+    cam = C.MacCamera("x", "", "x", frozenset({(640, 480), (1280, 720)}))
+    assert C.key_sizes(cam) == [(640, 480), (1280, 720)]
+
+
+def test_the_useful_width_has_no_protocol_budget_in_it() -> None:
+    """⭐ The ceiling the adaptive controller climbs toward is the PANE and the
+    CAPTURE — physical limits. The protocol budget is only a starting guess, because
+    on Julien's machine the cost is writing bytes, not encoding them, and no constant
+    measured on one afternoon can know that ratio."""
+    cell = C.CellSize(16.0, 34.0, measured=True)
+    assert C.useful_image_width(121, 1920, cell) == 1920, "the pane is 1936 px; capture bounds it"
+    assert C.useful_image_width(40, 1920, cell) == 640, "a small pane bounds it instead"
+    assert C.useful_image_width(121, 320, cell) == 320, "never above what was captured"
+    assert C.useful_image_width(121, 1920, cell) > C.IMAGE_WIDTH_CAP["kitty"], (
+        "the ceiling must be allowed above the starting cap, or nothing can climb")
 
 
 def test_the_number_keys_fall_back_when_the_modes_are_unknown() -> None:
