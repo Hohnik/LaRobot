@@ -280,10 +280,23 @@ and a simulated IK loop produced three failures on first hardware contact, one o
 
 ### Order of work
 
-1. Extract `ArmSession` with **no behaviour change**; run `--arms B` and confirm it feels identical.
+1. ⏳ Extract `ArmSession` with **no behaviour change**; run `--arms B` and confirm it feels identical.
+   - ✅ **The class exists and is tested** — `src/arm_session.py`, 17 tests against a fake robot
+     (2026-08-12). State, mode transitions, park stepping with the ramp, the queue, and the thermal
+     guard per arm. **The class decides, the script narrates:** no method prints, so every decision
+     is testable without hardware.
+   - ⬜ **Wiring it into `teleop_session.py` — the remaining half, and the risky one.** ~1000 lines of
+     `main()` currently hold that state as locals. Deliberately left for a session of its own:
+     mixing "write the class" and "restructure the loop" produces a diff nobody can review and that
+     only Julien can test. Session 4 is the standing warning.
+   - ⚠️ **Not in the class on purpose:** building the robot (it energises motors — stays visible in
+     the script), reading the SpaceMouse, key handling (which arm a key applies to is a *session*
+     question), and IK stepping (`CartesianTeleop` owns it).
 2. Add the `a` selector and per-arm status lines. Still one arm.
 3. `--arms B,G`, starting in HOLD, gripper enabled, desk clear.
 4. Only then GUIDE and CONTROLS on two arms.
+5. Mirror mode on top — `src/mirror.py` and its 14 tests already exist; it needs the two-arm process
+   from step 3 and nothing else.
 
 ## Step 6.5 — ⭐ Saved positions, sequences, and smooth motion between them
 
