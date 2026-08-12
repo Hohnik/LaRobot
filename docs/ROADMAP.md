@@ -391,6 +391,104 @@ Stop-at-each-waypoint first, blended later, and only if the motion genuinely nee
 arm about the default corner radius (`smooth`, 0.15 rad), the default ease (`both`) and
 the default speed. All three are live knobs, so tuning them needs no code.
 
+### ⭐ What the five ease profiles actually mean, in plain terms
+
+Julien asked, and "I don't know what s-curve is" is a fair thing not to know.
+
+Every profile answers one question: **how does the speed change at the two ends of a
+move?** The middle is always full speed.
+
+| profile | start | stop | when you want it |
+|---|---|---|---|
+| `none` | instant | instant | shortest possible move; a small jolt at each end |
+| `in` | gentle | instant | leaving a delicate position, arriving somewhere it does not matter |
+| `out` | instant | gentle | ⭐ **what Ctrl-C uses** — go now, land softly |
+| `both` | gentle | gentle | the general-purpose one |
+| `s-curve` | *very* gentle | *very* gentle | the smoothest, and the slowest off the mark |
+
+**The difference between `both` and `s-curve`** is what is being smoothed. `both`
+ramps the **speed** — but the *acceleration* still jumps from nothing to a constant
+value the instant it starts, which the arm feels as a small shove. `s-curve` ramps the
+acceleration too, so the force builds up gradually. In an editor this is the
+difference between dragging a linear keyframe handle and a Bézier one.
+
+⚠️ **Both ends use `√` now, not a straight line, and that is why the tail stopped
+crawling.** With a straight ramp the speed is proportional to the distance left, which
+is exponential decay — it halves in equal time steps and never quite arrives.
+Constant deceleration is `v ∝ √s` and it *does* arrive. Measured: the last 0.1 rad of
+a 1 rad move went from 1.08 s to 0.59 s while the rest was unchanged.
+
+### ⭐ The two "patiences", and whether they are smart
+
+Also a fair question. **They exist because two different things look identical from
+outside: an arm that has finished, and an arm that is stuck.** Both stop making
+progress. The only way to tell them apart is *how far from the target it stopped* and
+*how long you are willing to wait before deciding*.
+
+- **0.5 s — "has the controller finished settling?"** The arm never lands exactly on
+  the commanded pose; it settles a fraction of a degree short, where its stiffness
+  balances gravity. Half a second of no improvement while already *close* means it has
+  arrived as well as it ever will.
+- **4 s — "is something in the way?"** Stopping *far* from the target is a different
+  claim, and a much more serious one. Four seconds before saying so avoids crying wolf
+  over a slow patch.
+
+**Is it necessary?** Yes, and the history says so: they were one timer, and every park
+that finished outside the 0.02 rad tolerance — most of them — sat apparently idle for
+four seconds before admitting it had arrived. **Is it smart?** It is the minimum
+honest answer. The alternative is one number, which either declares arrival too
+eagerly (and hides an obstruction) or waits too long (which is what he saw). ⚠️ If it
+ever needs revisiting, the number to change is the 0.5 s, and the symptom would be a
+park declaring success while the arm is visibly still moving.
+
+### ⭐⭐ Is waypoint playback good training data? — thought through, 2026-08-12
+
+Julien's idea: *"define the waypoints in guide mode and then just play it without the
+hands in the way, so the robot can see all of the positions and the camera input as it
+should be — but at the same time it's predefined and not done with a mouse. Is that
+good data for the robot to learn?"*
+
+It is a genuinely good question and the answer is **no for policy learning, yes for
+almost everything around it** — and the reason is precise enough to be worth keeping.
+
+⛔ **Why it fails as training data.** An imitation policy learns a mapping from *what
+it sees* to *what to do*. A replayed trajectory is **the same every time regardless of
+what the camera sees**. So in the training set the action is statistically independent
+of the observation — and a model fitting that data has **no reason to look at the
+image at all**. It can score perfectly by memorising the trajectory and ignoring the
+camera, which is exactly the model you do not want. Move the object 5 cm and it does
+the identical thing.
+
+⛔ **The second failure is subtler and worse: no corrective behaviour.** A human
+teleoperating drifts slightly off, notices, and pulls back — so the demos naturally
+contain thousands of tiny examples of *"you are a bit off, here is the way back."* A
+replay is perfect every time, so the policy never sees a single recovery. The first
+time it makes a small error at run time it is in a state the training data never
+contained, and errors compound. This is the standard covariate-shift argument that
+motivates DAgger, and it is the reason scripted demos underperform human ones even
+when the scripted ones look cleaner.
+
+✅ **What it IS excellent for, and these are real:**
+
+1. **Validating the recording pipeline** — a repeatable trajectory is the perfect test
+   signal for MCAP schema, timestamp alignment, camera-to-joint sync and dropped
+   frames. You cannot debug a recorder against data that is different every time.
+2. **Measuring the rig** — tracking error, latency, repeatability, thermal drift over
+   a hundred identical cycles. All of that needs a motion that does not vary.
+3. ⭐ **AUTOMATED SCENE RESET, which is the one with real leverage.** The genuine
+   bottleneck in demo collection is not performing the task, it is *putting everything
+   back* between takes. A waypoint run that picks the object up and returns it to a
+   randomised start position means Julien can record demo after demo without touching
+   the scene — **the playback creates the conditions, the human still provides the
+   demonstration.** That keeps every property that makes teleop data good while
+   removing most of the tedium.
+
+⚠️ **The one way playback could become training data** is if the waypoints were
+*generated per episode from the observed scene* — object detected here, so approach
+there — because then the action genuinely depends on the observation. That is a
+different and much larger project (a scripted policy with perception), and it is worth
+knowing it exists rather than assuming replay is simply unusable.
+
 ⚠️ **If a future session wants more interpolation options** — he compared this to
 Premiere Pro — the honest ranking is: (a) per-waypoint speed, so one leg can be slow and
 the next quick, which needs the slot file to carry more than a pose; (b) *dwell* at a
@@ -399,6 +497,20 @@ actually needs; (c) true spline interpolation through the waypoints rather than
 blended corners, which is prettier and much harder to bound. **(b) is the one with real
 downstream value** — it is the difference between a motion and a *task*, and it is what
 the MCAP recorder will want to replay.
+
+⭐ **Julien's ruling on all three, 2026-08-12:** *"all three sound really good, but they
+don't have to be done right now and they don't have to be main options. They could just
+be extra options that we can press a button for."* So they are **deferred, and they are
+extras** — additional knobs on the run that already exists, not a redesign.
+
+The place they attach is already built: the run plan line and the `pending`/`confirm`
+key handler in `teleop_session.py`, where speed, corners, ease profile and ramp length
+already live. **Per-waypoint dwell is the one to do first**, because it needs the slot
+file to carry `{pose, dwell}` instead of a bare pose — and `park_slots()` /
+`with_park_slot()` already tolerate that shape change, since a slot's value only has to
+be a non-empty list. ⚠️ Adding dwell also turns a saved sequence into a *task
+description* rather than a path, which is exactly what the recorder wants to replay —
+see the data-collection analysis above for why that matters more than a prettier curve.
 
 ⚠️ **Deliberately still NOT doing: Cartesian-space blending.** These are *joint* poses,
 so a joint-space path needs no IK, cannot hit a singularity, and provably stays inside

@@ -31,13 +31,35 @@
 > gripper, the axis map, control frames, saved poses and blended multi-pose runs all work and Julien has
 > driven them. The camera view works and cameras are identified by measurement.
 >
-> **The next real piece of work is bimanual**, and it is half done in a specific way:
-> `src/arm_session.py` **exists and is tested (17 tests)** — it is one arm's state and mode machine,
-> written so N of them can run in one loop. ⬜ **It is not wired into `scripts/teleop_session.py` yet.**
-> That wiring is the job: ~1000 lines of `main()` currently hold one arm's state as locals.
-> ⭐ Do it as [ROADMAP step 6](ROADMAP.md) says — **`--arms B` running the N-arm code with N=1 first**,
-> confirm it feels identical, and only then N=2. Then mirror mode is just the two-arm process plus
-> `src/mirror.py`, which already exists with 14 tests.
+> ## ⬜⬜ THE NEXT JOB, AND IT IS THE ONLY BIG ONE LEFT: wire `ArmSession` in
+>
+> ⛔ **There is no bimanual command yet. `--arms` does not exist.** `teleop_session.py` is single-arm
+> from top to bottom; asking for two arms today would just error. Julien asked for the command on
+> 2026-08-12 and the honest answer was that it does not exist.
+>
+> **What IS done:** `src/arm_session.py` — one arm's state and mode machine, **17 tests against a fake
+> robot**, written so N of them run in one loop. State, mode transitions, park stepping with the ramp,
+> the queue, per-arm thermal guard. Its rule is *the class decides, the script narrates* — no method
+> prints — which is why it can be proven without hardware.
+>
+> **What is left, concretely:** `main()` is ~1000 lines holding ONE arm's state as locals —
+> `robot`, `teleop`, `mode`, `gripper_value`, `prev_q`, `home_ee`, `park_target`, `park_path`,
+> `park_s`, `guide_ref`, `park_cmd`. Replace those with a list of `ArmSession`, and iterate.
+>
+> ⭐ **Do it in this order — it is the whole de-risking plan and it is not optional:**
+> 1. `--arms B` runs the N-arm code with **N=1**. Julien confirms it *feels identical*. The restructure
+>    is then verified against a feel he already knows, separately from any two-arm risk.
+> 2. Add the `a` selector (B → G → BOTH) and per-arm status rows. Still one arm connected.
+> 3. `--arms B,G`, starting in **HOLD**, gripper enabled, desk clear.
+> 4. Only then GUIDE and CONTROLS on two arms — GUIDE last, because that is the mode where a
+>    dynamics-model error becomes a *falling* arm, and `g` on two arms is 8.6 kg at once.
+> 5. Mirror mode on top: `src/mirror.py` + its 14 tests already exist and need only the two-arm process.
+>
+> ⚠️ **The decisions are already made** — [ROADMAP step 6](ROADMAP.md) has the table: mode keys apply to
+> the *selected* arm, driving always applies to *all* arms, start in HOLD and refuse `--start-mode guide`
+> when N>1, and **a fault on one arm stops both** (a chain death on B must not leave G sagging).
+> Prerequisites that are already built: per-arm and per-frame axis maps, and
+> `pick_device_by_wiggle(exclude=…)` so one puck cannot be assigned to both arms.
 >
 > ⚠️ **Nothing is pushed** (working contract rule 9). A snapshot branch `julien/yam-teleop-wip` exists on
 > `Hohnik/LaRobot` from 2026-08-12 and is **not kept in sync** — it was taken once, for his colleagues.
