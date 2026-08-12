@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 from yam_robot import (  # noqa: E402
     advance_park_command,
     park_slots,
+    park_speed_factor,
     park_target_from,
     park_verdict,
     resolve_park_legs,
@@ -273,6 +274,54 @@ def test_slots_are_per_arm() -> None:
 def test_a_slot_can_be_overwritten() -> None:
     data = with_park_slot(with_park_slot({}, "B", "2", [1.0]), "B", "2", [5.0])
     assert park_slots(data, "B")["2"] == [5.0]
+
+
+# ---------------------------------------- smoothing between the poses ----
+
+RAMP, FLOOR = 0.2, 0.15
+
+
+def test_the_move_eases_in_and_out() -> None:
+    """A constant-rate park starts and stops with a jerk. With sequences that jerk
+    lands at every waypoint, in the middle of a motion someone is watching."""
+    start = park_speed_factor(0.0, 1.0, RAMP)
+    middle = park_speed_factor(0.5, 0.5, RAMP)
+    end = park_speed_factor(1.0, 0.0, RAMP)
+    assert start < middle, "it should ramp up from rest"
+    assert end < middle, "it should ramp down into the target"
+    assert middle == 1.0, "the middle of a long move runs at full speed"
+
+
+def test_it_never_reaches_zero() -> None:
+    """⚠️ Without a floor the factor hits zero at both ends and the arm creeps for
+    ever — which the stall detector would eventually, and wrongly, call an
+    obstruction."""
+    assert park_speed_factor(0.0, 1.0, RAMP) >= FLOOR
+    assert park_speed_factor(1.0, 0.0, RAMP) >= FLOOR
+    assert park_speed_factor(0.0, 0.0, RAMP) >= FLOOR
+
+
+def test_it_never_exceeds_full_speed() -> None:
+    """⛔ The safety-relevant direction. Scaling the step DOWN cannot overshoot,
+    because advance_park_command already clamps to the distance remaining. Scaling it
+    UP would break that guarantee, so the factor must never exceed 1."""
+    for travelled in (0.0, 0.1, 1.0, 100.0):
+        for remaining in (0.0, 0.1, 1.0, 100.0):
+            assert park_speed_factor(travelled, remaining, RAMP) <= 1.0
+
+
+def test_a_short_hop_becomes_a_triangle_not_a_special_case() -> None:
+    """A move shorter than two ramps never reaches full speed. That is correct, and
+    it falls out of the min() rather than needing a branch."""
+    peak = max(park_speed_factor(d, 0.1 - d, RAMP) for d in (0.0, 0.05, 0.1))
+    assert peak < 1.0, "a 0.1 rad move should never reach full speed with a 0.2 ramp"
+
+
+def test_a_zero_ramp_disables_smoothing_entirely() -> None:
+    """`--no-smooth` is exactly this, so the old constant-rate behaviour stays
+    reachable with one flag."""
+    for travelled, remaining in ((0.0, 1.0), (0.5, 0.5), (1.0, 0.0)):
+        assert park_speed_factor(travelled, remaining, 0.0) == 1.0
 
 
 BASE = [0.0] * 7

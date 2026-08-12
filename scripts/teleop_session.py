@@ -116,6 +116,7 @@ from yam_robot import (  # noqa: E402
     motor_temperatures,
     park_slots,
     park_target_from,
+    park_speed_factor,
     park_verdict,
     resolve_park_legs,
     shutdown_robot,
@@ -142,6 +143,11 @@ PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
 # ⭐ Slot "0" in the UI. The one pose Ctrl-C returns to before releasing the motors,
 # and the only one `s 0` may overwrite — see where it is loaded for why that matters.
 BASE_SLOT = "default"
+# ⭐ Ease in and out over this much joint travel. A constant-rate park starts and
+# stops with a jerk; with sequences that jerk lands at every waypoint. 0.20 rad is
+# ~half a second of ramp at the default 0.4 rad/s, and a move shorter than twice it
+# simply never reaches full speed. `--no-smooth` sets it to 0.
+PARK_RAMP = 0.20
 # Judged on the MEASURED pose, so it must allow for a position controller's
 # steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
 PARK_TOLERANCE = 0.02
@@ -299,7 +305,7 @@ def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
     threading.__excepthook__(args)
 
 
-def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
+def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP) -> str:  # noqa: ANN001
     """Drive to the park pose, **blocking**, and say how it ended.
 
     Returns `"arrived"` · `"stalled"` · `"stopped"` (a key was pressed) · `"dead"`.
@@ -321,6 +327,7 @@ def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
     if warn:
         print(f"\n  ⚠️  {warn}.")
     cmd = np.asarray(robot.get_joint_pos(), dtype=float)
+    start = cmd.copy()
     best = float(np.max(np.abs(tgt - cmd)))
     last_progress = time.perf_counter()
     # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean
@@ -356,7 +363,11 @@ def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
             return "stopped"
         if err < best - PARK_PROGRESS_EPS:
             best, last_progress = err, now
-        cmd = advance_park_command(cmd, tgt, PARK_SPEED / CONTROL_HZ)
+        # Same ease-in/ease-out as the interleaved park — Ctrl-C should not shut down
+        # with a jerk at both ends when a mid-session park glides.
+        factor = park_speed_factor(float(np.max(np.abs(cmd - start))),
+                                   float(np.max(np.abs(tgt - cmd))), ramp)
+        cmd = advance_park_command(cmd, tgt, PARK_SPEED * factor / CONTROL_HZ)
         robot.command_joint_pos(cmd)
         time.sleep(1.0 / CONTROL_HZ)
 
@@ -369,6 +380,11 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--no-gripper", action="store_true",
                     help="run the 6 arm joints only and leave motor 7 free — the escape hatch if the "
                          "gripper misbehaves again")
+    ap.add_argument("--no-smooth", action="store_true",
+                    help="drive to park poses at a constant rate, as before. By default "
+                         "each move eases in and out over 0.2 rad, which matters most "
+                         "when running a SEQUENCE of poses — every waypoint is otherwise "
+                         "a stop and a start")
     ap.add_argument("--no-rotation", action="store_true",
                     help="start with wrist rotation disabled (toggle live with r)")
     ap.add_argument("--frame", default="world", choices=sorted(FRAMES),
@@ -420,6 +436,7 @@ def main() -> int:  # noqa: PLR0915
     slots = park_slots(load_json(PARK_FILE, {}), args.arm)
     park = slots.get(BASE_SLOT)
     park_speed = PARK_SPEED
+    park_start: np.ndarray | None = None
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
@@ -619,6 +636,7 @@ def main() -> int:  # noqa: PLR0915
             arm once taught us to centralise.
             """
             nonlocal mode, park_target, park_cmd, park_best_err, park_progress_t
+            nonlocal park_start
             tgt, warn = park_target_from(robot.get_joint_pos(), pose,
                                          gripper_index=N_ARM, clamp=clamp_gripper)
             if warn:
@@ -626,6 +644,9 @@ def main() -> int:  # noqa: PLR0915
             park_target = tgt
             mode = "park"
             enter_hold()
+            # Where this leg began, so the ramp knows how far it has come. Recorded
+            # per LEG, not per session — each waypoint gets its own ease-in.
+            park_start = np.asarray(robot.get_joint_pos(), dtype=float)
             # Seed the trajectory at the arm's real pose, then let it run ahead.
             # enter_hold() has just resynced SafeRobot, so the rate limiter starts
             # anchored here too.
@@ -1228,7 +1249,15 @@ def main() -> int:  # noqa: PLR0915
                     else:
                         # ⛔ Advance the COMMAND, not the measurement. See
                         # yam_robot.advance_park_command() for why this is the whole bug.
-                        park_cmd = advance_park_command(park_cmd, park_target, park_speed * dt)
+                        # ⭐ Ease in and out. The factor only ever SCALES THE STEP DOWN,
+                        # and advance_park_command already clamps a step to the distance
+                        # remaining — so this cannot overshoot, only soften the ends.
+                        ramp = park_speed_factor(
+                            float(np.max(np.abs(park_cmd - park_start))),
+                            float(np.max(np.abs(park_target - park_cmd))),
+                            0.0 if args.no_smooth else PARK_RAMP)
+                        park_cmd = advance_park_command(park_cmd, park_target,
+                                                        park_speed * ramp * dt)
                         robot.command_joint_pos(park_cmd)
                         if err < park_best_err - PARK_PROGRESS_EPS:
                             park_best_err, park_progress_t = err, t

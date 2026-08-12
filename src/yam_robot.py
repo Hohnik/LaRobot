@@ -291,6 +291,38 @@ def park_target_from(
     return target, warning
 
 
+def park_speed_factor(travelled: float, remaining: float, ramp: float,
+                      floor: float = 0.15) -> float:
+    """How much of the park speed to use right now — a trapezoidal ramp, in [floor, 1].
+
+    Ease in over the first `ramp` radians, cruise, ease out over the last `ramp`. On a
+    move shorter than `2 * ramp` the profile degenerates to a triangle, which is the
+    correct thing for a short hop rather than a special case.
+
+    ⭐ WHY THIS IS A SEPARATE FUNCTION AND NOT A CHANGE TO `advance_park_command`.
+    That function is confirmed on hardware, has 15 tests, and its one job — *advance
+    the COMMAND, never the measurement* — cost two sessions to get right. Smoothing
+    does not need to touch it: this returns a scale factor and the caller multiplies
+    its step. The trajectory integrator stays exactly as it is.
+
+    ⚠️ AND THAT SHAPE REMOVES THE RISK I ORIGINALLY WORRIED ABOUT. The plan in
+    ROADMAP 6.5 said easing should be opt-in because *"a deceleration bug shows up as
+    overshoot — the arm arriving somewhere it was not aimed"*. That is true of a new
+    integrator carrying velocity state. It is **not** true here: `advance_park_command`
+    is `command + clip(target - command, -step, step)`, so a step is already bounded
+    by the distance that remains. **Scaling that step DOWN cannot overshoot**, only
+    slow down. Checked by reading it rather than assumed, which is why this is on by
+    default with `--no-smooth` as the escape hatch.
+
+    ⚠️ `floor` matters: without it the factor reaches zero at both ends and the arm
+    creeps for ever, which the stall detector would eventually — and wrongly — call
+    an obstruction.
+    """
+    if ramp <= 0:
+        return 1.0
+    return max(floor, min(1.0, travelled / ramp, remaining / ramp))
+
+
 def resolve_park_legs(wanted: list[str], base: list | None, slots: dict[str, list],
                       ) -> tuple[list[tuple[str, list]], list[str]]:
     """Turn typed digits into `(legs, missing)` — the poses to visit, in order.
