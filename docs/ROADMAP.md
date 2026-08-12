@@ -378,9 +378,27 @@ Stop-at-each-waypoint first, blended later, and only if the motion genuinely nee
    the plan and waits for a second Enter · `-/+` speed and `,/.` corners work **while
    typing as well as while moving**.
 
+8. ✅ **Easing as its own axis** (2026-08-12) — five profiles cycled with `e`:
+   `none` · `in` · `out` · `both` · `s-curve`. ⭐ **Corner blending and easing are
+   independent and both are needed**: blending decides the *shape*, easing decides the
+   *speed along it*. Ctrl-C uses `out` — full speed from the first step, soft landing —
+   because a shutdown move should leave at once.
+9. ✅ **The end-of-park wait** — `settled` had shared the `blocked` timer, so every park
+   finishing outside the 0.02 rad tolerance idled for four seconds before admitting it
+   had arrived. Two questions, two patiences: 0.5 s and 4 s.
+
 ⬜ **What is left in this area:** nothing structural — only Julien's judgement on the
-arm about the default corner radius (`smooth`, 0.15 rad) and default speed. Both are
-live knobs, so tuning them needs no code.
+arm about the default corner radius (`smooth`, 0.15 rad), the default ease (`both`) and
+the default speed. All three are live knobs, so tuning them needs no code.
+
+⚠️ **If a future session wants more interpolation options** — he compared this to
+Premiere Pro — the honest ranking is: (a) per-waypoint speed, so one leg can be slow and
+the next quick, which needs the slot file to carry more than a pose; (b) *dwell* at a
+waypoint, i.e. pause N seconds before continuing, which is what a pick-and-place demo
+actually needs; (c) true spline interpolation through the waypoints rather than
+blended corners, which is prettier and much harder to bound. **(b) is the one with real
+downstream value** — it is the difference between a motion and a *task*, and it is what
+the MCAP recorder will want to replay.
 
 ⚠️ **Deliberately still NOT doing: Cartesian-space blending.** These are *joint* poses,
 so a joint-space path needs no IK, cannot hit a singularity, and provably stays inside
