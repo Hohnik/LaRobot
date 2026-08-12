@@ -43,11 +43,70 @@ but a different, and predictable, shape.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 # How finely each rounded corner is sampled. 12 is smooth to the eye at these speeds
 # and keeps a 10-waypoint path in the low hundreds of points, which is nothing.
 CORNER_SAMPLES = 12
+
+
+@dataclass(frozen=True)
+class Easing:
+    """A named velocity profile — how the move starts and stops.
+
+    ⭐ Corner blending and easing are **independent axes** and Julien wants both
+    adjustable: blending decides the *shape* the arm follows, easing decides the
+    *speed along it*. Naming them the way an editor does (Premiere's ease in / ease
+    out / ease both) is deliberate — it is the vocabulary he used, and each name says
+    exactly what it does to the two ends of the move.
+    """
+
+    name: str
+    ease_in: bool
+    ease_out: bool
+    smooth: bool = False        # smoothstep the ramp instead of a straight line
+
+
+# ⚠️ `none` is not decoration: Julien on the Ctrl-C park — *"I don't want to have to
+# wait until the movement has been smoothed out, I want it to move into its parking
+# position quickly and swiftly, without the excessive starting and pausing."* A
+# shutdown move wants to leave immediately; only the landing needs to be soft.
+EASINGS = [
+    Easing("none", False, False),
+    Easing("in", True, False),
+    Easing("out", False, True),
+    Easing("both", True, True),
+    Easing("s-curve", True, True, smooth=True),
+]
+
+
+def easing_factor(easing: Easing, travelled: float, remaining: float, ramp: float,
+                  floor: float = 0.15) -> float:
+    """Speed multiplier in `[floor, 1]` for a move `travelled` in and `remaining` to go.
+
+    ⚠️ `floor` is load-bearing. Without it the factor reaches zero at whichever end is
+    eased and the arm creeps for ever, which the stall detector would eventually — and
+    wrongly — call an obstruction.
+
+    ⭐ `smooth` applies smoothstep (`3f² − 2f³`) to the ramp, which removes the corner
+    in the *acceleration* as well as in the speed. A linear ramp still starts moving
+    abruptly in the sense that acceleration jumps from 0 to constant; smoothstep eases
+    that too, and it is the difference between "ease" and "ease with a Bézier handle"
+    in an editor.
+    """
+    if ramp <= 0:
+        return 1.0
+    f = 1.0
+    if easing.ease_in:
+        f = min(f, travelled / ramp)
+    if easing.ease_out:
+        f = min(f, remaining / ramp)
+    f = max(0.0, min(1.0, f))
+    if easing.smooth:
+        f = f * f * (3.0 - 2.0 * f)
+    return max(floor, f)
 
 
 def _dist(a, b) -> float:  # noqa: ANN001

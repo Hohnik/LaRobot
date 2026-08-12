@@ -351,7 +351,7 @@ def resolve_park_legs(wanted: list[str], base: list | None, slots: dict[str, lis
 
 
 def park_verdict(err: float, stopped_improving: bool, tolerance: float,
-                 settled_band: float) -> str:
+                 settled_band: float, stopped_briefly: bool | None = None) -> str:
     """`"arrived"` · `"settled"` · `"blocked"` · `"moving"` — has the park finished?
 
     ⛔⭐ THE KNIFE EDGE THIS REMOVES, seen on hardware 2026-08-12. In one session the
@@ -380,12 +380,30 @@ def park_verdict(err: float, stopped_improving: bool, tolerance: float,
     So the threshold that was doing two jobs is split into two thresholds, each doing
     one. `tolerance` means "arrived cleanly"; `settled_band` means "close enough that
     the remaining error is the controller, not an obstruction".
+
+    ⭐ `stopped_briefly` is a SECOND, much shorter timer, and adding it fixed a real
+    annoyance. Julien, 2026-08-12: *"I quite dislike how long it takes for the last
+    waypoint to be reached — it's nearly there, but then it moves millimetre by
+    millimetre really slowly until it actually reaches its position."*
+
+    He was watching a **wait**, not a crawl. `settled` was gated on the same 4-second
+    stall timer as `blocked`, so every park that finished outside the 0.02 tolerance —
+    which is most of them, because the controller settles ~0.04 rad short under load —
+    sat apparently doing nothing for four seconds before admitting it had arrived.
+
+    The two questions deserve different patience. *"Has the controller finished
+    settling?"* is answered in a fraction of a second. *"Is something blocking the
+    arm?"* deserves four. Splitting them costs one argument and removes the wait.
     """
+    if stopped_briefly is None:
+        stopped_briefly = stopped_improving
     if err < tolerance:
         return "arrived"
-    if not stopped_improving:
-        return "moving"
-    return "settled" if err < settled_band else "blocked"
+    if err < settled_band and stopped_briefly:
+        return "settled"
+    if stopped_improving:
+        return "blocked"
+    return "moving"
 
 
 def park_slots(data: dict, arm: str) -> dict[str, list]:

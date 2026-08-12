@@ -107,7 +107,8 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
-from motion import JointPath  # noqa: E402
+from motion import EASINGS, JointPath, easing_factor  # noqa: E402
+from screen import StatusLine  # noqa: E402
 from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
@@ -117,7 +118,6 @@ from yam_robot import (  # noqa: E402
     motor_temperatures,
     park_slots,
     park_target_from,
-    park_speed_factor,
     park_verdict,
     resolve_park_legs,
     shutdown_robot,
@@ -159,6 +159,14 @@ BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
 # corner is not the shape anyone chose. SafeRobot's 0.25 rad lag limit is the backstop
 # below this; this keeps the path faithful rather than merely safe.
 MAX_CURSOR_LAG = 0.15
+# ⭐ Two DIFFERENT patiences, and separating them removed a four-second dead wait at
+# the end of every park. "Has the controller finished settling?" is answered in a
+# fraction of a second; "is something blocking the arm?" deserves four. They used to
+# share PARK_STALL_SECONDS, so every park that finished outside the 0.02 tolerance —
+# which is most of them — sat apparently doing nothing before admitting it had
+# arrived. Julien: *"it moves millimetre by millimetre really slowly."* He was
+# watching a wait, not a crawl.
+PARK_SETTLE_SECONDS = 0.5
 # Judged on the MEASURED pose, so it must allow for a position controller's
 # steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
 PARK_TOLERANCE = 0.02
@@ -219,7 +227,8 @@ HELP = """
             p then Enter          drive to the base pose
             p then 1 then Enter   drive to waypoint 1
             p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
-            while choosing OR moving:  - / +  speed     , / .  corners sharp↔flowing
+            while choosing OR moving:  - / +  speed   , / .  corners sharp↔flowing
+                                       e  ease: none / in / out / both / s-curve
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
@@ -318,7 +327,8 @@ def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
     threading.__excepthook__(args)
 
 
-def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP) -> str:  # noqa: ANN001
+def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP,
+                  speed: float = PARK_SPEED, easing=EASINGS[2]) -> str:  # noqa: ANN001
     """Drive to the park pose, **blocking**, and say how it ended.
 
     Returns `"arrived"` · `"stalled"` · `"stopped"` (a key was pressed) · `"dead"`.
@@ -358,7 +368,8 @@ def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP) -> 
         meas = np.asarray(robot.get_joint_pos(), dtype=float)
         err = float(np.max(np.abs(tgt - meas)))
         verdict = park_verdict(err, now - last_progress > PARK_STALL_SECONDS,
-                               PARK_TOLERANCE, PARK_SETTLED)
+                               PARK_TOLERANCE, PARK_SETTLED,
+                               stopped_briefly=now - last_progress > PARK_SETTLE_SECONDS)
         if verdict == "arrived":
             print(f"\n⭐ PARKED ({err:.3f} rad off).")
             return "arrived"
@@ -378,9 +389,14 @@ def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP) -> 
             best, last_progress = err, now
         # Same ease-in/ease-out as the interleaved park — Ctrl-C should not shut down
         # with a jerk at both ends when a mid-session park glides.
-        factor = park_speed_factor(float(np.max(np.abs(cmd - start))),
-                                   float(np.max(np.abs(tgt - cmd))), ramp)
-        cmd = advance_park_command(cmd, tgt, PARK_SPEED * factor / CONTROL_HZ)
+        # ⭐ EASINGS[2] is "out": full speed from the first step, soft landing.
+        # Julien on Ctrl-C: *"I don't want to have to wait until the movement has been
+        # smoothed out — I want it to move into its parking position quickly and
+        # swiftly, without the excessive starting and pausing."* A shutdown move should
+        # leave at once; only the arrival needs to be gentle.
+        factor = easing_factor(easing, float(np.max(np.abs(cmd - start))),
+                               float(np.max(np.abs(tgt - cmd))), ramp)
+        cmd = advance_park_command(cmd, tgt, speed * factor / CONTROL_HZ)
         robot.command_joint_pos(cmd)
         time.sleep(1.0 / CONTROL_HZ)
 
@@ -420,6 +436,27 @@ def main() -> int:  # noqa: PLR0915
     # currently and cannot be twisted". It was off for the first hardware run
     # because a wrong rotation sign swings the wrist while a wrong translation
     # sign only nudges — that caution has served its purpose.
+    # ⭐⭐ ALL OUTPUT IN THIS SESSION GOES THROUGH ONE STATUS LINE.
+    #
+    # ⛔ `print` is deliberately shadowed for the whole of main(). Julien changed the
+    # park speed six times while choosing a run and got six copies of a two-line plan
+    # interleaved with six status lines — *"that seems to be more of a bug."* It was:
+    # a `\r` status with no newline and ordinary prints with newlines were fighting
+    # over the same row.
+    #
+    # Shadowing rather than converting ~60 call sites is a deliberate trade. It makes
+    # the output policy ONE thing in ONE place, and — the part that matters — a print
+    # added later cannot forget to follow it. The rule: `end=""` means "this is the
+    # live line, repaint it in place"; anything else scrolls above it. See src/screen.py.
+    screen = StatusLine()
+
+    def print(*args, sep=" ", end="\n", flush=False):  # noqa: A001, ARG001
+        text = sep.join(str(a) for a in args)
+        if end == "":
+            screen.set(text.lstrip("\r"))
+        else:
+            screen.say(text)
+
     threading.excepthook = _quiet_expected_server_exit
     rotation = not args.no_rotation
     control_frame = args.frame
@@ -455,6 +492,8 @@ def main() -> int:  # noqa: PLR0915
     park_s = 0.0
     park_marks: list[tuple[str, float]] = []
     blend_idx = 1                       # "smooth" — the sensible default
+    ease_idx = 3                        # "both" — see motion.EASINGS
+    park_leg_t = 0.0                    # when the current run started
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
@@ -653,9 +692,11 @@ def main() -> int:  # noqa: PLR0915
             """
             seq = " → ".join(park_sequence) if park_sequence else "0"
             name, radius = BLEND_MODES[blend_idx]
-            return (f"\n  RUN {seq}    speed {park_speed:.2f} rad/s (-/+)"
-                    f"    corners {name} ({radius:.2f} rad) (,/.)\n"
-                    f"     Enter = go     any other key = cancel\n")
+            # ⭐ ONE line, so changing a knob repaints instead of appending. Six taps
+            # on `+` should leave one line showing the final speed, not six blocks.
+            return (f"  RUN {seq}  ·  speed {park_speed:.2f} (-/+)  ·  corners {name} "
+                    f"{radius:.2f} (,/.)  ·  ease {EASINGS[ease_idx].name} (e)  ·  "
+                    f"Enter=go  other=cancel")
 
         def begin_path(legs: list, what: str) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
@@ -671,7 +712,7 @@ def main() -> int:  # noqa: PLR0915
             to each of them, not just the first.
             """
             nonlocal mode, park_target, park_cmd, park_path, park_s, park_marks
-            nonlocal park_best_err, park_progress_t
+            nonlocal park_best_err, park_progress_t, park_leg_t
             targets = []
             for _, pose in legs:
                 tgt, warn = park_target_from(robot.get_joint_pos(), pose,
@@ -689,6 +730,7 @@ def main() -> int:  # noqa: PLR0915
             enter_hold()
             park_best_err = float(np.max(np.abs(park_target - start)))
             park_progress_t = t
+            park_leg_t = t
             print(f"\n⭐ MODE: PARK → {what}, {park_path.length:.2f} rad of travel at "
                   f"{park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
                   "Press h or t to stop.\n")
@@ -849,16 +891,23 @@ def main() -> int:  # noqa: PLR0915
                         # the moment you are choosing the move.
                         if k in "+=":
                             park_speed = min(1.5, park_speed * 1.25)
-                            print(park_plan_line()); continue
+                            print(park_plan_line(), end=""); continue
                         if k == "-":
                             park_speed = max(0.05, park_speed / 1.25)
-                            print(park_plan_line()); continue
+                            print(park_plan_line(), end=""); continue
                         if k == ".":
                             blend_idx = min(len(BLEND_MODES) - 1, blend_idx + 1)
-                            print(park_plan_line()); continue
+                            print(park_plan_line(), end=""); continue
                         if k == ",":
                             blend_idx = max(0, blend_idx - 1)
-                            print(park_plan_line()); continue
+                            print(park_plan_line(), end=""); continue
+                        if k == "e":
+                            # ⭐ Start/stop easing is INDEPENDENT of corner blending.
+                            # Julien wanted the ends toggleable without giving up the
+                            # smooth corners; `none` leaves immediately, which is what
+                            # a shutdown move wants.
+                            ease_idx = (ease_idx + 1) % len(EASINGS)
+                            print(park_plan_line(), end=""); continue
 
                     if pending == "park":
                         if k.isdigit():
@@ -875,7 +924,7 @@ def main() -> int:  # noqa: PLR0915
                             # trajectory and how it moves is worth a glance first.
                             if len(park_sequence) >= 2:
                                 pending = "confirm"
-                                print(f"\n{park_plan_line()}")
+                                print(park_plan_line(), end="")
                                 continue
                             pending = None
                             wanted = park_sequence[:] or ["0"]
@@ -1306,8 +1355,8 @@ def main() -> int:  # noqa: PLR0915
                         # own corner is not the shape anyone chose.
                         advanced = False
                         if lag < MAX_CURSOR_LAG:
-                            ramp = park_speed_factor(
-                                park_s, park_path.length - park_s,
+                            ramp = easing_factor(
+                                EASINGS[ease_idx], park_s, park_path.length - park_s,
                                 0.0 if args.no_smooth else PARK_RAMP)
                             park_s = min(park_path.length,
                                          park_s + park_speed * ramp * dt)
@@ -1327,10 +1376,15 @@ def main() -> int:  # noqa: PLR0915
                                   f"{lag:.3f} rad behind the path, no progress for "
                                   f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
                         elif park_marks and park_s >= park_marks[0][1]:
+                            # ⭐ Time each waypoint. Julien: *"you can't really see how
+                            # long each parking section took, you can only see the park
+                            # itself."* Now each leg reports its own seconds as it is
+                            # passed, which is also the number to watch when tuning
+                            # speed and corner radius.
                             name, _ = park_marks.pop(0)
-                            if park_marks:
-                                print(f"\r  ⭐ through slot {name} → next {park_marks[0][0]}"
-                                      f"      ", end="", flush=True)
+                            print(f"  ⭐ slot {name} in {t - park_leg_t:.1f}s"
+                                  + (f" → next {park_marks[0][0]}" if park_marks else ""))
+                            park_leg_t = t
                         elif t >= next_park_report:
                             next_park_report = t + 1.0
                             print(f"\r  moving… {park_path.length - park_s:.2f} rad of path "
@@ -1338,12 +1392,15 @@ def main() -> int:  # noqa: PLR0915
                                   end="", flush=True)
                     else:
                         leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
-                                           PARK_TOLERANCE, PARK_SETTLED)
+                                           PARK_TOLERANCE, PARK_SETTLED,
+                                           stopped_briefly=t - park_progress_t
+                                           > PARK_SETTLE_SECONDS)
                         if leg in ("arrived", "settled"):
                             extra = ("" if leg == "arrived" else
                                      " — as close as the arm holds itself under load")
                             mode = "hold"; enter_hold()
-                            print(f"\n⭐ PARK reached ({err:.3f} rad off{extra}) → HOLD\n")
+                            print(f"⭐ PARK reached in {t - park_leg_t:.1f}s "
+                                  f"({err:.3f} rad off{extra}) → HOLD")
                         elif leg == "blocked":
                             # ⛔ Never spin silently. If the arm has stopped closing the
                             # gap the honest thing is to say so and hold, not to keep
@@ -1435,7 +1492,8 @@ def main() -> int:  # noqa: PLR0915
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))
 
             # ---- controlled shutdown -----------------------------------------
-            print(f"\n\n⛔ stopping: {stop_reason}")
+            screen.done()
+            print(f"\n⛔ stopping: {stop_reason}")
 
             # ⭐ CTRL-C IS A GRACEFUL SHUTDOWN, NOT A QUESTION. Julien, 2026-08-12:
             # *"if we hit control c it should just instantly go back into the starting
@@ -1460,7 +1518,8 @@ def main() -> int:  # noqa: PLR0915
                 enter_hold()
                 print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
-                outcome = park_and_wait(robot, keys, park, clamp_gripper)
+                outcome = park_and_wait(robot, keys, park, clamp_gripper,
+                                        speed=park_speed)
                 if outcome == "arrived":
                     auto_parked = True
                     print("\n   Disabling the motors now.\n")
