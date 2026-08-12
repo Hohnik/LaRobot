@@ -1380,7 +1380,7 @@ same thing", the check has told you nothing at all.
 Found while reading `teleop_session.py` end to end before restructuring it. **None had
 ever fired on hardware**, which is why none is in [§0](#0-the-one-thing-to-internalise-before-touching-anything)'s
 table — and is also exactly why they were worth finding first. This is the same
-exercise as [§9](#9-four-defects-found-by-reading-2026-08-10-session-3---no-hardware-involved),
+exercise as [§9](#9-four-defects-found-by-reading-2026-08-10-session-3--no-hardware-involved),
 and it found the same class of thing: **guards with a path around them, and messages
 that promise what the code does not do.**
 
@@ -1406,8 +1406,9 @@ calm `hottest 0°C`. Nothing warned. If the read failed persistently, the sessio
 run to completion with **no thermal protection at all**, reassuring the operator the
 whole way.
 
-Motor 7 has been cooked three times on this rig ([§3.5](#35-the-gripper-2-frame-fix)),
-so this is not a theoretical guard.
+Motor 7 has been cooked three times on this rig
+([§3.5](#35--the-gripper-two-2π-frame-errors-not-a-broken-mechanism)), so this is not a
+theoretical guard.
 
 **Fixed** by `ThermalGuard` in `src/yam_robot.py`: only the *read* is wrapped, never the
 decisions; a failed read is `None` and never a temperature; blindness is announced once
