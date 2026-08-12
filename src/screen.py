@@ -31,9 +31,55 @@ from __future__ import annotations
 
 import shutil
 import sys
+import unicodedata
 from typing import Any
 
 CLEAR_LINE = "\r\x1b[K"
+
+# ⚠️ VARIATION SELECTOR-16 turns a text symbol into an emoji, and terminals draw an
+# emoji TWO columns wide. `⚠️` is `⚠` + VS16, so it is not one column, and the
+# selector itself is not a column at all.
+_VS16 = "️"
+_ZERO_WIDTH = ("︎", "​", "‌", "‍")
+
+
+def char_width(text: str, i: int) -> int:
+    """Columns occupied by `text[i]`, given what follows it.
+
+    ⛔ Needs the whole string because width is not a property of a character alone:
+    `⚠` is one column and `⚠` + VS16 is two.
+    """
+    ch = text[i]
+    if unicodedata.combining(ch) or ch == _VS16 or ch in _ZERO_WIDTH:
+        return 0
+    if unicodedata.east_asian_width(ch) in ("W", "F"):
+        return 2
+    # ⚠️ VS16 forces emoji presentation, which is two columns whatever the base
+    # character's width class says. `⚠` (U+26A0) is `N`, *neutral* — not ambiguous —
+    # so a rule keyed on `A` missed the single most common symbol in this codebase.
+    # Measured, after asserting the wrong thing first.
+    if i + 1 < len(text) and text[i + 1] == _VS16:
+        return 2
+    return 1
+
+
+def display_width(text: str) -> int:
+    """How many terminal COLUMNS `text` occupies. ⛔ Not `len()`.
+
+    ⛔⭐ WHY THIS EXISTS. The truncation that stops the live block wrapping was
+    measuring `len()`, and this repo's status lines are full of `⭐ ⛔ ⚠️ →` — every
+    one of which Python counts as a single character and a terminal draws as one or
+    two columns. So a line "fitted" to 99 columns could be 105 columns wide, wrap,
+    and desynchronise the cursor arithmetic by a row. That is the same class of
+    defect as measuring a claim with something that cannot distinguish it from its
+    opposite (working contract rule 5).
+
+    ⚠️ `east_asian_width` returns `A` (ambiguous) for `→ · ° ⚠` — genuinely
+    terminal-dependent, one column in most, two in a CJK locale. Treated as one,
+    except when VS16 forces emoji presentation. **So this can still undercount in a
+    CJK-configured terminal**, which is why `width()` also keeps a spare column.
+    """
+    return sum(char_width(text, i) for i in range(len(text)))
 
 
 class StatusLine:
@@ -74,10 +120,21 @@ class StatusLine:
     def _fit(self, text: str) -> str:
         """⚠️ Truncate rather than wrap. A wrapped status line scrolls the terminal by
         a row every time it is redrawn, which turns a stationary readout into a
-        flickering waterfall — the exact complaint this class exists to answer."""
+        flickering waterfall — the exact complaint this class exists to answer.
+
+        ⛔ Measured in COLUMNS, not characters — see `display_width`."""
         text = text.replace("\n", " ")
         limit = self.width()
-        return text if len(text) <= limit else text[: limit - 1] + "…"
+        if display_width(text) <= limit:
+            return text
+        kept, width = [], 0
+        for i in range(len(text)):
+            w = char_width(text, i)
+            if width + w > limit - 1:       # keep a column for the ellipsis
+                break
+            kept.append(text[i])
+            width += w
+        return "".join(kept) + "…"
 
     def _rewind(self) -> str:
         """Escape sequence that puts the cursor back at the top of the live block."""
@@ -117,13 +174,66 @@ class StatusLine:
         self._paint()
 
     def say(self, text: str = "") -> None:
-        """Print a message ABOVE the live block, then repaint the block under it."""
-        self.stream.write(self._rewind() + "\x1b[K" + text + "\n")
-        for _ in range(max(0, self._rows - 1)):
-            self.stream.write("\x1b[K\n")
-        if self._rows > 1:
-            self.stream.write(f"\x1b[{self._rows - 1}A")
+        """Print a message ABOVE the live block, then repaint the block under it.
+
+        ⛔⭐ EVERY LINE OF THE MESSAGE GETS ITS OWN CLEARED ROW, AND THAT IS THE FIX
+        FOR WHAT JULIEN SAW ON 2026-08-12. He reported *"hold sometimes gets
+        overwritten"* and output that looked duplicated. Both were this function.
+
+        It used to clear **one** row and then write `text` — but every caller in
+        `teleop_session.py` writes `print("\\n⭐ MODE: HOLD\\n")`, because `print` is
+        shadowed and those ~60 call sites were written for the builtin. So the payload
+        carried newlines: the first line landed on the cleared row, and the SECOND
+        line landed on the status row **without clearing it**, overwriting only its
+        first few columns. That is the visible signature in his paste, on every
+        message he sent back:
+
+            ⭐ MODE: GUIDE — arm is weightless°C  jaw   33°C  q [-0.49 …]
+            ⭐ MODE: TELEOP — SpaceMouse drivesC  jaw   33°C  q [-0.49 …]
+              run cancelled.6.0s  hottest   39°C
+
+        The tail after each message is the surviving right-hand end of the status row.
+        ⭐ **And `⭐ MODE: HOLD` is the shortest banner in the program**, so it
+        overwrote the least and looked, correctly, like the one that got eaten.
+
+        The worse half is invisible: `_rows` was then wrong by the number of embedded
+        newlines, so the next `_rewind()` moved the cursor to the wrong row and the
+        live block was repainted somewhere it had not been — leaving the previous copy
+        on screen. **That is the "duplicate print": two copies of the same block whose
+        only difference is the timestamp**, which is exactly what he pasted
+        (`t= 198.0s` and `t= 256.0s`, 58 seconds apart, identical otherwise).
+
+        ⚠️ The test that was supposed to cover this passed a SINGLE-LINE message —
+        `say("⭐ MODE: PARK")` — which no call site in the program produces. A test
+        written against an interface rather than against its callers is the same
+        defect as a guard never re-derived against the thing it guards (working
+        contract rule 7). The tests below now use the real payload shape.
+        """
+        # ⭐ TRUNCATE ONLY WHEN THERE IS A LIVE BLOCK TO PROTECT. Wrapping is what
+        # desynchronises the row count — but only because the next `_rewind()` has to
+        # move back over a known number of rows. With nothing live there is nothing to
+        # rewind over, so a long line may wrap harmlessly.
+        #
+        # ⚠️ This is not a micro-optimisation: the whole startup plan (`--arm`, the axis
+        # map, the workspace box, HELP) is printed through this before the loop begins,
+        # and truncating THAT would silently cut the information the operator is reading
+        # to decide whether to press `--yes`. Losing a column of a temperature readout
+        # is cosmetic; losing the end of "map scope: SHARED — edits affect BOTH arms" is
+        # not.
+        live = self._rows > 0 or self._current or self._hint
+        lines = [self._fit(line) if live else line for line in text.split("\n")]
+        out = [self._rewind()]
+        for line in lines:
+            out.append("\x1b[K" + line + "\n")
+        # If the message is SHORTER than the block it displaced, the block's lower
+        # rows still hold stale text. Wipe exactly those, then come back.
+        stale = max(0, self._rows - len(lines))
+        for _ in range(stale):
+            out.append("\x1b[K\n")
+        if stale:
+            out.append(f"\x1b[{stale}A")
         self._rows = 0
+        self.stream.write("".join(out))
         self._paint()
 
     def clear(self) -> None:

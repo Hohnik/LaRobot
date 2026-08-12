@@ -19,12 +19,56 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from motion import EASINGS, Easing, easing_factor  # noqa: E402
-from screen import CLEAR_LINE, StatusLine  # noqa: E402
+from screen import CLEAR_LINE, StatusLine, display_width  # noqa: E402
 
 
 def fresh(width: int = 80):  # noqa: ANN201
     buf = io.StringIO()
     return buf, StatusLine(stream=buf, width=width)
+
+
+def rows_of(out: str) -> list[str]:
+    """What each terminal ROW ends up holding, replaying the escape codes we emit.
+
+    ⛔⭐ WHY A REPLAY AND NOT A SUBSTRING CHECK. The bug Julien hit was invisible to
+    `assert "MODE: HOLD" in out` — the text WAS in the output. What was wrong was
+    *where it landed*: on the status row, without clearing it, so the row read
+    `⭐ MODE: GUIDE — arm is weightless°C  jaw   33°C  q [-0.49 …]`. Only a model of
+    the screen can catch that, and the tests that missed it were asserting on the
+    stream. Handles the four codes this module emits: `\\r`, `\\x1b[K`, `\\x1b[NA`
+    and `\\n`.
+    """
+    grid: list[list[str]] = [[]]
+    row, col = 0, 0
+    i = 0
+    while i < len(out):
+        if out.startswith("\x1b[K", i):
+            del grid[row][col:]
+            i += 3
+        elif out[i] == "\r":
+            col = 0
+            i += 1
+        elif out[i] == "\n":
+            row += 1
+            col = 0
+            while len(grid) <= row:
+                grid.append([])
+            i += 1
+        elif out.startswith("\x1b[", i) and out.find("A", i) > 0:
+            end = out.index("A", i)
+            row = max(0, row - int(out[i + 2 : end] or "1"))
+            col = 0
+            i = end + 1
+        else:
+            while len(grid[row]) < col:
+                grid[row].append(" ")
+            if col < len(grid[row]):
+                grid[row][col] = out[i]
+            else:
+                grid[row].append(out[i])
+            col += 1
+            i += 1
+    return ["".join(r) for r in grid]
 
 
 # ------------------------------------------------------- the status line ----
@@ -75,6 +119,91 @@ def test_a_newline_inside_a_status_cannot_break_the_layout() -> None:
     buf, screen = fresh()
     screen.set("line one\nline two")
     assert buf.getvalue().count("\n") == 0
+
+
+def test_a_MULTI_LINE_message_never_lands_on_the_status_row() -> None:
+    """⛔⭐ THE BUG JULIEN REPORTED AS *"hold sometimes gets overwritten"*, 2026-08-12.
+
+    Every mode banner in `teleop_session.py` is `print("\\n⭐ MODE: HOLD\\n")`, so the
+    payload reaching `say()` carries newlines. It used to clear ONE row and then write
+    the lot: line 2 landed on the status row without clearing it and overwrote only its
+    first columns, which is why his paste reads
+    `⭐ MODE: GUIDE — arm is weightless°C  jaw   33°C …`.
+    """
+    buf, screen = fresh()
+    screen.set("[HOLD    ] t= 108.0s  hottest   40°C  jaw   33°C  q [-0.05  0.02]")
+    screen.say("\n⭐ MODE: HOLD\n")
+    rows = rows_of(buf.getvalue())
+    banner = [r for r in rows if "MODE: HOLD" in r]
+    assert banner, "the banner vanished entirely"
+    assert banner[0].strip() == "⭐ MODE: HOLD", f"status text welded on: {banner[0]!r}"
+    assert rows[-1].startswith("[HOLD"), "the status must be repainted last, intact"
+    assert sum("hottest" in r for r in rows) == 1, "the status row exists twice"
+
+
+def test_the_live_block_is_not_duplicated_when_messages_and_hints_interleave() -> None:
+    """⛔⭐ THE "DUPLICATE PRINT". His paste has the same three rows twice, differing
+    only in the timestamp (`t= 198.0s`, `t= 256.0s`) — 58 seconds apart, so not a
+    copy-paste artefact. `_rows` had desynchronised from the real cursor by the number
+    of newlines inside the messages, so `_rewind()` moved to the wrong row and the block
+    was repainted where it had never been, leaving the earlier copy on screen."""
+    buf, screen = fresh()
+    screen.set("[HOLD    ] t= 198.0s  hottest   40°C")
+    screen.hint("RUN 1 → 2 → 3 · speed 1.22 (-/+) · Enter=go")
+    screen.say("\n⭐ MODE: PARK → 1 → 2 → 3\n")
+    screen.set("[PARK    ] t= 200.0s  hottest   40°C")
+    screen.say("  ⭐ slot 1 in 2.6s → next 2")
+    screen.set("[PARK    ] t= 202.0s  hottest   41°C")
+    rows = rows_of(buf.getvalue())
+    live = [r for r in rows if r.startswith("[")]
+    assert len(live) == 1, f"the status row survives more than once: {live}"
+    assert live[0].startswith("[PARK    ] t= 202.0s"), "the surviving row is stale"
+    assert sum("Enter=go" in r for r in rows) <= 1, "the run plan row was duplicated"
+
+
+def test_the_startup_plan_is_NOT_truncated_because_nothing_is_live_yet() -> None:
+    """⭐ The whole `--arm` plan and HELP go through `say()` before the loop starts.
+    Truncating those would cut the information he reads to decide whether to pass
+    `--yes` — and with no live block there is nothing for a wrap to desynchronise."""
+    buf, screen = fresh(width=40)
+    screen.say("  map scope   : SHARED — edits here affect BOTH arms")
+    assert "affect BOTH arms" in buf.getvalue(), "the startup plan was truncated"
+
+
+def test_a_message_longer_than_the_terminal_is_truncated_not_wrapped() -> None:
+    """⚠️ A wrapped MESSAGE desynchronises the row count exactly as an embedded newline
+    does — the class counts one row, the terminal consumes two. `say()` never truncated,
+    and the PARK banner is ~110 characters wide."""
+    buf, screen = fresh(width=60)
+    screen.set("[PARK] t=1.0s")
+    screen.say("⭐ MODE: PARK → slot 0, 0.98 rad of travel at 0.78 rad/s, "
+               "corners smooth. Press h or t to stop.")
+    for row in rows_of(buf.getvalue()):
+        assert display_width(row) <= 60, f"row is {display_width(row)} columns: {row!r}"
+
+
+def test_width_is_measured_in_COLUMNS_not_characters() -> None:
+    """⛔ `len()` counts `⭐` as one; a terminal draws it as two. A line "fitted" to the
+    width could therefore still wrap — and every line in this program has emoji in it."""
+    assert display_width("⭐") == 2
+    assert display_width("⛔") == 2
+    assert display_width("⚠️") == 2, "VS16 makes it emoji-presentation, so two columns"
+    assert display_width("abc") == 3
+    assert display_width("→") == 1, "ambiguous-width, one column outside a CJK locale"
+    buf, screen = fresh(width=10)
+    screen.set("⭐⭐⭐⭐⭐⭐")
+    painted = buf.getvalue().split(CLEAR_LINE)[-1]
+    assert display_width(painted) <= 10, f"{display_width(painted)} columns: {painted!r}"
+
+
+def test_an_empty_message_is_one_blank_row() -> None:
+    """`print()` with no arguments is a real call site — it must not silently do nothing
+    and must not consume two rows."""
+    buf, screen = fresh()
+    screen.set("[HOLD] t=1.0s")
+    screen.say("")
+    assert rows_of(buf.getvalue())[-1] == "[HOLD] t=1.0s"
+    assert buf.getvalue().count("\n") == 1
 
 
 def test_done_ends_the_line_only_if_something_was_on_it() -> None:

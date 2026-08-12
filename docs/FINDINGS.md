@@ -1685,3 +1685,201 @@ arm at the same pose.
 that protocol carries JPEG — ~25× cheaper in time and ~30× in bytes than the PNG the
 kitty protocol forces — and the sharpness ceiling roughly doubles for free. One look at
 the screen settles it.
+---
+
+## 27. ⛔⭐ One function explained all three of the complaints from session 19 — 2026-08-12
+
+Julien's report after driving the arm through GUIDE / TELEOP / PARK for ~4½ minutes:
+*"everything worked as it should. However, a couple things was still a bit weird. Hold
+sometimes gets overwritten … I feel like the second hold, or the first hold, was
+overwritten"*, plus an observation that some output looked duplicated and an explicit
+invitation to work out **where** it had duplicated.
+
+⭐ **All of it was `StatusLine.say()`, and the evidence was in the paste he sent back.**
+Every message line in it carries a fragment of the status line welded onto its end:
+
+```
+⭐ MODE: GUIDE — arm is weightless°C  jaw   33°C  q [-0.49  1.    0.88 …]
+⭐ MODE: TELEOP — SpaceMouse drivesC  jaw   33°C  q [-0.49  0.96  0.84 …]
+⭐ MODE: PARK → slot 0, 0.98 rad … Press h or t to stop. 0.216 -0.081  0.352]
+  run cancelled.6.0s  hottest   39°C  jaw   33°C  q [-0.49  0.96 …]
+  PARK to which?  0 = base, 1-9 = a waypoint, Enter = base. 0.98  0.76  0.27 …
+```
+
+`weightless°C`, `drivesC`, `to stop. 0.216`, `cancelled.6.0s` — the tail after each
+message is **the surviving right-hand end of the status row underneath it.**
+
+### 27.1 The defect
+
+`say()` cleared **one** row and then wrote its payload. But `print` is shadowed for the
+whole of `main()`, and its ~60 call sites were written for the builtin, so they all look
+like `print("\n⭐ MODE: HOLD\n")`. The payload therefore *contains newlines*:
+
+1. `\x1b[K` clears the hint row.
+2. The payload's first line (empty) emits `\n` → **the cursor moves onto the status row,
+   which is never cleared.**
+3. `⭐ MODE: HOLD` is written over its first 13 columns. The rest of the status survives.
+4. `_rows` is then wrong by the number of embedded newlines, so the next `_rewind()`
+   moves the cursor to a row the live block was never on, and repaints the block there —
+   **leaving the previous copy on screen.**
+
+⭐ **That fourth step is the "duplicate print", and it is not a copy-paste artefact.**
+His log contains the same three rows twice with only the timestamp differing —
+`[HOLD] t= 198.0s` and `[HOLD] t= 256.0s`, **58 seconds apart**, each under an identical
+`⭐ PARK reached in 0.9s (0.036 rad off …)` and `RUN 1 → 2 → 3 … Enter=go`. A stale copy
+of a live row, still holding the timestamp it had when it was orphaned.
+
+⭐ **And `⭐ MODE: HOLD` is the shortest banner in the program** — 13 columns against a
+~90-column status row. It therefore overwrote the least and looked, correctly, like *the
+one that got eaten*. Julien's *"hold sometimes gets overwritten"* was a precise
+description of a real mechanism, not an impression.
+
+### 27.2 The test that should have caught it, and why it could not
+
+```python
+screen.say("⭐ MODE: PARK")          # the test
+print("\n⭐ MODE: PARK → …\n")       # every actual call site
+```
+
+**The test passed a single-line message. No call site in the program produces one.** It
+asserted `out.count("\n") == 1`, which is exactly the property that breaks the moment the
+payload has newlines of its own — so the assertion was measuring the thing it was
+supposed to protect, on input that could not violate it.
+
+⛔ This is working contract rule 7 again — *what path reaches the hazard without passing
+through your guard?* — in a new place. The guard was a **test**, written against the
+interface rather than against its callers. The repo already knew this shape: a thermal
+test that could not detect the thing it tested (§9), a refusal that named the wrong arm
+(§16), a hint advertising a key that did nothing where it was printed (§17.1).
+**A test is a guard, and it decays the same way.**
+
+⭐ **The fix that makes it hard to repeat:** `test_screen.py` now replays the escape
+codes into a grid of rows (`rows_of()`) and asserts on **what each row ends up holding**,
+not on the stream. `assert "MODE: HOLD" in out` was true throughout the bug. The text was
+never missing; only its *position* was wrong, and only a model of the screen can see that.
+
+### 27.3 Two more ways the same row accounting could break, both now closed
+
+- **A message longer than the terminal wraps**, consuming two physical rows where the
+  class counts one. `say()` never truncated, and the PARK banner is ~110 columns.
+  ⭐ **Truncation is now applied only when a live block exists** — with nothing live there
+  is nothing to rewind over, so the startup plan and HELP still print in full. Getting
+  this wrong in the other direction would silently cut the information he reads to decide
+  whether to pass `--yes`.
+- **Width was measured with `len()`.** `⭐` is one character and **two columns**; `⚠️` is
+  two characters (`⚠` + VS16) and two columns. Every line in this program has emoji in
+  it, so a line "fitted" to 99 columns could be 105 wide, wrap, and desynchronise the
+  same arithmetic. ⚠️ First attempt keyed the VS16 promotion on east-asian-width `A`
+  (ambiguous) — but `⚠` is `N`, *neutral*, so the rule missed the commonest symbol in the
+  codebase. The test caught it. **Ambiguous-width characters (`→ · °`) are still counted
+  as one column, which is right outside a CJK locale and wrong inside one**; `width()`
+  keeps a spare column for that.
+
+### 27.4 ⛔ The stale hint row — and it is why `e` "did nothing"
+
+`hint()` was **never cleared anywhere in the file.** So once a run had been typed, the row
+
+```
+RUN 1 → 2 → 3 · speed 0.78 (-/+) · corners smooth 0.15 (,/.) · ease s-curve over 0.20 (e, [/]) · Enter=go
+```
+
+stayed live for the rest of the session — after the run was cancelled, through mode
+changes, sitting above a `[HOLD]` status. It is a *live* row, repainted every cycle, which
+is the other half of why the same block appears twice in his paste.
+
+⭐ **Worse than untidy, because it advertises keys.** His log reads:
+
+```
+  run cancelled.
+  (key 'e' does nothing — press ? for the list)
+  (key 'e' does nothing — press ? for the list)
+```
+
+He cancelled a run, the stale row went on offering `(e, [/])`, he pressed `e` twice, and
+was told the key does nothing. **Both halves were defects:** the row should have gone, and
+`e` should have worked. `e` was bound only inside the "typing a park sequence" branch,
+although the ease profile describes how the *next* park will move, which is meaningful in
+any mode. It is now global.
+
+⚠️ **`e` is still handled in the pending branch as well, and that duplication is
+deliberate:** an unrecognised key while typing a sequence *cancels the run*, so a key
+bound only further down the dispatch would abort the very move it was meant to configure.
+
+### 27.5 Two live rows, and the ones that were fighting for the status row
+
+`hint()` exists so a knob change repaints instead of scrolling. Two places still wrote
+their transient readout through `print(…, end="")`, which the shadowed `print` routes to
+`screen.set` — **the heartbeat row**:
+
+- the park-sequence echo (`park sequence: 1 → 2   (another digit, or Enter)`), and
+- the once-a-second park progress (`moving… 2.31 rad of path left, …`).
+
+Both replaced the temperature readout and were then wiped by the next repaint. ⛔ The
+second is the worse one: during the one motion where an operator most wants to watch a
+temperature climb, the temperature row was the one being painted over. Both are hints now.
+
+### 27.6 ⛔ An arrow key was silently changing a motion parameter
+
+An arrow key sends `ESC` `[` `A`. The key reader returned those as **three keypresses**,
+and **`[` is bound** — gripper step in the drive modes, ease-ramp length while a run is
+being typed. So pressing ↑ halved a motion parameter and then printed
+`(key 'A' does nothing)`, which reads as the program having lost track of itself.
+
+⚠️ **A test asserted this behaviour and called it *"documented, not desired"*.** Writing a
+defect into a test does not make it safe; it makes it permanent. That wording is the tell
+— a test recording behaviour nobody wanted, with a comment explaining why it was fine.
+Escape sequences now arrive as one non-printable token, which the session's
+`k.isprintable()` filter drops in silence. A bare `ESC` still arrives as `ESC`, because it
+cancels a pending park.
+
+### 27.7 ⭐ `ö` and `ä` — and why the reader could not have seen them
+
+Julien: *"I don't like the fact that the brackets are used because I have a German
+keyboard, and they're awkward to reach. Maybe ä and ö could be used."*
+
+He is right, and it is worse than awkward: **on a German QWERTZ layout `[` and `]` are
+AltGr+8 and AltGr+9** — a three-finger chord, on a rig whose input design rule is *no
+shift keys*, for a knob adjusted while 4.3 kg is moving.
+
+⛔ **But the keys could not simply be bound, because the reader was structurally
+incapable of receiving them.** `KeyReader.get()` did `os.read(fd, 1)` and decoded that
+**single byte** with `errors="replace"`. `ö` is two bytes in UTF-8 (`0xC3 0xB6`), `ä` is
+`0xC3 0xA4` — so each half decoded independently to `U+FFFD` and **one keypress produced
+two replacement characters and no key.** No exception, no log line: this file's opening
+rule, in the input layer.
+
+Fixed with a UTF-8 **incremental** decoder held on the instance, because the two bytes of
+one character can land in different reads and a per-call decoder would mangle a key that
+arrived intact. Tested by writing the halves separately into a pty.
+
+⭐ **Why `ö`/`ä` and not something else** — the alternatives were checked rather than
+assumed. Unshifted keys free on a German layout: `ö`, `ä`, `ü`, `#`, `<`, `ß`, and `+`
+(already "faster"); `^` and `´` are **dead keys** that emit nothing until a second press.
+`ö` and `ä` are adjacent, on the home row, in the physical position US layouts give `;`
+and `'`. ⚠️ **They are ALIASES — `[` and `]` still work**, because they are in every doc
+and a US keyboard (a colleague's, or a clone of this repo) must not lose the feature.
+
+### 27.8 A mode key pressed twice reported itself as unknown
+
+`(key 'g' does nothing — press ? for the list)` appears in his log **immediately after
+`⭐ MODE: GUIDE`**, which reads as the program having lost track of its own state. It had
+not: the mode branches are guarded by `mode != "guide"`, so a second press fell past them
+to the catch-all for unrecognised keys. Now answered with `already in GUIDE`.
+
+⚠️ **The mode is deliberately not re-entered.** `enter_guide()` re-arms gravity
+compensation and re-takes the drift reference; that cannot be tested from the bench, so
+this fixes the *message* and changes nothing the motors see.
+
+### ⭐ What to take from this one
+
+**Four of the eight items above were guards or tests that had stopped describing their
+subject** — a screen test asserting on a payload shape no caller produces, a keyboard test
+pinning an unwanted behaviour, a hint outliving the state it described, a mode branch
+whose fall-through reported the wrong thing. None of them failed. They all passed, kept
+passing, and stopped meaning anything.
+
+⛔ **The corollary for this repo's method: "245 tests pass" is a statement about the tests
+as much as about the code.** Session 4's lesson was that reading does not find what only
+hardware knows. This is its twin: **a test does not find what its input cannot express.**
+The cheapest defence found here was to assert on the *user-visible artefact* — the grid of
+rows a terminal ends up displaying — rather than on the call that produced it.

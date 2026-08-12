@@ -88,13 +88,59 @@ def test_a_long_burst_survives() -> None:
         assert keys.drain() == ["q"] * 32
 
 
-def test_an_escape_sequence_arrives_as_its_bytes() -> None:
-    """⚠️ Documented, not desired: an arrow key is ESC [ A, so a caller that treats
-    bare ESC as an action will see one. Pre-existing and unchanged — recorded here so
-    the next person meets it in a test rather than on the arm."""
+def test_an_arrow_key_is_ONE_token_and_never_leaks_a_bracket() -> None:
+    """⛔⭐ THIS TEST USED TO ASSERT THE BUG. It pinned `["\\x1b", "[", "A"]` and called
+    it *"documented, not desired"* — but `[` is a **bound key** in
+    `teleop_session.py`: it shrinks the gripper step, and the ease ramp while a run is
+    being typed. So every ↑ silently halved a motion parameter and then printed
+    `(key 'A' does nothing)`.
+
+    ⚠️ Writing a defect into a test does not make it safe; it makes it permanent. The
+    "documented, not desired" wording was the tell — a test recording behaviour nobody
+    wanted, next to a comment explaining why it was fine."""
     with FakeTerminal() as term, KeyReader() as keys:
         term.type("\x1b[A")
-        assert keys.drain() == ["\x1b", "[", "A"]
+        assert keys.drain() == ["\x1b[A"]
+    with FakeTerminal() as term, KeyReader() as keys:
+        term.type("\x1b[A\x1b[B\x1b[C\x1b[D\x1bOP")
+        assert keys.drain() == ["\x1b[A", "\x1b[B", "\x1b[C", "\x1b[D", "\x1bOP"]
+    with FakeTerminal() as term, KeyReader() as keys:
+        term.type("h\x1b[1;2At")
+        assert keys.drain() == ["h", "\x1b[1;2A", "t"], "parameter bytes must be consumed"
+
+
+def test_a_bare_escape_still_arrives_as_a_key() -> None:
+    """Esc cancels a pending park, so it must not be swallowed while the reader waits to
+    see whether a sequence follows."""
+    with FakeTerminal() as term, KeyReader() as keys:
+        term.type("\x1b")
+        assert keys.drain() == ["\x1b"]
+
+
+def test_a_GERMAN_KEY_ARRIVES_AT_ALL() -> None:
+    """⛔⭐ Julien asked for `ö`/`ä` instead of `[`/`]` because AltGr+8 and AltGr+9 are a
+    three-finger chord on a QWERTZ layout. The reader could not have seen them: `ö` is
+    two bytes (`0xC3 0xB6`), and `os.read(fd, 1)` decoded each half separately into a
+    replacement character. **Two keys pressed, no key received, no error raised.**"""
+    with FakeTerminal() as term, KeyReader() as keys:
+        term.type("öä")
+        assert keys.drain() == ["ö", "ä"], "a two-byte key must arrive as one key"
+    with FakeTerminal() as term, KeyReader() as keys:
+        term.type("pöhät")
+        assert keys.drain() == ["p", "ö", "h", "ä", "t"], "mixed with ASCII in one burst"
+
+
+def test_a_multibyte_key_SPLIT_ACROSS_TWO_READS_survives() -> None:
+    """⚠️ The reason the decoder is an instance attribute and not a local. The two bytes
+    of `ö` can land in different reads; a fresh decoder per call would emit two
+    replacement characters for a key that arrived intact."""
+    with FakeTerminal() as term, KeyReader() as keys:
+        os.write(term.master, b"\xc3")
+        time.sleep(0.05)
+        assert keys.drain() == [], "half a character is not a keypress"
+        os.write(term.master, b"\xb6")
+        time.sleep(0.05)
+        assert keys.drain() == ["ö"], "the halves must be rejoined across drains"
 
 
 def test_not_a_terminal_degrades_to_no_keys_rather_than_crashing() -> None:

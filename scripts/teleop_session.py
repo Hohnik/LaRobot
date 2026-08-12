@@ -154,6 +154,31 @@ PARK_RAMP = 0.20
 # the others are for: *"instead of moving and then jittering ninety degrees to the next
 # side, in a smooth curve it would go to the next point."*
 BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
+# ⭐⭐ THE SAME PAIR OF KEYS, REACHABLE ON A GERMAN KEYBOARD. Julien, 2026-08-12:
+# *"I don't like the fact that the brackets are used because I have a German
+# keyboard, and they're awkward to reach. Maybe ä and ö could be used."*
+#
+# He is right, and it is worse than awkward: on a German QWERTZ layout `[` and `]` are
+# **AltGr + 8** and **AltGr + 9** — a three-finger chord, on a rig whose whole input
+# design rule is "no shift keys", for a knob he adjusts while 4.3 kg is moving.
+#
+# ⭐ `ö` and `ä` are single unshifted keys, adjacent, on the home row immediately right
+# of `L` — the physical position US layouts give to `;` and `'`. They are the best pair
+# available: `ü` and `+` are the other unshifted candidates and `+` already means
+# "faster", while `^` and `´` are dead keys that emit nothing until a second press.
+#
+# ⚠️ ALIASES, NOT REPLACEMENTS. `[` and `]` keep working — they are in every doc, and
+# a US keyboard (a colleague's, or a clone of this repo) must not lose the feature. Two
+# spellings of one key is cheap; a key that exists only on one person's laptop is not.
+#
+# ⛔ These are non-ASCII, so they only arrive at all because `KeyReader` now decodes
+# UTF-8 across reads — `ö` is two bytes and the old one-byte reader turned it into two
+# replacement characters. See `src/keyboard.py::_refill`.
+KEY_STEP_DOWN = ("[", "ö")          # shorter ease ramp · smaller gripper step
+KEY_STEP_UP = ("]", "ä")            # longer ease ramp  · bigger gripper step
+# ⚠️ `m` is absent on purpose: CONTROLS owns the keyboard while it is active, so `m`
+# pressed inside it is handled by that branch and never reaches the check that uses this.
+MODE_KEYS = {"g": "GUIDE", "t": "TELEOP", "h": "HOLD"}
 # ⛔ Do not let the commanded cursor run further than this ahead of the arm. The
 # trajectory is a SHAPE now, and a command that races ahead while the arm cuts its own
 # corner is not the shape anyone chose. SafeRobot's 0.25 rad lag limit is the backstop
@@ -227,11 +252,12 @@ HELP = """
             p then Enter          drive to the base pose
             p then 1 then Enter   drive to waypoint 1
             p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
-            while choosing OR moving:  - / + speed   , / . corners   e ease profile
-                                       [ / ] how long the ease lasts
+            while choosing OR moving:  - / + speed   , / . corners
+                                       ö / ä  how long the ease lasts  (also [ / ])
+  EASE      e  cycle none / in / out / both / s-curve — works in ANY mode
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
-  SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
+  SPEED     - / +  linear             , / .  rotation      ö / ä  gripper step ([ / ])
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
   OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
@@ -707,7 +733,7 @@ def main() -> int:  # noqa: PLR0915
             # on `+` should leave one line showing the final speed, not six blocks.
             return (f"RUN {seq} · speed {park_speed:.2f} (-/+) · corners {name} "
                     f"{radius:.2f} (,/.) · ease {EASINGS[ease_idx].name} over "
-                    f"{park_ramp:.2f} (e, [/]) · Enter=go")
+                    f"{park_ramp:.2f} (e, ö/ä) · Enter=go")
 
         def begin_path(legs: list, what: str) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
@@ -742,6 +768,8 @@ def main() -> int:  # noqa: PLR0915
             park_best_err = float(np.max(np.abs(park_target - start)))
             park_progress_t = t
             park_leg_t = t
+            # The plan has become the thing happening; the progress readout replaces it.
+            hint("")
             print(f"\n⭐ MODE: PARK → {what}, {park_path.length:.2f} rad of travel at "
                   f"{park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
                   "Press h or t to stop.\n")
@@ -912,15 +940,16 @@ def main() -> int:  # noqa: PLR0915
                         if k == ",":
                             blend_idx = max(0, blend_idx - 1)
                             hint(park_plan_line()); continue
-                        if k == "]":
+                        if k in KEY_STEP_UP:
                             # ⭐ How LONG the ease lasts, separately from its shape.
                             # Julien: *"the smoothing should maybe be adjustable at the
                             # beginning of the park, similar to the parking speed."*
-                            # [ and ] mean gripper step elsewhere, which is meaningless
-                            # while choosing a park — same context-dependence as +/-.
+                            # ö/ä (or [/]) mean gripper step elsewhere, which is
+                            # meaningless while choosing a park — same
+                            # context-dependence as +/-.
                             park_ramp = min(1.0, park_ramp * 1.4)
                             hint(park_plan_line()); continue
-                        if k == "[":
+                        if k in KEY_STEP_DOWN:
                             park_ramp = max(0.0, park_ramp / 1.4 if park_ramp > 0.03 else 0.0)
                             hint(park_plan_line()); continue
                         if k == "e":
@@ -928,15 +957,28 @@ def main() -> int:  # noqa: PLR0915
                             # Julien wanted the ends toggleable without giving up the
                             # smooth corners; `none` leaves immediately, which is what
                             # a shutdown move wants.
+                            #
+                            # ⚠️ Handled HERE as well as in the main dispatch below, and
+                            # that duplication is deliberate: an unrecognised key while
+                            # typing a sequence CANCELS the run, so a key that is only
+                            # bound further down would abort the very move it was meant
+                            # to configure. `+/-` and `,/.` are duplicated for the same
+                            # reason. The two differ only in what they show — the whole
+                            # plan while choosing, just the profile otherwise.
                             ease_idx = (ease_idx + 1) % len(EASINGS)
                             hint(park_plan_line()); continue
 
                     if pending == "park":
                         if k.isdigit():
                             park_sequence.append(k)
-                            print(f"\r  park sequence: {' → '.join(park_sequence)}"
-                                  f"   (another digit, or Enter)      ",
-                                  end="", flush=True)
+                            # ⛔ A HINT, NOT THE STATUS ROW. This used to `print(…,
+                            # end="")`, which the shadowed print routes to `screen.set`
+                            # — the heartbeat row. So the echo of what you were typing
+                            # replaced the temperature readout and was then wiped by
+                            # the next once-a-second repaint: the one piece of feedback
+                            # in a modal state that drives 4.3 kg, flickering.
+                            hint(f"  park sequence: {' → '.join(park_sequence)}"
+                                 f"   (another digit, or Enter)")
                             continue
                         if k in ("\r", "\n", " ", "p"):
                             # ⭐ ONE pose runs immediately, so `p Enter` for the base and
@@ -962,6 +1004,7 @@ def main() -> int:  # noqa: PLR0915
                             continue
                         pending = None
                         park_sequence.clear()
+                        hint("")
                         print("\n  park cancelled.\n")
                         continue
 
@@ -979,6 +1022,20 @@ def main() -> int:  # noqa: PLR0915
                                 print("\n  nothing to park to.\n")
                         else:
                             park_sequence.clear()
+                            # ⛔⭐ THE STALE ROW JULIEN THEN PRESSED KEYS AT. `hint()`
+                            # was never cleared anywhere in this file, so the
+                            # `RUN 1 → 2 → 3 … ease s-curve over 0.20 (e, ö/ä) ·
+                            # Enter=go` row stayed live for the rest of the session —
+                            # after the run was cancelled, through mode changes, next
+                            # to a `[HOLD]` status. It is a live row, repainted every
+                            # cycle, which is why the same block appears twice in his
+                            # paste with only the timestamp differing.
+                            #
+                            # Worse than untidy: it advertises `e` and `ö/ä`, he pressed
+                            # `e`, and the reply was `(key 'e' does nothing)`. A hint
+                            # that outlives the thing it describes is the `b` defect
+                            # again (FINDINGS §17.1) — right text, wrong context.
+                            hint("")
                             print("\n  run cancelled.\n")
                         continue
 
@@ -1166,11 +1223,27 @@ def main() -> int:  # noqa: PLR0915
                         if not rotation:
                             print("  ⚠️  wrist rotation is OFF (r toggles) — ROLL/PITCH/YAW will not move.\n")
                     elif k == "g" and mode != "guide":
-                        mode = "guide"; enter_guide(); print("\n⭐ MODE: GUIDE — arm is weightless\n")
+                        mode = "guide"; hint(""); enter_guide()
+                        print("\n⭐ MODE: GUIDE — arm is weightless\n")
                     elif k == "t" and mode != "teleop":
-                        mode = "teleop"; enter_teleop(); print("\n⭐ MODE: TELEOP — SpaceMouse drives\n")
+                        mode = "teleop"; hint(""); enter_teleop()
+                        print("\n⭐ MODE: TELEOP — SpaceMouse drives\n")
                     elif k == "h" and mode != "hold":
-                        mode = "hold"; enter_hold(); print("\n⭐ MODE: HOLD\n")
+                        mode = "hold"; hint(""); enter_hold()
+                        print("\n⭐ MODE: HOLD\n")
+                    elif k in MODE_KEYS:
+                        # ⛔ ALREADY IN THAT MODE — say so, do not call it unrecognised.
+                        # Julien's paste has `⭐ MODE: GUIDE` immediately followed by
+                        # `(key 'g' does nothing — press ? for the list)`, which reads
+                        # as the program having lost track of its own state. It had not:
+                        # the mode branches above are guarded by `mode != …`, so a second
+                        # press fell past them to the catch-all for unknown keys.
+                        #
+                        # ⚠️ The mode is deliberately NOT re-entered. `enter_guide()`
+                        # re-arms gravity compensation and re-takes the drift reference,
+                        # and this cannot be tested on the arm from here — so this fixes
+                        # the message and changes nothing the motors see.
+                        hint(f"already in {MODE_KEYS[k]}")
                     elif k == "s":
                         pending = "save"
                         saved_now = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
@@ -1190,12 +1263,22 @@ def main() -> int:  # noqa: PLR0915
                         gripper_value = clamp_gripper(gripper_value + gripper_step)
                     elif k == "c" and mode == "teleop":
                         gripper_value = clamp_gripper(gripper_value - gripper_step)
-                    elif k == "]":
+                    elif k in KEY_STEP_UP:
                         gripper_step = min(0.20, gripper_step * 1.5)
                         hint(f"gripper step {gripper_step:.3f} per press")
-                    elif k == "[":
+                    elif k in KEY_STEP_DOWN:
                         gripper_step = max(0.002, gripper_step / 1.5)
                         hint(f"gripper step {gripper_step:.3f} per press")
+                    elif k == "e":
+                        # ⭐ WORKS EVERYWHERE NOW, and it did not before. `e` was bound
+                        # only while a run was being typed, yet the run plan row stayed
+                        # on screen advertising it — so Julien cancelled a run, pressed
+                        # `e`, and got `(key 'e' does nothing)`. The profile describes
+                        # how the NEXT park will move, which is meaningful in any mode,
+                        # so there is no reason for it to be modal.
+                        ease_idx = (ease_idx + 1) % len(EASINGS)
+                        hint(f"ease {EASINGS[ease_idx].name} over {park_ramp:.2f} rad"
+                             f"   (ö/ä adjusts how long)")
                     elif k == "r":
                         rotation = not rotation
                         hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
@@ -1393,7 +1476,7 @@ def main() -> int:  # noqa: PLR0915
                             park_best_err = min(park_best_err, err)
                             park_progress_t = t
                         if t - park_progress_t > PARK_STALL_SECONDS:
-                            mode = "hold"; enter_hold()
+                            mode = "hold"; enter_hold(); hint("")
                             print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                   f"{lag:.3f} rad behind the path, no progress for "
                                   f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
@@ -1409,9 +1492,14 @@ def main() -> int:  # noqa: PLR0915
                             park_leg_t = t
                         elif t >= next_park_report:
                             next_park_report = t + 1.0
-                            print(f"\r  moving… {park_path.length - park_s:.2f} rad of path "
-                                  f"left, {err:.3f} to the final pose, {lag:.3f} behind   ",
-                                  end="", flush=True)
+                            # ⛔ A HINT, NOT THE STATUS ROW — same fix as the sequence
+                            # echo. Routed through `screen.set` this replaced the
+                            # temperature heartbeat with the progress readout, so during
+                            # the one motion where an operator most wants to see a
+                            # temperature climbing, it was the line that had been
+                            # painted over.
+                            hint(f"  moving… {park_path.length - park_s:.2f} rad of path "
+                                 f"left, {err:.3f} to the final pose, {lag:.3f} behind")
                     else:
                         leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
                                            PARK_TOLERANCE, PARK_SETTLED,
@@ -1421,6 +1509,7 @@ def main() -> int:  # noqa: PLR0915
                             extra = ("" if leg == "arrived" else
                                      " — as close as the arm holds itself under load")
                             mode = "hold"; enter_hold()
+                            hint("")        # the progress readout has nothing left to say
                             print(f"⭐ PARK reached in {t - park_leg_t:.1f}s "
                                   f"({err:.3f} rad off{extra}) → HOLD")
                         elif leg == "blocked":
@@ -1428,7 +1517,7 @@ def main() -> int:  # noqa: PLR0915
                             # gap the honest thing is to say so and hold, not to keep
                             # printing a number that is not changing — which is exactly
                             # how the old treadmill bug hid for two sessions.
-                            mode = "hold"; enter_hold()
+                            mode = "hold"; enter_hold(); hint("")
                             print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
                                   f"progress for {PARK_STALL_SECONDS:.0f}s.")
                             print(f"   The command ran {lag:.3f} rad ahead of the arm; "
