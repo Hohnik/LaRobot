@@ -107,6 +107,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
+from motion import JointPath  # noqa: E402
 from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
@@ -148,6 +149,16 @@ BASE_SLOT = "default"
 # ~half a second of ramp at the default 0.4 rad/s, and a move shorter than twice it
 # simply never reaches full speed. `--no-smooth` sets it to 0.
 PARK_RAMP = 0.20
+# ⭐ How much the path may cut a corner, in radians of the fastest joint. `sharp`
+# reproduces the old stop-at-every-waypoint behaviour exactly. Julien's words for what
+# the others are for: *"instead of moving and then jittering ninety degrees to the next
+# side, in a smooth curve it would go to the next point."*
+BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
+# ⛔ Do not let the commanded cursor run further than this ahead of the arm. The
+# trajectory is a SHAPE now, and a command that races ahead while the arm cuts its own
+# corner is not the shape anyone chose. SafeRobot's 0.25 rad lag limit is the backstop
+# below this; this keeps the path faithful rather than merely safe.
+MAX_CURSOR_LAG = 0.15
 # Judged on the MEASURED pose, so it must allow for a position controller's
 # steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
 PARK_TOLERANCE = 0.02
@@ -205,8 +216,10 @@ PARK_FILE = REPO / "config" / "park_pose.json"
 HELP = """
   MODES     g GUIDE (weightless)   t TELEOP   h HOLD
   POSES     s then 0-9  SAVE here (0 = the BASE pose Ctrl-C returns to, 1-9 waypoints)
-            p then 0-9  PARK to it · several digits then Enter = run them in order
-            p then Enter = the base pose        +/- change park speed while parking
+            p then Enter          drive to the base pose
+            p then 1 then Enter   drive to waypoint 1
+            p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
+            while choosing OR moving:  - / +  speed     , / .  corners sharp↔flowing
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
@@ -436,11 +449,15 @@ def main() -> int:  # noqa: PLR0915
     slots = park_slots(load_json(PARK_FILE, {}), args.arm)
     park = slots.get(BASE_SLOT)
     park_speed = PARK_SPEED
-    park_start: np.ndarray | None = None
+    # The blended path being followed, the cursor along it, and where each waypoint
+    # falls so the readout can say which one it is heading for.
+    park_path: JointPath | None = None
+    park_s = 0.0
+    park_marks: list[tuple[str, float]] = []
+    blend_idx = 1                       # "smooth" — the sensible default
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
-    park_queue: list[tuple[str, list]] = []
     angular_scale = ANGULAR_SCALE
     gripper_step = GRIPPER_STEP
     # CONTROLS mode remembers the last puck axis that actually moved, with no
@@ -627,34 +644,54 @@ def main() -> int:  # noqa: PLR0915
                 return
             print("  ⚠️  enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)")
 
-        def begin_park(pose, what: str) -> None:
-            """Start driving to `pose`. The one place a park leg is set up.
+        def park_plan_line() -> str:
+            """The one line showing what a run will do and how it will feel.
 
-            ⭐ Shared by `p`, by every leg of a sequence, and by the queue advancing —
-            so a waypoint run cannot drift away from a plain park. `park_target_from`
-            still does the length-reconciling and gripper clamping that dropping an
-            arm once taught us to centralise.
+            ⭐ Printed while typing the sequence, on every knob change, and again at the
+            confirm step — so speed and corner style are never something discovered
+            only after the arm is already moving.
             """
-            nonlocal mode, park_target, park_cmd, park_best_err, park_progress_t
-            nonlocal park_start
-            tgt, warn = park_target_from(robot.get_joint_pos(), pose,
-                                         gripper_index=N_ARM, clamp=clamp_gripper)
-            if warn:
-                print(f"\n  ⚠️  {warn}.")
-            park_target = tgt
+            seq = " → ".join(park_sequence) if park_sequence else "0"
+            name, radius = BLEND_MODES[blend_idx]
+            return (f"\n  RUN {seq}    speed {park_speed:.2f} rad/s (-/+)"
+                    f"    corners {name} ({radius:.2f} rad) (,/.)\n"
+                    f"     Enter = go     any other key = cancel\n")
+
+        def begin_path(legs: list, what: str) -> None:
+            """Start ONE continuous motion through every leg — the whole run, blended.
+
+            ⭐ THE CORRECTION THIS IMPLEMENTS. The previous version ran each leg as a
+            separate park and stopped dead at every waypoint. Julien: *"instead of
+            moving and then jittering ninety degrees to the next side, in a smooth
+            curve it would go to the next point … so that we have one smooth motion of
+            specific waypoints."* One path, one cursor, corners rounded.
+
+            ⚠️ Every waypoint still goes through `park_target_from`, so the gripper
+            clamp and the 6-vs-7-joint reconciliation that once dropped an arm apply
+            to each of them, not just the first.
+            """
+            nonlocal mode, park_target, park_cmd, park_path, park_s, park_marks
+            nonlocal park_best_err, park_progress_t
+            targets = []
+            for _, pose in legs:
+                tgt, warn = park_target_from(robot.get_joint_pos(), pose,
+                                             gripper_index=N_ARM, clamp=clamp_gripper)
+                if warn:
+                    print(f"\n  ⚠️  {warn}.")
+                targets.append(tgt)
+            start = np.asarray(robot.get_joint_pos(), dtype=float)
+            park_path = JointPath([start, *targets], blend=BLEND_MODES[blend_idx][1])
+            park_marks = list(zip([n for n, _ in legs], park_path.arrival_lengths()[1:]))
+            park_s = 0.0
+            park_target = targets[-1]
+            park_cmd = start.copy()
             mode = "park"
             enter_hold()
-            # Where this leg began, so the ramp knows how far it has come. Recorded
-            # per LEG, not per session — each waypoint gets its own ease-in.
-            park_start = np.asarray(robot.get_joint_pos(), dtype=float)
-            # Seed the trajectory at the arm's real pose, then let it run ahead.
-            # enter_hold() has just resynced SafeRobot, so the rate limiter starts
-            # anchored here too.
-            park_cmd = np.asarray(robot.get_joint_pos(), dtype=float)
-            park_best_err = float(np.max(np.abs(park_target - park_cmd)))
+            park_best_err = float(np.max(np.abs(park_target - start)))
             park_progress_t = t
-            print(f"\n⭐ MODE: PARK → {what} {np.round(park_target[:N_ARM], 2)} "
-                  f"at {park_speed:.2f} rad/s. Press h or t to stop.\n")
+            print(f"\n⭐ MODE: PARK → {what}, {park_path.length:.2f} rad of travel at "
+                  f"{park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
+                  "Press h or t to stop.\n")
 
         if mode == "teleop":
             enter_teleop()
@@ -804,34 +841,74 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
                         continue
 
+                    if pending in ("park", "confirm"):
+                        # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
+                        # moving. Julien: *"I can change the park speeds whilst it's
+                        # parking, but not whilst I'm putting in the numbers, which is
+                        # a bit annoying."* Deciding how a move should feel belongs to
+                        # the moment you are choosing the move.
+                        if k in "+=":
+                            park_speed = min(1.5, park_speed * 1.25)
+                            print(park_plan_line()); continue
+                        if k == "-":
+                            park_speed = max(0.05, park_speed / 1.25)
+                            print(park_plan_line()); continue
+                        if k == ".":
+                            blend_idx = min(len(BLEND_MODES) - 1, blend_idx + 1)
+                            print(park_plan_line()); continue
+                        if k == ",":
+                            blend_idx = max(0, blend_idx - 1)
+                            print(park_plan_line()); continue
+
                     if pending == "park":
                         if k.isdigit():
                             park_sequence.append(k)
                             print(f"\r  park sequence: {' → '.join(park_sequence)}"
-                                  f"   (another digit to add, Enter to run)   ",
+                                  f"   (another digit, or Enter)      ",
                                   end="", flush=True)
                             continue
-                        pending = None
                         if k in ("\r", "\n", " ", "p"):
+                            # ⭐ ONE pose runs immediately, so `p Enter` for the base and
+                            # `p 1 Enter` for a waypoint stay two keystrokes — the muscle
+                            # memory Ctrl-C also depends on. TWO OR MORE shows the plan
+                            # and waits for a second Enter, because a multi-pose run is a
+                            # trajectory and how it moves is worth a glance first.
+                            if len(park_sequence) >= 2:
+                                pending = "confirm"
+                                print(f"\n{park_plan_line()}")
+                                continue
+                            pending = None
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
                             legs, missing = resolve_park_legs(wanted, park, slots)
                             if missing:
-                                print(f"\n  ⚠️  nothing saved in slot(s) "
-                                      f"{', '.join(missing)} — press s then that digit "
-                                      "to record one.")
+                                print(f"\n  ⚠️  nothing saved in slot {', '.join(missing)}"
+                                      " — press s then that digit to record one.\n")
                             if legs:
-                                first, rest = legs[0], legs[1:]
-                                park_queue = rest
-                                if rest:
-                                    print(f"\n⭐ running {len(legs)} poses: "
-                                          f"{' → '.join(n for n, _ in legs)}")
-                                begin_park(first[1], f"slot {first[0]}")
+                                begin_path(legs, f"slot {legs[0][0]}")
+                            else:
+                                print("\n  nothing to park to.\n")
+                            continue
+                        pending = None
+                        park_sequence.clear()
+                        print("\n  park cancelled.\n")
+                        continue
+
+                    if pending == "confirm":
+                        pending = None
+                        if k in ("\r", "\n", " ", "p"):
+                            wanted = park_sequence[:]
+                            park_sequence.clear()
+                            legs, missing = resolve_park_legs(wanted, park, slots)
+                            if missing:
+                                print(f"\n  ⚠️  skipping empty slot(s) {', '.join(missing)}.\n")
+                            if legs:
+                                begin_path(legs, " → ".join(n for n, _ in legs))
                             else:
                                 print("\n  nothing to park to.\n")
                         else:
                             park_sequence.clear()
-                            print("\n  park cancelled.\n")
+                            print("\n  run cancelled.\n")
                         continue
 
                     # ---- device configuration: works in EVERY mode ------------
@@ -1098,15 +1175,17 @@ def main() -> int:  # noqa: PLR0915
                         print(HELP)
                     elif k.isprintable() and k.strip():
                         print(f"\n  (key {k!r} does nothing — press ? for the list)\n")
-                # ⛔ Leaving PARK for ANY reason abandons the rest of a sequence. One
-                # line rather than a `park_queue.clear()` in each of g/t/h/m/blocked,
-                # because the one that gets forgotten is the one that matters: an arm
-                # that resumes a queued trajectory after the operator pressed HOLD is
-                # doing something nobody asked for.
-                if mode != "park" and park_queue:
-                    print(f"\n  ⚠️  {len(park_queue)} queued pose(s) abandoned — "
-                          "leaving PARK cancels the rest of a sequence.\n")
-                    park_queue.clear()
+                # ⛔ Leaving PARK for ANY reason abandons the rest of the run. One
+                # place rather than a clear() in each of g/t/h/m/blocked, because the
+                # one that gets forgotten is the one that matters: an arm resuming a
+                # planned trajectory after the operator pressed HOLD is doing something
+                # nobody asked for.
+                if mode != "park" and park_path is not None:
+                    left = park_path.length - park_s
+                    if left > PARK_TOLERANCE:
+                        print(f"\n  ⚠️  run abandoned with {left:.2f} rad of path left — "
+                              "leaving PARK cancels the rest.\n")
+                    park_path, park_marks = None, []
                 if stop_reason:
                     break
 
@@ -1208,64 +1287,80 @@ def main() -> int:  # noqa: PLR0915
                     robot.command_joint_pos(full)
                     prev_q = q_target.copy()
 
-                elif mode == "park" and park_target is not None and park_cmd is not None:
+                elif mode == "park" and park_path is not None and park_target is not None:
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     # ⭐ Completion is judged from the MEASURED pose, never from the
                     # command — the command always arrives first, so testing it would
                     # declare success while the arm was still travelling.
                     err = float(np.max(np.abs(park_target - q)))
-                    # ⭐ Same verdict as the blocking park — one rule, two schedulers.
-                    # Before this, the two paths could disagree about the same arm at
-                    # the same pose, which is exactly what happened at 0.020 vs 0.021.
-                    leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
-                                       PARK_TOLERANCE, PARK_SETTLED)
-                    if leg in ("arrived", "settled"):
-                        extra = ("" if leg == "arrived" else
-                                 " — as close as the arm holds itself under load")
-                        if park_queue:
-                            # ⭐ The next leg of a sequence, started from inside the
-                            # 100 Hz loop rather than by a blocking call — so keys, the
-                            # thermal guard and the chain-alive check all keep running
-                            # for the whole run. See ROADMAP step 6.5 for why that is
-                            # the load-bearing decision in this feature.
-                            name, pose = park_queue.pop(0)
-                            print(f"\n⭐ reached ({err:.3f} rad off{extra}) → next: "
-                                  f"slot {name}, {len(park_queue)} after it\n")
-                            begin_park(pose, f"slot {name}")
-                        else:
+                    lag = float(np.max(np.abs(park_cmd - q))) if park_cmd is not None else 0.0
+                    at_end = park_s >= park_path.length
+
+                    # ⛔ ARRIVAL IS GATED ON THE CURSOR REACHING THE END, not on the
+                    # error alone. A run like `p 1 2 1` finishes where it started, so
+                    # the error to the FINAL target is small at t=0 too — judging on it
+                    # would declare the whole sequence complete before moving.
+                    if not at_end:
+                        # Hold the cursor if the arm has fallen behind. The trajectory
+                        # is a SHAPE now; a command racing ahead while the arm cuts its
+                        # own corner is not the shape anyone chose.
+                        advanced = False
+                        if lag < MAX_CURSOR_LAG:
+                            ramp = park_speed_factor(
+                                park_s, park_path.length - park_s,
+                                0.0 if args.no_smooth else PARK_RAMP)
+                            park_s = min(park_path.length,
+                                         park_s + park_speed * ramp * dt)
+                            advanced = True
+                        park_cmd = park_path.point_at(park_s)
+                        robot.command_joint_pos(park_cmd)
+
+                        # Progress is "the cursor moved OR the arm closed the gap".
+                        # Without the first half, a legitimately slow leg looks stalled;
+                        # without the second, an arm pinned against something never does.
+                        if advanced or err < park_best_err - PARK_PROGRESS_EPS:
+                            park_best_err = min(park_best_err, err)
+                            park_progress_t = t
+                        if t - park_progress_t > PARK_STALL_SECONDS:
+                            mode = "hold"; enter_hold()
+                            print(f"\n⛔ PARK BLOCKED — the arm stopped following "
+                                  f"{lag:.3f} rad behind the path, no progress for "
+                                  f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
+                        elif park_marks and park_s >= park_marks[0][1]:
+                            name, _ = park_marks.pop(0)
+                            if park_marks:
+                                print(f"\r  ⭐ through slot {name} → next {park_marks[0][0]}"
+                                      f"      ", end="", flush=True)
+                        elif t >= next_park_report:
+                            next_park_report = t + 1.0
+                            print(f"\r  moving… {park_path.length - park_s:.2f} rad of path "
+                                  f"left, {err:.3f} to the final pose, {lag:.3f} behind   ",
+                                  end="", flush=True)
+                    else:
+                        leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
+                                           PARK_TOLERANCE, PARK_SETTLED)
+                        if leg in ("arrived", "settled"):
+                            extra = ("" if leg == "arrived" else
+                                     " — as close as the arm holds itself under load")
                             mode = "hold"; enter_hold()
                             print(f"\n⭐ PARK reached ({err:.3f} rad off{extra}) → HOLD\n")
-                    elif leg == "blocked":
-                        # ⛔ Never spin silently. If the arm has stopped closing the gap
-                        # the honest thing is to say so and hold, not to keep printing a
-                        # number that is not changing — which is exactly how the old
-                        # treadmill bug hid for two sessions.
-                        mode = "hold"; enter_hold()
-                        print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no progress "
-                              f"for {PARK_STALL_SECONDS:.0f}s.")
-                        print(f"   The command ran {float(np.max(np.abs(park_cmd - q))):.3f} rad ahead of "
-                              f"the arm; SafeRobot limited {getattr(robot, 'limited_cycles', 0)} cycles.")
-                        print("   Something is blocking it, or the pose is unreachable. Now HOLDING.\n")
-                    else:
-                        # ⛔ Advance the COMMAND, not the measurement. See
-                        # yam_robot.advance_park_command() for why this is the whole bug.
-                        # ⭐ Ease in and out. The factor only ever SCALES THE STEP DOWN,
-                        # and advance_park_command already clamps a step to the distance
-                        # remaining — so this cannot overshoot, only soften the ends.
-                        ramp = park_speed_factor(
-                            float(np.max(np.abs(park_cmd - park_start))),
-                            float(np.max(np.abs(park_target - park_cmd))),
-                            0.0 if args.no_smooth else PARK_RAMP)
-                        park_cmd = advance_park_command(park_cmd, park_target,
-                                                        park_speed * ramp * dt)
-                        robot.command_joint_pos(park_cmd)
-                        if err < park_best_err - PARK_PROGRESS_EPS:
-                            park_best_err, park_progress_t = err, t
-                        if t >= next_park_report:
-                            next_park_report = t + 1.0
-                            lead = float(np.max(np.abs(park_cmd - q)))
-                            print(f"\r  parking… {err:.3f} rad to go, command {lead:.3f} ahead   ",
-                                  end="", flush=True)
+                        elif leg == "blocked":
+                            # ⛔ Never spin silently. If the arm has stopped closing the
+                            # gap the honest thing is to say so and hold, not to keep
+                            # printing a number that is not changing — which is exactly
+                            # how the old treadmill bug hid for two sessions.
+                            mode = "hold"; enter_hold()
+                            print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
+                                  f"progress for {PARK_STALL_SECONDS:.0f}s.")
+                            print(f"   The command ran {lag:.3f} rad ahead of the arm; "
+                                  f"SafeRobot limited "
+                                  f"{getattr(robot, 'limited_cycles', 0)} cycles.")
+                            print("   Something is blocking it, or the pose is "
+                                  "unreachable. Now HOLDING.\n")
+                        else:
+                            robot.command_joint_pos(park_cmd)
+                            if err < park_best_err - PARK_PROGRESS_EPS:
+                                park_best_err, park_progress_t = err, t
 
                 # ---- 5. report --------------------------------------------
                 # CONTROLS mode reports continuously, not once a second: he is watching
