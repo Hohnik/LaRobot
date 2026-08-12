@@ -349,11 +349,21 @@ Stop-at-each-waypoint first, blended later, and only if the motion genuinely nee
 
 ### Order of work
 
-1. ✅ Storage + tests *(done)*.
-2. `s`+digit and `p`+digit, single slot, using the interleaved park. No sequences yet.
-3. Sequences: the queue, the echo, the abort.
-4. Park speed on `+`/`-` in PARK mode.
-5. Easing behind a flag; tune the ramp with Julien on the arm; then default it on.
+1. ✅ Storage + tests *(done 2026-08-12)*.
+2. ✅ `s`+digit and `p`+digit, on the interleaved park.
+3. ✅ Sequences: the queue, the echo, the abort — and ⛔ **leaving PARK for any reason
+   abandons the rest**, said out loud when it happens.
+4. ✅ Park speed on `+`/`-` while in PARK mode.
+5. ⬜ **Easing behind a flag; tune the ramp with Julien on the arm; then default it on.**
+   The only part left, and the only part that touches a function confirmed on hardware.
+
+⭐ **One decision arrived during implementation and is worth keeping:** Julien ruled that
+Ctrl-C must *always* return to the base pose regardless of what has been saved since —
+which turned "the park pose" from one variable into **two different things**. Slot `0` is
+the base: the pose the arm is released in, changed only by a deliberate `s 0`. Slots 1-9
+are waypoints, and Ctrl-C ignores them entirely. **A pose that is safe to be let go in is
+not the same as a pose you want to return to mid-task**, and before this the two shared a
+variable that `s` silently overwrote.
 
 ## Step 7 — Cameras
 
