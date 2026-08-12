@@ -1372,3 +1372,95 @@ assigned by asking the operator to wiggle one.
 a failed query are indistinguishable unless the tool distinguishes them for you. When a check
 returns "nothing", ask what a *broken* check would have returned — and if the answer is "the
 same thing", the check has told you nothing at all.
+
+---
+
+## 24. ⛔⭐ Three holes in the safety guards, found by READING — 2026-08-12
+
+Found while reading `teleop_session.py` end to end before restructuring it. **None had
+ever fired on hardware**, which is why none is in [§0](#0-the-one-thing-to-internalise-before-touching-anything)'s
+table — and is also exactly why they were worth finding first. This is the same
+exercise as [§9](#9-four-defects-found-by-reading-2026-08-10-session-3---no-hardware-involved),
+and it found the same class of thing: **guards with a path around them, and messages
+that promise what the code does not do.**
+
+⚠️ **All three fixes are tested headlessly and NONE is confirmed on the arm.** Session
+4 is the standing warning here — three changes that passed 34 tests, three dry runs and
+a simulated IK loop produced three failures on first hardware contact, one of which
+dropped 4.3 kg.
+
+### 24.1 The thermal guard disarmed itself on any read error
+
+The temperature block wrapped the read **and every decision that followed** in one
+`try`, whose handler was:
+
+```python
+except Exception:
+    temps, hottest, jaw_temp = [], 0.0, None
+```
+
+So **any** failure of `chain.read_states()` — a CAN hiccup, a decode error, a short
+state list — reported the hottest motor as **0 °C**. Then `if hottest >= TEMP_STOP`
+could not fire, the thermal stop was gone for that cycle, and the status line printed a
+calm `hottest 0°C`. Nothing warned. If the read failed persistently, the session would
+run to completion with **no thermal protection at all**, reassuring the operator the
+whole way.
+
+Motor 7 has been cooked three times on this rig ([§3.5](#35-the-gripper-2-frame-fix)),
+so this is not a theoretical guard.
+
+**Fixed** by `ThermalGuard` in `src/yam_robot.py`: only the *read* is wrapped, never the
+decisions; a failed read is `None` and never a temperature; blindness is announced once
+and becomes a **stop** after 100 cycles (1 s at 100 Hz), because a session that cannot
+see temperatures has lost the thing between the gripper and a stall burn. The readout
+now shows `hottest ??°C ⚠️BLIND` rather than a number.
+
+### 24.2 The 55 °C warning was advertised and never issued
+
+The startup plan has always printed `temperature : warn 55°C, stop 65°C`. An exhaustive
+grep over `scripts/` and `src/` found `TEMP_WARN` used in exactly two places: its own
+definition, and that line of the plan. **The warning did not exist.** Only the 65 °C
+stop was ever implemented, so the operator's first notice of a heating motor was the
+session ending.
+
+Same defect class as [§16](#16-a-refusal-that-named-the-wrong-arm), where a refusal
+named the wrong arm: the text is right, the behaviour is absent, and only somebody at
+the bench finds out. ⭐ **A constant that is printed but never compared against is a
+promise, and this repo should grep for those on purpose.**
+
+### 24.3 Ctrl-C released the arm, going around the consent flow
+
+This session exists partly because *"quitting released the arm on a timer"* and **a 5 s
+countdown is not consent** — so `q` was changed to go to HOLD and wait for an explicit
+second key. That fix is real and it works.
+
+**Ctrl-C went around all of it.** `SIGINT` raised past the consent flow, past the
+`with KeyReader()`, into the outer handler, and straight into `finally` — which calls
+`shutdown_robot()` and disables the motors. On a raised arm that is a sag, and ⚠️
+**Ctrl-C is precisely what a person presses when something looks wrong**, which is the
+worst possible moment to release 4.3 kg.
+
+Working contract rule 7, verbatim: *what path reaches the hazard without passing through
+your guard?* Here it was the interrupt, and the guard was the newest code in the file.
+
+**Fixed** with a SIGINT handler rather than a `try/except`, so the ~540-line loop body
+did not have to be re-indented for it: the first Ctrl-C sets a flag **and restores the
+default handler**, so the loop stops at the top of its next cycle and falls into the
+same consent flow `q` uses — and a **second** Ctrl-C is a genuine force quit, which is
+what pressing it twice means. There is a deliberate remaining gap: a Ctrl-C during
+`build_robot()`, before the handler is installed, still exits the old way. That is
+correct — the arm has only just been energised and is where the operator left it.
+
+### ⭐ What to take from this, beyond the three fixes
+
+**Every one of these was found by reading the code against its own documentation**, and
+each is invisible to testing that only exercises the happy path: the thermal hole needs
+a CAN failure, the warning needs a hot motor, the Ctrl-C hole needs someone to panic.
+The pattern worth repeating on any file that guards hardware:
+
+1. For each constant that names a limit, **grep for where it is compared.** If it only
+   appears in its definition and in a printed message, it is decoration.
+2. For each `except`, ask **what the handler makes the next check believe.** A handler
+   that substitutes a safe-looking default has silently answered a safety question.
+3. For each guard, ask **which exits skip it** — `break`, `return`, exceptions, and
+   signals. Signals are the one people forget, because they do not appear in the code.

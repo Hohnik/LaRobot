@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -288,6 +289,140 @@ def park_target_from(
         target[gripper_index] = clamp(float(target[gripper_index]))
 
     return target, warning
+
+
+def motor_temperatures(states: Any, gripper_index: int) -> tuple[list[float], float | None, float | None]:
+    """`(temps, hottest, jaw)` from a chain's state list. Pure, so it can be tested.
+
+    Each motor reports two temperatures — MOSFET and rotor — and the one that
+    matters is whichever is higher, so they are combined per motor rather than
+    picked between.
+
+    ⚠️ `hottest` is **None** for an empty list, never 0.0. A temperature of zero is
+    a plausible-looking reading that no motor in a warm room ever produces, and
+    inventing one is how a thermal guard gets quietly disarmed — see `ThermalGuard`.
+
+    ⭐ The gripper is returned SEPARATELY and is deliberately not folded into
+    `hottest`. Motors 2 and 3 carry the arm's 4.3 kg and sit at 41-42 °C in normal
+    equilibrium while an idle motor 7 is 31-36 °C, so a gripper climbing 33 → 41 °C
+    is completely hidden behind the shoulder in a `max()`. Watching motor 7 plateau
+    is the actual test of the 2π frame fix, and a test that cannot see the thing it
+    tests is not a test (FINDINGS §0).
+    """
+    temps = [float(max(getattr(s, "temp_mos", 0) or 0, getattr(s, "temp_rotor", 0) or 0))
+             for s in states]
+    hottest = max(temps) if temps else None
+    jaw = temps[gripper_index] if len(temps) > gripper_index else None
+    return temps, hottest, jaw
+
+
+@dataclass
+class ThermalVerdict:
+    """What the guard wants done this cycle. Both fields may be None."""
+
+    stop_reason: str | None = None
+    warning: str | None = None
+
+
+class ThermalGuard:
+    """Turns motor temperatures into a decision — **including when it cannot read them.**
+
+    ⛔⭐ THE DEFECT THIS REPLACES, found by reading on 2026-08-12 and never yet
+    triggered on hardware, which is the only reason it is not in FINDINGS §0's table.
+
+    The session used to read temperatures inside a bare `try`, and its handler was:
+
+        except Exception:
+            temps, hottest, jaw_temp = [], 0.0, None
+
+    So **any** failure of `chain.read_states()` — a CAN hiccup, a decode error, a
+    short state list — set the hottest motor to **0 °C**. The comparison
+    `if hottest >= TEMP_STOP` then could not fire, thermal protection was gone for
+    that cycle, and the status line printed a calm `hottest 0°C`. Nothing warned.
+    If the read failed persistently the session would run to completion with no
+    thermal guard at all, reassuring the operator the whole way.
+
+    That is three of this repo's own rules at once: it warns-and-continues past a
+    hazard (working contract rule 4), it is a guard with a path straight around it
+    (rule 7), and it fails by lying rather than by crashing (FINDINGS §0). Motor 7
+    has been cooked three times on this rig; the thermal guard is not decoration.
+
+    **So: a failed read is not a temperature.** Blindness is reported the first time
+    it happens and becomes a *stop* if it persists — because a session that cannot
+    see temperatures has lost the thing standing between the gripper and a stall
+    burn, and continuing is a decision nobody made deliberately.
+
+    ⭐ It also actually issues the warning the session has always advertised.
+    `TEMP_WARN = 55.0` was printed in the startup plan — *"temperature : warn 55°C,
+    stop 65°C"* — and, verified by an exhaustive grep on 2026-08-12, **was used
+    nowhere else in the codebase.** The session promised a warning it could not
+    give. Same defect class as the refusal that named the wrong arm (FINDINGS §16):
+    the text is right, the behaviour is absent, and only a user at the bench finds
+    out.
+    """
+
+    def __init__(self, warn_at: float = 55.0, stop_at: float = 65.0,
+                 blind_cycles: int = 100, rearm_below: float = 3.0) -> None:
+        self.warn_at = warn_at
+        self.stop_at = stop_at
+        # 100 cycles is 1 s at the 100 Hz control rate. A single dropped read is a
+        # bus hiccup and must not end a session; a second of silence means the
+        # instrument is gone, not noisy.
+        self.blind_cycles = blind_cycles
+        # Hysteresis, so a motor sitting exactly on the warn line does not print a
+        # warning every cycle and bury the rest of the readout.
+        self.rearm_below = rearm_below
+        self.blind = 0
+        self.max_seen = 0.0
+        self.max_jaw_seen = 0.0
+        self._warned_blind = False
+        self._warned_hot = False
+
+    def update(self, hottest: float | None, jaw: float | None = None,
+               motor: int | None = None) -> ThermalVerdict:
+        """Observe one cycle. `hottest=None` means **the read failed**, not 0 °C."""
+        if hottest is None:
+            self.blind += 1
+            if self.blind >= self.blind_cycles:
+                return ThermalVerdict(stop_reason=(
+                    f"motor temperatures have been unreadable for {self.blind} cycles "
+                    f"({self.blind / 100:.1f}s). The thermal guard is the only thing "
+                    "between the gripper and a stall burn, so this stops rather than "
+                    "running blind"))
+            if not self._warned_blind:
+                self._warned_blind = True
+                return ThermalVerdict(warning=(
+                    "cannot read motor temperatures — the thermal guard is BLIND. "
+                    f"Stopping if this lasts {self.blind_cycles} cycles"))
+            return ThermalVerdict()
+
+        if self._warned_blind:
+            self._warned_blind = False
+            self.blind = 0
+            recovered = ThermalVerdict(warning="motor temperatures readable again")
+        else:
+            self.blind = 0
+            recovered = ThermalVerdict()
+
+        self.max_seen = max(self.max_seen, hottest)
+        if jaw is not None:
+            self.max_jaw_seen = max(self.max_jaw_seen, jaw)
+
+        if hottest >= self.stop_at:
+            where = f"motor {motor + 1}" if motor is not None else "a motor"
+            return ThermalVerdict(stop_reason=(
+                f"{where} reached {hottest:.0f}°C (limit {self.stop_at:.0f}°C) — "
+                "stopping before the firmware trips"))
+        if hottest >= self.warn_at:
+            if not self._warned_hot:
+                self._warned_hot = True
+                where = f"motor {motor + 1}" if motor is not None else "a motor"
+                return ThermalVerdict(warning=(
+                    f"{where} is at {hottest:.0f}°C, past the {self.warn_at:.0f}°C "
+                    f"warning line. It stops at {self.stop_at:.0f}°C"))
+        elif hottest < self.warn_at - self.rearm_below:
+            self._warned_hot = False
+        return recovered
 
 
 def read_raw_gripper_position(arm: str) -> float | None:

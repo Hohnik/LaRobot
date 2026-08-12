@@ -17,6 +17,7 @@
     +/-   faster / slower.
     ?     print this again.
     q     QUIT — goes to HOLD first and asks; it never just releases the arm.
+    ^C    the SAME as q — stops and asks. Press it twice to force a real quit.
 
 ⛔ CONTROLS mode is where the axis map gets set up, ON THE ARM, and that is not a
 convenience. An earlier version held the arm still and this docstring recommended
@@ -55,7 +56,10 @@ FOUR REAL FAILURES FROM THE PREVIOUS RUN, ALL FIXED HERE
    the firmware's own trip, so the session ends in a controlled way instead of
    the thread dying underneath it.
 4. **Quitting released the arm on a timer.** A 5 s countdown is not consent. Now
-   `q` moves to HOLD and waits for an explicit second key.
+   `q` moves to HOLD and waits for an explicit second key. ⚠️ **And that fix had a
+   hole in it for two days: Ctrl-C went around the consent flow entirely** and
+   disabled the motors from `finally`. Fixed 2026-08-12 — the first Ctrl-C is now
+   the same request `q` is, the second forces the quit.
 
 ON RECOVERING A DROOPED ARM — yes, and nothing is lost
 ------------------------------------------------------
@@ -72,6 +76,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 import time
 from pathlib import Path
@@ -104,8 +109,10 @@ from spacemouse import (  # noqa: E402
 from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
+    ThermalGuard,
     advance_park_command,
     build_robot,
+    motor_temperatures,
     park_target_from,
     shutdown_robot,
 )
@@ -336,8 +343,11 @@ def main() -> int:  # noqa: PLR0915
     home_ee = None
     gripper_value = 0.0
     park_target = None
-    max_temp_seen = 0.0
-    max_jaw_temp_seen = 0.0
+    # ⛔ The thermal guard is an object rather than a pair of floats, because
+    # "I cannot read the temperature" is a state that has to be tracked and acted
+    # on. It used to be indistinguishable from 0 °C — see ThermalGuard.
+    thermal = ThermalGuard(warn_at=TEMP_WARN, stop_at=TEMP_STOP)
+    hottest: float | None = None
     jaw_temp = None
     stall_since = None
     next_park_report = 0.0
@@ -482,9 +492,42 @@ def main() -> int:  # noqa: PLR0915
                 print("⚠️  stdin is not a terminal — keys will not work. Ctrl-C still does.\n")
             print(f"⭐ MODE: {mode.upper()}\n")
 
+            # ⛔⭐ CTRL-C MUST NOT RELEASE THE ARM, and it used to.
+            #
+            # This whole session exists partly because "quitting released the arm on a
+            # timer" and *a 5 s countdown is not consent* — so `q` was changed to go to
+            # HOLD and wait for an explicit second key. **Ctrl-C went around all of
+            # that.** SIGINT raised past the consent flow, past the `with`, into the
+            # outer handler and straight to `finally`, which calls `shutdown_robot()`
+            # and disables the motors. On a raised arm that is a sag, and Ctrl-C is
+            # what everyone presses when something looks wrong.
+            #
+            # Found by reading on 2026-08-12, never yet triggered on hardware. It is
+            # working contract rule 7 exactly: *what path reaches the hazard without
+            # passing through your guard?* — this one, and the guard was the newest
+            # code in the file.
+            #
+            # A handler rather than a try/except so the ~540-line loop body is not
+            # re-indented for it. The first Ctrl-C sets a flag and restores the DEFAULT
+            # handler, so the loop stops at the top of its next cycle and falls into
+            # the same consent flow `q` uses — and a **second** Ctrl-C is a real force
+            # quit, which is what someone pressing it twice means.
+            interrupted: list[bool] = []
+
+            def on_sigint(signum, frame) -> None:  # noqa: ANN001, ARG001
+                signal.signal(signal.SIGINT, signal.SIG_DFL)
+                interrupted.append(True)
+
+            signal.signal(signal.SIGINT, on_sigint)
+
             while True:
                 loop_start = time.perf_counter()
                 t = loop_start - t0
+
+                if interrupted:
+                    stop_reason = ("Ctrl-C — the loop is stopping, and the arm is NOT "
+                                   "released until you choose below (Ctrl-C again forces it)")
+                    break
 
                 # ---- 1. is the robot still there? -------------------------
                 if not chain_alive(robot):
@@ -494,39 +537,39 @@ def main() -> int:  # noqa: PLR0915
                     )
                     break
 
-                # ---- 2. temperatures --------------------------------------
+                # ---- 2. temperatures and the gripper stall guard -----------
+                # ⛔⭐ ONLY THE READ IS WRAPPED. The decisions are not, and that is the
+                # entire point of this shape. The previous version wrapped the read AND
+                # every check that followed in one `try`, whose handler set
+                # `hottest = 0.0` — so a failed read silently disarmed the thermal stop
+                # and printed a calm "hottest 0°C". A guard with a path around it is
+                # the defect this repo keeps paying for (working contract rule 7);
+                # here the path was its own exception handler. See ThermalGuard.
                 try:
                     states = chain.read_states()
-                    temps = [max(getattr(s, "temp_mos", 0) or 0, getattr(s, "temp_rotor", 0) or 0)
-                             for s in states]
-                    hottest = max(temps)
-                    max_temp_seen = max(max_temp_seen, hottest)
-                    # ⭐ The GRIPPER'S OWN temperature, reported separately and not
-                    # folded into `hottest`. Motors 2/3 carry the arm's 4.3 kg and sit
-                    # at 41-42 °C in normal equilibrium, while an idle motor 7 is
-                    # 31-36 °C — so a gripper climbing 33 → 41 °C is entirely hidden
-                    # behind the shoulder in a max(). The whole point of the 2π frame
-                    # fix is that motor 7 no longer heats, and a test that cannot see
-                    # motor 7 cannot falsify that. FINDINGS §0: prefer the test that
-                    # could disagree with you.
-                    jaw_temp = temps[N_ARM] if len(temps) > N_ARM else None
-                    if jaw_temp is not None:
-                        max_jaw_temp_seen = max(max_jaw_temp_seen, jaw_temp)
-                    if hottest >= TEMP_STOP:
-                        stop_reason = (
-                            f"motor {temps.index(hottest) + 1} reached {hottest:.0f}°C "
-                            f"(limit {TEMP_STOP}°C) — stopping before the firmware trips"
-                        )
-                        break
+                    read_error = None
+                except Exception as exc:  # noqa: BLE001
+                    states, read_error = None, f"{type(exc).__name__}: {exc}"
+
+                if states is None:
+                    hottest, jaw_temp = None, None
+                    stall_since = None                # cannot judge a stall we cannot see
+                    verdict = thermal.update(None)
+                else:
+                    temps, hottest, jaw_temp = motor_temperatures(states, N_ARM)
+                    verdict = thermal.update(
+                        hottest, jaw_temp,
+                        motor=temps.index(hottest) if hottest is not None else None)
                     # ---- gripper stall guard ------------------------------
-                    # ⚠️ With NO_GRIPPER the chain has 6 motors, so states[6] would
-                    # IndexError -- and the surrounding try/except would swallow it,
-                    # silently killing temperature monitoring too. Guard explicitly.
+                    # ⚠️ With --no-gripper the chain has 6 motors, so states[6] would
+                    # IndexError. It used to be guarded by raising StopIteration out of
+                    # the shared try — which worked, but meant the "no gripper" path and
+                    # the "read failed" path were the same code path. Now it is just an
+                    # if, because there is nothing left to jump out of.
                     jaw = states[N_ARM] if len(states) > N_ARM else None
                     if jaw is None:
                         stall_since = None
-                        raise StopIteration
-                    if (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
+                    elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
                             and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
                         if stall_since is None:
                             stall_since = loop_start
@@ -538,10 +581,13 @@ def main() -> int:  # noqa: PLR0915
                             stall_since = None
                     else:
                         stall_since = None
-                except StopIteration:
-                    pass          # no gripper in the chain; temperatures already read
-                except Exception:  # noqa: BLE001
-                    temps, hottest, jaw_temp = [], 0.0, None
+
+                if verdict.warning:
+                    detail = f"  ({read_error})" if read_error else ""
+                    print(f"\n⚠️  {verdict.warning}{detail}\n")
+                if verdict.stop_reason:
+                    stop_reason = verdict.stop_reason
+                    break
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
@@ -1009,7 +1055,11 @@ def main() -> int:  # noqa: PLR0915
                     # comment where it is read. Watching this number plateau is the
                     # actual test of the 2π frame fix; watching `hottest` is not,
                     # because the shoulder sits hotter than the gripper all session.
-                    therm = f"hottest {hottest:4.0f}°C"
+                    # ⛔ "??" when the read failed, never a number. A fabricated 0 °C
+                    # is exactly what made a disarmed thermal guard look healthy on
+                    # screen, and the readout is the only place a human would notice.
+                    therm = (f"hottest {hottest:4.0f}°C" if hottest is not None
+                             else "hottest   ??°C ⚠️BLIND")
                     if jaw_temp is not None:
                         therm += f"  jaw {jaw_temp:4.0f}°C"
                     # ⭐ GUIDE reports DRIFT from where it went weightless. On 2026-08-10
@@ -1104,6 +1154,12 @@ def main() -> int:  # noqa: PLR0915
     except Exception as exc:  # noqa: BLE001
         print(f"\n⛔ {type(exc).__name__}: {exc}")
     finally:
+        # Hand SIGINT back before anything else, so a Ctrl-C during shutdown behaves
+        # the way the shell expects rather than being swallowed by our handler.
+        try:
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+        except Exception:  # noqa: BLE001, S110
+            pass
         try:
             handle.close()
         except Exception:  # noqa: BLE001, S110
@@ -1130,12 +1186,12 @@ def main() -> int:  # noqa: PLR0915
             disabled = shutdown_robot(robot)
             print(f"\nmotors confirmed disabled: {disabled}")
 
-    print(f"\nhottest motor seen this session: {max_temp_seen:.0f}°C")
-    if max_jaw_temp_seen:
+    print(f"\nhottest motor seen this session: {thermal.max_seen:.0f}°C")
+    if thermal.max_jaw_seen:
         # The number that decides whether the gripper frame fix held. A plateau near
         # idle (31-36 °C) is the pass; a steady climb is the failure, and it is
         # invisible in `hottest` because the shoulder runs hotter all session.
-        print(f"hottest the GRIPPER (motor 7) got: {max_jaw_temp_seen:.0f}°C")
+        print(f"hottest the GRIPPER (motor 7) got: {thermal.max_jaw_seen:.0f}°C")
     print(f"axis map: {axis_map.one_line(control_frame)}")
     if axis_map != axis_map_at_start:
         print(f"     was: {axis_map_at_start.one_line()}")
