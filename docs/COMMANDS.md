@@ -37,15 +37,18 @@ uv run scripts/read_arm_state.py --yes --arm B
 | `t` | **TELEOP** — the SpaceMouse drives the end effector |
 | `h` | **HOLD** — the arm holds its pose. The safe idle |
 | `p` | **PARK** — drive back to the saved pose at 0.4 rad/s. Press `h` or `t` to stop |
-| **`m`** | **MAP** — remap which puck axis drives which motion. **The arm HOLDS; the puck moves nothing** |
-| `s` | save the current pose as the park pose |
+| **`m`** | **CONTROLS** — remap which puck axis drives which motion. ⚠️ **The arm MOVES**, one isolated axis at half speed; only keys edit the map |
+| `s` then `0`-`9` | save this pose — **`0` is the BASE pose Ctrl-C returns to**, `1`-`9` are waypoints Ctrl-C ignores |
+| `p` then digits then `Enter` | drive to one pose, or **one blended motion through several** (`p 1 2 3 Enter` shows the plan, `Enter` again runs it) |
 | `o` / `c` | open / close the gripper |
-| `[` / `]` | gripper step slower / faster |
+| `ö` / `ä` | gripper step smaller / bigger — **and how long the ease lasts while a run is being typed**. ⭐ `[` / `]` are aliases and still work; `ö`/`ä` exist because the brackets are **AltGr+8 / AltGr+9** on a German layout ([FINDINGS §27.7](FINDINGS.md)) |
+| `e` | cycle the **ease profile** — `none` / `in` / `out` / `both` / `s-curve`. Works in **any** mode |
+| `v` | control **frame** — world / tool / camera. ⚠️ Each frame keeps its **own** axis map |
 | `r` | wrist rotation on / off *(on by default)* |
-| `,` / `.` | rotation speed slower / faster |
+| `,` / `.` | rotation speed slower / faster — **corner blending while a run is being typed or moving** |
 | **`x` `y` `z`** | flip **X / Y / UP** — **saved to `config/spacemouse_map.json`** |
 | **`1` `2` `3`** | flip **ROLL / PITCH / YAW** — same file |
-| `-` / `+` | linear speed slower / faster |
+| `-` / `+` | linear speed slower / faster — **park speed while in PARK or while a run is being typed** |
 | `?` | reprint the key list |
 | `b` | **assign the puck buttons** to gripper open/close — works in **any** mode. Then hold a button to move the jaws (in TELEOP/CONTROLS); `f` swaps them |
 | `q` | **QUIT** — goes to HOLD and *asks*. Then **`p` to park**, `g` to go weightless and park by hand, `d` to disable |

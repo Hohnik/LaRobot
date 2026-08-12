@@ -1,6 +1,6 @@
 # Handoff — start here if you have no context
 
-> **Written 2026-08-10, kept current — last updated 2026-08-11, end of session 9.** This file exists so a
+> **Written 2026-08-10, kept current — last updated 2026-08-12, end of session 19.** This file exists so a
 > fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) →
@@ -21,7 +21,7 @@
 >    one raised an exception. Check values for plausibility, never merely for the absence of an exception.
 > 4. **§5.5 is the task list**, ordered, with the reasoning for the order. Item 1 is the next thing to build.
 >
-> Run `for f in scripts/test_*.py; do uv run "$f"; done` first — **245 headless tests, no hardware
+> Run `for f in scripts/test_*.py; do uv run "$f"; done` first — **267 headless tests, no hardware
 > needed** — to confirm the tree is sound before changing anything. Also `uv run scripts/check_links.py`
 > (docs cross-reference each other constantly; one broken pointer is in `Setup-Plan.md` and is not ours).
 >
@@ -30,6 +30,16 @@
 > **Single-arm teleop is finished and confirmed on hardware.** GUIDE, TELEOP, HOLD, PARK, CONTROLS, the
 > gripper, the axis map, control frames, saved poses and blended multi-pose runs all work and Julien has
 > driven them. The camera view works and cameras are identified by measurement.
+>
+> ⭐⭐ **AND THE BIGGEST QUESTION IN THE PROJECT JUST CHANGED ITS ANSWER.** After driving a full session
+> on 2026-08-12 he reported that **executing a task with the SpaceMouse is very hard**, that setting the
+> scene up by hand is trivial by comparison, and that an automated scene reset is close to circular —
+> *"if the robot can just place the object at a random location, then it can already control itself."*
+> That refutes the recommendation this repo had written down about where demos come from. His proposal —
+> **teach the poses by hand in GUIDE, then replay them to record** — is analysed in full, with the two
+> ways it can silently poison a dataset and a third option that may beat it, in
+> ⭐ **[ROADMAP §6.6](ROADMAP.md)**. ⛔ **Read that before building any part of the recorder (step 5).**
+> It is a design question, not code: nothing has been built for it.
 >
 > ## ⬜⬜ THE NEXT JOB, AND IT IS THE ONLY BIG ONE LEFT: wire `ArmSession` in
 >
@@ -154,10 +164,18 @@ MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
 CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
 FRAME     v  world / tool / camera — what "forward" means (tool follows the wrist)
 DIRECTION x y z  flip translation        1 2 3  flip rotation
-SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
+SPEED     - / +  linear             , / .  rotation      ö / ä  gripper step ([ / ])
+EASE      e  cycle none / in / out / both / s-curve — works in ANY mode
 GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
 OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
 ```
+
+⭐ **`ö` and `ä` are aliases of `[` and `]`, added 2026-08-12** — on a German QWERTZ layout
+the brackets are **AltGr+8 / AltGr+9**, a three-finger chord for a knob adjusted while the
+arm is moving. Both spellings work everywhere. ⛔ They arrive at all only because
+`KeyReader` now decodes UTF-8 across reads: `ö` is two bytes, and the old one-byte reader
+turned one keypress into two replacement characters and no key
+([FINDINGS §27.7](FINDINGS.md)).
 
 Arms are **B** and **G**, matching the labels on the hardware. `--arm arm1` is gone and fails loudly.
 
@@ -262,14 +280,15 @@ work, not repair. In the order I would do it, with the reasoning:
 
 | # | task | why, and what is already known |
 |---|---|---|
-| 0 | ⚠️ **Confirm on the arm — the short list** | ✅ **Confirmed 2026-08-12:** Ctrl-C → park → disable · `h`/`t`/`h` switching *"instantly"* · `p 1 2 3 Enter` sequences · speed adjustable while moving · **blended corners** (*"works quite nicely"*) · the plan-and-confirm step · `-/+` and `,/.` while typing. ⬜ **New and unconfirmed:** the **one-line status** (changing speed six times should leave ONE line, not six blocks) · the **fast settle** — a park finishing ~0.04 rad short should now say PARKED within about half a second instead of pausing four · **`e` cycling the ease profile**, and Ctrl-C leaving at once with `out` · **per-waypoint timings** printed as each is passed. Still never seen: the **55 °C warning**, and the **blind-thermal stop**, which cannot be triggered without unplugging CAN mid-session — stated rather than assumed |
+| 0 | ⚠️ **Confirm on the arm — the short list** | ✅ **Confirmed 2026-08-12:** Ctrl-C → park → disable · `h`/`t`/`h` switching *"instantly"* · `p 1 2 3 Enter` sequences · speed adjustable while moving · **blended corners** (*"works quite nicely"*) · the plan-and-confirm step · `-/+` and `,/.` while typing · the **fast settle** (parks reported `0.1s`, `0.9s`, and `0.020`/`0.036 rad off` — no four-second wait anywhere in his log) · **per-waypoint timings** (`slot 1 in 2.6s → next 2`) · **s-curve easing**, which he likes: *"the S curve works quite well"*. ⬜ **New and unconfirmed — the session-19 display fixes:** the **status line no longer welded onto every message** · the **HOLD banner surviving** · `e` working outside a park prompt · the **stale RUN row** clearing · **`ö`/`ä`** arriving at all. Still never seen: the **55 °C warning**, and the **blind-thermal stop**, which cannot be triggered without unplugging CAN mid-session — stated rather than assumed |
+| 0a | ⭐⭐ **DECIDE WHERE DEMOS COME FROM — [ROADMAP §6.6](ROADMAP.md)** | ⛔ **Not code. The most consequential open question in the project**, and the previous written answer was refuted by Julien on 2026-08-12. It gates step 5 (the recorder) completely: build the recorder first and it gets designed around the wrong collection method. ⭐ **The cheapest way to settle it is a 20-minute measurement, not an argument** — time five demos by SpaceMouse against five by teach-and-replay, recording seconds and whether the task actually succeeded. Two things in §6.6 must not be lost: **jittering waypoints without moving the object actively poisons the dataset**, and **per-waypoint dwell is a prerequisite rather than an extra**, because corner blending is defined as *not* stopping and a grasp needs a stop |
 | 0b | ✅ **Smoothing between poses — done 2026-08-12, on by default** | Eases in and out over 0.2 rad (15% → 100% → 15%), both park paths, each leg of a sequence getting its own ramp. `--no-smooth` restores the constant rate. ⭐ **The opt-in caution in the original plan was wrong and checking it changed the decision:** "a deceleration bug shows up as overshoot" is true of a new integrator with velocity state, and false here — `advance_park_command` is `command + clip(target - command, -step, step)`, so a step is already bounded by the distance remaining and **scaling it down cannot overshoot**. Feel is still Julien's to judge on the arm; `PARK_RAMP` is the dial |
 | 0c | ⏳ **Wire `ArmSession` into the session** — the remaining half of the bimanual work | ✅ The class is **built and tested** (`src/arm_session.py`, 17 tests, fake robot). ⬜ What remains is restructuring ~1000 lines of `main()` to use it — deliberately its own session, because mixing "write the class" with "restructure the loop" produces a diff nobody can review and only Julien can test. ⭐ Do it as [ROADMAP step 6](ROADMAP.md) says: **`--arms B` with N=1 first**, confirm it feels identical, and only then N=2 |
 | 1 | ⭐⭐ **Mirror mode — the SCRIPT. The logic is done.** | Julien's idea, and **the right first two-arm feature**: ✅ **`src/mirror.py` + 14 tests are DONE** — `MirrorLink` handles copy/mirror, staged engagement and the stop-rather-than-chase guard, with no robot handle so it is fully testable without an arm. ❌ **What is missing is the script** that opens both arms, reads B and commands G. That is the same two-arm process `ArmSession` needs, so **build them together**. ✅ Julien answered the design question: **both modes exist, `copy` is the default, and the arms are side by side** — so copy is correct today. ⚠️ **`MIRROR_SIGNS` is a geometric PREDICTION, not a measurement** — reflecting through a vertical plane should negate base_yaw, wrist_roll and gripper_twist and leave the three pitches alone. Expect to adjust it the first time `mirror` is used. |
 | 2 | ⭐ **`ArmSession` + one script for both arms** | Fully designed in [ROADMAP step 6](ROADMAP.md). Neither hardware nor compute is the blocker — two arms on two buses from one loop is proven, two IK solves cost 0.100 ms/cycle against a 10 ms deadline, and Julien has already driven both arms at once as two processes. The blocker is that `teleop_session.py` (~1150 lines) holds one arm's state in one function's locals. ⭐ **Make `--arms B` run the N-arm code with N=1 first**, so the refactor is verified against a feel he already knows, separately from the two-arm risk. Prerequisites **done**: per-arm *and* per-frame maps, and `pick_device_by_wiggle(exclude=…)` |
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
-| 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
+| 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected. ⛔ **And as of 2026-08-12 it is blocked by item 0a as well**, on a second axis: the schema is his friend's to specify, but *what gets recorded* — nominal waypoint or actually-commanded pose, and whether perturbed replays are recorded at all — follows from [ROADMAP §6.6](ROADMAP.md). Recording the nominal target instead of the real command yields a dataset that looks correct and teaches nothing |
 | 6 | ⭐⭐ **The D405 wrist cameras — and the cheap shortcut WORKS** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **2026-08-11: OpenCV opens it over plain UVC and gets a real picture** — Julien's live view shows a textured photographic image and `--list` reports `colour`. *(An earlier note here said "depth only". That was inferred from the device's NAME — macOS calls it `… Depth` — and it was wrong; the pixels say otherwise. FINDINGS §22.)* **So driving from the wrist camera needs no SDK at all**, and `brew install librealsense` is an upgrade for depth data, intrinsics and camera controls rather than a prerequisite. Next: mount it properly, then `v` → **tool** frame (⛔ *not* `camera`, until the real mount transform is measured — COMMANDS). He gave the manual's link: `intelrealsense.com/get-started` |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **A remote of Julien's own** | ⚠️ Partly addressed 2026-08-12 — 56 commits now sit on the branch `julien/yam-teleop-wip` in his friend's public repo, so the work is no longer on one Mac alone. That branch is not a backup he controls, so a private remote of his own remains open |
@@ -351,6 +370,8 @@ diff. A pushed branch is not a proposal; opening the PR is.
 | 17 | 2026-08-12, ~14:20-15:3x | ⛔ **The smoothing built in session 16 was the wrong feature** — a speed ramp per leg, so the arm still stopped at every waypoint. Julien meant **corner blending**: one continuous motion curving *through* each pose. Built `src/motion.py` — `JointPath`, quadratic-Bézier corners, exact arc length, 12 tests — and rewired the park onto it, so there is **one motion engine** and the per-leg queue is gone. ⭐ Also the UX he specified: `p Enter` base, `p 1 Enter` one pose, `p 1 2 3 Enter` shows the plan and waits for a second Enter, and **`-/+` speed and `,/.` corners now work while typing**, not only while moving. ✅ `--term-test` answered: Ghostty replies `OK` to the kitty protocol and draws **only** the KITTY bars — **it does not implement iTerm2's**, so PNG is the ceiling and that question is closed. 233 → 245 headless tests. |
 
 | 18 | 2026-08-12, ~15:20-16:3x | ⭐ **Blended corners confirmed working on the arm** — *"the smoothing seems to work quite nicely, actually."* Three complaints from that run, all fixed: the terminal **reprinted a whole block on every knob change** (now one live status line, `src/screen.py`, and `print` is shadowed in `main()` so the policy is one thing in one place) · the end of every park **waited 4 seconds** because `settled` shared the `blocked` timer (now 0.5 s vs 4 s) · and **easing is its own axis** — five profiles cycled with `e`, with Ctrl-C using `out` so a shutdown leaves at once and only lands softly. Each waypoint now reports its own seconds. 245 → 258 headless tests. |
+
+| 19 | 2026-08-12, ~16:50-18:0x | ⭐⭐ **The session that changed where the training data will come from.** Julien drove a full ~4½-minute session — everything worked, s-curve easing *"works quite well"*, the fast settle and per-waypoint timings both confirmed — and then reported that ⛔ **the previous analysis of demo collection was "significantly wrong"**: the bottleneck is *executing* with the SpaceMouse, not resetting the scene, and an automated reset is near-circular. His proposal (teach poses by hand in GUIDE, replay to record) is analysed in full in **[ROADMAP §6.6](ROADMAP.md)**, including the two ways it can silently poison a dataset, a **third option that may beat both**, and a 20-minute measurement that settles it. ⭐ **All three of his UX complaints turned out to be ONE function** — `StatusLine.say()` cleared one row and then wrote a payload containing newlines, so every message overwrote part of the status row (`weightless°C`, `drivesC`, `cancelled.6.0s` in his own paste) and `_rows` desynchronised, which is the "duplicate print" and the eaten HOLD banner. **Four of the eight defects fixed were guards or tests that had stopped describing their subject** — including a screen test asserting on a payload shape no caller produces, and a keyboard test that pinned an arrow key silently changing a motion parameter and called it *"documented, not desired"*. Also `ö`/`ä` for the ease ramp, which needed a UTF-8 decoder before it could be a binding question at all. 258 → 267 headless tests. [FINDINGS §27](FINDINGS.md) |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed
