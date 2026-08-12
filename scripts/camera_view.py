@@ -117,6 +117,13 @@ def key_sizes(cam: "MacCamera | None") -> list[tuple[int, int]]:
     if not (cam and cam.modes):
         return SIZES
     modes = sorted({(int(w), int(h)) for w, h in cam.modes}, key=lambda wh: wh[0] * wh[1])
+    # ⚠️ Landscape only, when there is a real choice. Apple's camera advertises
+    # 1080x1920 and 1552x1552 — Center Stage crop modes — which by pixel count sort
+    # ABOVE 1920x1080 and would put a portrait or square frame on key 6, where the
+    # operator expects "the best this camera can do" for a video view.
+    landscape = [m for m in modes if m[0] > m[1]]
+    if len(landscape) >= 2:
+        modes = landscape
     if len(modes) <= 6:
         return modes
     step = (len(modes) - 1) / 5

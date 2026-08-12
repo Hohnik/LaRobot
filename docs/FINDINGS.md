@@ -1139,83 +1139,179 @@ captured run has no terminal at all. So the cell is now **measured** where possi
 where it is not, the status line prints `ASSUMED` — because a fallback you cannot see is
 indistinguishable from a bug, which is this section's whole theme.
 
+### 21.5 ⛔ The flicker — two causes, and one of them was wasting half the machine
+
+Julien, 2026-08-11: *"the image in the terminal is flickering because some frames seem
+to not be drawn or something like that."*
+
+**Cause 1 — delete-then-draw.** Every kitty frame began with `a=d,d=A` (**delete all
+images**) and only then transmitted the new one. Between the delete and the new image
+being decoded there is nothing on screen, so the picture was blanked 30 times a second.
+Whether that reads as flicker depends on how fast the terminal decodes — which is why
+it got worse as the image was allowed to grow.
+
+The fix is double buffering, exactly as in any graphics pipeline: two image ids used
+alternately, the new image **placed over** the old one, and only then the old id
+deleted from underneath. There is never a moment with nothing on screen. Deleting still
+has to happen — `d=I` frees the image data too, and without it a 30 fps stream leaks
+one image per frame into the terminal's memory.
+
+**Cause 2 — redrawing frames the terminal already had.** ⭐ This one is worth
+internalising. The display loop ran as fast as it could while the camera delivered 30
+fps: with an ~18 ms draw it went round about **55 times a second**, so nearly half of
+every second was spent re-encoding and re-transmitting a **pixel-identical** picture.
+The loop tracked a frame sequence number and used it only to count fps — never to
+decide whether drawing was worth doing. Skipping unchanged frames halves the terminal's
+load and removes half the flashes at the same time.
+
+⚠️ Both fixes are reasoned and structurally tested; neither can be *seen* by the agent
+([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). Confirmation is Julien's
+eye, and it should be asked for explicitly rather than assumed.
+
+### 21.6 The number keys were offering another camera's modes
+
+*"The numbers when I press them don't allow for all the quality options. They cycle
+between about three, and not in the correct order either."*
+
+`SIZES` in `camera_view.py` is a list of **C920** modes, and it was used for every
+camera. A UVC device asked for a mode it does not have substitutes the nearest one it
+does, so on the MacBook Air camera — whose seven modes are 640x480, 1280x720,
+1552x1552, 1760x1328, 1328x1760, 1920x1080, 1080x1920 — keys 1 to 4 all land on
+640x480. **Three distinct results from six keys, and its portrait modes are why the
+order looked wrong too.**
+
+Keys are now bound to the selected camera's **own** modes, read from AVFoundation:
+deduplicated, ascending, at most six spread across the range, bounds-checked, so key
+`6` is always the best that camera can do. On the C920 that is **2560x1472**, which was
+never on offer before — the hard-coded list stopped at 1920x1080.
+
+⭐ **The symptom was also evidence.** "Only three distinct sizes" is the signature of
+the MacBook Air camera, not the C920 — so the complaint about the number keys was, in
+hindsight, an independent report that the tool was driving the wrong camera. It was not
+recognised as such at the time. **When two complaints arrive together, check whether
+one is a symptom of the other before fixing them separately.**
+
 ---
 
-## 22. ⭐ Which camera is which — names, and exactly how far they can be trusted
+## 22. ⛔⭐ Which camera is which — and how a careful, checked, published inference was still wrong
 
-**The problem.** Four cameras are visible on this Mac: the built-in one, the D405 on
-arm B, the C920, and Julien's iPhone over Continuity. **OpenCV opens them by integer
-index and reports no name at all** — verified on OpenCV 5.0, where `cv2.videoio_registry`
-enumerates *backends* and never *devices*. Indices also move: they are an AVFoundation
-artefact and change when something is replugged, which is [§0 #5](#0-the-one-thing-to-internalise-before-touching-anything)
-— *an adapter chosen by index silently retargeted the other robot* — with a different
-cable.
+> **Read this section for the method, not just the answer.** It is the cleanest example in this
+> repo of [§0](#0-the-one-thing-to-internalise-before-touching-anything) — the stack failing by
+> lying — being reproduced *by the code written to prevent it*.
 
-**The way out: macOS will say what OpenCV will not.**
+**The problem.** Four cameras are visible on this Mac: the built-in one, the D405 on arm B, the
+C920, and Julien's iPhone over Continuity. **OpenCV opens them by integer index and reports no
+name at all** — verified on OpenCV 5.0, where `cv2.videoio_registry` enumerates *backends* and
+never *devices*. Indices also move on replug, which is
+[§0 #5](#0-the-one-thing-to-internalise-before-touching-anything) — *an adapter chosen by index
+silently retargeted the other robot* — with a different cable.
 
-```bash
-system_profiler -json SPCameraDataType
-```
+### What was tried first, and why it looked sound
 
-gives, in enumeration order, each camera's name, model ID and — for USB devices — its
-vendor and product ID. ⭐ **It needs no camera permission**, because it enumerates
-rather than captures, so unlike everything else in [§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)
-**the agent can run it.** That is the only reason naming was solvable at all.
+macOS *will* name cameras (`system_profiler -json SPCameraDataType`), and ⭐ it needs no camera
+permission, so even the agent can run it — the only reason naming was approachable at all
+([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). The first implementation paired
+macOS's n-th camera with OpenCV's n-th index.
 
-⚠️ **macOS prints the USB IDs in decimal**: `VendorID_32902 ProductID_2907` is
-`8086:0b5b`. Every datasheet and USB tool speaks hex. Converted once, in `MacCamera.usb`.
+It was **not** done casually. The pairing was labelled an inference in the code, in the docs and
+in the chat; the device counts were checked to agree (macOS listed 4, indices 0-3 opened, and
+OpenCV's own `out device of bound (0-3): 4` confirmed the count); a falsifier was coded — a D405
+cannot deliver a frame wider than 1280, so a shuffled order would strand it on a 1920-px index —
+and a falsification procedure was published: *cover each camera and see which index goes dark.*
 
-### What is actually attached, 2026-08-11
+**Julien ran it. It failed.**
 
-| # | name macOS reports | USB | what `--list` saw |
-|---|---|---|---|
-| 0 | MacBook Air Camera | *(built-in)* | 1920x1080 @ 24 fps, bright |
-| 1 | `Intel(R) RealSense(TM) Depth Camera 405  Depth` | `8086:0b5b` | **1280x720** @ 5 fps |
-| 2 | HD Pro Webcam C920 | `046d:08e5` | 1920x1080 @ 15 fps, nearly black |
-| 3 | Julien's iPhone Camera (`iPhone12,3`) | *(Continuity)* | 1920x1080, **no frame on the first run**, then 30 fps at brightness 0 |
+| | macOS says | reality |
+|---|---|---|
+| index 0 | MacBook Air Camera | **HD Pro Webcam C920** |
+| index 1 | RealSense D405 | RealSense D405 ✅ |
+| index 2 | HD Pro Webcam C920 | **MacBook Air Camera** |
+| index 3 | iPhone (Continuity) | iPhone (Continuity) ✅ |
 
-### ⛔ The pairing is POSITIONAL — an inference — so here is the whole argument
+Two of four names were wrong, and the tool was confident about both. He had already driven a whole
+session with `--camera c920` while looking at his laptop's own camera.
 
-macOS's n-th camera is assumed to be OpenCV's n-th index. This repo does not accept
-inferences quietly, so the assumption is stated, checked three ways, and refused when
-any check fails.
+⭐ **Three lessons, and the third is the one that generalises.**
 
-1. **Membership agrees.** macOS listed 4 cameras and indices 0-3 opened, while OpenCV
-   itself refused index 4 with `out device of bound (0-3): 4` — its own error message
-   is a device count, and it matches. `--list` deliberately probes **one index past the
-   name list** so that a disagreement is discoverable at all.
-2. ⭐ **A falsifier that could have fired and did not.** A D405's imagers are **1280 px
-   wide** and every stream it offers is at most that. On this rig exactly one index
-   reported 1280x720 and every other reported 1920x1080 — so if the order were shuffled,
-   the D405 would have to be sitting on a 1920-wide index, and `KNOWN_MAX_WIDTH` would
-   fire. There is a test that shuffles the order and demands the ⛔.
-3. **An independent signal from the picture itself.** `frame_is_mono()` reports whether
-   the three colour channels are identical. The D405's UVC entry carries depth, so they
-   are; a colour camera's never are, because white balance alone separates them.
+1. **The falsifier only covered the case it was written for.** It knew one fact — the D405's
+   width — so it could only catch a permutation that moved the D405. The D405 happened to be in
+   the right place. **A check that can only fire for one of N possibilities is not a check on the
+   claim; it is a check on a corner of it.**
+2. **Agreement between sources is not independence.** `system_profiler` and AVFoundation agree
+   because they read the same CoreMedia list. Counting them as two confirmations was counting one
+   fact twice — the same error as [§1](#1-the-hardware-as-measured)'s "two arms verified identical
+   by evidence that could not tell them apart from one arm read twice".
+3. ⛔ **Nothing that could be read off a list would have worked.** Three separate macOS
+   enumerations — `system_profiler`, `AVCaptureDevice.devicesWithMediaType:`, and an
+   `AVCaptureDeviceDiscoverySession` asked in two different device-type orders — return the **same**
+   order, and it is not OpenCV's. The information simply is not in any list.
 
-⛔ **When the counts disagree, no name is attached at all.** A wrong name is worse than
-no name — it is the confident, plausible, wrong answer of §0 pointed at a camera.
+*(One observation, offered only as a lead if the measurement below ever fails: OpenCV's order looks
+like USB cameras sorted by location ID first, then built-in, then Continuity — `0x1120000` (C920) <
+`0x1210000` (D405). One data point. Do not build on it.)*
 
-**To falsify it yourself:** unplug one camera, re-run `--list`, and check that the index
-that vanished is the one that was carrying its name.
+### ⭐ The fix: ask the hardware a question only one camera can answer
 
-### ⭐ The D405 answer §8 of the handoff was waiting for: UVC gives DEPTH ONLY
+Every camera advertises a set of modes, and AVFoundation will list them. On this rig they differ
+sharply:
 
-`HANDOFF.md` §8 recorded that the D405 also enumerates as a plain UVC camera and asked
-whether its **colour** stream appears as a separate index. **It does not.** macOS lists
-exactly one entry for it, named `… Depth`, and there is no second RealSense device on
-the bus.
+| camera | modes | one that is **its alone** |
+|---|---|---|
+| MacBook Air Camera | 7 | `1552x1552` (square) |
+| RealSense D405 | 6 | `848x480` |
+| HD Pro Webcam C920 | 18 | `160x90` |
+| iPhone (Continuity) | 4 | `1920x1440` |
 
-**Consequence, and it matters for the roadmap:** the "just use OpenCV, no SDK needed"
-shortcut gets a **depth/infrared** stream, not a picture. Depth is not useless — but it
-is useless for the thing the wrist camera exists for, which is *driving the arm by eye*
-in the tool frame ([§19](#19--driving-from-the-cameras-point-of-view-is-a-frame-question-not-a-camera-question)).
-So a colour picture from the D405 needs the librealsense route after all
-(`brew install librealsense`, HANDOFF §8's ladder rung 2), and the UVC shortcut is
-**not** the free win it looked like.
+Ask an index for a mode only one camera owns. If it comes back **exactly**, that camera is on that
+index. A camera cannot deliver a mode it does not have — **it substitutes the nearest one it does**,
+which is how `424x240` turned into `640x360` in session 7. That measured substitution behaviour is
+the foundation the scheme rests on, and it is stated in `identify_indices()` where it can be
+re-checked: if a future OpenCV ever echoes the request instead of the result, every index matches
+every mode, which surfaces as *everything ambiguous* rather than as a wrong name.
 
-⚠️ Confirm before building on it: run `--list` and read the `picture` column. `MONO`
-confirms depth; `colour` would mean this conclusion is wrong and the shortcut lives.
+**Deliberately not cached.** A replug can reorder indices without changing anything a cache could
+key on, so a stored map is the same failure with a longer fuse. Identification costs a few seconds
+at startup; the viewer then runs for minutes.
+
+**What it refuses to answer, out loud:** an index that matches two cameras · two indices claiming
+the same camera · a listed camera no index answers for (normal for Continuity when the phone is
+asleep) · and ⚠️ **two D405s, which share every mode and therefore cannot be told apart this way at
+all.** The second D405 is on the desk waiting to be plugged in, so that case is not hypothetical —
+when it arrives, tell them apart by covering one, and select with `--index`.
+
+### ⛔ Two measurement bugs that made the evidence murky in the first place
+
+Both were in the code that was supposed to help identify cameras, and both produced confident wrong
+readings rather than errors.
+
+1. **The probe read one frame the instant the camera opened.** Apple's built-in camera takes roughly
+   half a second to expose and Continuity longer, so the built-in camera reported **brightness 5
+   while pointing at a bright room**, and the iPhone reported `NO FRAME`. Both numbers were about
+   sensor warm-up — in the column the operator is told to use to tell cameras apart. It now reads
+   until a frame has actual variation, and reports how long that took.
+2. **A black frame was called mono.** Three all-zero channels are identical, so `frame_is_mono`
+   printed `MONO — depth/IR, not a picture` about **an iPhone**. A frame with no variation carries
+   no colour information; the honest answer is "cannot say", which is now what it returns.
+
+### ⭐ The D405 over UVC gives a PICTURE, not a depth map — an earlier claim here, corrected
+
+This section briefly claimed the opposite, on the strength of the device's **name**: macOS lists
+exactly one entry for the D405 and calls it `Intel(R) RealSense(TM) Depth Camera 405  Depth`, from
+which it was concluded that plain UVC reaches only a depth stream and that
+`brew install librealsense` was therefore required before the wrist camera could be driven by eye.
+
+**Wrong, and the tool's own output said so.** `--list` reported index 1 as `colour`, and the live
+view shows a textured photographic image of the room — wall pattern, wood grain, print on a
+t-shirt. A depth map has no texture. The D405's imagers are colour-capable, and what arrives over
+the single UVC entry is an ordinary picture with a cold white balance.
+
+⚠️ **The error was reasoning from a label instead of from the pixels** — a name is not a contract,
+which is the same lesson as `--no-gripper` in [§11.1](#111---no-gripper-silently-breaks-gravity-compensation-the-arm-falls),
+where a flag named for one thing changed another and dropped the arm.
+
+**So:** the "no SDK needed" shortcut **does** work for teleop. `librealsense` is still the route to
+depth data, intrinsics, alignment and camera controls — but it is an upgrade, not a prerequisite,
+and the wrist view can be driven today.
 
 ### Using it
 

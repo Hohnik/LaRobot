@@ -98,10 +98,12 @@ therefore **not** a serial device — it is CAN, reached through the CANable.
 > |---|---|---|
 > | **second CANable + second YAM arm** | `1d50:606f` ×2 | ✅ both arms driven; adapters resolved **by serial**, `B` = `2081337C594E5018`, `G` = `20593383594E5018` |
 > | **second SpaceMouse** | `256f:c635` ×2 | ✅ both usable. ⚠️ **Both report empty serials**, so they are assigned by asking the operator to wiggle one |
-> | **Intel RealSense D405** *(mounted on arm B)* | `8086:0b5b`, serial `255323071773` | ✅ present, USB SuperSpeed, opens over plain UVC — but ⛔ **depth stream only**, no colour without `librealsense` ([FINDINGS §22](docs/FINDINGS.md)) |
+> | **Intel RealSense D405** *(mounted on arm B)* | `8086:0b5b`, serial `255323071773` | ✅ USB SuperSpeed, and ⭐ **it delivers a colour picture over plain UVC — no SDK needed** ([FINDINGS §22](docs/FINDINGS.md)) |
 > | **second D405** *(with arm G)* | — | ⚠️ not plugged in; only one serial is on the bus |
 >
-> Cameras are now selected **by name** (`--camera d405`), not by an index that moves on replug.
+> Cameras are selected **by name** (`--camera d405`), and the name↔index mapping is **measured** — asking
+> each index for a resolution only one camera supports. ⛔ Not read off macOS's list: that order is not
+> OpenCV's, and assuming it was got two of four cameras wrong.
 
 ⚠️ **No 3Dconnexion driver is installed or running**, which is *good*: nothing claims the HID device
 exclusively, so raw access works with no vendor software and no permission prompt.

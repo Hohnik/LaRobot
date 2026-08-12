@@ -158,15 +158,22 @@ uv run scripts/camera_view.py --camera c920 --big     # by name, in a window
 ⭐ **Select by name, not by index.** The index is an AVFoundation artefact that moves on replug; the name
 does not. `--camera` takes any part of the name plus the aliases `d405`, `realsense`, `c920`, `iphone`,
 `builtin`, or a `vid:pid`. It **refuses** when a name matches nothing or matches more than one camera, and
-never falls back to index 0 — [FINDINGS §22](FINDINGS.md) has the argument for how far the name↔index
-pairing can be trusted, and what would falsify it.
+never falls back to index 0.
+
+⛔ **The mapping is MEASURED, not read off macOS's list** — each index is asked for a resolution only one
+camera supports, and whoever answers exactly is that camera. That costs a few seconds at startup and is
+deliberately not cached. Assuming macOS's order was OpenCV's got two of four cameras wrong on 2026-08-11;
+[FINDINGS §22](FINDINGS.md) has the whole account. ⚠️ **Two cameras of the same model share every mode and
+cannot be told apart this way** — when the second D405 is plugged in, use `--index` and confirm by covering
+one.
 
 **Keys in the terminal view** (`--term`):
 
 ```
 q quit · f mirror · r rotate · b draw mode (blocks / iterm / kitty)
 + / -   how much of the pane the picture fills
-1-6     CAPTURE size — what the camera sends the Mac
+1-6     CAPTURE size — what the camera sends the Mac. ⭐ These are THIS camera's own
+        modes, ascending, so 6 is the best it can do (2560x1472 on the C920)
 [ ]     DETAIL — what the Mac sends the terminal;  0 back to automatic
 ```
 

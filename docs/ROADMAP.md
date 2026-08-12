@@ -267,11 +267,12 @@ and a simulated IK loop produced three failures on first hardware contact, one o
 C920 plus the wrist D405s. Needed for data collection, not for teleop. Deliberately last of the near-term set
 because nothing else depends on it.
 
-**Where it actually stands, 2026-08-11.** The C920 works in a window and in the terminal, cameras are now
-selectable **by name** rather than by an index that moves on replug, and one D405 is mounted on arm B and
-measured. ⛔ **The one thing that changed the plan:** OpenCV can open the D405 over plain UVC, but macOS
-exposes only its **depth** stream — so the "no SDK needed" shortcut cannot produce a picture to drive by, and
-`brew install librealsense` moves from optional to required for this step. [FINDINGS §22](FINDINGS.md).
+**Where it actually stands, 2026-08-11.** The C920 works in a window and in the terminal, cameras are
+selectable **by name** — identified by measurement, not by any list order, after a positional guess turned
+out to be wrong about two of four ([FINDINGS §22](FINDINGS.md)) — and one D405 is mounted on arm B, measured,
+and **delivering a colour picture over plain UVC with no SDK at all**. So this step is further along than
+"needed for data collection" suggests: the wrist view is drivable today, and `librealsense` is an upgrade for
+depth, intrinsics and camera controls rather than a prerequisite.
 
 ---
 
@@ -292,7 +293,7 @@ exposes only its **depth** stream — so the "no SDK needed" shortcut cannot pro
 | # | Question | Why it matters |
 |---|---|---|
 | 1 | ~~How much clear space is around arm 1?~~ **Answered: not safe yet.** Desk to be cleared | Gates every whole-arm step. Reordered the roadmap — see the top |
-| 2 | ~~Are the **D405 wrist cameras** mounted?~~ **Answered 2026-08-11: one is, on arm B, and it is plugged in and measured** (serial `255323071773`, USB SuperSpeed). The second is with arm G and unplugged. ⛔ **And the cheap software path is closed:** macOS exposes only its *depth* stream over UVC, so a colour picture needs `librealsense` — FINDINGS §22 | Scopes step 7 |
+| 2 | ~~Are the **D405 wrist cameras** mounted?~~ **Answered 2026-08-11: one is, on arm B, plugged in, measured** (serial `255323071773`, USB SuperSpeed) **and delivering a colour picture over plain UVC — no SDK needed.** The second is with arm G and unplugged. ⚠️ Two D405s share every capture mode, so they cannot be told apart by measurement; when the second is plugged in, select by `--index` and confirm by covering one — FINDINGS §22 | Scopes step 7 |
 | 3 | ~~The second SpaceMouse~~ — **answered by measurement, see below** | — |
 | 4 | ~~Is there an **e-stop**, or is wall power the only cut-off?~~ **Answered by Julien: wall sockets only, there is NO e-stop.** Hence every new motion path being slow, bounded and interruptible, and `h` HOLD / `q` being the real stops — HANDOFF §4.5 | Changes how aggressive the step-4 safety envelope needs to be |
 

@@ -562,8 +562,20 @@ def test_the_number_keys_offer_the_cameras_OWN_modes() -> None:
     assert len(set(sizes)) == len(sizes), "two keys would give the same size"
     assert sizes == sorted(sizes, key=lambda wh: wh[0] * wh[1]), "keys must ascend"
     assert all(s in macbook.modes for s in sizes), "offered a mode this camera lacks"
-    assert sizes[-1] == max(macbook.modes, key=lambda wh: wh[0] * wh[1]), (
-        "the last key should be the best this camera can do")
+    landscape = [m for m in macbook.modes if m[0] > m[1]]
+    assert sizes[-1] == max(landscape, key=lambda wh: wh[0] * wh[1]), (
+        "the last key should be the best LANDSCAPE mode this camera can do — the "
+        "square and portrait Center Stage crops are excluded on purpose, see the "
+        "portrait test below")
+
+
+def test_the_number_keys_do_not_offer_portrait_modes_for_a_video_view() -> None:
+    """⚠️ Apple's camera advertises 1080x1920 and 1552x1552 — Center Stage crops —
+    and by pixel count those sort ABOVE 1920x1080. Key 6 should be the best
+    *landscape* the camera can do, not a square frame."""
+    sizes = C.key_sizes(FAKE_NAMES[0])
+    assert all(w >= h for w, h in sizes), f"a portrait or square mode was offered: {sizes}"
+    assert sizes[-1] == (1760, 1328), f"key 6 should be the largest landscape mode, got {sizes[-1]}"
 
 
 def test_the_number_keys_fall_back_when_the_modes_are_unknown() -> None:

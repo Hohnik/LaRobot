@@ -62,14 +62,19 @@ learning programme, this is an engineering build with hardware and deadlines. It
   ⚠️ The agent physically cannot test anything camera-related — see [FINDINGS §21.1](FINDINGS.md).
 - **Mirror-mode engagement logic** (`src/mirror.py`) — copy or mirror, staged engagement,
   14 tests. ⚠️ **The script that opens both arms and runs it does not exist yet.**
-- ⭐ **Cameras have names.** `--camera d405` / `--camera c920` selects by name instead of an
-  index that moves on replug, because macOS reports names even though OpenCV does not. The
-  name↔index pairing is *positional*, so it is cross-checked three ways and refused when the
-  checks disagree — the argument, and what would falsify it, is [FINDINGS §22](FINDINGS.md).
-- **The terminal view can get sharper**, and its keys are no longer invisible: the image sent
-  is sized from the pane, the capture and the protocol budget instead of a fixed 480 px.
-  ⛔ **The kitty protocol is PNG-only** (~25x iTerm2's JPEG cost), which is the real ceiling
-  on detail in Ghostty — measured table in [FINDINGS §21.4](FINDINGS.md).
+- ⭐ **Cameras are identified by MEASUREMENT.** `--camera d405` / `--camera c920` selects by name,
+  and the name↔index mapping is established by asking each index for a resolution only one camera
+  supports. ⛔ It is **not** read off any list: macOS's enumeration order is not OpenCV's, and
+  assuming it was got two of four cameras wrong on 2026-08-11 — the full account, and why the
+  checks that were in place did not catch it, is [FINDINGS §22](FINDINGS.md).
+  ⚠️ **Two D405s share every mode and cannot be told apart this way** — that matters as soon as
+  the second one is plugged in.
+- **The terminal view can get sharper**, its keys are no longer invisible, and they now offer the
+  selected camera's own modes rather than a hard-coded C920 list. ⛔ **The kitty protocol is
+  PNG-only** (~25x iTerm2's JPEG cost), which is the real ceiling on detail in Ghostty — measured
+  table in [FINDINGS §21.4](FINDINGS.md). Flicker fixed by double-buffering the image and by not
+  redrawing frames the terminal already has ([§21.5](FINDINGS.md)) — ⚠️ **reasoned and tested but
+  not yet confirmed by eye.**
 
 **⛔⭐ READ THIS FIRST — the arm fell on 2026-08-10, and the cause was advice in these docs.**
 
@@ -210,7 +215,7 @@ work, not repair. In the order I would do it, with the reasoning:
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
-| 6 | ⭐⭐ **The D405 wrist cameras — the next big piece, and the cheap shortcut is now closed** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **NEW 2026-08-11 (session 9): the "just use OpenCV over UVC, no SDK" shortcut gives DEPTH ONLY.** macOS lists exactly one entry for it, named `… Depth`, and no second RealSense device — so there is no colour stream to open without the SDK, and a depth picture is useless for the thing the wrist camera is *for* (driving by eye in the tool frame, §19). **So rung 2 of §8's ladder is now the real next step: `brew install librealsense`**, then `rs-enumerate-devices` to confirm firmware and `realsense-viewer` to see what the colour stream actually looks like. ⚠️ Confirm first with `--list`: the `picture` column reads `MONO` if this conclusion holds, `colour` if it is wrong. He gave the manual's link: `intelrealsense.com/get-started`. Full account: [FINDINGS §22](FINDINGS.md) |
+| 6 | ⭐⭐ **The D405 wrist cameras — and the cheap shortcut WORKS** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **2026-08-11: OpenCV opens it over plain UVC and gets a real picture** — Julien's live view shows a textured photographic image and `--list` reports `colour`. *(An earlier note here said "depth only". That was inferred from the device's NAME — macOS calls it `… Depth` — and it was wrong; the pixels say otherwise. FINDINGS §22.)* **So driving from the wrist camera needs no SDK at all**, and `brew install librealsense` is an upgrade for depth data, intrinsics and camera controls rather than a prerequisite. Next: mount it properly, then `v` → **tool** frame (⛔ *not* `camera`, until the real mount transform is measured — COMMANDS). He gave the manual's link: `intelrealsense.com/get-started` |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **Give this repo a git remote** | ~57 commits exist on one Mac only. Julien has deliberately deferred pushing; not forgotten |
 
@@ -259,17 +264,59 @@ it is not forgotten, and it is the only single-point-of-failure left in the proj
 | 6 | 2026-08-11, ~14:00-14:35 | Arms **renamed B and G** to match their physical labels, config migrated with every value verified byte-identical. **Per-frame control maps** — each frame owns its wiring and `m` describes the frame you are actually in, with tool-frame labels measured from the model. New frames are **seeded from the world map** so nothing is re-tuned from scratch. **Camera fixed: the 5 fps was my own frame-draining loop**, not USB bandwidth — `grab()` blocks on macOS, so "draining" waited for five frames. **Speed lag diagnosed as a singularity problem**, not a speed problem, and throttled at the source. 109 headless tests. |
 | 7 | 2026-08-11, ~15:00-15:47 | **Camera terminal view** — aspect-ratio stretch fixed (it ignored the source aspect entirely), real C920 modes offered down to 320×180 (a UVC camera silently substitutes the nearest mode, which is why 424×240 became 640×360), and **iTerm2/kitty inline images implemented** so the block renderer is a fallback rather than the only option. `b` had been a two-way toggle whose sides could be identical, so it looked broken. **Latency measured at ~2 ms of draw cost — the rest is the camera hardware.** ⭐ **Mirror-mode logic built** (`src/mirror.py`), whose own tests caught a hidden 5 rad/s jump at the guard handover and a length mismatch. 123 → 138 headless tests. |
 | 8 | 2026-08-11, ~16:10-16:29 | **Kitty images fixed** — they showed nothing because `f=100` means PNG and the renderer sent JPEG, with `q=2` suppressing the error that would have said so. `--term-test` added to make a silent display path speak. ⭐ **The D405 arrived and was measured**: serial `255323071773` (a real one, unlike the SpaceMice), USB SuperSpeed, and **it also enumerates as a plain UVC camera** — so OpenCV may open it with no SDK at all. `pyrealsense2` has no macOS wheels at any version (verified), but `librealsense` is a prebuilt Homebrew bottle. 143 headless tests. |
-| 9 | 2026-08-11, ~16:30 CEST | **No hardware touched.** ⭐ **Cameras have names** — `--camera d405` works, because macOS reports what OpenCV will not. The pairing is *positional*, so it is cross-checked three ways and refused outright when the checks disagree ([FINDINGS §22](FINDINGS.md)). ⭐ **The D405's UVC shortcut turns out to be DEPTH ONLY** — macOS exposes one entry, named `… Depth` — which closes the "no SDK needed" path for teleop and makes `brew install librealsense` the next real step rather than an upgrade. Fixed Julien's *"the resolution is stuck … pressing the numbers doesn't do anything"*: keys 1-6 changed the **capture** while the image sent to the terminal stayed pinned at 480 px, so they were **working perfectly and invisible**. Measured the PNG-vs-JPEG gap that makes kitty mode soft (~25x on both time and bytes) — the kitty protocol has no JPEG at all. 143 → 156 headless tests. |
+| 9 | 2026-08-11, ~16:30-17:15 | **No hardware touched.** Fixed Julien's *"the resolution is stuck … pressing the numbers doesn't do anything"*: keys 1-6 changed the **capture** while the image sent to the terminal stayed pinned at 480 px, so they were **working perfectly and invisible**. Measured the PNG-vs-JPEG gap that makes kitty mode soft (~25x on both time and bytes) — the kitty protocol has no JPEG at all. Cameras given names. ⛔ **Two conclusions from this session were REFUTED in session 10 and are struck here so nobody inherits them:** ~~names paired to indices by macOS's list order, cross-checked~~ (the order is not OpenCV's — it was wrong about two of four cameras) and ~~the D405's UVC entry is depth only~~ (it delivers a colour picture; the claim came from reading the device's *name*). 143 → 156 headless tests. |
+| 10 | 2026-08-11, ~17:20-18:0x | ⛔⭐ **Session 9's naming was wrong, and Julien's own falsification procedure is what caught it** — he covered each camera in turn and the C920 answered on index 0 where macOS lists the built-in. **Identity is now MEASURED**: each index is asked for a resolution only one camera supports, and whoever answers exactly is that camera ([FINDINGS §22](FINDINGS.md)). Three macOS enumerations all agree with each other and none is OpenCV's, so no list could ever have supplied this. Also fixed: **the probe read one frame at open**, so Apple's slow-exposing camera reported brightness 5 in a bright room and Continuity reported NO FRAME — warm-up, in the column used to identify cameras; **a black frame was reported as MONO depth/IR** — about an iPhone; **the number keys** now offer the selected camera's own modes (the old list was C920 modes, which collapse to three on the built-in — itself an unrecognised second report of the naming bug); and **the flicker**, which was delete-then-draw plus redrawing unchanged frames ~25 times a second. ⭐ **The D405's UVC stream is a real picture**, so the wrist view needs no SDK. 156 → 165 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed
 instead of wall-clock read. Read the clock.
 
-⭐ **Sessions 6-9 are timed from the commit clock (`git log --date=format:'%H:%M'`), not from memory** — and
+⭐ **Sessions 6-10 are timed from the commit clock (`git log --date=format:'%H:%M'`), not from memory** — and
 doing that turned up two defects in this very table. Sessions 6, 7 and 8 were logged **out of order** (8, 7,
 6), and session 8 was labelled *"evening"* when its commits are 16:13-16:29, which would have made session 9
 at 16:30 look like it came first. **A log that is complete and mis-ordered still misleads** — the placement
 lesson again, in the one table whose entire job is sequence.
+
+### ⭐ Where the time actually goes — measured over sessions 9 and 10, 2026-08-11
+
+Julien asked for this explicitly, because *"just so you have an understanding of what takes time and why."*
+His own numbers: the first message went out at ~16:30, the opening check-in took ~2 minutes, the build itself
+~32, and **he spent ~15 minutes reading the result, taking screenshots and testing** — roughly an hour of
+wall clock for one feature. Sessions 9 and 10 together ran 16:36 → 18:0x.
+
+**Session 9, from the tool-call record** (16:36 → 17:14, ~38 min):
+
+| phase | ~min | what it bought |
+|---|---|---|
+| reading before writing | 11 | `camera_view.py` is 828 lines and `test_camera_render.py` 318. Skipping this is how you fix the wrong thing |
+| measuring | 3 | the PNG-vs-JPEG benchmark. **The single best minutes spent** — it produced the numbers that set the caps and killed a guess |
+| writing code | 12 | 8 edits |
+| writing tests | 5 | 13 new ones |
+| documentation | 9 | 5 files, and it found 4 places the docs had silently drifted |
+
+**Session 10** (17:20 → 18:0x): ~20 min of investigation *before a line of code* — six separate probes
+(AVFoundation ordering, two discovery-session orderings, per-device format lists) to settle a question two
+plausible stories were fighting over — then ~15 min of code, ~10 of tests, and the rest documentation.
+
+**What is actually expensive, in order:**
+
+1. ⭐ **Undoing a published wrong conclusion.** Session 9's naming bug cost ~10 minutes of *code* to fix and
+   roughly **three times that in corrections**: FINDINGS §22 rewritten, four places in HANDOFF, two in
+   ROADMAP, one in README, plus a struck-through session-log row. **The blast radius of an inference is
+   every document that repeated it** — which is the "measure, don't infer" rule of this repo restated as a
+   number, and the strongest argument for spending the 20 minutes on measurement first.
+2. **This repo's documentation standard.** Docstrings that carry the *why*, commit messages that hold the
+   reasoning, and FINDINGS entries are perhaps 40% of everything written. That is deliberate — it is why a
+   contextless agent can resume — but it is the largest single line item, and the one to trim first if a
+   session ever has to be short.
+3. **Investigation round-trips.** Each measurement is a separate command with thinking either side. Cheap
+   individually, and they are what separates a diagnosis from a guess.
+4. **Writing the code.** Consistently the *smallest* part. Typing was never the bottleneck.
+
+**Rough planning numbers, for deciding what fits in a sitting:** a known fix in a known place, 10-15 min ·
+diagnose + fix + test + document a new defect, 30-45 · a session that has to overturn a conclusion already
+written into the docs, 45-60. ⚠️ Add Julien's own 10-20 minutes for anything he has to run on hardware —
+that time is real, it is on the critical path, and it is where the actual truth comes from.
 
 ⭐ **Session 3's lesson: the bench is not where the cheap defects are.** Nothing was plugged in, and it
 still turned up a path that would have released a raised arm (PARK with `--no-gripper`), a thermal test
@@ -307,23 +354,25 @@ one of which dropped 4.3 kg. Two specific process faults worth carrying:
 | **link speed** | **SuperSpeed (5 Gbps), `Device Speed = 3`** | ⭐ it negotiated **USB 3**, not USB 2. Bandwidth is not a problem for one camera. Re-check when the second is added |
 | **UVC** | `Intel(R) RealSense(TM) Depth Camera 405  Depth` → `UVC Camera VendorID_32902 ProductID_2907` | ⭐⭐ **see below — this is the shortcut** |
 
-### ⛔ The shortcut was real but it is DEPTH ONLY — measured 2026-08-11, session 9
+### ⭐ The shortcut WORKS — and an earlier claim here, that it did not, was wrong
 
 macOS lists the D405 as a standard **UVC camera**, so OpenCV opens it with no SDK at all, and
-`camera_view.py --list` shows it as index 1 on the current rig.
+`camera_view.py --list` identifies it as index 1 on the current rig.
 
-**The question this section used to leave open — "whether the RGB stream appears as a separate index" — is
-now answered: it does not.** macOS lists exactly **one** entry for the D405, named `… Depth`, and there is no
-second RealSense device on the bus. So what OpenCV can open without the SDK is a 16-bit depth stream widened
-into three identical channels, which `--list` reports in its `picture` column as `MONO`.
+**The question this section used to leave open — "whether the RGB stream appears as a separate index" — has
+a better answer than expected.** macOS lists exactly **one** entry for the D405 and calls it `… Depth`, but
+what arrives over it is **an ordinary picture**: `--list` reports `colour`, and Julien's live view shows wall
+texture, wood grain and print on a t-shirt. A depth map has none of that. The D405's imagers are
+colour-capable, and that is what the single UVC entry carries.
 
-⛔ **That closes the cheap path for teleop.** Driving the arm from the camera's point of view needs a
-*picture* — the control-frame machinery (`v` → tool frame) is built and waiting for one — and depth is not it.
-**Rung 2 of the ladder below is therefore the next real step, not an optional upgrade.**
+⛔ **This section previously said the opposite — "depth only" — and it was committed before anyone looked at
+the pixels.** The claim was inferred from the word `Depth` in the device name. *A name is not a contract*:
+the same lesson as `--no-gripper`, chosen because it sounded like the safer experiment, which silently
+swapped the gravity model and dropped the arm ([FINDINGS §11.1](FINDINGS.md)).
 
-⚠️ Re-check rather than inherit this: run `--list` and read the `picture` column. `colour` there would mean
-this conclusion is wrong and the shortcut lives. A UVC-only path would in any case give no depth alignment,
-no intrinsics and no camera controls.
+⭐ **So the wrist view can be driven today**, with the control-frame machinery (`v` → tool frame) that is
+already built and waiting. A UVC-only path still gives no depth alignment, no intrinsics and no camera
+controls — that is what the ladder below is for, but it is an upgrade rather than a gate.
 
 ### The SDK situation — measured, and the prediction held
 
@@ -344,14 +393,13 @@ realsense-viewer               # GUI: streams, depth, and the camera's own contr
 ⚠️ **The Homebrew formula does not necessarily build the PYTHON bindings** — those usually need a source
 build with `-DBUILD_PYTHON_BINDINGS=ON`. So the likely ladder, cheapest first:
 
-1. ~~**UVC via OpenCV**~~ — **tried, and it reaches depth only** (see above). Still worth keeping: it is
-   how the camera is identified and named. It is not a route to a picture.
-2. ⭐ **`brew install librealsense`** — **now the next real step, not an optional upgrade.** Prebuilt
-   tools, confirms hardware and firmware, and `realsense-viewer` shows what the colour stream looks like
-   before any code is written against it.
-3. **Source build with Python bindings** — only if depth data, or colour *inside Python*, is genuinely
-   needed. ⚠️ Find out in step 2 whether the viewer's colour stream is the left imager's mono image or a
-   real RGB picture; the D405 has no separate colour sensor, and that decides how useful this path is.
+1. ✅ **UVC via OpenCV** — **done, and it is enough to drive by.** Nothing to install; a colour picture
+   arrives; `--camera d405 --term` works today.
+2. **`brew install librealsense`** — an upgrade, not a gate. Prebuilt tools, confirms firmware, and
+   `realsense-viewer` shows the depth stream and the camera's own controls. Worth doing when depth data,
+   exposure control or intrinsics are actually wanted.
+3. **Source build with Python bindings** — only if depth is needed *inside Python*. ⚠️ Its cost is a
+   source build; do not start it before something concretely needs depth.
 
 ⭐ **This is the same shape as the CAN SDK problem** ([FINDINGS §2](FINDINGS.md)): a vendor SDK that assumes
 a platform we are not on. That was solved by patching from *outside* while keeping `third_party/` a clean
