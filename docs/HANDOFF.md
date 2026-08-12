@@ -35,11 +35,16 @@
 > on 2026-08-12 he reported that **executing a task with the SpaceMouse is very hard**, that setting the
 > scene up by hand is trivial by comparison, and that an automated scene reset is close to circular —
 > *"if the robot can just place the object at a random location, then it can already control itself."*
-> That refutes the recommendation this repo had written down about where demos come from. His proposal —
-> **teach the poses by hand in GUIDE, then replay them to record** — is analysed in full, with the two
-> ways it can silently poison a dataset and a third option that may beat it, in
-> ⭐ **[ROADMAP §6.6](ROADMAP.md)**. ⛔ **Read that before building any part of the recorder (step 5).**
-> It is a design question, not code: nothing has been built for it.
+> That refutes the recommendation this repo had written down about where demos come from.
+>
+> ⭐ **Everything about that now lives in ONE place: [ROADMAP.md](ROADMAP.md) §6.6, "Where the training
+> data comes from".** ⛔ **Read `ROADMAP.md` §6.6 before building any part of the recorder (step 5), and
+> before touching the waypoint runner.** It is written in plain language because Julien reads it himself,
+> and it carries: what he decided, the plan he liked (**hand-guide a whole movement in GUIDE, then replay
+> it to record**), his refinement that **noise should be set per waypoint** rather than once for the whole
+> path, his idea to **label good and bad stretches with a microphone**, a free trick for detecting whether
+> a grab worked, what **diffusion** as the model choice settles, what **provenance** requires of the
+> recorder, and a table of **what is built and what is not**. ⛔ Almost none of it is built.
 >
 > ## ⬜⬜ THE NEXT JOB, AND IT IS THE ONLY BIG ONE LEFT: wire `ArmSession` in
 >
@@ -209,8 +214,43 @@ These are not preferences, they were arrived at by things going wrong.
    and never re-derived against the thing they guard — a clamp PARK went around, a refusal a weaker copy
    undermined, a temperature monitor that aggregated away its own signal.
 
-8. ⭐ **How to WRITE to Julien, because it has cost real time twice.** Two independent
-   requirements, and both must hold:
+8. ⭐⭐ **How to WRITE to Julien. THIS RULE EXISTED, WAS FOLLOWED AS WRITTEN, AND STILL
+   FAILED ON 2026-08-12** — he read a complete reply and understood none of it:
+   *"I cannot understand a single thing of what you're trying to explain… the way you
+   write is incomprehensible and feels cryptic. You could just explain it clearly and
+   write way less text, in normal plain English."*
+
+   ⛔ **The style is now named and non-negotiable: "ELI18".** Write plain English for a
+   smart 18-year-old who knows the project but not the code. Short sentences, ordinary
+   words, answer first, under ~400 words unless he asked for depth. **This applies to
+   CHAT ONLY** — repo files keep the conventions you see here.
+
+   ⭐ **The two failures that actually broke comprehension were NOT covered by the two
+   requirements below, and they are the ones to watch:**
+   - ⛔ **A reply structured as a correction of something he has never read.** The reply
+     opened with *"the circularity objection I missed entirely"* — a phrase pointing at a
+     document he had not seen, naming an idea it never defined. His answer:
+     *"What are you talking about?"* **Say what a thing IS before saying what is wrong
+     with it. Never assume he has read your prose, including prose from earlier today.**
+   - ⛔ **A section reference with no file name.** The reply said `§6.6` in the one block
+     he was told to read, so he had to hunt back through the message for the single
+     earlier mention of `ROADMAP §6.6`. **Name the file every single time, including in
+     summaries and recommendations.**
+
+   ⚠️ **Banned in chat:** em-dashes · "it's not X, it's Y" · "not just X but Y" ·
+   "precisely" · "genuinely" · "load-bearing" · "the honest answer" · "smoking gun" ·
+   "surface" as a verb · stacked nouns as adjectives ("clean-scene replay pass") · bold
+   inside a sentence · ⭐ ⛔ ⚠️ · ALL CAPS · dramatic one-line paragraphs. He pointed at
+   the `claudish-to-english` critique for the full list
+   (`github.com/gvzdv/claudish-to-english`, and `slhck.info/software/2026/06/22/claudish.html`).
+   ⚠️ Reddit is blocked to both WebFetch and the in-app browser; those two sources carry
+   the content.
+
+   ⚠️ **It decays hardest immediately after heavy tool use or long reasoning**, which is
+   exactly when the worst messages get written. Re-read the rule before composing, not
+   before starting.
+
+   **The two original requirements still hold underneath all of that:**
    - **Density** — cut anything that does not change what he thinks or does. No
      ceremonial time-tracking block, no "anything else?" section by default, no
      tables recapping what he can read in the commits. One item per line in lists.
@@ -281,7 +321,8 @@ work, not repair. In the order I would do it, with the reasoning:
 | # | task | why, and what is already known |
 |---|---|---|
 | 0 | ⚠️ **Confirm on the arm — the short list** | ✅ **Confirmed 2026-08-12:** Ctrl-C → park → disable · `h`/`t`/`h` switching *"instantly"* · `p 1 2 3 Enter` sequences · speed adjustable while moving · **blended corners** (*"works quite nicely"*) · the plan-and-confirm step · `-/+` and `,/.` while typing · the **fast settle** (parks reported `0.1s`, `0.9s`, and `0.020`/`0.036 rad off` — no four-second wait anywhere in his log) · **per-waypoint timings** (`slot 1 in 2.6s → next 2`) · **s-curve easing**, which he likes: *"the S curve works quite well"*. ⬜ **New and unconfirmed — the session-19 display fixes:** the **status line no longer welded onto every message** · the **HOLD banner surviving** · `e` working outside a park prompt · the **stale RUN row** clearing · **`ö`/`ä`** arriving at all. Still never seen: the **55 °C warning**, and the **blind-thermal stop**, which cannot be triggered without unplugging CAN mid-session — stated rather than assumed |
-| 0a | ⭐⭐ **DECIDE WHERE DEMOS COME FROM — [ROADMAP §6.6](ROADMAP.md)** | ⛔ **Not code. The most consequential open question in the project**, and the previous written answer was refuted by Julien on 2026-08-12. It gates step 5 (the recorder) completely: build the recorder first and it gets designed around the wrong collection method. ⭐ **The cheapest way to settle it is a 20-minute measurement, not an argument** — time five demos by SpaceMouse against five by teach-and-replay, recording seconds and whether the task actually succeeded. Two things in §6.6 must not be lost: **jittering waypoints without moving the object actively poisons the dataset**, and **per-waypoint dwell is a prerequisite rather than an extra**, because corner blending is defined as *not* stopping and a grasp needs a stop |
+| 0a | ⭐⭐ **READ [ROADMAP.md](ROADMAP.md) §6.6 — where the training data comes from** | ⛔ **Not code, and it gates step 5 (the recorder) completely.** Build the recorder first and it gets designed around the wrong collection method. Julien has now answered the three questions that were open: **task = not decided yet, on purpose** (*"we first have to get the setup right"* — so build everything task-agnostic); **model = most likely diffusion**, which makes deliberately varied demos safe rather than harmful; **provenance = matters a lot**, meaning every episode must record the git commit, camera serials, calibration, collection method and a success flag. ⭐ Two things in `ROADMAP.md` §6.6 must not be lost: **noise on the grab waypoint poisons the dataset while noise on the approach waypoints is useful** (his own refinement, and it is right), and **a pause at each waypoint is a prerequisite** because blending is defined as not stopping and a grab needs a stop |
+| 0b | ⭐⭐ **BUILD: record a movement in GUIDE mode, then replay it** — `ROADMAP.md` §6.6 | ⛔ **Nothing exists. This is the next feature to build**, and Julien picked it: *"one good idea is definitely recording everything in the guide mode and then replaying it. That's a smart idea, definitely."* Stream `q(t)` while he hand-guides the arm, save it, replay it through the existing `src/motion.py` engine. ⭐ Why it beats waypoints: human timing and hesitation are preserved, no IK is involved, the path is achievable by definition because the arm physically went there, and his hands are only in frame during teaching. ⚠️ The unknown to check is whether the replay follows the taught path closely enough that image and action still line up — the park loop already reports the lag, so instrument it rather than assuming |
 | 0b | ✅ **Smoothing between poses — done 2026-08-12, on by default** | Eases in and out over 0.2 rad (15% → 100% → 15%), both park paths, each leg of a sequence getting its own ramp. `--no-smooth` restores the constant rate. ⭐ **The opt-in caution in the original plan was wrong and checking it changed the decision:** "a deceleration bug shows up as overshoot" is true of a new integrator with velocity state, and false here — `advance_park_command` is `command + clip(target - command, -step, step)`, so a step is already bounded by the distance remaining and **scaling it down cannot overshoot**. Feel is still Julien's to judge on the arm; `PARK_RAMP` is the dial |
 | 0c | ⏳ **Wire `ArmSession` into the session** — the remaining half of the bimanual work | ✅ The class is **built and tested** (`src/arm_session.py`, 17 tests, fake robot). ⬜ What remains is restructuring ~1000 lines of `main()` to use it — deliberately its own session, because mixing "write the class" with "restructure the loop" produces a diff nobody can review and only Julien can test. ⭐ Do it as [ROADMAP step 6](ROADMAP.md) says: **`--arms B` with N=1 first**, confirm it feels identical, and only then N=2 |
 | 1 | ⭐⭐ **Mirror mode — the SCRIPT. The logic is done.** | Julien's idea, and **the right first two-arm feature**: ✅ **`src/mirror.py` + 14 tests are DONE** — `MirrorLink` handles copy/mirror, staged engagement and the stop-rather-than-chase guard, with no robot handle so it is fully testable without an arm. ❌ **What is missing is the script** that opens both arms, reads B and commands G. That is the same two-arm process `ArmSession` needs, so **build them together**. ✅ Julien answered the design question: **both modes exist, `copy` is the default, and the arms are side by side** — so copy is correct today. ⚠️ **`MIRROR_SIGNS` is a geometric PREDICTION, not a measurement** — reflecting through a vertical plane should negate base_yaw, wrist_roll and gripper_twist and leave the three pitches alone. Expect to adjust it the first time `mirror` is used. |
@@ -289,6 +330,7 @@ work, not repair. In the order I would do it, with the reasoning:
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected. ⛔ **And as of 2026-08-12 it is blocked by item 0a as well**, on a second axis: the schema is his friend's to specify, but *what gets recorded* — nominal waypoint or actually-commanded pose, and whether perturbed replays are recorded at all — follows from [ROADMAP §6.6](ROADMAP.md). Recording the nominal target instead of the real command yields a dataset that looks correct and teaches nothing |
+| 5b | ⭐ **Cameras: the second D405 breaks how they are identified** — full plan in [ROADMAP.md](ROADMAP.md) §7.1-7.3 | ⛔ **Read `ROADMAP.md` §7.1 before plugging in the second D405.** Cameras are identified by asking each for a picture size only one supports ([FINDINGS §22](FINDINGS.md)); **two identical D405s support the same sizes, so that method cannot separate them.** They have real serials, but the plain-webcam path cannot read a serial. ⭐ Fix: `brew install librealsense` (prebuilt, no compiling) and select by serial — which also unlocks depth, the lens numbers and exposure control. ⚠️ Also open: **measure the real mount** (the code's `camera` frame assumes a modelled 25° tilt that the photographs do not match — drive in `tool` until measured), **measure two-camera USB bandwidth** (fails as dropped frames, not as an error), and **re-measure latency** rather than assuming the C920's ~200 ms carries over. ⭐ **And the cable is wrong today**: it strains the plug when the wrist twists and hangs loose in the workspace. `ROADMAP.md` §7.3 has the fix and the USB length limits |
 | 6 | ⭐⭐ **The D405 wrist cameras — and the cheap shortcut WORKS** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **2026-08-11: OpenCV opens it over plain UVC and gets a real picture** — Julien's live view shows a textured photographic image and `--list` reports `colour`. *(An earlier note here said "depth only". That was inferred from the device's NAME — macOS calls it `… Depth` — and it was wrong; the pixels say otherwise. FINDINGS §22.)* **So driving from the wrist camera needs no SDK at all**, and `brew install librealsense` is an upgrade for depth data, intrinsics and camera controls rather than a prerequisite. Next: mount it properly, then `v` → **tool** frame (⛔ *not* `camera`, until the real mount transform is measured — COMMANDS). He gave the manual's link: `intelrealsense.com/get-started` |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **A remote of Julien's own** | ⚠️ Partly addressed 2026-08-12 — 56 commits now sit on the branch `julien/yam-teleop-wip` in his friend's public repo, so the work is no longer on one Mac alone. That branch is not a backup he controls, so a private remote of his own remains open |
@@ -372,6 +414,8 @@ diff. A pushed branch is not a proposal; opening the PR is.
 | 18 | 2026-08-12, ~15:20-16:3x | ⭐ **Blended corners confirmed working on the arm** — *"the smoothing seems to work quite nicely, actually."* Three complaints from that run, all fixed: the terminal **reprinted a whole block on every knob change** (now one live status line, `src/screen.py`, and `print` is shadowed in `main()` so the policy is one thing in one place) · the end of every park **waited 4 seconds** because `settled` shared the `blocked` timer (now 0.5 s vs 4 s) · and **easing is its own axis** — five profiles cycled with `e`, with Ctrl-C using `out` so a shutdown leaves at once and only lands softly. Each waypoint now reports its own seconds. 245 → 258 headless tests. |
 
 | 19 | 2026-08-12, ~16:50-18:0x | ⭐⭐ **The session that changed where the training data will come from.** Julien drove a full ~4½-minute session — everything worked, s-curve easing *"works quite well"*, the fast settle and per-waypoint timings both confirmed — and then reported that ⛔ **the previous analysis of demo collection was "significantly wrong"**: the bottleneck is *executing* with the SpaceMouse, not resetting the scene, and an automated reset is near-circular. His proposal (teach poses by hand in GUIDE, replay to record) is analysed in full in **[ROADMAP §6.6](ROADMAP.md)**, including the two ways it can silently poison a dataset, a **third option that may beat both**, and a 20-minute measurement that settles it. ⭐ **All three of his UX complaints turned out to be ONE function** — `StatusLine.say()` cleared one row and then wrote a payload containing newlines, so every message overwrote part of the status row (`weightless°C`, `drivesC`, `cancelled.6.0s` in his own paste) and `_rows` desynchronised, which is the "duplicate print" and the eaten HOLD banner. **Four of the eight defects fixed were guards or tests that had stopped describing their subject** — including a screen test asserting on a payload shape no caller produces, and a keyboard test that pinned an arrow key silently changing a motion parameter and called it *"documented, not desired"*. Also `ö`/`ä` for the ease ramp, which needed a UTF-8 decoder before it could be a binding question at all. 258 → 267 headless tests. [FINDINGS §27](FINDINGS.md) |
+
+| 20 | 2026-08-12, ~18:1x-19:xx | ⛔⭐ **NO CODE. Two things, and the first one changes every session from now on.** (1) **The way this project writes to Julien was rejected outright** — he read a full reply and understood none of it. The style is now named **"ELI18"** and the rule is in §4 item 8 above, with the two failures that actually broke it: **a reply structured as a correction of a document he had never read** (*"the circularity objection I missed entirely"* → *"What are you talking about?"*) and **a section reference with no file name** (`§6.6` instead of `ROADMAP.md` §6.6). ⚠️ **The old rule was followed as written and still failed**, so the scope widened from "explaining new topics" to every reply. Enforcing copy is `~/.claude/working-style/turn_reminder.md`, injected every turn. (2) ⭐ **[ROADMAP.md](ROADMAP.md) §6.6 rewritten in plain language and made the single place for data collection**, now carrying his answers (task undecided on purpose, diffusion, provenance matters), the plan he chose (**hand-guide a movement in GUIDE, replay it to record**), his **per-waypoint noise** refinement, his **microphone labelling** idea, a free grab-success detector using the gripper position we already read, and a table of what is built. Also **[ROADMAP.md](ROADMAP.md) §7.1-7.3 written**: what a D405 can actually do, ⛔ **the second D405 breaking camera identification**, and the cable routing with the USB length limits. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed

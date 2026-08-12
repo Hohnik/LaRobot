@@ -486,7 +486,7 @@ when the scripted ones look cleaner.
    SpaceMouse, not resetting the scene — and an automated reset is close to circular,
    because placing an object at a chosen position **is** the task being learned. Full
    account, and what replaces it, in
-   [§6.6 below](#66--how-demos-will-actually-be-collected--his-correction-2026-08-12).
+   [§6.6 below](#66-where-the-training-data-comes-from).
 
 ⚠️ **The one way playback could become training data** is if the waypoints were
 *generated per episode from the observed scene* — object detected here, so approach
@@ -533,283 +533,319 @@ are waypoints, and Ctrl-C ignores them entirely. **A pose that is safe to be let
 not the same as a pose you want to return to mid-task**, and before this the two shared a
 variable that `s` silently overwrote.
 
-## 6.6 ⭐⭐ How demos will actually be collected — his correction, 2026-08-12
+## 6.6 Where the training data comes from
 
-> ⛔ **This section supersedes the "automated scene reset" claim in §6.5 and part of the
-> reasoning around it.** It is the most consequential design conversation this project has
-> had, because it decides *where the training data comes from* — and the previous answer
-> was wrong about which part of the job is expensive.
+> **Read this section if you read nothing else in this file.** It decides what the
+> recorder (step 5) has to do, and the recorder is the next big piece of engineering.
 >
-> ⚠️ **Nothing here is built yet.** It is a design and a research question, written down in
-> full because it will be picked up in a different session, probably by an agent with no
-> context. Read it before building any part of the recorder (step 5).
+> Written 2026-08-12, **in plain language on purpose**, because Julien reads this section
+> himself. ⛔ **Almost nothing in it is built yet** — see the last table for exactly what
+> exists.
 
-### What Julien reported, in his words
+### First: what a demo is, and what the robot learns from one
 
-> *"It's definitely very hard — or it seems to be very hard — to control and execute the
-> task with the space mouse. So the hard part is definitely not setting up the task. I can
-> just take the object with my hand, place it somewhere, put the robot back in the zero
-> gravity guide mode, or put it in a random position, whatever. And then I have to execute
-> the task with a space mouse, which is very difficult, and there's no automated way to set
-> up the scene — because if the robot can just place the object at a random location, then
-> it can already control itself."*
+A **demo** is one recording of the robot doing the task once. Several times a second it
+stores two things: what the cameras saw, and what the joints were told to move to.
 
-And his proposal:
+Training turns a pile of those recordings into a single rule: *when you see this, do that.*
 
-> *"Place the waypoints and then play the task, and then place the waypoints slightly
-> differently and play the task slightly differently. Or place the waypoints and think of
-> different ways in which the splines could connect, or the order of how we place the
-> points. Or we could maybe even slightly add random jittering on the waypoints that we
-> place. All of those features we could add, and then we could really easily create many
-> different ways to do the actual task. Because if we slightly move the object, placing a
-> new waypoint for the new object isn't difficult — if we just use `g` mode for that it's
-> very easy, compared to trying to find it with the mouse — even though, as you said, we
-> wouldn't have all of the pullback and drift and those types of teleoperate problems."*
+⭐ **That rule can only work if what the robot sees actually predicts what it should do.**
+Keep that sentence in mind. Everything below follows from it.
 
-### ⛔ Where the previous analysis was wrong, precisely
+### Why a plain replay does not work
 
-Three separate errors, and they are different kinds:
+Suppose we teach the arm a path by hand, then play that path back a hundred times with the
+object always in the same place.
 
-1. ⛔ **"The genuine bottleneck is putting everything back between takes" was a claim about
-   *his* rig, imported from the general literature without checking.** It is often true —
-   for a trained operator on a mature rig, reset dominates. It is **false here**: one
-   person, an unfamiliar 6-DoF rate-control device, a task never yet performed once.
-   Resetting means picking an object up with a hand. *Verify the consequence, not the
-   mechanism* (working contract rule 5) — this reasoned from a pattern instead of from the
-   rig, and he found it out by trying.
+Every recording now has the same picture and the same movement. Nothing in the training
+rewards looking at the picture, because the picture never changes. The model can score
+perfectly by memorising the movement and ignoring the camera completely. Move the object
+5 cm and it does the same thing as before, into empty air.
 
-2. ⛔ **The circularity objection is correct and was missed entirely.** For the robot to
-   place an object at a randomised start position it must pick it up *from wherever it
-   currently is*. Open-loop playback can only do that from a **deterministic** pose. So an
-   automated reset needs: the demo to always end with the object in a fixed, graspable
-   pose (a cube dropped in a bin does not land in a known orientation), plus one
-   hand-taught reset path per start position it is supposed to produce.
-   ⭐ **And the sharpest form of the error is internal:** the same analysis said one page
-   later that per-episode waypoints from the observed scene are *"a different and much
-   larger project"* — which is exactly what a real reset policy is. **The recommendation
-   quietly depended on the thing it had just called out of scope.**
+That is the whole objection to replaying a fixed scene, and it is real.
 
-3. ⚠️ **The choice was framed as "replay vs teleop", and it is not.** If SpaceMouse teleop
-   is hard enough that a task cannot be demonstrated at all, the real comparison is
-   **replay vs nothing**, and 100 imperfect demos beat 8 excellent ones. That reframing is
-   his, and it is the decisive one.
+### Why Julien's version does work
 
-### ✅ What the previous analysis got right, and it still holds — but conditionally
+His version differs in one way, and that one way changes everything:
 
-**The causal-confusion argument is sound, and the condition it depends on is exactly what
-his proposal breaks.** Stated properly, so the distinction is usable:
+> *"If we slightly move the object, placing a new waypoint for the new object isn't
+> difficult. If we just use `g` mode for that it's very easy, compared to trying to find it
+> with the mouse."*
 
-- A policy trained by imitation fits a mapping from **what it sees** (`o`, the camera) to
-  **what to do** (`a`, the commanded joints).
-- **Pure replay with a fixed scene:** `a` is a function of time alone and `o` is
-  ~identical every episode. The action carries no information about the observation, so
-  nothing in the training signal rewards *looking at the image*. The policy can score
-  perfectly by memorising the trajectory, and moving the object 5 cm changes nothing it
-  does. ✅ Correct, and still correct.
-- ⭐ **His proposal is not that.** *"If we slightly move the object, placing a new waypoint
-  for the new object isn't difficult"* — when the object moves **and** the waypoints are
-  re-taught to match, the action becomes a function of the object's position, which is
-  what the camera sees. The dependence runs through his eye and his hand, but it is
-  genuinely there. **That is real learning signal, and it is the thing behaviour cloning
-  needs.**
+Move the object by hand. Then hand-guide the arm to the new grab position and save it. Now
+the movement is different in every recording **and so is the picture**, and the two change
+together. The picture predicts the movement. That is real training signal.
 
-⭐ **So the honest name for his scheme is not "replay". It is *kinesthetic teaching with a
-clean-scene replay for recording*** — a standard and respected demonstration modality,
-not a degenerate one.
+⭐ **So the rule is: the variety has to come from the object moving, not from the path
+moving on its own.** That single line settles most of the design questions below.
 
-⭐ **And it has an advantage over both alternatives that was under-sold before.** Ordinary
-kinesthetic teaching puts the human's hands in every camera frame, so the policy either
-learns to look for a hand — a feature that is absent at test time — or the frames have to
-be masked. **Teaching and recording are separate passes here**, so the recorded episode
-shows nothing but the robot and the object. That was in his original idea (*"just play it
-without the hands in the way, so the robot can see the camera input as it should be"*) and
-it is a real, non-obvious win.
+### The one thing a replay is missing, and how to put it back
 
-### ⚠️ The one substantive objection that survives — and how to answer it
+A person driving the robot wobbles. They go a bit wrong, notice, and pull back. So a human
+demo is full of small examples of *"you have drifted, here is the way back."*
 
-**A replay contains no corrective behaviour.** A human teleoperating drifts, notices, and
-pulls back, so the demos are full of tiny *"you are off, here is the way back"* examples. A
-replay is perfect every time. The first small error at run time therefore puts the policy in
-a state the data never contained, and errors compound. (This is the standard covariate-shift
-argument: behaviour-cloning error grows with the square of the episode length in the worst
-case, against linear growth for a method that collects corrections on-policy — the argument
-DAgger exists for.)
+A replay never wobbles, so the model never sees a single recovery. The first time it goes
+slightly wrong in real use, it is in a situation that was not in the training data, and
+from there things get worse rather than better.
 
-⭐⭐ **But the replay engine can MANUFACTURE that data, more systematically than a human
-produces it by accident. This is the strongest new idea in this section:**
+⭐ **We can create those recoveries on purpose, and more evenly than a human produces them
+by accident.** Two ways, both cheap on this rig:
 
-1. **Perturbed starts.** Begin the replay from a joint configuration slightly off the
-   nominal path. The controller drives back onto it, and every recorded step is literally
-   *"I am off-path, here is the way back"*, labelled with an image showing the arm off-path.
-2. **Bounded noise injected during the replay**, with the nominal path still the target —
-   so the arm wanders and the recorded action is the correction. This is DART-style noise
-   injection (Laskey et al., 2017, *"DART: Noise Injection for Robust Imitation Learning"*),
-   and it exists precisely to buy back the robustness that clean demos lack.
+1. **Start the replay slightly off the path.** The arm drives back onto it. Every frame of
+   that is a recording of *"I am off, here is the way back"*, paired with a picture that
+   shows the arm off the path.
+2. **Add a small wobble during the replay**, while still aiming at the correct path, so the
+   arm drifts and the recorded movement is the correction.
 
-⭐ Both are nearly free here: the path is already a parameterised object with a cursor
-(`src/motion.py::JointPath`), and the loop already measures how far the arm is running
-behind (`MAX_CURSOR_LAG`).
+This is a known technique with a paper behind it: *DART: Noise Injection for Robust
+Imitation Learning* (Laskey et al., 2017). It exists to buy back exactly what clean
+recordings lack.
 
-⛔ **The load-bearing requirement:** the recorded action must be **what was actually
-commanded** and the observation **what was actually seen**. Recording the nominal waypoint
-instead of the perturbed command produces a dataset that looks fine and teaches nothing.
-Write this into the recorder's design, not into a comment.
+⛔ **One requirement, and getting it wrong ruins the dataset silently.** The recording must
+store what the arm was **actually told to do**, not the tidy path we planned. Store the
+plan instead and every recording claims "I was perfectly on track" while the picture shows
+the arm off to one side. The model then learns nothing useful, and nothing about the files
+looks wrong. Write this into the recorder's design.
 
-### ⛔⭐ THE ONE ITEM ON HIS LIST THAT CAN POISON THE DATASET
+### Noise per waypoint: Julien's refinement, and it is right
 
-**Jittering the waypoints WITHOUT moving the object is not free data augmentation — it is
-actively harmful**, and it is the item that sounds most obviously good.
+His idea, 2026-08-12:
 
-If the object stays put and the waypoints move, then one observation is paired with many
-different actions. Two consequences:
+> *"Maybe not put noise on the waypoints like when the object is being picked up, those
+> waypoints might need to be exact, and maybe the jittering needs to be very, very slight
+> on those. But the others, how to get there, the waypoints for those could be very
+> different, maybe the noise could be higher."*
 
-- A unimodal, zero-mean jitter centred on the correct grasp mostly averages out, so it
-  behaves as label noise and is *nearly* harmless.
-- ⛔ **But it teaches, with every sample, that the action does not depend on the image** —
-  the image is constant while the action varies. That is the causal-confusion failure
-  amplified, not fixed. And jitter large enough to make some episodes *fail* means training
-  on failures labelled as demonstrations.
+This is better than one noise setting for the whole path, and the reason is that the two
+kinds of waypoint have completely different tolerances.
 
-⭐ **THE RULE, and it is the single most important line in this section: variation must live
-in the (observation, action) pair jointly, never in the action alone.** Jitter the waypoints
-*and* move the object. A jitter knob that does not require the object to move should not
-exist, or should be labelled as a *robustness* tool for the motion engine rather than a
-data-collection one.
+| waypoint | how much error it survives | so what noise is right |
+|---|---|---|
+| where the gripper closes on the object | millimetres, set by the size of the object | none, or very little. Its position should come from the object, re-taught by hand |
+| on the way there: above, around, retreating | centimetres, set by "do not hit anything" | plenty. Different approach routes are useful variety |
 
-⚠️ **The same caution, weaker, applies to two more of his four variations.** Reordering
-waypoints and changing the spline/corner parameters vary the *trajectory* while the
-observation is unchanged. They buy a little robustness to path shape — the policy learns
-that many paths reach the same grasp — but they do **not** buy the thing BC most needs,
-which is coverage of *object positions*. Cheap and mildly useful; not a substitute for
-moving the object. (Varying *speed* is the most defensible of the three: it changes the
-dynamics the policy sees, which is real robustness if the action space is timed joint
-targets.)
+⭐ Noise on the approach teaches the model that many routes to the same grab are fine,
+which is real robustness. Noise on the grab teaches it to be sloppy at the one moment when
+precision decides success or failure.
 
-⚠️ **And one that bears directly on his phrasing.** *"Many different ways to do the actual
-task"* is a benefit **only with a policy class that can represent more than one answer.**
-Trained with a plain squared-error head, several genuinely different demonstrations from the
-same object position get averaged into something that does neither — a well-known BC failure
-and the reason diffusion policies and action-chunking architectures exist. So: deliberate
-multimodality is a liability with an MSE policy and an asset with a diffusion / ACT-style
-one. **Worth settling before collecting a dataset built around it.**
+⛔ **And a failed grab is worse than a wasted minute: it is a bad demo labelled as a good
+one.** So we have to know whether each episode actually worked.
 
-### ✅ What was checked in the code rather than assumed
+⭐ **Which we can detect for free, using hardware we already read every cycle.** The gripper
+is position controlled and we read its position. If the jaws close on a 3 cm object they
+stop at 3 cm; if nothing is there they close further, to the empty-hand position. **So "did
+the grab work" is a number we already have.** That gives an automatic success-or-failure
+label per episode, which is exactly what is needed to throw out the poisoned ones.
+⚠️ It needs one calibration step per object (measure where the jaws stop when holding it),
+and it cannot tell a good grab from an awkward one. It can tell "holding something" from
+"holding nothing", which is the case that matters.
 
-- ⭐ **A saved waypoint carries all seven joints, gripper included, and PARK commands the
-  jaws through the clamp** (`src/yam_robot.py::park_target_from`, `park pose` in the startup
-  plan reads `[…, 0.03, 0.035]`). **So a pick-and-place is replayable today.** This was the
-  gate: had a slot held only the six arm joints, no replayed sequence could grasp anything
-  and the whole idea would have needed a storage change first.
-- ⛔ **But corner blending and grasping fight each other, and this is the real missing
-  piece.** Blending is *defined* as flowing through a waypoint without stopping — and a
-  grasp needs the arm to stop, the jaws to travel, and time to pass. Worse, the gripper is
-  just another dimension of the joint vector, so a corner between "above the object, open"
-  and "at the object, closed" makes the jaws close **during the descent**, closing early or
-  pushing the object away.
-- ⭐ **So per-waypoint DWELL is a prerequisite, not an extra.** §6.5 already ranked it *"the
-  one with real downstream value"* and deferred it as an optional knob on his ruling. That
-  ranking was right and this promotes it: a sequence needs
-  `approach(open) → at-object(open) → dwell → at-object(closed) → dwell → lift(closed)`.
-  A dwell > 0 also implies a stop, which suppresses blending exactly where blending is
-  wrong — so `{pose, dwell}` covers both needs and no separate per-waypoint blend flag is
-  required. `park_slots()` / `with_park_slot()` already tolerate that shape.
+### Recording your voice while driving: his other idea
 
-### ⭐⭐ A third option neither of us named, and it may be the best one
+> *"Maybe later in the process we want a possibility to record data with a microphone where
+> as a user I can also say, like, 'I like this. No, this is bad. This way is bad. I'm
+> currently doing something bad. This is good again.' And then we could match the text to
+> the specific time code of the waypoints and then maybe custom score the waypoints, so
+> that it's clear later during reinforcement learning into the model which of the pathways
+> are good and which are bad."*
 
-**Record the hand-guided motion CONTINUOUSLY in GUIDE mode, instead of recording waypoints.**
+The mechanism is easy and everything needed runs locally. Record the microphone with
+timestamps, transcribe it with Whisper on the laptop, and store the words with their times
+alongside the joint and camera data.
 
-The papers this project follows (ABC / ASPIRE / ENPIRE) all teleoperate with **GELLO leader
-arms**, which hand over joint angles directly and need no IK at all — `docs/Setup-Plan.md`
-§4.2 names using a SpaceMouse instead as *the single largest deviation from the papers*.
-⭐ **A YAM arm in GUIDE mode is very nearly a leader arm already:** hand-guiding *is*
-joint-space demonstration. So his instinct is rediscovering why the papers use leader arms,
-and his difficulty with the SpaceMouse is the *expected* cost of that deviation, not a
-failure on his part.
+⭐ **The valuable part is the label, not the audio.** So there are two versions, and the
+cheap one is worth having first:
 
-The extension: stream `q(t)` while he hand-guides the arm through the whole task, then
-**replay that trajectory with the scene reset and record the camera on the replay pass.**
+- **A keypress.** One key for good, another for bad, pressed while the arm moves. Instant,
+  exactly timed, no transcription, and it fits the key handling that already exists.
+- **Voice.** Better when both hands are busy, which they are during teleop. That is the
+  argument for doing it his way, and it is a good one. Both can coexist.
 
-- ✅ Actions carry human timing, hesitation and correction — the very thing waypoint
-  interpolation throws away, and the objection above becomes much smaller.
-- ✅ No IK, no SpaceMouse, no singularities, and the trajectory is **dynamically feasible by
-  construction** because the arm physically went there.
-- ✅ Clean frames, because the recording pass has no hands in it.
-- ✅ Needs almost nothing new: GUIDE exists, replay exists, the recorder needs `q(t)`.
-- ⚠️ **Actions from the teach pass and observations from the replay pass must be aligned** —
-  the replay has to reproduce the taught trajectory closely enough that image `t`
-  corresponds to action `t`. Checkable: the park loop already reports tracking error and
-  cursor lag.
-- ⚠️ Hand-guiding smoothly is its own skill; a wobbly path replayed at speed could be
-  jerky. Light temporal smoothing, or replay at the recorded speed.
+⚠️ **The timing needs care, and this is the part that would quietly go wrong.** A person
+comments *after* the event, roughly half a second to two seconds later. So a comment at
+time `t` marks the stretch from about `t − 2s` to `t`, not the instant of `t`. Attach the
+label to the moment of the words and it lands on the recovery rather than on the mistake,
+teaching the opposite of what was meant.
 
-⭐ **This is the top candidate to investigate**, and it is strictly more informative than
-waypoints. Waypoints remain the right thing for *scripted* motion — approach poses, reset
-paths, rig measurement.
+**What the labels are actually good for, cheapest first:**
 
-### ⭐ The hybrid that is probably the actual answer
+1. ⭐ **Throwing away the bad stretches before training.** Reliable, simple, and it works
+   with ordinary imitation learning. This alone justifies building it.
+2. **Training more heavily on the good stretches** (weighting rather than deleting).
+3. **Proper reinforcement learning from the comments.** Real, and a much larger project:
+   human comments are sparse and loosely timed, which is its own research area (learning a
+   reward model from human feedback). Worth knowing it exists; not the thing to build
+   first.
 
-Not either/or:
+⭐ **A second, unrelated use for the microphone, possibly worth more.** Modern policies are
+often *told* what to do in words as well as shown pictures. Saying *"pick up the red
+block"* at the start of each episode gives us the text half of that for free, at a cost of
+one sentence per recording. ⛔ **If there is any chance of using a model that takes a
+language instruction, record it from the very first episode. It cannot be added
+afterwards.**
 
-1. **Bulk of the dataset** — teach and replay, with the object moved by hand every episode
-   and the grasp re-taught to match. Continuous hand-guided teaching if the third option
-   works; waypoints if it does not.
-2. **Recovery data** — perturbed starts and injected noise, to manufacture the corrections
-   a clean replay cannot contain.
-3. ⭐ **The SpaceMouse changes role rather than being abandoned** — from *the demo tool* to
-   *the correction tool*. Nudging a trained policy for a few seconds where it fails
-   (a DAgger-style loop) is the one regime where a hard 6-DoF device is fine, because it
-   needs seconds of input rather than a whole task. **None of the teleop work is wasted.**
+### Recording in guide mode: he likes this, and it may beat waypoints
 
-### ⚠️ Before building around "the SpaceMouse is too hard", two cheap checks
+> *"One good idea is definitely recording everything in the guide mode and then replaying
+> it. That's a smart idea, definitely."*
 
-His difficulty is expected (see the leader-arm point above), but part of it may be tuning
-rather than the device, and finding out costs minutes:
+Instead of saving a handful of poses and letting the code interpolate between them, stream
+the joint positions continuously while he hand-guides the arm through the whole task. Then
+replay that recording with the scene reset, and record the cameras on the replay pass.
 
-- **Control frame.** Driving in `world` while watching a wrist camera is much harder than
-  driving in `tool`, where "forward" means *forward as the gripper sees it*. `v` switches
-  it, each frame keeps its own axis map, and this has never been tried on hardware for a
-  task.
-- **A fine-speed mode.** `-`/`+` already scale the linear speed; the hard part of a grasp is
-  the last two centimetres, which wants a much lower scale than the approach. A momentary
-  "slow" state, or simply turning the speed down for the approach, is worth one attempt
-  before concluding the device cannot do it.
+**Why this is likely better than waypoints:**
 
-⛔ **Do not block the data-collection design on these.** They are worth one session's
-curiosity; the design above stands either way.
+- The movement carries human timing and hesitation, so it is much closer to a real demo.
+- No inverse kinematics anywhere, so no singularities and nothing to solve. Hand-guiding is
+  already a demonstration in joint angles, which is the form the arm wants.
+- The path is physically achievable by definition, because the arm actually went there.
+- His hands are in the frame only during teaching. The recorded pass contains nothing but
+  the robot and the object. Ordinary hand-guided teaching puts the human's arms in every
+  frame, and a model then either learns to look for a hand (which is absent when it runs on
+  its own) or the frames have to be masked.
 
-### ⭐ The measurement that settles this, and it takes 20 minutes
+⭐ **And there is a reason this is the natural thing to do.** The papers this project
+follows all use **GELLO leader arms**: a small copy of the arm that a person moves, which
+hands over joint angles directly with no IK at all. `docs/Setup-Plan.md` §4.2 names using a
+SpaceMouse instead as the single biggest difference between this rig and the papers. **A YAM
+arm in guide mode is very close to being a leader arm already.** So the difficulty with the
+SpaceMouse is the expected cost of that difference, not a personal failing.
 
-Everything above is argument. ⛔ **The comparison is empirical and cheap:**
+⚠️ **Two things to watch:**
 
-**Time five episodes each way** — five demos by SpaceMouse teleop, five by teach-and-replay
-with the object moved between each — and record, per episode: wall-clock seconds, whether
-the task actually succeeded, and how much of the time was spent on what.
+- The movements come from the teaching pass and the pictures from the replay pass, so the
+  replay has to follow the taught path closely enough that picture and movement still line
+  up. Checkable: the park loop already reports how far the arm is running behind the
+  command.
+- Hand-guiding smoothly is its own skill. A wobbly taught path replayed at speed could be
+  jerky. Light smoothing, or replaying at the speed it was taught, both help.
 
-⚠️ **Rough estimates only, explicitly not measurements, for deciding whether the experiment
-is worth running:** teach-and-replay looks like ~40-70 s per episode (move the object ~5 s,
-re-teach the grasp in GUIDE ~20-40 s — the approach and place waypoints often need no
-change if only the pick position moved — replay and record ~10-20 s), so ~100 episodes in
-1.5-2 hours. Teleop at 60-90 s per attempt with a substantial failure rate is several times
-that, and its failures are not merely wasted time — they are plausible-looking bad
-demonstrations. ⚠️ Comparable published real-robot BC work typically uses ~50-200 demos per
-task, so ~100 is the right order to plan for; that figure is literature-typical, not
-measured here.
+### The three ways to collect demos, side by side
 
-**Run the measurement before committing to either.** It is exactly this repo's method: the
-one thing that has consistently beaten a confident argument is twenty minutes of measuring.
+| | how it works | good | bad |
+|---|---|---|---|
+| **SpaceMouse teleop** | he drives with the puck, we record | natural corrections; matches what the papers assume | he reports it is very hard; slow; failed attempts still look like demos |
+| **Waypoint teach and replay** | save poses by hand, replay them | easy and fast; clean frames | interpolated motion with no human timing; needs a pause at each grab |
+| **Guide-mode record and replay** | hand-guide the whole task, replay it | human timing; no IK; clean frames; closest to the papers' leader arms | not built; needs the two passes to line up |
 
-### Open questions that are genuinely Julien's
+⭐ **Best guess at the right answer, which is not one of the three on its own:**
 
-1. **Which task?** Everything above assumes something pick-and-place-shaped. The number of
-   waypoints, whether dwell is needed, and whether one grasp re-teach per episode is enough
-   all follow from the task, and it has never been named.
-2. **Does the provenance of the demos matter to the professor / to his friend's plan?** The
-   MCAP file is identical either way — actions are actions — but *"collected by kinesthetic
-   teaching and replay"* is a real methodological difference from *"collected by
-   teleoperation"*, and if results are ever compared against the papers it should be
-   declared rather than discovered. A social question, not a technical one.
-3. **Which policy class?** It decides whether deliberate multimodality is an asset or a
-   liability (above), and it is downstream of his friend's plan rather than of this repo.
+1. Most of the dataset from **guide-mode teaching and replay**, with the object moved by
+   hand every episode and the grab re-taught to match it.
+2. **Recoveries added** by starting some replays slightly off the path and by adding wobble.
+3. **The SpaceMouse kept, with a different job.** Not for whole demos, but for nudging a
+   trained model in the moments where it fails. That needs a few seconds of input rather
+   than a whole task, which is the one situation where a hard six-axis device is fine.
+   ⭐ **None of the teleop work is wasted by this.**
+
+### The measurement that settles it, and it takes 20 minutes
+
+Everything above is argument. The comparison is cheap and it is real:
+
+⭐ **Do five demos each way** and write down, per demo: the wall-clock seconds, whether the
+task actually worked, and where the time went.
+
+⚠️ Rough guesses only, so we can judge whether the experiment is worth running.
+Teach-and-replay looks like 40 to 70 seconds an episode (move the object, about 5 s;
+re-teach the grab in guide mode, 20 to 40 s; replay and record, 10 to 20 s), so 100
+episodes in under two hours. Teleop at 60 to 90 seconds an attempt with a high failure rate
+is several times that, and its failures cost more than time. Published work on this kind of
+task usually uses somewhere between 50 and 200 demos, so 100 is the right number to plan
+for. ⚠️ **That last figure comes from the literature, not from anything measured here.**
+
+### His answers to the three questions this section used to ask
+
+**Which task?** Not decided, and deliberately not yet: *"I have no idea about the task yet.
+That's irrelevant right now because we first have to get the setup right."*
+⭐ **So build the collection machinery to be task-agnostic.** Do not bake in a number of
+waypoints, a grab shape, or an object size anywhere.
+
+**Which kind of model?** ⭐ **Most likely diffusion**, because *"we want to have the newest
+research"*, plus interest in vision-language-action models and world models, and
+specifically the ABC research. He has papers to share and will send them.
+
+⭐ **This closes a question that was open, and it closes it in his favour.** A **diffusion
+policy** is a model that can hold *several* valid answers for the same picture instead of
+being forced to pick one. A simpler model trained to minimise squared error averages the
+answers instead, so two different good routes come out as one bad route between them.
+**So deliberately collecting several different ways to do the same task is safe with
+diffusion, and would have been harmful with the simpler kind.** His *"many different ways
+to do the actual task"* is fine.
+
+⚠️ **What to check against the papers when he sends them.** He asked specifically where our
+code might not match the research and where connecting pieces are missing. These are the
+candidates, to be confirmed against real papers rather than guessed at:
+
+- **What counts as an "action".** We command joint positions. Much of the literature
+  commands end-effector movements instead. Both can be recorded, and step 5 already says to
+  record both. ⛔ Deciding late is only possible if both are recorded from the start.
+- **A fixed recording rate.** Diffusion policies usually predict a short block of future
+  moves at once, which assumes evenly spaced samples. Our loop runs at 100 Hz; recordings
+  are normally reduced to 10 to 30 Hz. That has to be a deliberate, timestamped resampling,
+  not "whatever the loop happened to manage".
+- **A fixed image size and frame rate**, per camera, decided before collecting rather than
+  after.
+- **A text field for the instruction**, if a language-conditioned model is possible at all.
+- **A success or failure flag per episode**, which the gripper trick above can fill in.
+- **Which camera produced which image**, since B and G currently have different cameras.
+
+**Does the provenance matter?** ⭐ **Yes, a lot**, and he defined what he means by it:
+
+> *"As far as I understand, like, having the history and everything we found and problems we
+> had and being able to reproduce everything and connect it to other research papers,
+> because we're doing a student project and would want to connect everything to research
+> and maybe build on this research."*
+
+⭐ **That is a concrete requirement on the recorder, not a vague wish.** Every episode has
+to carry enough information to be reproduced and cited later:
+
+- which arm, and the git commit of the code that recorded it
+- which cameras, by serial, at what resolution and frame rate
+- the calibration in force at the time (gripper limits, axis map, control frame)
+- how it was collected: taught by hand or driven; which waypoints; what noise settings;
+  what speed and easing
+- a timestamp, and the success-or-failure flag
+
+⚠️ **All of that is cheap to write at collection time and impossible to reconstruct
+afterwards.** A dataset without it is a folder of videos nobody can cite.
+⭐ This is also the one place where this repo's existing habit already pays off:
+`FINDINGS.md`, the long commit messages and this file are the *"everything we found and the
+problems we had"* half of what he described, and they already exist.
+
+### What exists today, and what does not
+
+He asked directly whether the features under discussion are built. Mostly they are not.
+
+| feature | state |
+|---|---|
+| single-arm driving: guide, teleop, hold, park, waypoint runs, blended corners, easing | ✅ **built, and confirmed on the arm** |
+| both arms from one script | ⬜ **not built.** `--arms` does not exist. `src/arm_session.py` is the class it needs, with 17 tests, but nothing uses it yet. ROADMAP step 6 |
+| mirroring one arm onto the other | ⬜ **half built.** `src/mirror.py` and its 14 tests exist. The script that opens both arms does not. Needs the two-arm work first |
+| recording a movement in guide mode and replaying it | ⬜ **nothing exists.** This is the idea he liked, and it has never been built |
+| noise on waypoints, chosen per waypoint | ⬜ **nothing exists** |
+| a pause at a waypoint, so a grab has time to happen | ⬜ **nothing exists**, and it is needed before any grab can be replayed at all. See below |
+| microphone or keypress labels | ⬜ **nothing exists** |
+| writing recordings to a file at all | ⬜ **nothing exists.** This is step 5 |
+| both D405 depth cameras working together | ⬜ **one works, the second is unplugged.** ROADMAP step 7 |
+
+⛔ **One thing that IS already true and matters: a saved pose carries all seven joints,
+including the gripper, and a park drives the gripper to it.** Checked in the code
+(`src/yam_robot.py`, `park_target_from`). So a saved sequence can already open and close the
+jaws, which means a pick-and-place is in principle replayable today.
+
+⛔ **But blended corners and grabbing fight each other, and this is the missing piece.**
+"Blending" means the arm curves *through* a waypoint without stopping. A grab needs the
+opposite: stop, let the jaws travel, wait. Worse, the gripper is just another number in the
+joint list, so a smooth corner between "above the object, jaws open" and "at the object,
+jaws closed" closes the jaws **during the descent**, which either grabs early or shoves the
+object away.
+
+⭐ **So a pause at each waypoint is required, not an extra.** §6.5 above already ranked it
+first among the deferred options; this promotes it to a prerequisite. A grab needs roughly:
+approach with the jaws open, arrive, pause, close the jaws, pause, lift. A pause also
+implies a stop, which switches blending off exactly where blending is wrong, so one setting
+covers both needs and no separate per-waypoint blending switch is required. The storage
+(`park_slots()` / `with_park_slot()`) already tolerates the shape change.
 
 ## Step 7 — Cameras
 
@@ -822,6 +858,104 @@ out to be wrong about two of four ([FINDINGS §22](FINDINGS.md)) — and one D40
 and **delivering a colour picture over plain UVC with no SDK at all**. So this step is further along than
 "needed for data collection" suggests: the wrist view is drivable today, and `librealsense` is an upgrade for
 depth, intrinsics and camera controls rather than a prerequisite.
+
+### 7.1 What the D405 can and cannot do right now — asked by Julien, 2026-08-12
+
+He asked: *"I don't even know what's capable with them and how they should be used."* Written in plain
+language, because he reads this. **Current wiring: arm B has a D405, arm G has the Logitech C920, and he is
+about to put the second D405 on arm G.** Photographs of both arms were provided on 2026-08-12.
+
+**What a D405 is.** A small stereo depth camera. Two lenses, a few centimetres apart, and a chip on board
+that compares the two views to work out how far away things are. It is built for close-up work, roughly a
+hand's reach, which is exactly the distance from a wrist mount to whatever the gripper is holding.
+⚠️ **The exact usable range is from the product datasheet and has not been confirmed on this unit** — the
+manual is at `intelrealsense.com/get-started`, and `rs-enumerate-devices` reports it once librealsense is
+installed.
+
+| | works today | needs `librealsense` |
+|---|---|---|
+| a colour picture | ✅ **measured** — it appears as an ordinary webcam, so OpenCV opens it with no driver at all | — |
+| choosing resolution and frame rate | ✅ works | — |
+| **depth** (how far away each pixel is) | ⛔ no | ✅ yes |
+| **intrinsics** (the lens numbers needed to turn a pixel into a direction in 3D) | ⛔ no | ✅ yes |
+| exposure, gain and other camera controls | ⛔ no | ✅ yes |
+| **telling two D405s apart by serial number** | ⛔ **no, and this is the one that bites** | ✅ yes |
+
+⛔ **The second D405 breaks how cameras are currently identified, and this is the single most important thing
+in this section.** Cameras are identified by asking each one for a picture size that only one of them
+supports ([FINDINGS §22](FINDINGS.md)). **Two identical D405s support exactly the same sizes, so that method
+cannot separate them.** They do have real serial numbers, unlike the two SpaceMice — but the plain-webcam path
+cannot read a serial. So there are two options and no third:
+
+1. **Install `librealsense`** (`brew install librealsense`, a prebuilt package, no compiling) and select each
+   camera by serial. ⭐ **This is the recommendation** — it also unlocks depth, intrinsics and exposure, so it
+   pays for itself.
+2. **Identify by hand each session**: cover one lens, see which index goes dark, note it. ⚠️ Works, but it is
+   a manual step before every session and it is exactly the kind of thing that gets skipped and then produces
+   a dataset where the two arms' images are swapped.
+
+### 7.2 What actually needs doing, in order
+
+1. ⭐ **Install `librealsense` and select by serial.** Unblocks the identification problem above before it can
+   corrupt a recording. Also answers what the camera can do, via `realsense-viewer`.
+2. ⭐ **Measure the mount: where each camera sits and which way it points, relative to the wrist.**
+   ⛔ There is already a `camera` control frame in the code, and it assumes a **modelled** mount with a 25°
+   tilt. The photographs show a bracket on the side of the wrist that is very unlikely to match that model.
+   **Until it is measured, drive in the `tool` frame (`v` cycles them), not `camera`** — the existing warning
+   in [COMMANDS.md](COMMANDS.md) is correct and this confirms why.
+3. **Plug in the second D405 and measure USB bandwidth.** Two USB-3 cameras streaming at once can exceed what
+   one laptop controller carries. ⚠️ It fails as dropped frames, not as an error message, which is the worst
+   failure mode for training data. [FINDINGS §8](FINDINGS.md) already flags this as needing a re-check.
+4. **Measure the D405's latency.** The C920 is about 200 ms and that is the camera's own doing, not software
+   ([FINDINGS §21.3](FINDINGS.md)). A machine-vision camera may be far quicker. ⚠️ **Re-measure rather than
+   assuming the number carries over.**
+5. **Decide whether depth is wanted at all.** Most image-based policies use colour only. So depth is a
+   "know what we have" item, not a blocker on anything.
+6. ✅ **Put the same camera on both arms** — he is already doing this. Two different cameras means two
+   different fields of view, colours and latencies, which is an avoidable inconsistency in a bimanual dataset.
+
+### 7.3 ⭐ The cable — asked by Julien, 2026-08-12, with photographs
+
+> *"Currently the depth cameras are connected via a cable directly to the computer, but the cable's very
+> short, and it's kind of in the way of the robots. So is that the best possible way to do it? Or is it
+> usually connected to the robot in some way?"*
+
+**No, the current arrangement is not good, and the photographs show two separate problems.**
+
+1. ⛔ **The plug takes the strain.** The cable leaves the camera sideways and hangs in a free loop. When the
+   wrist twists (motor 6), that loop winds up and pulls on the connector. A USB-C socket is not built for
+   repeated pulling and twisting, and it is glued to a camera that costs real money.
+2. ⛔ **The cable is loose inside the workspace**, where the arm can catch, drag or pinch it. On a rig with no
+   emergency stop ([HANDOFF §4.5](HANDOFF.md)) that is a snag risk during a motion nobody is holding a hand
+   over.
+
+**What is normally done, and it is worth copying.** Route the camera cable **along the arm**: clip or tie it
+to each link, and leave a small loop of slack at each joint so the joint moves the loop instead of pulling the
+plug. Then run one longer cable from the base of the arm to the computer. ⭐ **The photographs show a black
+braided sleeve already running along the arm** (the motor and CAN wiring), so there is an existing path to
+follow and clip to.
+
+⚠️ **Do not simply buy a long USB cable.** A passive USB-3 cable at 5 Gbps is reliable to about 2 m and
+sometimes 3 m; beyond that it needs either an **active** cable (with a chip in it) or a **powered USB-3 hub**
+acting as a repeater partway along. Over-long passive cable shows up as dropped frames and random
+disconnects, never as a clear error.
+
+⭐ **Recommended shape**, cheapest first:
+
+1. A **short** USB-C cable from the camera down the arm to a **powered USB-3 hub** clamped near the arm's
+   base, then one cable from the hub to the laptop. Keeps the flexing part short and replaceable, and the hub
+   is where the second D405 plugs in too. ⚠️ The hub must be **USB 3** and **externally powered** — a bus
+   powered USB-2 hub will silently throttle both cameras. (A "Selore" hub is visible on the desk in the arm G
+   photograph; check which kind it is.)
+2. If a hub is not wanted, a single **active** USB-C cable of the length actually needed, clipped along the
+   arm.
+
+⚠️ **There is no wireless option worth considering.** The D405 has no computer of its own; it must be cabled
+to a host.
+
+⭐ **And one thing that must happen after any re-cabling: re-verify the camera identification.** Moving a
+camera to a different port changes its index, and index is not identity ([FINDINGS §22](FINDINGS.md)) —
+this is the mistake that got two of four cameras wrong once already.
 
 ---
 
