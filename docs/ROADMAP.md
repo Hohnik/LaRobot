@@ -548,6 +548,167 @@ He asked: *"I don't even know what's capable with them and how they should be us
 
 ---
 
+## 8. ⭐⭐ What is still missing for the whole system to work — 2026-08-12
+
+> Julien asked for this directly: *"everything for the whole setup needs a full list of what is still missing for the full system to work."* Built from a photograph of the desk he sent on 2026-08-12, plus `ioreg` run the same day. Written in plain language because he reads it.
+
+### 8.0 What the rig is, right now
+
+From the photograph and from `ioreg`, both on 2026-08-12:
+
+- Two arms on separate base plates, on the **same wooden desk as the laptop**, facing inward. Base serials `JG260704018` (B) and `JG260704022` (G).
+- One MacBook drives everything. Both CAN adapters are on the bus (`2081337C594E5018` = B, `20593383594E5018` = G).
+- ⭐ **Both SpaceMice are connected**, one either side of the laptop.
+- One USB hub, to the left of the laptop.
+- **Arm B carries the D405** (serial `255323071773`, USB SuperSpeed). **Arm G carries the Logitech C920.**
+- ⛔ **Only one D405 is on the bus.** The second is still unplugged.
+- Cables run loose across the desk and down to the floor.
+- ⛔ **No camera looks at the workspace from outside.** Both cameras are on wrists.
+- ⛔ **No emergency stop.** The wall plug is the only cut-off ([HANDOFF §4.5](HANDOFF.md)).
+
+### 8.1 Hardware still missing
+
+| what | why it matters | how urgent |
+|---|---|---|
+| ⭐⭐ **A camera that sees the whole workspace**, and something to mount it on | ⛔ **The biggest gap, and it is on no other list.** Nearly all published manipulation work uses a wrist camera **and** a fixed camera watching the scene. A wrist camera alone cannot see where the object is until the arm is already near it, so a model trained on wrist views only has to search blindly at the start of every episode | **high**, and before collecting any dataset |
+| The second D405, on arm G | Two different cameras on two arms means two fields of view, two colour responses and two latencies in one dataset. He is already planning this | high |
+| A powered **USB 3** hub with enough ports | Two D405s streaming at once may exceed what one laptop controller carries. ⚠️ It fails as dropped frames, never as an error | measure before assuming |
+| Objects to manipulate, and somewhere repeatable to put them | The task is undecided, but a dataset needs the same object and a marked start area. The "RobCo building blocks" bag in the photograph may already be this | with the task |
+| Cable clips or sleeving | Loose cable inside the arms' reach is a snag risk on a rig with no emergency stop | cheap, do it whenever |
+| A longer USB cable per wrist camera | Only needed if the cable is routed along the arm. See §8.4 | deferred, his call |
+| ⚠️ **A switched mains power strip within arm's reach** | There is no emergency stop and buying a real one may not be worth it. A switched strip is a few euros and gives one thing to hit. Not a substitute for a proper stop, and better than reaching for a plug | worth one decision |
+| Something holding the base plates down | The plates sit on the desk with the laptop. ⚠️ **Unknown from the photograph whether they are clamped.** Worth checking rather than assuming | check |
+
+### 8.2 Software still missing, in the order I would build it
+
+| # | what | state |
+|---|---|---|
+| 1 | **Both arms from one script** | class + 17 tests exist (`src/arm_session.py`), nothing uses it. [ROADMAP step 6](#step-6--two-arms-two-spacemice--what-julien-asked-for-next-2026-08-10) |
+| 2 | ⭐ **Record a movement in GUIDE, then replay it** | nothing exists. He chose this one. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 3 | ⛔ **A pause at each waypoint** | nothing exists, and **no grab can be replayed without it**. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 4 | **Mirroring** | logic + 14 tests exist (`src/mirror.py`), the two-arm script does not. Needs 1 |
+| 5 | **Telling two identical D405s apart** | nothing exists. Use the wiggle approach, [FINDINGS §28.5](FINDINGS.md) |
+| 6 | **Capturing several cameras with timestamps** | nothing exists. Images must line up with joint data or the dataset is unusable |
+| 7 | **The recorder** (step 5) | nothing exists. Metadata list in [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 8 | **Good/bad labels while driving** | nothing exists. Keypress first, microphone second |
+| 9 | **Noise per waypoint** | nothing exists |
+| 10 | **Detecting whether a grab worked**, from the gripper position | nothing exists, and it is nearly free. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+
+### 8.3 Decisions still missing
+
+- **The task.** Undecided on purpose: *"we first have to get the setup right."*
+- **Which model.** Probably diffusion. Papers to come from him.
+- **Recording rate, image size, and what counts as an action.** ⛔ All three have to be fixed *before* collecting, because changing them later means re-collecting.
+- **A start-of-session checklist.** Gripper calibration after a power cycle already exists; camera identification and a bandwidth check will need to join it.
+
+### 8.4 Deliberately deferred, and by whose decision
+
+⭐ **Measuring exactly where each camera sits and points: deferred, his ruling.** *"The exact measuring of what the setup looks like we haven't done yet. That's still a task that's open, but it's not for this current setup, because we will still move everything around. Currently we just have to make sure that everything is connected and works, and that we have some type of guiding system that we can then work towards when we reimplement the whole thing from scratch."*
+
+⚠️ **So the goal right now is "connected and working", not "measured and final".** One consequence to keep: until the mount is measured, drive in the `tool` frame and not `camera`, because the `camera` frame assumes a modelled 25° tilt that the photographs do not match.
+
+⭐ **The cable: he has it under control.** *"Don't worry about any problems with the cable. I have everything under control. It's just that it would be good so that we can do that better in a different way later."* Two facts of his worth keeping, because they change what "route it along the arm" would cost: it needs **a much longer cable than they own**, and **there is nothing on the arm to plug into**, so it would be one continuous run from the wrist to the base rather than a socket at the base.
+
+### 8.5 ⭐ The consolidation task he asked for, and when it should happen
+
+His words: *"Later, one task would be to consolidate everything in the whole code and think about deeply and plan the full structure of what is necessary to build this architecture, and then create, like, an assignment plan or something like that, maybe a bit more creative fitting to the actual situation, which then will help us to work through everything."*
+
+⛔ **This should happen after the setup works, not before, and the reason is specific.** The architecture depends on three things that are all still open: the task, the model, and the papers being matched. A structure planned against a rig that does not yet run end to end is a guess dressed as a plan, and this repo has a name for that ([FINDINGS §0](FINDINGS.md)).
+
+**What it needs as input, so it can be started the moment those arrive:** the papers he will send · the task · the model choice · and one complete run of the pipeline, even a bad one, so the plan is written against measured behaviour.
+
+---
+
+## 9. ⭐⭐ The target stack, and what the research actually demands of this rig — 2026-08-12
+
+> ⛔ **Read this before any large restructuring, and before the recorder.** Julien sent the project's own stack plan and its three papers on 2026-08-12, saying *"we have no idea what we're doing, so I just wanted to let you know what we're thinking of"*, and asking what is smart, what to watch for, and **how to reconnect into the systems that already exist** if this repo becomes the template for a rebuild.
+>
+> ⭐ **Everything below was read from the actual sources on 2026-08-12, not recalled.** Two of the three papers are newer than any model's training data, so anything stated from memory would have been invented.
+
+### 9.1 The plan, in his own words
+
+> *"Stack: Wir nehmen so viel es geht aus `github.com/amazon-far/abc` und bauen einen stabilen, lokalen Stack fuer unsere Roboter. Teleoperation (via 3d Space Mouse) zum Datensammeln fuer einen oder zwei machbare Aufgaben, SFT fuer diese Tasks (vmtl. VLA basierte Policy) und eine funktionierende Sim sind unsere minimalen Meilensteine."*
+>
+> *"Algorithmische Arbeit: einen bis jetzt noch nicht ganz so im Fokus stehenden Ansatz verfolgen: ENPIRE, und `arxiv.org/abs/2607.00272`. Um nicht komplett den Mainstream aussen vor zu lassen, moechte ich auch auf `arxiv.org/abs/2607.15275` schauen. Alternative Themen (RL z.B.) waeren natuerlich auch super, falls der Stack steht."*
+
+⚠️ **He was explicit that none of this is fixed.** Treat it as direction, not specification.
+
+### 9.2 ⭐⭐ What ABC actually is, and the part that changes our plans
+
+`github.com/amazon-far/abc` is an open behaviour-cloning stack. **Behaviour cloning** means training a model to copy recorded demonstrations. It ships a diffusion policy called **ABC-DiT**, a large public dataset, pretrained checkpoints, training code and evaluation tools.
+
+⭐ **It vendors the YAM MuJoCo model from i2rt-robotics, the same source this repo vendors.** So it was built for our arms.
+
+⛔⭐ **THE FINDING THAT MATTERS MOST: its training data format tells us the shape of everything upstream of it.**
+
+```
+episode_<uuid>/
+  states_actions.bin               # 28 columns, float64  (14 states + 14 actions)
+  combined_camera-images-rgb.mp4   # 30 fps, 224x224, several camera views stacked
+  episode_metadata.json            # task name, cameras, resolutions, timing
+```
+
+Read that carefully, because four decisions fall straight out of it:
+
+1. ⛔⭐ **14 states and 14 actions means TWO ARMS IN ONE TIMELINE.** Fourteen is 2 x 7 joints. **So both arms must be recorded together, at the same rate, in one file.** Two separate terminal sessions, which is how Julien has driven both arms so far, physically cannot produce this. **Two arms from one script stops being the next nice feature and becomes a prerequisite of the data format.** See [ROADMAP step 6](#step-6--two-arms-two-spacemice--what-julien-asked-for-next-2026-08-10) and `src/arm_session.py`.
+2. ✅ **Actions are joint positions, and that is what we already command.** A worry recorded earlier in [ROADMAP §6.6](#66-where-the-training-data-comes-from), that much of the literature commands end-effector movements instead, does not apply to ABC. **We match it today.** Recording both anyway stays cheap insurance.
+3. ⭐ **Images are 224x224 at 30 fps, several cameras stacked into one video.** So the resolution argument that has run through [FINDINGS §21](FINDINGS.md) is irrelevant to training: 224 pixels is tiny. What matters instead is **which camera is in which slot of the stack**, every single time. ⛔ That is exactly the two-identical-D405s problem ([FINDINGS §28.6](FINDINGS.md)), and getting it wrong swaps the arms' views in the dataset while every file still looks fine.
+4. ⭐ **`episode_metadata.json` already exists as the place for provenance.** The list in [ROADMAP §6.6](#66-where-the-training-data-comes-from) should be written into **their** field names rather than ours, wherever they overlap.
+
+⭐⭐ **And the thing to check first, because it could cut the work by a factor of five.** ABC publishes a **large dataset (`XDOF/ABC-130k` on Hugging Face) and pretrained checkpoints**. Fine-tuning an existing checkpoint needs far fewer demonstrations than training from nothing. The professor's milestone is **SFT** (supervised fine-tuning) on one or two tasks, which is exactly that. ⚠️ **So the "50 to 200 demos" figure in [ROADMAP §6.6](#66-where-the-training-data-comes-from) may be several times too high for our case.** ⛔ Unverified: check what the ABC README and the checkpoints actually support before planning a collection session around either number.
+
+⚠️ **Two practical facts from the same README.** Training runs on **8 GPUs** (`torchrun --nproc-per-node 8`), so it cannot happen on his MacBook and compute is a gap on no list yet. And the vision backbone is **DINOv3**, whose licence forbids military and weapons use, which is worth knowing in a university project even though it changes nothing here.
+
+⭐ **One milestone may be largely free.** ABC ships `viz_policy.py` and `eval_policy.py` running against the YAM MuJoCo model. *"Eine funktionierende Sim"* is a stated milestone, and much of it may already exist rather than needing to be built.
+
+### 9.3 The three papers, and what each one demands of the hardware
+
+| paper | what it is | what it needs from us |
+|---|---|---|
+| **ENPIRE** ([2606.19980](https://arxiv.org/abs/2606.19980), NVIDIA / CMU / Berkeley, June 2026) | A harness that lets a coding agent improve a policy in the real world, on a loop: **reset the scene, run the policy, check whether it worked, improve.** Four modules: Environment (automatic reset and checking), Policy Improvement, Rollout (evaluate on one or several robots at once), Evolution. Reached 99% on real dexterous tasks | ⛔ **automatic scene reset** · ⛔ **automatic success checking** · parallel rollouts on both arms · a **scriptable API** an agent can call · **unattended running**, which on a rig with no emergency stop is a real problem |
+| **ASPIRE** ([2607.00272](https://arxiv.org/abs/2607.00272), June 2026) | Writes and refines robot control **programs** (code as the policy) and builds a reusable **skill library**, using evolutionary search over task sequences | **"fine-grained multimodal traces"** for diagnosing its own failures · named, reusable motion primitives · the same scriptable API |
+| **RoboTTT** ([2607.15275](https://arxiv.org/abs/2607.15275), July 2026) | A **vision-language-action** policy whose context stretches to **8000 timesteps**, about 1000x the usual. Enables one-shot imitation from **human video** and long multi-stage tasks | ⛔ **long, unbroken recordings** (8000 steps at 30 fps is ~4.5 minutes) · a **language instruction** per episode · ⭐ **human video demonstrations** |
+
+### 9.4 ⭐⭐ Where this changes decisions we have already made
+
+**Automatic scene reset: Julien's objection was right for now and stops being right later.** He argued it is close to circular, because a robot that can place an object at a chosen spot can already do the task. ⭐ **ENPIRE's whole method is built on automatic reset, so the tension is real and worth resolving rather than picking a side.**
+
+The resolution, and it holds both positions:
+
+- **At the demo-collection stage he is right.** No policy exists, so a reset would have to be a hand-taught open-loop path, and teaching one per start position costs more than moving the object by hand.
+- **At the self-improvement stage he stops being right, for two reasons.** First, **a reset does not need to be precise.** Tipping pins out of a box, sweeping objects into a rough area or pushing something back is far easier than grasping it, and ENPIRE's own tasks are like this. Second, **by then a policy exists** that can partly do the task, so the circularity is gone.
+- ⭐ **So automatic reset moves from "not worth it" to "required later, and it can be crude."** Do not build it now. Do not design it out either: the recorder and the session API should not assume a human is present between episodes.
+
+**Automatic success checking stops being a nicety.** Both ENPIRE and ASPIRE need the robot to know whether it succeeded, without a human watching. ⭐ The gripper trick in [ROADMAP §6.6](#66-where-the-training-data-comes-from) (the jaws stop at the object's width when holding something, and close further when holding nothing) is exactly that primitive, and it now has a research reason rather than only a data-hygiene one.
+
+⭐⭐ **His hands in the frame during guide-mode teaching may be an asset, not a problem.** [ROADMAP §6.6](#66-where-the-training-data-comes-from) treats the teaching pass as something to keep out of the recording. **RoboTTT learns from human video demonstrations.** So the teaching pass is potentially a second, differently-useful recording. ⛔ **Record it rather than discarding it.** It costs a file and cannot be recovered later.
+
+**A language instruction per episode is now near-certain rather than speculative.** The plan says *"vmtl. VLA basierte Policy"*, RoboTTT is a vision-language-action model, and ABC's own text encoder is CLIP. ⭐ So the spoken-instruction half of the microphone idea in [ROADMAP §6.6](#66-where-the-training-data-comes-from) is the part with the clearest payoff, and it is one sentence per recording.
+
+⚠️ **A tension worth watching, not resolving yet.** ABC's episodes are short clips at a fixed size. RoboTTT wants ~4.5 minutes of unbroken context. **Do not build a recorder that can only produce short clips.** Record continuously with real timestamps and cut clips out afterwards, because that direction is reversible and the other is not.
+
+### 9.5 ⭐⭐ The architecture conclusion, and it answers his rebuild question
+
+He asked how this becomes a template to rebuild from, and how to reconnect into what already exists. **All three papers want the same thing from us, and our code is currently the opposite of it.**
+
+What they want:
+
+- **The robot as a callable library**, with a clean API a script or a coding agent can drive. ENPIRE and ASPIRE both have an agent writing policy code against it.
+- **Structured traces**, one record per cycle, filterable. ASPIRE diagnoses its own failures from them.
+- **An automatic success signal.**
+- **Long continuous recordings**, with a language instruction attached.
+- **Both arms in one process**, because the data format is 14 columns wide.
+
+What we have: `scripts/teleop_session.py`, an interactive terminal program with roughly 2000 lines in one `main()`, one arm per process, printing for a human.
+
+⭐ **So the rebuild has a clear shape, and it is not a rewrite from zero.** Build a control library with a clean API, structured logging and a success signal. Make the interactive session **one client** of that library rather than the place the logic lives.
+
+⭐ **And `src/arm_session.py` is already the first step in exactly that direction.** Its rule is *the class decides, the script narrates*, with no printing inside the class, which is why 17 tests can prove it without hardware. ⛔ **That design choice was made for testability and it turns out to be the shape the research needs.** Wiring it in is the single highest-value piece of work available, and it now has three independent reasons: bimanual driving, the 14-column data format, and every paper above.
+
+⚠️ **What is still needed before the consolidation task in [ROADMAP §8.5](#85--the-consolidation-task-he-asked-for-and-when-it-should-happen) can be done properly:** the chosen task · whether fine-tuning an ABC checkpoint is possible · a machine with GPUs · and one complete end-to-end run, even a bad one, so the plan is written against measured behaviour rather than against this document.
+
+---
+
 ## Deliberately NOT doing, and why
 
 - **Joint-space jogging as a stepping stone** (SpaceMouse axis → one joint each, no IK). Genuinely simpler and it would prove the plumbing sooner. Rejected as the *main* path because it is throwaway — the plan needs cartesian control — and because simulation already provides a risk-free place to debug the real thing. **Kept as a fallback:** if IK fights us, joint jogging still gets a SpaceMouse driving the arm the same day.
@@ -569,7 +730,9 @@ He asked: *"I don't even know what's capable with them and how they should be us
 
 ---
 
-## ⛔ Do NOT connect the second SpaceMouse yet — and this is measured, not a preference
+## ~~⛔ Do NOT connect the second SpaceMouse yet~~ — RESOLVED, and both are now connected
+
+> ⭐ **This section is spent, and is kept only because the reasoning below is still the reason the fix looks the way it does.** Both SpaceMice are connected as of 2026-08-12 (visible in his desk photograph, and both appear in `ioreg`). The problem it warned about was solved rather than avoided: `pick_device_by_wiggle(exclude=…)` in `src/spacemouse.py` asks the operator to move the puck they want, so identity comes from a gesture instead of from an index. ⭐ **That same idea is now the answer to a second problem** with the same shape, two identical D405 cameras that no list can tell apart: see [FINDINGS §28.5](FINDINGS.md).
 
 Julien offered to free a USB port and connect the second SpaceMouse. **Recommendation: don't, yet.** Not because "one thing at a time", but because of a specific fact checked on 2026-08-10:
 

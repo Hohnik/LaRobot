@@ -1114,3 +1114,151 @@ Fixed with a UTF-8 **incremental** decoder held on the instance, because the two
 **Four of the eight items above were guards or tests that had stopped describing their subject** — a screen test asserting on a payload shape no caller produces, a keyboard test pinning an unwanted behaviour, a hint outliving the state it described, a mode branch whose fall-through reported the wrong thing. None of them failed. They all passed, kept passing, and stopped meaning anything.
 
 ⛔ **The corollary for this repo's method: "245 tests pass" is a statement about the tests as much as about the code.** Session 4's lesson was that reading does not find what only hardware knows. This is its twin: **a test does not find what its input cannot express.** The cheapest defence found here was to assert on the *user-visible artefact* — the grid of rows a terminal ends up displaying — rather than on the call that produced it.
+
+---
+
+## 28. ⛔⭐ librealsense on macOS: installed, cannot open the camera, and does not need to — 2026-08-12
+
+### 28.1 What was measured
+
+`brew install librealsense` succeeded: version 2.58.3, prebuilt bottle, no compiling, dependencies `glfw` and `libusb` already present. Then `rs-enumerate-devices -s` failed, identically, in **both** the agent's shell and Julien's own terminal:
+
+```
+failed to claim usb interface: 0, error: RS2_USB_STATUS_ACCESS
+acquire_power failed: failed to set power state
+libusb_init failed with status: -99 (attempt 1)
+Could not create device - failed to set power state
+No device detected. Is it plugged in?
+```
+
+⭐ **The fact that it fails in HIS terminal too is the useful half.** macOS camera permission is granted per application, and his terminal has it (`camera_view.py` works there). So permission is **not** the cause, and [§21.1](FINDINGS.md) does not explain this one.
+
+The camera itself is healthy. `ioreg` reports serial `255323071773`, `Device Speed = 3` (USB SuperSpeed, 5 Gbps), `kUSBCurrentConfiguration = 1`.
+
+### 28.2 ⭐ The USB tree shows FOUR interfaces, which extends §8
+
+`ioreg -p IOService -w0 -r -n "Intel(R) RealSense(TM) Depth Camera 405"`:
+
+| interface | macOS's name for it | what is attached |
+|---|---|---|
+| 0 | `Intel(R) RealSense(TM) Depth Camera 405  Depth@0` | matched, no visible client |
+| 1 | `… Depth@1` | matched, no visible client |
+| 2 | `… Y@2` | matched, no visible client (Y = the infrared/mono imagers) |
+| 3 | `… RGB@3` | ⭐ **`UVCAssistant`** — macOS's own UVC driver |
+
+⭐ **This settles why OpenCV gets a real photograph rather than a depth map.** [§8](FINDINGS.md) recorded that macOS lists exactly one entry for the D405 and calls it `… Depth`, and inferred that the colour picture arrives over that single entry. At the USB level there is a **distinct `RGB` interface**, and macOS's UVC driver has claimed exactly that one. The colour picture is the RGB interface doing its job.
+
+⚠️ **An open question worth one command.** If the `Depth` or `Y` interfaces also appear as *capture devices*, some depth or infrared data may be reachable through OpenCV with no SDK at all. `uv run scripts/camera_view.py --list` answers it: one D405 entry, or more than one? ⛔ Julien has to run it; the agent cannot open a camera ([§21.1](FINDINGS.md)).
+
+### 28.3 ⛔ Google Chrome was holding BOTH cameras, after he believed everything was closed
+
+The same `ioreg` output shows, under the C920 **and** under the D405:
+
+```
++-o Google Chrome  <class AppleUSBHostDeviceUserClient, id 0x…, active, retain 7>
+```
+
+⭐ **This is what "deep check whether something is using the camera" looks like, and the answer was yes.** Julien had closed the viewer, FaceTime and Photo Booth, and reported *"I think I properly closed everything… still nothing."* Chrome keeps a user client open on both cameras regardless. Eliminate it before drawing any conclusion about librealsense:
+
+```bash
+osascript -e 'quit app "Google Chrome"'; sleep 3; rs-enumerate-devices -s
+```
+
+### 28.4 ⭐⭐ ANSWERED THE SAME DAY: `sudo` works, and the second theory was wrong
+
+```
+$ sudo rs-enumerate-devices -s
+Device Name        Serial Number     Firmware Version
+RealSense D405     260322274021      5.15.1.55
+```
+
+Two candidates had been written down, with one command to separate them:
+
+- **(a) Privilege.** libusb's macOS backend has to take a USB interface away from the kernel driver that already holds it, and that can require root. ✅ **This was it.**
+- **(b) Entitlement.** The device node carries `IOServiceDEXTEntitlements = (("com.apple.developer.driverkit.transport.usb"))`, and a Homebrew-built binary cannot carry that entitlement. ⛔ **Wrong**, and wrong in an instructive way: it was plausible, self-consistent, and it predicted that root *could not* help, because root does not grant entitlements. Root helped.
+
+⭐ **The lesson is [§0](FINDINGS.md) pointed the other way for once, and it still applies.** A mechanism that fully explains the symptom is not a result. This one cost nothing only because it was written down as a hypothesis with that warning attached rather than as a finding. ⚠️ **Chrome was a red herring too** — quitting it changed nothing, so §28.3 survives as a lesson about checking rather than as a cause.
+
+⭐ **Firmware `5.15.1.55` confirms a prediction.** [§8](FINDINGS.md) read `bcdDevice = 20721 = 0x50F1` and guessed *"probably firmware 5.15.1, unverified"*. It was right.
+
+⚠️ **What this does and does not unlock.** Running an inspection tool as root is fine. ⛔ **Running a 100 Hz control loop as root is not.** So this does not mean our Python code can read serials or depth. The practical shape: `sudo rs-enumerate-devices` for inspection and firmware, the ordinary OpenCV path for streaming, and the wiggle method in §28.6 for working out which camera is on which arm.
+
+### 28.5 ⛔⭐ ONE CAMERA, TWO DIFFERENT SERIAL NUMBERS. Unresolved.
+
+| source | serial reported |
+|---|---|
+| `sudo rs-enumerate-devices -s` (librealsense, reads the camera's own firmware) | **`260322274021`** |
+| `ioreg` USB descriptor, and [§8](FINDINGS.md) on 2026-08-11 | **`255323071773`** |
+
+Both readings come from the same evening, minutes apart, with exactly **one** RealSense on the bus (confirmed by `ioreg`). The firmware version matching the prediction made from that same USB descriptor says it is one physical camera.
+
+⛔ **So one camera answers the question "what is your serial number" with two different numbers, depending on which tool asks.** Anyone writing "select the camera by serial" into a config file must record *which* serial, or the value is right in one tool and wrong in the other while both look plausible. Same class of trap as [§5](FINDINGS.md) trap 2, where cached raw motor positions were frame-dependent and it cost a motor.
+
+⚠️ **Not explained, and two stories fit: librealsense reporting an internal serial that differs from the USB descriptor string, or a second D405 having been briefly involved.** ⛔ **Do not pick one.** The hardware was unplugged at the end of 2026-08-12. Settle it on the next hardware session, with both cameras connected:
+
+```bash
+sudo rs-enumerate-devices -s; ioreg -p IOUSB -w0 -l | grep -A2 RealSense | grep Serial
+```
+
+That also answers whether two D405s can be told apart by either number.
+
+### 28.6 ⭐⭐ The way around it is still the better plan
+
+What librealsense was wanted for, and how much each part actually depends on it:
+
+| wanted | depends on librealsense? | how much we care |
+|---|---|---|
+| depth | yes | ⚠️ optional. Most image-based policies use colour only |
+| lens numbers (intrinsics) | yes | only needed to convert a pixel into a direction in 3D |
+| exposure and gain control | yes | nice to have |
+| **telling two identical D405s apart** | ⛔ **this was the one that mattered** | see below |
+
+⭐ **The last one has a solution that needs no SDK, and this repo already invented it for exactly the same problem.** The two SpaceMice report **empty serial numbers**, so they cannot be selected by identity; they are assigned by asking the operator to move the one they want (`pick_device_by_wiggle`, `src/spacemouse.py`). Two D405s cannot be told apart by capability, because they support identical capture modes ([§22](FINDINGS.md)). So assign them the same way: **make one camera's picture change and see which index changes.**
+
+1. ⭐ **Version 1, no arm, no risk:** ask the operator to wave a hand in front of one camera. Roughly three seconds, and it is the same interaction he already knows from the pucks.
+2. **Version 2, automatic:** command a small, bounded wrist twist on one arm and see which camera's image moves. ⚠️ It moves a motor, so it is Julien's to run under working-contract rule 1, and the motion must be tiny.
+
+⭐ **This is a better answer than a serial lookup, for the reason [§0](FINDINGS.md) keeps restating.** A serial tells you *which camera this is*. What the code actually needs to know is *which arm this camera is bolted to*, and no serial can answer that: swap the two brackets and every serial-based mapping is silently wrong while every value still looks plausible. The wiggle measures the thing we care about.
+
+---
+
+## 29. ⭐ The terminal camera view shrinks itself and can never grow back — 2026-08-12
+
+Julien, on two screenshots taken minutes apart: *"they get worse over time, which is a bit weird… it has the highest quality when I use it for FaceTime or something. It just lowers for the terminal for some reason."*
+
+⭐ **The camera is fine and nothing is degrading.** The terminal renderer is shrinking the picture deliberately, and then cannot climb back out. It is a one-way ratchet, which is exactly what "gets worse over time" feels like from outside.
+
+### The arithmetic, from his own two screenshots
+
+The controller in `run_terminal` ([`scripts/camera_view.py`](../scripts/camera_view.py)) measures its own draw cost every 0.4 s and adjusts the width it sends:
+
+- `target` = half the frame interval = `0.5 × 1000/30` = **16.7 ms**
+- `draw > 16.7 ms` → shrink, `× 0.85`
+- `draw < 0.6 × 16.7 = 10 ms` → grow, `× 1.15`
+- anything between 10 and 16.7 ms → **do nothing**
+
+His screenshots: `sent 520x292` at `draw 13.3 ms`, and later `sent 442x249` at `draw 10.5 ms`.
+
+⭐ **`520 × 0.85 = 442.0` exactly.** So precisely one shrink step happened. And at 442 the draw cost is 10.5 ms, which sits **inside the dead band and above the 10 ms grow threshold** — so it can never climb back.
+
+⛔ **Every width whose draw cost lands between 10 and 16.7 ms is a fixed point.** One transient hiccup (another app waking, a thermal blip, a scroll) knocks it down a step, and it stays there for the rest of the session. The dead band was added to stop oscillation and it also removed every path back up.
+
+### Why FaceTime looks better, and it is not the camera
+
+FaceTime draws pixels onto the screen. The terminal path has to encode **every frame as a PNG** and write it into the terminal. Ghostty implements only the kitty protocol, and that protocol has **no JPEG at all** ([§21.4](FINDINGS.md)); PNG of a photograph costs roughly 25× the encode time and 20× the bytes of a JPEG. So the terminal is the ceiling here, permanently.
+
+⭐ **Immediate workaround, and it costs nothing:** drop `--term` and use the window.
+
+```bash
+uv run scripts/camera_view.py --camera d405 --big
+```
+
+### The fix, written down and NOT applied
+
+⚠️ Julien deprioritised it (*"not that relevant, though, because I can still see everything… we can think about that later"*), so this is a ready recipe rather than a change:
+
+1. **Shrink only after two consecutive over-target readings**, so a single hiccup cannot move it. This is the part that removes the ratchet.
+2. **Raise the grow threshold** from `0.6 × target` to about `0.85 × target`, so the dead band is narrow and recovery actually happens.
+3. **Reduce both step sizes** (say `× 0.93` down and `× 1.06` up) so the residual oscillation is too small to see.
+
+⚠️ Also visible in his screenshots and already warned about on screen: capture is `1280x720` while only ~450 px is sent. Shrinking the *capture* would cut the resize cost and might on its own let the controller climb.
