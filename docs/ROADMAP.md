@@ -198,6 +198,29 @@ re-collected, which is hours of a human's time rather than minutes of a computer
 Log everything from the start — SpaceMouse input, resulting EE pose, **and** the IK-produced joint angles —
 so the action space can be chosen per experiment without re-collecting (Setup-Plan §4.3).
 
+### ⭐ No, this does not mean running ROS2 — the question, answered once
+
+**There is no middleware anywhere in this system, and none is needed.** Julien asked on 2026-08-12; the answer
+is worth writing down because it will be asked again, especially by anyone coming from `Hohnik/LaRobot`, which
+targets Ubuntu.
+
+- **The transport is direct USB CAN.** `python-can` with the **`gs_usb`** (candleLight) backend over libusb,
+  in **one process** that talks straight to the motors at 100 Hz. No ROS2, no DDS, no ZeroMQ, no gRPC, no
+  sockets. Verified by search: no `rclpy`, `rospy`, `zmq` or equivalent in `src/`, `scripts/` or the vendored
+  I2RT SDK.
+- **The only ROS2 that appears anywhere is a set of schema NAMES**, inside `third_party/i2rt/i2rt/utils/
+  recording.py`: `sensor_msgs/msg/JointState` and `sensor_msgs/msg/Temperature`. ⭐ **MCAP is a file format,
+  and ROS2 message definitions are being used as a serialisation schema inside it.** Writing a file that
+  *describes* its records with ROS2 message definitions requires no ROS2 installation, no node, no bus and no
+  running graph — which is why `mcap-ros2-support` is a dependency and `rclpy` is not.
+- ⚠️ **So the interop point with ABC is a FILE, not a bus.** That is a good thing and it should stay that
+  way: a middleware would add latency and failure modes to a 100 Hz loop that currently has ~3.7 ms of spare
+  budget, in exchange for nothing this rig needs. Everything runs on one machine.
+
+⚠️ Declared in `pyproject.toml` but **not imported by our code yet**: `mcap`, `mcap-ros2-support`, `dm-env`,
+`tyro`, `pydantic`. They arrived with the I2RT SDK and with this step's plan. That is fine, but it means
+their presence is *not* evidence that anything uses them — check before assuming.
+
 ---
 
 ## Step 6 — Two arms, two SpaceMice ⭐ **what Julien asked for next, 2026-08-10**
