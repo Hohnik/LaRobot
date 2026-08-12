@@ -78,6 +78,7 @@ import argparse
 import json
 import signal
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -114,6 +115,7 @@ from yam_robot import (  # noqa: E402
     build_robot,
     motor_temperatures,
     park_target_from,
+    park_verdict,
     shutdown_robot,
 )
 
@@ -137,6 +139,14 @@ PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
 # Judged on the MEASURED pose, so it must allow for a position controller's
 # steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
 PARK_TOLERANCE = 0.02
+# ⭐ "Close enough that what is left is the controller, not an obstruction."
+# MEASURED on hardware 2026-08-12: the same arm parking to the same pose reported
+# 0.020 rad off (pass) and 0.021 rad off (stall) in consecutive sessions, because a
+# position-controlled arm settles a fraction of a degree short under its own weight.
+# 0.02 rad sits ON that noise floor rather than above it. See yam_robot.park_verdict:
+# the answer is not a bigger tolerance — it is a second threshold, so that stopping
+# CLOSE is success while stopping FAR is still an obstruction.
+PARK_SETTLED = 0.06        # rad, 3.4°
 # If the measured error stops improving for this long, PARK says so and holds,
 # rather than printing a number that is not changing. That silence is precisely how
 # the treadmill bug survived two sessions.
@@ -242,6 +252,44 @@ def chain_alive(robot) -> bool:  # noqa: ANN001
     return bool(getattr(chain, "running", False))
 
 
+_SHUTTING_DOWN = {"yes": False}
+
+
+def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
+    """Silence ONE known, expected traceback — and only while we are shutting down.
+
+    ⛔ The noise this removes. Every clean exit printed:
+
+        Exception in thread robot_server:
+        RuntimeError: … motor_chain_robot's motor chain is not running, exiting the
+        robot server
+
+    …immediately before `motors confirmed disabled: [1, 2, 3, 4, 5, 6, 7]`. It is the
+    I2RT SDK's background server thread noticing the chain has stopped — **because we
+    stopped it**. Nothing is wrong, and the shutdown it appears to indict has in fact
+    succeeded.
+
+    ⚠️ Why bother, when it is harmless? Because a scary traceback printed on every
+    successful exit is a training exercise in ignoring tracebacks, and this project
+    depends on people reading the ones that matter. FINDINGS §0 is a catalogue of
+    failures that looked calm; the inverse — a success that looks like a failure — has
+    the same cost, paid in attention.
+
+    ⛔ Deliberately narrow, because blanket exception-swallowing is the other half of
+    that catalogue: it fires only during our own shutdown, only for that thread, only
+    for `RuntimeError`, and only for that message. Anything else goes to the real hook
+    and prints in full.
+    """
+    if (_SHUTTING_DOWN["yes"]
+            and getattr(args, "thread", None) is not None
+            and args.thread.name == "robot_server"
+            and args.exc_type is RuntimeError
+            and "motor chain is not running" in str(args.exc_value)):
+        print("  (the SDK's robot_server thread exited because we stopped the chain — expected)")
+        return
+    threading.__excepthook__(args)
+
+
 def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
     """Drive to the park pose, **blocking**, and say how it ended.
 
@@ -266,6 +314,12 @@ def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
     cmd = np.asarray(robot.get_joint_pos(), dtype=float)
     best = float(np.max(np.abs(tgt - cmd)))
     last_progress = time.perf_counter()
+    # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean
+    # a key pressed *at* the moving arm, not one left over from teleop or from the
+    # menu that led here. Julien saw a park announce itself and stop in the same
+    # breath — the stale keystroke that cancelled it had been typed seconds earlier,
+    # and with the KeyReader buffering bug it could have been typed long before that.
+    keys.drain()
     print(f"\n⭐ PARKING to {np.round(np.asarray(tgt)[:N_ARM], 2)} — any key stops it.\n")
     while True:
         now = time.perf_counter()
@@ -274,12 +328,18 @@ def park_and_wait(robot, keys, park, clamp_gripper) -> str:  # noqa: ANN001
             return "dead"
         meas = np.asarray(robot.get_joint_pos(), dtype=float)
         err = float(np.max(np.abs(tgt - meas)))
-        if err < PARK_TOLERANCE:
+        verdict = park_verdict(err, now - last_progress > PARK_STALL_SECONDS,
+                               PARK_TOLERANCE, PARK_SETTLED)
+        if verdict == "arrived":
             print(f"\n⭐ PARKED ({err:.3f} rad off).")
             return "arrived"
-        if now - last_progress > PARK_STALL_SECONDS:
-            print(f"\n⛔ PARK STALLED — {err:.3f} rad still to go and no progress for "
-                  f"{PARK_STALL_SECONDS:.0f}s. Something is blocking it, or the pose "
+        if verdict == "settled":
+            print(f"\n⭐ PARKED ({err:.3f} rad off — as close as the arm holds itself; "
+                  f"the last fraction of a degree is the controller settling under load).")
+            return "arrived"
+        if verdict == "blocked":
+            print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no progress for "
+                  f"{PARK_STALL_SECONDS:.0f}s. Something is in the way, or the pose "
                   "is unreachable.")
             return "stalled"
         if keys.get() is not None:
@@ -322,6 +382,7 @@ def main() -> int:  # noqa: PLR0915
     # currently and cannot be twisted". It was off for the first hardware run
     # because a wrong rotation sign swings the wrist while a wrong translation
     # sign only nudges — that caution has served its purpose.
+    threading.excepthook = _quiet_expected_server_exit
     rotation = not args.no_rotation
     control_frame = args.frame
     # ⛔ The store decides WHICH map this arm uses — its own override if it has one,
@@ -1028,16 +1089,23 @@ def main() -> int:  # noqa: PLR0915
                     # command — the command always arrives first, so testing it would
                     # declare success while the arm was still travelling.
                     err = float(np.max(np.abs(park_target - q)))
-                    if err < PARK_TOLERANCE:
+                    # ⭐ Same verdict as the blocking park — one rule, two schedulers.
+                    # Before this, the two paths could disagree about the same arm at
+                    # the same pose, which is exactly what happened at 0.020 vs 0.021.
+                    leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
+                                       PARK_TOLERANCE, PARK_SETTLED)
+                    if leg in ("arrived", "settled"):
                         mode = "hold"; enter_hold()
-                        print(f"\n⭐ PARK reached ({err:.3f} rad off) → HOLD\n")
-                    elif t - park_progress_t > PARK_STALL_SECONDS:
+                        extra = ("" if leg == "arrived" else
+                                 " — as close as the arm holds itself under load")
+                        print(f"\n⭐ PARK reached ({err:.3f} rad off{extra}) → HOLD\n")
+                    elif leg == "blocked":
                         # ⛔ Never spin silently. If the arm has stopped closing the gap
                         # the honest thing is to say so and hold, not to keep printing a
                         # number that is not changing — which is exactly how the old
                         # treadmill bug hid for two sessions.
                         mode = "hold"; enter_hold()
-                        print(f"\n⛔ PARK STALLED — {err:.3f} rad still to go and no progress "
+                        print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no progress "
                               f"for {PARK_STALL_SECONDS:.0f}s.")
                         print(f"   The command ran {float(np.max(np.abs(park_cmd - q))):.3f} rad ahead of "
                               f"the arm; SafeRobot limited {getattr(robot, 'limited_cycles', 0)} cycles.")
@@ -1229,6 +1297,7 @@ def main() -> int:  # noqa: PLR0915
             except Exception as exc:  # noqa: BLE001
                 print(f"\n⚠️  could not save the axis map: {type(exc).__name__}: {exc}")
         if robot is not None:
+            _SHUTTING_DOWN["yes"] = True
             disabled = shutdown_robot(robot)
             print(f"\nmotors confirmed disabled: {disabled}")
 

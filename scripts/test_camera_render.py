@@ -505,7 +505,7 @@ def test_a_camera_can_be_selected_by_name() -> None:
         identified, _ = C.identify_indices(FAKE_NAMES)
     for spec, want_index in (("d405", 1), ("realsense", 1), ("c920", 0),
                              ("iphone", 3), ("builtin", 2), ("8086:0b5b", 1)):
-        idx, cam = C.resolve_camera(spec, FAKE_NAMES, identified)
+        idx, cam, _ = C.resolve_camera(spec, FAKE_NAMES, identified)
         assert idx == want_index, f"{spec!r} resolved to {idx}, expected {want_index}"
         assert cam is not None
 
@@ -589,7 +589,7 @@ def test_finding_one_camera_asks_only_about_that_camera() -> None:
     c920 = FAKE_NAMES[2]
     others = [c for c in FAKE_NAMES if c is not c920]
     with FakeHints(), CountingBus(FAKE_WIRING) as bus:
-        idx, notes = C.find_camera_index(c920, others)
+        idx, notes, cap = C.find_camera_index(c920, others)
     assert idx == 0, f"{notes}"
     assert bus.opens == [0], f"opened {bus.opens} — it should have stopped at the first hit"
 
@@ -601,7 +601,7 @@ def test_a_remembered_index_is_tried_first_and_still_verified() -> None:
     macbook = FAKE_NAMES[0]
     others = [c for c in FAKE_NAMES if c is not macbook]
     with FakeHints({macbook.unique_id: 2}), CountingBus(FAKE_WIRING) as bus:
-        idx, _ = C.find_camera_index(macbook, others)
+        idx, _, cap = C.find_camera_index(macbook, others)
     assert idx == 2
     assert bus.opens == [2], "a correct hint should mean exactly one open"
 
@@ -613,7 +613,7 @@ def test_a_WRONG_remembered_index_is_caught_not_trusted() -> None:
     c920 = FAKE_NAMES[2]
     others = [c for c in FAKE_NAMES if c is not c920]
     with FakeHints({c920.unique_id: 3}), CountingBus(FAKE_WIRING) as bus:
-        idx, _ = C.find_camera_index(c920, others)
+        idx, _, cap = C.find_camera_index(c920, others)
     assert idx == 0, "a stale hint must not win"
     assert bus.opens[0] == 3, "the hint should still have been tried first"
 
@@ -635,7 +635,7 @@ def test_two_identical_cameras_are_refused_before_anything_is_opened() -> None:
     twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
                        "UVC Camera VendorID_32902 ProductID_2907", "0xTWIN", D405_MODES)
     with FakeHints(), CountingBus(FAKE_WIRING) as bus:
-        idx, notes = C.find_camera_index(FAKE_NAMES[1], [twin])
+        idx, notes, cap = C.find_camera_index(FAKE_NAMES[1], [twin])
     assert idx is None
     assert bus.opens == [], "it must refuse without touching a camera"
     assert any("shares every capture mode" in n for n in notes), notes

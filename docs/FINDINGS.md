@@ -1552,7 +1552,110 @@ empty USB list, and it appeared here in the code written to diagnose exactly thi
 of problem. Fixed by giving the test image an id; "no reply" now says plainly that it
 proves nothing and asks the operator to look at the screen.
 
-⚠️ **Still unanswered:** whether Ghostty draws the **iTerm2** inline image. If it does,
+⚠️ **Still unanswered:** whether Ghostty draws the **iTerm2** inline image.
+
+---
+
+## 26. ⛔⭐ The key reader was swallowing keys — including the ones that stop the arm
+
+**2026-08-12, found by chasing something else entirely.** Julien reported that after a
+park stalled, the session *"kind of went back into a mode"*. It had, and the cause was
+not in the park.
+
+### The defect
+
+`KeyReader.get()` did this:
+
+```python
+if select.select([sys.stdin], [], [], 0)[0]:
+    return sys.stdin.read(1)
+```
+
+**Those two lines do not see the same thing.** `sys.stdin` is a `TextIOWrapper` over a
+`BufferedReader`: `read(1)` returns one character, but the buffer underneath first pulls
+**everything available** off the file descriptor. `select()` then asks the *descriptor*
+whether data is waiting, the descriptor says no — and the remaining keys sit in Python's
+buffer, invisible, until the next keystroke happens to arrive and flushes them out.
+
+**Reproduced on a pty:**
+
+```
+keys typed:      pgh
+first  drain(): ['p']
+second drain(): []
+```
+
+`drain()`'s own docstring promises *"every pending keypress"*. It returned one of three
+and lost the rest.
+
+### Why this one matters more than a dropped keystroke usually would
+
+These keys are **`h` for HOLD**, **`q` for the quit-and-consent flow**, and **"any key"
+to stop a park while the arm is moving.** ⛔ **A burst of keys is exactly what a person
+produces when they want the arm to stop**, and a burst was precisely the broken case.
+
+It also explains the reported symptom directly: a swallowed key surfaces later, next to
+input that had nothing to do with it, so a mode appears to change by itself. In his log a
+park announced itself and reported `park stopped.` in the same breath — cancelled by a
+keystroke typed seconds earlier, for something else.
+
+**Fixed** by reading the descriptor with `os.read(fd, 1)`, so `select` and the read are
+talking about the same buffer. `scripts/test_keyboard.py` covers it on a **real pty** —
+6 tests — because the bug lived in the seam between two real objects and a mocked stdin
+would have passed while the arm still ate keystrokes.
+
+⚠️ **The same defect was in `--term-test`**, and it is how that command reported
+`⛔ ERROR` about a terminal that had answered correctly: it read a single `\x1b` of a
+longer reply and judged the rest missing. Same fix.
+
+⭐ **The general lesson, and it is not really about terminals:** `select()` answers
+questions about a *file descriptor*, and every buffered reader layered on top of one
+holds data the descriptor no longer knows about. Mixing the two is a silent data-loss
+bug in any language. Ask both questions of the same object.
+
+### 26.1 The park stall was a knife edge, not a fault
+
+Same session, two consecutive runs, same arm and same pose:
+
+```
+⭐ PARK reached (0.020 rad off) → HOLD        # interleaved park
+⛔ PARK STALLED — 0.021 rad still to go       # Ctrl-C park, next session
+```
+
+`PARK_TOLERANCE` is **0.02**. The arm was landing either side of the threshold by a
+thousandth of a radian — and that is not a fault, it is **the noise floor**. A
+position-controlled arm holding itself against gravity settles where its stiffness
+balances the load, a fraction of a degree short of the commanded pose.
+`park_target_from`'s own comment said so all along: *"it must allow for a position
+controller's steady-state error."* 0.02 rad (1.1°) turned out to sit **on** that error
+rather than safely above it.
+
+⭐ **The fix is not a bigger number.** Loosening the tolerance would also make a
+genuinely obstructed arm look parked — and the obstruction might be a hand. What
+separates the two cases is **how far away it stopped**:
+
+| stopped improving, and | verdict | why |
+|---|---|---|
+| **close** (< 0.06 rad) | `settled` — success | the remaining error is the controller, not an obstacle |
+| **far** | `blocked` — hold and ask | something is in the way, or the pose is unreachable |
+
+One threshold was doing two jobs; it is now two thresholds doing one each
+(`park_verdict()`, pure, 5 tests). Both park paths — the interleaved one and the
+blocking one — now share the single rule, so they can no longer disagree about the same
+arm at the same pose.
+
+### 26.2 Two smaller things from the same log
+
+- **A park could be cancelled by a keystroke typed before it started.** "Any key stops
+  it" must mean a key pressed *at the moving arm*, not one left over from teleop or from
+  the menu that led there. Both park paths now drain stale input first.
+- **Every clean exit printed a traceback.** The SDK's `robot_server` thread raises
+  `motor chain is not running` when we stop the chain — i.e. on success, immediately
+  before `motors confirmed disabled`. ⚠️ Harmless, and worth removing anyway: a scary
+  traceback on every successful exit is a training exercise in ignoring tracebacks, and
+  this project depends on people reading the ones that matter. Suppressed **narrowly** —
+  only during our own shutdown, only that thread, only that exception, only that
+  message; anything else prints in full. If it does,
 that protocol carries JPEG — ~25× cheaper in time and ~30× in bytes than the PNG the
 kitty protocol forces — and the sharpness ceiling roughly doubles for free. One look at
 the screen settles it.

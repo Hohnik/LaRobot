@@ -27,6 +27,7 @@ from yam_robot import (  # noqa: E402
     advance_park_command,
     park_slots,
     park_target_from,
+    park_verdict,
     with_park_slot,
 )
 
@@ -183,6 +184,50 @@ def test_advance_does_not_run_away_from_an_arm_that_follows() -> None:
 
 def test_advance_handles_an_already_reached_target() -> None:
     assert np.allclose(advance_park_command([1.0, 2.0], [1.0, 2.0], 0.1), [1.0, 2.0])
+
+
+# ------------------------------------------- when is a park finished? ----
+
+TOL, SETTLED = 0.02, 0.06
+
+
+def test_the_exact_knife_edge_seen_on_hardware() -> None:
+    """⛔⭐ THE REGRESSION, with the real numbers. Two consecutive sessions on the
+    same arm and the same pose: 0.020 rad reported "PARK reached", 0.021 reported
+    "PARK STALLED". The tolerance is 0.02 — the arm was landing either side of it by
+    a thousandth of a radian, which is the controller's steady-state error, not a
+    fault. Both must now finish."""
+    assert park_verdict(0.020, True, TOL, SETTLED) == "settled"
+    assert park_verdict(0.021, True, TOL, SETTLED) == "settled"
+    assert park_verdict(0.019, False, TOL, SETTLED) == "arrived"
+
+
+def test_still_closing_the_gap_is_not_a_verdict_yet() -> None:
+    assert park_verdict(0.5, False, TOL, SETTLED) == "moving"
+    assert park_verdict(0.03, False, TOL, SETTLED) == "moving"
+
+
+def test_stopping_FAR_from_the_target_is_still_blocked() -> None:
+    """⛔ The case that must not be softened away. Loosening the tolerance would have
+    made an obstructed arm look parked — and the obstruction might be a hand."""
+    assert park_verdict(0.2, True, TOL, SETTLED) == "blocked"
+    assert park_verdict(SETTLED, True, TOL, SETTLED) == "blocked", "the band is exclusive"
+
+
+def test_arrival_does_not_depend_on_having_stopped() -> None:
+    """Reaching the pose while still moving is arrival, not a stall."""
+    assert park_verdict(0.001, False, TOL, SETTLED) == "arrived"
+    assert park_verdict(0.001, True, TOL, SETTLED) == "arrived"
+
+
+def test_the_two_thresholds_each_do_one_job() -> None:
+    """The whole point of splitting them: one threshold was deciding both "close
+    enough to stop" and "close enough to trust", and those are different questions."""
+    assert SETTLED > TOL, "the settled band must be looser than clean arrival"
+    for err in (0.021, 0.03, 0.05):
+        assert park_verdict(err, True, TOL, SETTLED) == "settled"
+        assert park_verdict(err, False, TOL, SETTLED) == "moving", (
+            "the same error means 'keep going' while progress is still being made")
 
 
 # --------------------------------------------------- saved pose slots ----

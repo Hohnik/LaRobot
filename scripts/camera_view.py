@@ -570,11 +570,12 @@ def find_camera_index(cam: MacCamera, others: list[MacCamera],
     if mode is None:
         return None, [f"⛔ {cam.short} shares every capture mode with another camera, so "
                       "it cannot be identified by measurement. Use --index, and confirm "
-                      "by covering one of them."]
+                      "by covering one of them."], None
     want_w, want_h = mode
     hint = _load_hints().get(cam.unique_id)
     order = ([hint] if hint is not None else []) + [i for i in range(limit) if i != hint]
 
+    started = time.perf_counter()
     for idx in order:
         cap = cv2.VideoCapture(idx)
         if not cap.isOpened():
@@ -583,19 +584,23 @@ def find_camera_index(cam: MacCamera, others: list[MacCamera],
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, want_w)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, want_h)
         got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        cap.release()
         if got == (want_w, want_h):
-            if idx == hint:
-                notes.append(f"✅ {cam.short} is on index {idx}, where it was last time "
-                             f"(confirmed by asking it for {want_w}x{want_h}).")
-            else:
-                notes.append(f"✅ {cam.short} found on index {idx} — it answered "
-                             f"{want_w}x{want_h}, which only it offers.")
+            took = time.perf_counter() - started
+            where = ("where it was last time" if idx == hint
+                     else f"which only it offers (the hint said {hint})" if hint is not None
+                     else "which only it offers")
+            notes.append(f"✅ {cam.short} is index {idx} — it answered {want_w}x{want_h}, "
+                         f"{where}. {took:.1f}s.")
             _save_hint(cam.unique_id, idx)
-            return idx, notes
+            # ⭐ HANDED BACK STILL OPEN. Opening a camera on macOS costs seconds, and
+            # this one is already open and already the right device — releasing it so
+            # the caller can open the same index again was pure waste, and it was a
+            # measurable part of the startup delay Julien reported.
+            return idx, notes, cap
+        cap.release()
     notes.append(f"⛔ no index delivered {want_w}x{want_h}, so {cam.short} is not "
                  "openable right now. Continuity cameras drop off when the phone sleeps.")
-    return None, notes
+    return None, notes, None
 
 
 # Words worth accepting that do not appear in the macOS name string. `d405` is the
@@ -634,8 +639,8 @@ def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
             identified, _ = identify_indices(cams)
         for got_idx, cam in identified:
             if got_idx == idx:
-                return idx, cam
-        return idx, None
+                return idx, cam, None
+        return idx, None, None
 
     want = _normalise(spec)
     want = _normalise(ALIASES.get(want, want)) if want in ALIASES else want
@@ -656,20 +661,20 @@ def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
     if identified is not None:
         for idx, got in identified:
             if got is not None and got.unique_id == cam.unique_id:
-                return idx, cam
+                return idx, cam, None
         raise CameraLookupError(
             f"macOS lists {cam.short}, but no index answered for it.\n"
             "  Run --list to see what each index actually shows, then use --index N.")
 
     others = [c for c in cams if c.unique_id != cam.unique_id]
-    idx, notes = find_camera_index(cam, others)
+    idx, notes, cap = find_camera_index(cam, others)
     for note in notes:
         print(f"  {note}")
     if idx is None:
         raise CameraLookupError(
             f"could not find {cam.short} on any camera index.\n"
             "  Run --list to see what each index actually shows, then use --index N.")
-    return idx, cam
+    return idx, cam, cap
 
 
 def list_cameras() -> None:
@@ -761,10 +766,14 @@ def probe_modes(index: int, secs: float = 2.5) -> None:
     print("  request and resolution is your only lever — which is why the default is 640x480.")
 
 
-def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
-    cap = cv2.VideoCapture(index)
-    if not cap.isOpened():
-        return None
+def configure_camera(cap, width: int, height: int, fps: int):  # noqa: ANN001, ANN201
+    """Apply the capture settings to an already-open handle.
+
+    ⭐ Split out of `open_camera` so an identification probe can hand its handle
+    straight to the viewer. **Opening a camera on macOS is the expensive step** —
+    seconds, not milliseconds — and doing it once to ask "who are you?" and again to
+    actually watch was most of the startup delay Julien measured.
+    """
     # ⭐ MJPG first, THEN the resolution. Setting size before the codec leaves the
     # C920 in uncompressed YUY2, where 1080p does not fit in the USB bandwidth and
     # drops to a few fps — which reads as "lag" but is a bandwidth problem.
@@ -784,6 +793,15 @@ def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
     except Exception:  # noqa: BLE001, S110
         pass
     return cap
+
+
+def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
+    """Open a camera index and configure it. None if it will not open."""
+    cap = cv2.VideoCapture(index)
+    if not cap.isOpened():
+        cap.release()
+        return None
+    return configure_camera(cap, width, height, fps)
 
 
 class FrameGrabber:
@@ -1270,11 +1288,20 @@ def term_test(cols: int = 40, rows: int = 12) -> int:
         # rewritten to avoid — this time in the diagnostic itself.
         sys.stdout.write(render_kitty(bars("KITTY"), cols, rows, quiet=False, image_id=771))
         sys.stdout.flush()
+        # ⛔⭐ READ THE DESCRIPTOR, NOT `sys.stdin`. This had the same defect as
+        # KeyReader: `select()` asks the file descriptor whether bytes are waiting
+        # while `sys.stdin.read(1)` pulls them into Python's own buffer, where the
+        # descriptor cannot see them. The visible result on 2026-08-12 was a reply of
+        # exactly `'\x1b'` — one byte of a longer answer — which this then reported as
+        # **"⛔ ERROR"** about a terminal that had answered perfectly well.
         reply = ""
         deadline = time.time() + 2.0
         while time.time() < deadline:
-            if select.select([sys.stdin], [], [], 0.05)[0]:
-                reply += sys.stdin.read(1)
+            if select.select([fd], [], [], 0.05)[0]:
+                chunk = os.read(fd, 256)
+                if not chunk:
+                    break
+                reply += chunk.decode("utf-8", errors="replace")
                 if reply.endswith("\x1b\\"):
                     break
         # ⭐ And now the OTHER protocol. It is worth knowing whether this terminal
@@ -1350,7 +1377,9 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
         print("  ⚠️ Block mode is one character cell per pixel — that is the medium's")
         print("     limit, not a bug. If your terminal does support images, force it:")
         print("     --term-mode iterm   or   --term-mode kitty     (b cycles them live)")
-    time.sleep(1.2)
+    # Long enough to read the two lines above, short enough not to be a third of the
+    # startup delay. Opening the camera already costs seconds on macOS.
+    time.sleep(0.6)
     scale = min(1.0, max(0.1, args.scale))
 
     grab = FrameGrabber(cap)
@@ -1629,10 +1658,10 @@ def main() -> int:
     # act on the camera that was asked for. Resolution refuses rather than guessing,
     # and it prints what it chose: FINDINGS §0 #5 is about an adapter picked by index
     # that silently drove the other robot.
-    label, chosen = "", None
+    label, chosen, ready = "", None, None
     if args.camera:
         try:
-            args.index, chosen = resolve_camera(args.camera)
+            args.index, chosen, ready = resolve_camera(args.camera)
         except CameraLookupError as exc:
             print(f"⛔ {exc}")
             return 1
@@ -1649,14 +1678,21 @@ def main() -> int:
         probe_modes(args.index)
         return 0
 
-    cap = open_camera(args.index, args.width, args.height, args.fps)
+    # ⭐ Reuse the handle the identification already opened — see find_camera_index.
+    t_open = time.perf_counter()
+    if ready is not None:
+        cap = configure_camera(ready, args.width, args.height, args.fps)
+    else:
+        cap = open_camera(args.index, args.width, args.height, args.fps)
     if cap is None:
         print(f"⛔ could not open camera index {args.index}. Try:  --list")
         return 1
 
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"camera {args.index}: {w}x{h}, requested {args.fps} fps, MJPG")
+    print(f"camera {args.index}: {w}x{h}, requested {args.fps} fps, MJPG"
+          f"  ({'reused the probe handle' if ready is not None else 'opened'} in "
+          f"{time.perf_counter() - t_open:.1f}s)")
 
     if args.measure:
         # ⚠️ Runs through FrameGrabber, the same class the viewer uses. The previous

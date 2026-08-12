@@ -291,6 +291,44 @@ def park_target_from(
     return target, warning
 
 
+def park_verdict(err: float, stopped_improving: bool, tolerance: float,
+                 settled_band: float) -> str:
+    """`"arrived"` · `"settled"` · `"blocked"` · `"moving"` — has the park finished?
+
+    ⛔⭐ THE KNIFE EDGE THIS REMOVES, seen on hardware 2026-08-12. In one session the
+    interleaved park reported **"PARK reached (0.020 rad off)"** and in the next the
+    Ctrl-C park reported **"PARK STALLED — 0.021 rad still to go"**. Same arm, same
+    pose, same code — and `PARK_TOLERANCE` is **0.02**. The arm was landing either
+    side of the threshold by a thousandth of a radian.
+
+    **That is not a fault, it is the noise floor.** A position-controlled arm holding
+    itself against gravity has a steady-state error: the controller settles where its
+    stiffness balances the load, a fraction of a degree short of the commanded pose.
+    `park_target_from`'s own comment says so — *"it must allow for a position
+    controller's steady-state error"* — and 0.02 rad (1.1°) turns out to sit right at
+    it rather than safely above it.
+
+    ⭐ **The fix is not a bigger number.** Simply loosening the tolerance would also
+    make a genuinely obstructed arm look parked. What actually separates the two
+    cases is **how far away it stopped**:
+
+    - stopped improving and *close* → the controller has arrived as near as it can.
+      That is `"settled"`, and it is a success.
+    - stopped improving and *far* → something is in the way, or the pose is
+      unreachable. That is `"blocked"`, and it must never be treated as arrival —
+      it is the case that protects a hand or a clamp in the arm's path.
+
+    So the threshold that was doing two jobs is split into two thresholds, each doing
+    one. `tolerance` means "arrived cleanly"; `settled_band` means "close enough that
+    the remaining error is the controller, not an obstruction".
+    """
+    if err < tolerance:
+        return "arrived"
+    if not stopped_improving:
+        return "moving"
+    return "settled" if err < settled_band else "blocked"
+
+
 def park_slots(data: dict, arm: str) -> dict[str, list]:
     """Every saved pose for `arm`, keyed by slot name.
 
