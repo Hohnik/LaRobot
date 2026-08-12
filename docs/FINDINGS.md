@@ -1,11 +1,8 @@
 # Findings — everything learned about this rig, and how
 
-> **Purpose.** `README.md` says what is true now; `ROADMAP.md` says what to do next and why.
-> **This file is the latent knowledge** — the things that were expensive to learn, that no file records
-> implicitly, and that a fresh agent would otherwise re-derive at cost or, worse, get wrong the same way.
+> **Purpose.** `README.md` says what is true now; `ROADMAP.md` says what to do next and why. **This file is the latent knowledge** — the things that were expensive to learn, that no file records implicitly, and that a fresh agent would otherwise re-derive at cost or, worse, get wrong the same way.
 >
-> Everything here was **measured on the real hardware on 2026-08-10** unless it says otherwise.
-> Where a number appears, it is a number that was actually read off the arm.
+> Everything here was **measured on the real hardware on 2026-08-10** unless it says otherwise. Where a number appears, it is a number that was actually read off the arm.
 
 ---
 
@@ -13,8 +10,7 @@
 
 > ### ⛔ **This stack fails by lying, not by crashing.**
 
-Nine separate defects in one day produced **confident, plausible, wrong answers** and **not one raised an
-exception**:
+Nine separate defects in one day produced **confident, plausible, wrong answers** and **not one raised an exception**:
 
 | # | The lie | What it looked like |
 |---|---|---|
@@ -28,28 +24,22 @@ exception**:
 | 8 | `MotorChainRobot.close()` | prints *"all torques set to zero"* — it sets none |
 | 9 | Control thread dies silently | the loop kept commanding a corpse for **64 seconds**, printing healthy numbers |
 
-**Practical rule: check values for plausibility, not merely for the absence of an exception.
-And prefer a test that could falsify the claim over one that merely agrees with it.** #6 was only settled by
-finding a measurement (per-unit `inertia`) that would have *differed* if the claim were wrong.
+**Practical rule: check values for plausibility, not merely for the absence of an exception. And prefer a test that could falsify the claim over one that merely agrees with it.** #6 was only settled by finding a measurement (per-unit `inertia`) that would have *differed* if the claim were wrong.
 
 ---
 
 ## 1. The hardware, as measured
 
-**Two YAM arms, each with its own CANable adapter on its own CAN bus.** Both use motor IDs **1-7**, so
-**nothing inside a CAN frame distinguishes the arms.** The adapter serial is the only discriminator.
+**Two YAM arms, each with its own CANable adapter on its own CAN bus.** Both use motor IDs **1-7**, so **nothing inside a CAN frame distinguishes the arms.** The adapter serial is the only discriminator.
 
 | | serial | notes |
 |---|---|---|
 | `B` | `2081337C594E5018` | everything up to ~11:00 was this one |
 | `G` | `20593383594E5018` | plugged in mid-session; **its adapter enumerated FIRST** |
 
-⛔ **Never select the adapter by index.** `chain_channel('B')` returned `gsusb1` at 10:58 and `gsusb0` at
-11:45 — **the enumeration order changed twice within one session.** `src/yam_can.py` resolves by serial and
-re-verifies after opening.
+⛔ **Never select the adapter by index.** `chain_channel('B')` returned `gsusb1` at 10:58 and `gsusb0` at 11:45 — **the enumeration order changed twice within one session.** `src/yam_can.py` resolves by serial and re-verifies after opening.
 
-**Proof the two arms are genuinely distinct** (not one arm read twice): `inertia` is per-unit calibration data
-burned into each motor. All seven differ between the arms — e.g. joint 1: `1.7169109e-05` vs `1.6964389e-05`.
+**Proof the two arms are genuinely distinct** (not one arm read twice): `inertia` is per-unit calibration data burned into each motor. All seven differ between the arms — e.g. joint 1: `1.7169109e-05` vs `1.6964389e-05`.
 
 ### Motors and joints
 
@@ -63,23 +53,15 @@ burned into each motor. All seven differ between the arms — e.g. joint 1: `1.7
 | 6 | `gripper_twist` | DM4310 | −2.0944 … +2.0944 |
 | 7 | `gripper_jaws` | DM4310 | prismatic; see §3 |
 
-**How the models were identified without energising anything:** the `gear_ratio` register. The Damiao part
-number *is* the gear ratio — DM43**40** reports 40.0, DM43**10** reports 10.0. `sw_ver` partitions
-identically as a cross-check. That layout is `yam_v1.yml` exactly ⇒ the arm is `yam` / `yam_pro` /
-`yam_ultra_v1` (indistinguishable over CAN) and **not** `yam_ultra_v2`.
+**How the models were identified without energising anything:** the `gear_ratio` register. The Damiao part number *is* the gear ratio — DM43**40** reports 40.0, DM43**10** reports 10.0. `sw_ver` partitions identically as a cross-check. That layout is `yam_v1.yml` exactly ⇒ the arm is `yam` / `yam_pro` / `yam_ultra_v1` (indistinguishable over CAN) and **not** `yam_ultra_v2`.
 
-⚠️ **Decoding a motor with the wrong type does not raise, it mis-scales.** Position is safe (±12.5 rad on
-both), but velocity reads **3× high** and torque **2.8× LOW** — under-reading force on the three heaviest
-joints, which is the dangerous direction.
+⚠️ **Decoding a motor with the wrong type does not raise, it mis-scales.** Position is safe (±12.5 rad on both), but velocity reads **3× high** and torque **2.8× LOW** — under-reading force on the three heaviest joints, which is the dangerous direction.
 
-⚠️ **The URDF limits are directly comparable to raw motor positions** only because `get_robot.py` sets
-`motor_offsets = [0.0] * n` and `yam_v1.yml` sets every direction to `+1`. Re-check if either changes.
+⚠️ **The URDF limits are directly comparable to raw motor positions** only because `get_robot.py` sets `motor_offsets = [0.0] * n` and `yam_v1.yml` sets every direction to `+1`. Re-check if either changes.
 
 ### The parked pose is mechanically supported
 
-`shoulder_pitch` and `elbow_pitch` read ~0.000, and the URDF puts **both of their mechanical limits at 0**.
-The arm rests against its own stops rather than balancing, so energising from the parked pose cannot release a
-joint into a fall. **This is why every first-contact test started there.**
+`shoulder_pitch` and `elbow_pitch` read ~0.000, and the URDF puts **both of their mechanical limits at 0**. The arm rests against its own stops rather than balancing, so energising from the parked pose cannot release a joint into a fall. **This is why every first-contact test started there.**
 
 ---
 
@@ -87,32 +69,13 @@ joint into a fall. **This is why every first-contact test started there.**
 
 I2RT's stack assumes Linux + SocketCAN throughout. Four things had to be solved, each for a distinct reason.
 
-**1. `bustype` is an argument, not a constant.** `CanInterface.__init__` takes `bustype="socketcan"` and
-passes it to `can.interface.Bus`. So `bustype="gs_usb"` reaches python-can untouched and the CANable works
-over libusb. ⚠️ **But the layer the docs point you at cannot do this**: `get_yam_robot()` →
-`DMChainCanInterface` picks the bus with `if "can" in channel:` and hardcodes socketcan, with no override
-(`dm_driver.py:409`). Hence `chain_channel()` returns **`gsusb<N>`** — a name chosen precisely because it
-fails that substring test — and `patch_dm_driver_for_gs_usb()` rewrites it one layer lower.
+**1. `bustype` is an argument, not a constant.** `CanInterface.__init__` takes `bustype="socketcan"` and passes it to `can.interface.Bus`. So `bustype="gs_usb"` reaches python-can untouched and the CANable works over libusb. ⚠️ **But the layer the docs point you at cannot do this**: `get_yam_robot()` → `DMChainCanInterface` picks the bus with `if "can" in channel:` and hardcodes socketcan, with no override (`dm_driver.py:409`). Hence `chain_channel()` returns **`gsusb<N>`** — a name chosen precisely because it fails that substring test — and `patch_dm_driver_for_gs_usb()` rewrites it one layer lower.
 
-**2. `detach_kernel_driver` fails with EACCES on macOS** even though nothing holds the device (measured:
-`is_kernel_driver_active(0)` is False and `claim_interface(0)` succeeds). Only the `USBError` is suppressed,
-so a platform where the detach genuinely matters is unaffected.
+**2. `detach_kernel_driver` fails with EACCES on macOS** even though nothing holds the device (measured: `is_kernel_driver_active(0)` is False and `claim_interface(0)` succeeds). Only the `USBError` is suppressed, so a platform where the detach genuinely matters is unaffected.
 
-**3. ⛔ Transmit echoes. Load-bearing.** A candleLight adapter echoes each sent frame back as a send
-confirmation; python-can marks it `is_rx=False` but **does not drop it**. SocketCAN never loops a frame back
-to the sending socket, so I2RT has no filter and takes the next frame as the reply. Decoding our own
-request's `data[4:8]` — four zero bytes — produced a perfect set of zeros from all seven motors, reported as
-success. Filtered at the bus layer where nothing can bypass it.
+**3. ⛔ Transmit echoes. Load-bearing.** A candleLight adapter echoes each sent frame back as a send confirmation; python-can marks it `is_rx=False` but **does not drop it**. SocketCAN never loops a frame back to the sending socket, so I2RT has no filter and takes the next frame as the reply. Decoding our own request's `data[4:8]` — four zero bytes — produced a perfect set of zeros from all seven motors, reported as success. Filtered at the bus layer where nothing can bypass it.
 
-**4. Enable/disable desynchronisation.** `_send_message_get_response` retries by **re-sending** the command.
-A late reply fails the arbitration-id check → the retry puts a *second* enable on the wire → two replies come
-back → one is consumed, one is left in the buffer and read as the **next** motor's reply → which mismatches →
-which retries. One hiccup snowballs down the chain and lands wherever the margin runs out. **The varying
-failure point is the signature** — a genuinely dead motor fails in the same place every time.
-I2RT's 3 ms inter-motor spacing is ample in-kernel; over libusb each transfer is ~0.45 ms and the margin is
-thin. **A transport mismatch, not a bug in their code.** Fixed by draining before every enable/disable and
-retrying the whole exchange after a fuller drain. Reliability went **1/3 → 8/8**.
-⚠️ Deliberately **not** applied to `set_control`, which shares the function but runs the 100 Hz loop.
+**4. Enable/disable desynchronisation.** `_send_message_get_response` retries by **re-sending** the command. A late reply fails the arbitration-id check → the retry puts a *second* enable on the wire → two replies come back → one is consumed, one is left in the buffer and read as the **next** motor's reply → which mismatches → which retries. One hiccup snowballs down the chain and lands wherever the margin runs out. **The varying failure point is the signature** — a genuinely dead motor fails in the same place every time. I2RT's 3 ms inter-motor spacing is ample in-kernel; over libusb each transfer is ~0.45 ms and the margin is thin. **A transport mismatch, not a bug in their code.** Fixed by draining before every enable/disable and retrying the whole exchange after a fuller drain. Reliability went **1/3 → 8/8**. ⚠️ Deliberately **not** applied to `set_control`, which shares the function but runs the 100 Hz loop.
 
 ### Throughput — macOS is not the bottleneck
 
@@ -125,64 +88,27 @@ cycle ms: mean 3.121  p50 3.116  p95 3.231  p99 3.318  p99.9 3.576  max 17.771
 would miss a 100 Hz deadline: 2/8000 (0.03%)
 ```
 
-**~3× headroom over 100 Hz.** Session 1's "do not fight macOS for the control loop" is **refuted**. Linux
-remains right for the final rig (RealSense, cuRobo, ABC training are Linux-first) and this says nothing about
-the loop once cameras and inference compete for CPU — but the specific claim is dead.
-⚠️ Measured with register reads, so it is a lower bound.
+**~3× headroom over 100 Hz.** Session 1's "do not fight macOS for the control loop" is **refuted**. Linux remains right for the final rig (RealSense, cuRobo, ABC training are Linux-first) and this says nothing about the loop once cameras and inference compete for CPU — but the specific claim is dead. ⚠️ Measured with register reads, so it is a lower bound.
 
 ---
 
 ## 3. The gripper
 
-- **Stroke: 6.57 motor-rad ↔ 0.096 m** of jaw travel (`linear_4310.yml`), matching the URDF's two prismatic
-  tips at 0.0469 m each.
-- **Measured limits (B, 2026-08-10): `+0.0704 … −5.0528`, usable stroke 5.123 rad = 78% of declared.**
-  Saved in `config/gripper_limits.json`.
-- **The jaws began the day parked hard against the `0` stop.** That is why every early jaw command in the
-  positive direction tripped the torque limit within a fraction of a second while negative moved freely.
-- ⚠️ **`get_yam_robot()` re-calibrates on EVERY construction** when `gripper_limits` is null, and
-  `detect_gripper_limits` drives each stop and *holds* until the position stops changing. Julien: *"they move
-  really quickly and quite hard… they seem to crash into the ends and then seem to try to push further."*
-  **Passing `gripper_limits_override` is what disables it** (`get_robot.py:223-225`) — which is why
-  `yam_robot.build_robot()` always loads the saved limits.
-- There is **no speed parameter**. The routine is torque-controlled, so torque *is* the speed; lowering it
-  lowers both. Ours uses 0.3 Nm vs I2RT's 0.5.
+- **Stroke: 6.57 motor-rad ↔ 0.096 m** of jaw travel (`linear_4310.yml`), matching the URDF's two prismatic tips at 0.0469 m each.
+- **Measured limits (B, 2026-08-10): `+0.0704 … −5.0528`, usable stroke 5.123 rad = 78% of declared.** Saved in `config/gripper_limits.json`.
+- **The jaws began the day parked hard against the `0` stop.** That is why every early jaw command in the positive direction tripped the torque limit within a fraction of a second while negative moved freely.
+- ⚠️ **`get_yam_robot()` re-calibrates on EVERY construction** when `gripper_limits` is null, and `detect_gripper_limits` drives each stop and *holds* until the position stops changing. Julien: *"they move really quickly and quite hard… they seem to crash into the ends and then seem to try to push further."* **Passing `gripper_limits_override` is what disables it** (`get_robot.py:223-225`) — which is why `yam_robot.build_robot()` always loads the saved limits.
+- There is **no speed parameter**. The routine is torque-controlled, so torque *is* the speed; lowering it lowers both. Ours uses 0.3 Nm vs I2RT's 0.5.
 - After calibration the gripper is exposed as a **normalised 0…1 value**, not raw radians.
-- ⛔⭐ **THE WORST BUG OF THE DAY: the limits are stored in one coordinate frame and used in another.**
-  `get_yam_robot()` applies a **±2π wrap correction at every construction**, chosen from wherever the motor
-  happens to be sitting at that instant (`get_robot.py:268-274`). `calibrate_gripper.py` builds a
-  `DMChainCanInterface` directly and gets **no** such correction. So whether the saved numbers mean anything
-  depends on the jaws' position when each ran.
-  **The consequence is not a wrong number, it is a cooked motor:** `motor_chain_robot.py:390` force-clips
-  every gripper command into `[min(limits), max(limits)]` *regardless of where the jaws are*. Measured: jaws
-  at **−1.380** with a saved range of **[+1.231, +6.481]** → the gripper was commanded 2.6 rad away and held
-  there against a mechanical stop → **43 °C → 65 °C in five seconds.**
-  **Fix:** `reconcile_gripper_limits()` tries the saved range shifted by 0, +2π and −2π and returns whichever
-  brackets the measured position; if none does, `build_robot` **refuses to start**. Verified: reconciling the
-  failure case yields `[0.1979, −5.0524]` against the morning's independent calibration of
-  `[0.0704, −5.0528]` — **the lower bound agrees to 0.0004 rad.**
-  ⚠️ **Never "warn and continue" on this.** That is exactly what was done, and it is what burned the motor.
-- ⛔ **A power cycle also invalidates the saved limits.** Measured 2026-08-10: before the power cycle the jaws
-  calibrated to `+0.0704 … −5.0528`; afterwards they read **+1.6691 rad**, outside that range entirely. The
-  motor's position reference shifts across power. A stale range makes the normalised value fall outside
-  `[0,1]`, so every hold command pushes toward a stop — **which is precisely how motor 7 cooked, twice.**
-  **Re-run `calibrate_gripper.py` after every power cycle.** `teleop_session.py` detects the mismatch and
-  says so.
-- ⛔ **Never command the gripper to 0.0 or 1.0.** Those *are* the mechanical stops, and holding a position at
-  a stop is stall torque: full current, no motion, no cooling. Operator-requested values are clamped to
-  **[0.02, 0.98]**.
-  ⚠️ **The clamp is applied only to values the OPERATOR asks for, never to move the jaws to where they
-  already are.** The earlier `[0.15, 0.85]` band was applied *on entering TELEOP*, which meant that if the
-  jaws happened to sit outside it, the session **commanded them to move** the moment teleop began — a
-  motion nobody asked for, into a mechanical stop when the limits were also mis-framed. Entry now takes
-  the jaws exactly where they are.
+- ⛔⭐ **THE WORST BUG OF THE DAY: the limits are stored in one coordinate frame and used in another.** `get_yam_robot()` applies a **±2π wrap correction at every construction**, chosen from wherever the motor happens to be sitting at that instant (`get_robot.py:268-274`). `calibrate_gripper.py` builds a `DMChainCanInterface` directly and gets **no** such correction. So whether the saved numbers mean anything depends on the jaws' position when each ran. **The consequence is not a wrong number, it is a cooked motor:** `motor_chain_robot.py:390` force-clips every gripper command into `[min(limits), max(limits)]` *regardless of where the jaws are*. Measured: jaws at **−1.380** with a saved range of **[+1.231, +6.481]** → the gripper was commanded 2.6 rad away and held there against a mechanical stop → **43 °C → 65 °C in five seconds.** **Fix:** `reconcile_gripper_limits()` tries the saved range shifted by 0, +2π and −2π and returns whichever brackets the measured position; if none does, `build_robot` **refuses to start**. Verified: reconciling the failure case yields `[0.1979, −5.0524]` against the morning's independent calibration of `[0.0704, −5.0528]` — **the lower bound agrees to 0.0004 rad.** ⚠️ **Never "warn and continue" on this.** That is exactly what was done, and it is what burned the motor.
+- ⛔ **A power cycle also invalidates the saved limits.** Measured 2026-08-10: before the power cycle the jaws calibrated to `+0.0704 … −5.0528`; afterwards they read **+1.6691 rad**, outside that range entirely. The motor's position reference shifts across power. A stale range makes the normalised value fall outside `[0,1]`, so every hold command pushes toward a stop — **which is precisely how motor 7 cooked, twice.** **Re-run `calibrate_gripper.py` after every power cycle.** `teleop_session.py` detects the mismatch and says so.
+- ⛔ **Never command the gripper to 0.0 or 1.0.** Those *are* the mechanical stops, and holding a position at a stop is stall torque: full current, no motion, no cooling. Operator-requested values are clamped to **[0.02, 0.98]**. ⚠️ **The clamp is applied only to values the OPERATOR asks for, never to move the jaws to where they already are.** The earlier `[0.15, 0.85]` band was applied *on entering TELEOP*, which meant that if the jaws happened to sit outside it, the session **commanded them to move** the moment teleop began — a motion nobody asked for, into a mechanical stop when the limits were also mis-framed. Entry now takes the jaws exactly where they are.
 
 ---
 
 ## 3.5 ⭐ The gripper: two 2π frame errors, not a broken mechanism
 
-**Motor 7 was cooked three times on 2026-08-10 and the first three explanations were all wrong.** The real
-cause is a coordinate-frame mismatch, and Julien is the one who pushed back on giving up — correctly.
+**Motor 7 was cooked three times on 2026-08-10 and the first three explanations were all wrong.** The real cause is a coordinate-frame mismatch, and Julien is the one who pushed back on giving up — correctly.
 
 **Two separate 2π shifts are involved, and conflating them is what cost three attempts:**
 
@@ -202,9 +128,7 @@ saved limits                   [6.481, 1.231]     (un-shifted)
 normalised = (0.0403 − 6.481) / (1.231 − 6.481) = 1.227     ← outside [0,1]
 ```
 
-A normalised position outside `[0,1]` is clipped onto the nearest limit by `motor_chain_robot.py:390`, so the
-motor is commanded into **a stop it is already past** and pushes at 7.71 Nm indefinitely. Self-reinforcing:
-7.7 Nm shoves the jaws further beyond what a 0.3 Nm calibration called the limit.
+A normalised position outside `[0,1]` is clipped onto the nearest limit by `motor_chain_robot.py:390`, so the motor is commanded into **a stop it is already past** and pushes at 7.71 Nm indefinitely. Self-reinforcing: 7.7 Nm shoves the jaws further beyond what a 0.3 Nm calibration called the limit.
 
 **`frame_correct_gripper_limits()` applies both shifts.** Verified on the two independent failures:
 
@@ -216,27 +140,21 @@ first calibration of the day, independently:  [0.0704, −5.0528]
 
 Two different positions hours apart converging on one range, matching an independent measurement.
 
-⛔ **And it is verified rather than trusted:** `build_robot` reads the normalised jaw position back from the
-runtime after construction and **shuts everything down before the control loop starts** if it is outside
-`[0,1]`. A prediction about a frame is exactly the kind of thing that should not be believed on argument.
+⛔ **And it is verified rather than trusted:** `build_robot` reads the normalised jaw position back from the runtime after construction and **shuts everything down before the control loop starts** if it is outside `[0,1]`. A prediction about a frame is exactly the kind of thing that should not be believed on argument.
 
 **Escape hatch:** `--no-gripper` runs the six arm joints only and leaves motor 7 free.
 
 ### Lessons that generalise beyond the gripper
 
-- **Two bugs with identical symptoms hide each other.** Fixing one and seeing no improvement is weak evidence
-  that you fixed nothing — it may be evidence that there are two.
-- ⛔ **A guard that cannot express a safe command is not a guard.** The stall guard "released" the command to
-  the measured value — which clipped straight back onto the stop. It fired every cycle and changed nothing.
-- **Cached raw motor positions are frame-dependent.** Anywhere a position is stored and re-used across
-  process boundaries, ask which wrap correction was in force at each end.
+- **Two bugs with identical symptoms hide each other.** Fixing one and seeing no improvement is weak evidence that you fixed nothing — it may be evidence that there are two.
+- ⛔ **A guard that cannot express a safe command is not a guard.** The stall guard "released" the command to the measured value — which clipped straight back onto the stop. It fired every cycle and changed nothing.
+- **Cached raw motor positions are frame-dependent.** Anywhere a position is stored and re-used across process boundaries, ask which wrap correction was in force at each end.
 
 ---
 
 ## 3.6 (historical) The interim decision to disable the gripper
 
-**Motor 7 was cooked three separate times on 2026-08-10.** Three different fixes were attempted and the first
-two addressed the wrong layer. This is the true mechanism, and it is the single most important open item.
+**Motor 7 was cooked three separate times on 2026-08-10.** Three different fixes were attempted and the first two addressed the wrong layer. This is the true mechanism, and it is the single most important open item.
 
 **The evidence that settled it**, printed by our own stall guard:
 
@@ -244,39 +162,24 @@ two addressed the wrong layer. This is the true mechanism, and it is the single 
 ⚠️ GRIPPER STALLED (+7.71 Nm, not moving) — releasing it to 1.186
 ```
 
-**`1.186`.** That is the *normalised* gripper position, and it is outside `[0, 1]` — **the jaws sit 18.6%
-beyond the "fully open" end of their own calibrated range.** `command_joint_pos` clips it back to `1.0`,
-which maps to the end stop, so the motor is commanded into a stop **it is already past** and pushes at
-7.71 Nm indefinitely.
+**`1.186`.** That is the *normalised* gripper position, and it is outside `[0, 1]` — **the jaws sit 18.6% beyond the "fully open" end of their own calibrated range.** `command_joint_pos` clips it back to `1.0`, which maps to the end stop, so the motor is commanded into a stop **it is already past** and pushes at 7.71 Nm indefinitely.
 
-**It is self-reinforcing, which is why every run was worse than the last:** 7.7 Nm of runtime torque shoves
-the jaws further beyond the limit that a 0.3 Nm calibration detected. The calibration finds a "stop" that
-the runtime simply pushes through, so each session starts further outside the range than the one before.
+**It is self-reinforcing, which is why every run was worse than the last:** 7.7 Nm of runtime torque shoves the jaws further beyond the limit that a 0.3 Nm calibration detected. The calibration finds a "stop" that the runtime simply pushes through, so each session starts further outside the range than the one before.
 
 **Why the earlier fixes could not work:**
-- Clamping the command **above** `command_joint_pos` is bypassed: the vendor's clip is **below** it
-  (`motor_chain_robot.py:390`).
-- Releasing the command to the *measured* value is a no-op: `1.186` clips to `1.0`, the same stop. **A guard
-  that cannot express a safe command is not a guard.**
-- The ±2π reconciliation (§3) is correct and still necessary, but it fixes limits in the wrong **frame**, not
-  limits of the wrong **size**. Both faults are real and independent.
+- Clamping the command **above** `command_joint_pos` is bypassed: the vendor's clip is **below** it (`motor_chain_robot.py:390`).
+- Releasing the command to the *measured* value is a no-op: `1.186` clips to `1.0`, the same stop. **A guard that cannot express a safe command is not a guard.**
+- The ±2π reconciliation (§3) is correct and still necessary, but it fixes limits in the wrong **frame**, not limits of the wrong **size**. Both faults are real and independent.
 
-**Current state: `GripperType.NO_GRIPPER` is the default.** Motor 7 is never enabled and never commanded; its
-400 ms timeout leaves it damped and free. The six arm joints are entirely unaffected and teleop works fully.
-`--gripper` opts back in.
+**Current state: `GripperType.NO_GRIPPER` is the default.** Motor 7 is never enabled and never commanded; its 400 ms timeout leaves it damped and free. The six arm joints are entirely unaffected and teleop works fully. `--gripper` opts back in.
 
 > ### ⭐ To fix it properly (the next session's job)
-> **Calibrate at the torque the runtime actually uses, not at 0.3 Nm.** The runtime reaches 7.7 Nm, so a
-> limit found at 0.3 Nm is not a limit — it is where the jaws stop being easy to move. Options, in order of
-> preference:
-> 1. Calibrate at ~2-3 Nm and **inset** the saved range by a margin, so the runtime can never command the
->    true stop.
-> 2. Reduce the gripper's `kp` (currently 20.0 from `linear_4310.yml`) so the runtime cannot generate 7.7 Nm
->    against a stop in the first place.
+> **Calibrate at the torque the runtime actually uses, not at 0.3 Nm.** The runtime reaches 7.7 Nm, so a limit found at 0.3 Nm is not a limit — it is where the jaws stop being easy to move. Options, in order of preference:
+> 1. Calibrate at ~2-3 Nm and **inset** the saved range by a margin, so the runtime can never command the true stop.
+> 2. Reduce the gripper's `kp` (currently 20.0 from `linear_4310.yml`) so the runtime cannot generate 7.7 Nm against a stop in the first place.
 > 3. Command the gripper by **torque** rather than position — a gripper does not want a position controller.
 >
-> ⚠️ Whatever is chosen, **verify by leaving it holding for 60 s and watching the temperature plateau.**
-> A gripper at equilibrium is the test; a gripper that "looks fine for 5 seconds" is not.
+> ⚠️ Whatever is chosen, **verify by leaving it holding for 60 s and watching the temperature plateau.** A gripper at equilibrium is the test; a gripper that "looks fine for 5 seconds" is not.
 
 ---
 
@@ -288,25 +191,14 @@ the runtime simply pushes through, so each session starts further outside the ra
 ERROR:root:motor id: 7, error: motor over temperature at yam_real
 ```
 
-I2RT's control thread raised and exited. **The teleop loop did not notice and kept running for another
-64 seconds**, solving IK and calling `command_joint_pos` into a dead robot, printing plausible EE numbers the
-whole time. Julien saw the arm stop responding while the terminal claimed motion. With no commands arriving,
-the motors' own 400 ms timeout damped them and **the arm sagged slowly under gravity** — slowly enough to
-catch by hand, which he did.
+I2RT's control thread raised and exited. **The teleop loop did not notice and kept running for another 64 seconds**, solving IK and calling `command_joint_pos` into a dead robot, printing plausible EE numbers the whole time. Julien saw the arm stop responding while the terminal claimed motion. With no commands arriving, the motors' own 400 ms timeout damped them and **the arm sagged slowly under gravity** — slowly enough to catch by hand, which he did.
 
-**Why motor 7 and not a big joint.** Motor 7 is the gripper, a small DM4310 with little thermal mass, and it
-had spent the whole day being pushed **against a hard stop**: three teleop runs aborting at 1.2 Nm, I2RT's
-0.5 Nm auto-calibration, then our 0.3 Nm calibration. Stall torque is the worst possible thermal case — full
-current, no motion, no cooling. Then teleop commanded it to *hold* its position, which against a stop is more
-stall torque. **The heat was cumulative across the session, which is why "I didn't even move it quickly"
-is entirely consistent with an over-temperature fault.**
+**Why motor 7 and not a big joint.** Motor 7 is the gripper, a small DM4310 with little thermal mass, and it had spent the whole day being pushed **against a hard stop**: three teleop runs aborting at 1.2 Nm, I2RT's 0.5 Nm auto-calibration, then our 0.3 Nm calibration. Stall torque is the worst possible thermal case — full current, no motion, no cooling. Then teleop commanded it to *hold* its position, which against a stop is more stall torque. **The heat was cumulative across the session, which is why "I didn't even move it quickly" is entirely consistent with an over-temperature fault.**
 
 **Rules that follow:**
 1. **Never command the gripper to hold a position at a hard stop.** Park it mid-stroke.
-2. **Monitor temperature every cycle** and stop at 65 °C, below the firmware trip. `chain.read_states()`
-   returns `temp_mos` / `temp_rotor` per motor. Idle is ~30-33 °C.
-3. ⭐ **Check that the control thread is alive every cycle.** `chain.running` going False means commands are
-   not arriving. A loop that cannot tell whether its commands land is worse than one that crashes.
+2. **Monitor temperature every cycle** and stop at 65 °C, below the firmware trip. `chain.read_states()` returns `temp_mos` / `temp_rotor` per motor. Idle is ~30-33 °C.
+3. ⭐ **Check that the control thread is alive every cycle.** `chain.running` going False means commands are not arriving. A loop that cannot tell whether its commands land is worse than one that crashes.
 
 ---
 
@@ -318,39 +210,23 @@ is entirely consistent with an over-temperature fault.**
 3. close the bus
 ```
 
-Both vendor `close()` methods get this wrong. `DMChainCanInterface.close()` shuts the bus **without disabling
-the motors**; `MotorChainRobot.close()` prints *"Robot closed with all torques set to zero"* and calls only
-the former — while the 250 Hz thread is mid-`set_control`, which produced a thread-death traceback.
-**Leaving motors enabled is what broke consecutive runs**: they time out into damping, and the next
-`_motor_on()` takes the error-clearing path, which desynchronises §2.4.
+Both vendor `close()` methods get this wrong. `DMChainCanInterface.close()` shuts the bus **without disabling the motors**; `MotorChainRobot.close()` prints *"Robot closed with all torques set to zero"* and calls only the former — while the 250 Hz thread is mid-`set_control`, which produced a thread-death traceback. **Leaving motors enabled is what broke consecutive runs**: they time out into damping, and the next `_motor_on()` takes the error-clearing path, which desynchronises §2.4.
 
-`yam_robot.shutdown_robot()` does it correctly and **returns the IDs that actually confirmed** — never a
-hopeful constant.
+`yam_robot.shutdown_robot()` does it correctly and **returns the IDs that actually confirmed** — never a hopeful constant.
 
 ---
 
 ## 6. Recovering a drooped arm — yes, and nothing is lost
 
-Julien asked whether a droop leaves the system miscalibrated. **It does not.** The encoders report true joint
-positions at all times — proven this morning when a hand-twist of the gripper read back exactly
-(0.0086 → −1.2312 rad) while every other motor stayed byte-identical.
+Julien asked whether a droop leaves the system miscalibrated. **It does not.** The encoders report true joint positions at all times — proven this morning when a hand-twist of the gripper read back exactly (0.0086 → −1.2312 rad) while every other motor stayed byte-identical.
 
-**What was lost when the arm drooped was the control loop, not the knowledge of where the arm is.** So
-recovery is simply: read the true current pose, then interpolate slowly to the target. `teleop_session.py`'s
-PARK mode does exactly that at **0.40 rad/s**.
-⚠️ What it *cannot* know is what is now in the way, which is why it moves slowly and `h` or `t` stops it.
-⛔ **Correction, 2026-08-10: "any key aborts it" was the bug, not the feature.** Every unrecognised key —
-Enter included — used to cancel PARK, so pressing `p` and then Enter out of habit killed the move in the
-same keyboard batch and looked exactly like "park just went to hold". Only `h` and `t` stop it now.
+**What was lost when the arm drooped was the control loop, not the knowledge of where the arm is.** So recovery is simply: read the true current pose, then interpolate slowly to the target. `teleop_session.py`'s PARK mode does exactly that at **0.40 rad/s**. ⚠️ What it *cannot* know is what is now in the way, which is why it moves slowly and `h` or `t` stops it. ⛔ **Correction, 2026-08-10: "any key aborts it" was the bug, not the feature.** Every unrecognised key — Enter included — used to cancel PARK, so pressing `p` and then Enter out of habit killed the move in the same keyboard batch and looked exactly like "park just went to hold". Only `h` and `t` stop it now.
 
 ---
 
 ## 7. Working rules established with Julien
 
-- **The agent never runs anything that can move the arm.** Those are handed over as commands.
-  The line: **scripts that enable motors but send no setpoint → agent. Anything that sends a setpoint →
-  Julien.** (Widened from "anything that enables a motor" once enabling-without-setpoint had been shown ~15
-  times to produce ≈0 torque.)
+- **The agent never runs anything that can move the arm.** Those are handed over as commands. The line: **scripts that enable motors but send no setpoint → agent. Anything that sends a setpoint → Julien.** (Widened from "anything that enables a motor" once enabling-without-setpoint had been shown ~15 times to produce ≈0 torque.)
 - **Announce before running, do not pause.** Say what is about to run, then run it.
 - ⛔ **The workspace was the binding constraint, not the software**, until 12:1x when Julien cleared the desk.
 - **`--yes` on every script that transmits.** Dry run is always the default and always prints the full plan.
@@ -359,82 +235,39 @@ same keyboard batch and looked exactly like "park just went to hold". Only `h` a
 
 ## 8. State at the end of 2026-08-10
 
-**Achieved:** SpaceMouse verified on all 6 axes · both arms identified and driven · bimanual gripper motion
-from one loop over two buses · 100 Hz proven with 3× headroom · gravity compensation holding to **0.61°** ·
-hand-guiding · **cartesian SpaceMouse teleop on the real arm** (EE moved 0.15 m under puck control).
+**Achieved:** SpaceMouse verified on all 6 axes · both arms identified and driven · bimanual gripper motion from one loop over two buses · 100 Hz proven with 3× headroom · gravity compensation holding to **0.61°** · hand-guiding · **cartesian SpaceMouse teleop on the real arm** (EE moved 0.15 m under puck control).
 
-**✅ RESOLVED — it was the wall power, exactly as the shared-cause reasoning predicted.** Julien
-disconnected and reconnected the arms at the socket and both came straight back: all 7 motors on each bus,
-every temperature 31-36 °C, no latched faults. **A power cycle is the recovery for a latched motor
-over-temperature.** The diagnosis held because two independent arms on two independent buses cannot fail
-together for independent reasons — the only shared thing was mains.
+**✅ RESOLVED — it was the wall power, exactly as the shared-cause reasoning predicted.** Julien disconnected and reconnected the arms at the socket and both came straight back: all 7 motors on each bus, every temperature 31-36 °C, no latched faults. **A power cycle is the recovery for a latched motor over-temperature.** The diagnosis held because two independent arms on two independent buses cannot fail together for independent reasons — the only shared thing was mains.
 
 **Known-imperfect, deliberately deferred:**
-- **SpaceMouse axis directions are wrong/unintuitive.** Not yet mapped to Julien's expectation. **The tooling
-  for it is complete as of session 3** (`scripts/map_axes.py`, no hardware needed) — what remains is him
-  driving it. See §9 and §10.
-- **Two SpaceMice are now connected, and the ambiguity is SOLVED — by asking the hardware.** Both report an
-  empty serial, so select-by-serial does not transfer from the CAN adapters. They differ only in USB
-  `port_numbers` — `(1,3)` and `(1,4)` — which hidapi does not expose, and which tell a human nothing about
-  which puck is under which hand. So `pick_device_by_wiggle()` opens all of them and uses **whichever one the
-  operator moves.** Unambiguous, needs no config, survives replugging into any port, and costs five seconds.
+- **SpaceMouse axis directions are wrong/unintuitive.** Not yet mapped to Julien's expectation. **The tooling for it is complete as of session 3** (`scripts/map_axes.py`, no hardware needed) — what remains is him driving it. See §9 and §10.
+- **Two SpaceMice are now connected, and the ambiguity is SOLVED — by asking the hardware.** Both report an empty serial, so select-by-serial does not transfer from the CAN adapters. They differ only in USB `port_numbers` — `(1,3)` and `(1,4)` — which hidapi does not expose, and which tell a human nothing about which puck is under which hand. So `pick_device_by_wiggle()` opens all of them and uses **whichever one the operator moves.** Unambiguous, needs no config, survives replugging into any port, and costs five seconds.
 - No git remote. Everything exists only on this Mac.
 
 ---
 
 ## 9. Four defects found by READING, 2026-08-10 (session 3) — no hardware involved
 
-Nothing was plugged in for any of these. Each was found by checking the code against what the docs claimed
-about it, which is worth noting on its own: **the bench is not where the cheap defects are.**
+Nothing was plugged in for any of these. Each was found by checking the code against what the docs claimed about it, which is worth noting on its own: **the bench is not where the cheap defects are.**
 
-**1. ⛔ PARK with `--no-gripper` would have released a raised arm.** `config/park_pose.json` holds **7**
-joints; `--no-gripper` builds a **6**-DoF robot. `park_target - measured` on mismatched shapes raises
-`ValueError` — and that exception escaped the control loop, **skipped the "the arm is HOLDING, press g or d"
-consent flow**, and fell into `finally`, which disables the motors. A raised arm sags. The path matters:
-`--no-gripper` is exactly the escape hatch the gripper instructions tell you to fall back to, *so the
-fallback was the broken one.* Symmetrically, a pose saved **in** a no-gripper session had 6 entries and broke
-the next 7-DoF session. Fixed in `yam_robot.park_target_from()` — start from the measured pose and overlay
-only the joints the saved pose carries, so no target is ever invented for a joint we know nothing about.
-Tested: `scripts/test_park_target.py`.
+**1. ⛔ PARK with `--no-gripper` would have released a raised arm.** `config/park_pose.json` holds **7** joints; `--no-gripper` builds a **6**-DoF robot. `park_target - measured` on mismatched shapes raises `ValueError` — and that exception escaped the control loop, **skipped the "the arm is HOLDING, press g or d" consent flow**, and fell into `finally`, which disables the motors. A raised arm sags. The path matters: `--no-gripper` is exactly the escape hatch the gripper instructions tell you to fall back to, *so the fallback was the broken one.* Symmetrically, a pose saved **in** a no-gripper session had 6 entries and broke the next 7-DoF session. Fixed in `yam_robot.park_target_from()` — start from the measured pose and overlay only the joints the saved pose carries, so no target is ever invented for a joint we know nothing about. Tested: `scripts/test_park_target.py`.
 
-**2. PARK was the one motion path that bypassed the gripper clamp.** It commanded the saved jaw value
-directly. Harmless with the pose saved today (0.0366, inside the band) — but `s` saves wherever the jaws
-happen to be, so saving with the jaws on a stop would later drive them back onto that stop and **hold** them
-there. That is the stall condition from §4 rule 1, reachable through the one door the guard did not cover.
+**2. PARK was the one motion path that bypassed the gripper clamp.** It commanded the saved jaw value directly. Harmless with the pose saved today (0.0366, inside the band) — but `s` saves wherever the jaws happen to be, so saving with the jaws on a stop would later drive them back onto that stop and **hold** them there. That is the stall condition from §4 rule 1, reachable through the one door the guard did not cover.
 
-**3. ⭐ The gripper thermal test could not detect the thing it tested.** The status line printed only
-`hottest` — the max over all seven motors. Motors 2/3 carry the arm's 4.3 kg and sit at **41-42 °C** in
-normal equilibrium, while an idle motor 7 is **31-36 °C**. So motor 7 climbing 33 → 41 °C was **entirely
-hidden inside the `max()`**, and "watch `hottest` plateau" agreed with the claim it was supposed to be able
-to refute. §0's own rule, missed in the one place it was load-bearing. The jaw temperature is now printed
-separately (`jaw NN°C`), and the session's peak jaw temperature is reported at exit.
+**3. ⭐ The gripper thermal test could not detect the thing it tested.** The status line printed only `hottest` — the max over all seven motors. Motors 2/3 carry the arm's 4.3 kg and sit at **41-42 °C** in normal equilibrium, while an idle motor 7 is **31-36 °C**. So motor 7 climbing 33 → 41 °C was **entirely hidden inside the `max()`**, and "watch `hottest` plateau" agreed with the claim it was supposed to be able to refute. §0's own rule, missed in the one place it was load-bearing. The jaw temperature is now printed separately (`jaw NN°C`), and the session's peak jaw temperature is reported at exit.
 
-**4. A warn-and-continue, in the exact wording of the rule against warn-and-continue.** A second
-stale-limit check in `teleop_session.py` compared the raw jaw position against the **unshifted** limits from
-the file, so it re-flagged precisely the cases `frame_correct_gripper_limits()` had legitimately reconciled:
-at the measured raw **−1.380** it printed *"STALE GRIPPER LIMITS … re-run calibrate_gripper"* while the frame
-was correct and the jaws normalised to **0.3005**. It then continued. Two harms, neither hypothetical: a real
-warning and a false alarm became indistinguishable, and the remedy it advised is a routine that drives the
-jaws into both mechanical stops. Deleted — `build_robot()` already gates this twice, better, and *before* any
-control loop starts. **A duplicated weaker check is worse than no check**, because it launders the strong one.
+**4. A warn-and-continue, in the exact wording of the rule against warn-and-continue.** A second stale-limit check in `teleop_session.py` compared the raw jaw position against the **unshifted** limits from the file, so it re-flagged precisely the cases `frame_correct_gripper_limits()` had legitimately reconciled: at the measured raw **−1.380** it printed *"STALE GRIPPER LIMITS … re-run calibrate_gripper"* while the frame was correct and the jaws normalised to **0.3005**. It then continued. Two harms, neither hypothetical: a real warning and a false alarm became indistinguishable, and the remedy it advised is a routine that drives the jaws into both mechanical stops. Deleted — `build_robot()` already gates this twice, better, and *before* any control loop starts. **A duplicated weaker check is worse than no check**, because it launders the strong one.
 
-**Also fixed:** the PARK progress report was an `elif` on the motion branch, so one cycle in every hundred
-sent no command at all. Benign — the chain's own 250 Hz thread holds the last target — but not what the code
-said it did, in the one mode a human watches rather than steers.
+**Also fixed:** the PARK progress report was an `elif` on the motion branch, so one cycle in every hundred sent no command at all. Benign — the chain's own 250 Hz thread holds the last target — but not what the code said it did, in the one mode a human watches rather than steers.
 
 > ### The generalisation
-> All four are the same shape: **a guard, a test or a message that was written once and then not re-derived
-> against the thing it guards.** The clamp existed and PARK went around it. The refusal existed and a weaker
-> copy undermined it. The temperature monitor existed and aggregated away the signal. ⭐ **Ask of every
-> guard: what is the path that reaches the hazard without passing through you?**
+> All four are the same shape: **a guard, a test or a message that was written once and then not re-derived against the thing it guards.** The clamp existed and PARK went around it. The refusal existed and a weaker copy undermined it. The temperature monitor existed and aggregated away the signal. ⭐ **Ask of every guard: what is the path that reaches the hazard without passing through you?**
 
 ---
 
 ## 10. The world frame, measured rather than assumed — 2026-08-10
 
-`CartesianTeleop.step()` integrates the twist in the **world** frame (deliberately — body frame is named in
-`src/teleop.py` as a later choice, not an ambiguity). What the world axes physically *are* had never been
-checked, and `scripts/map_axes.py` prompts with them, so a wrong label would make the whole tool lie.
+`CartesianTeleop.step()` integrates the twist in the **world** frame (deliberately — body frame is named in `src/teleop.py` as a later choice, not an ambiguity). What the world axes physically *are* had never been checked, and `scripts/map_axes.py` prompts with them, so a wrong label would make the whole tool lie.
 
 Measured in simulation, integrating a unit twist per component from the real saved park pose:
 
@@ -455,14 +288,9 @@ roll / pitch / yaw        -> rotation about exactly that world axis,
 | `UP` | `+Z` | straight up, away from the table |
 | `ROLL`/`PITCH`/`YAW` | about `+X`/`+Y`/`+Z` | the tool turns; **the tool point stays put** |
 
-⭐ **Consequence worth having: a wrong rotation sign twists the wrist in place rather than flinging the
-gripper across the desk.** That refines ROADMAP step 4's caution — rotation is the *less* dangerous sign to
-get wrong, not the more.
+⭐ **Consequence worth having: a wrong rotation sign twists the wrist in place rather than flinging the gripper across the desk.** That refines ROADMAP step 4's caution — rotation is the *less* dangerous sign to get wrong, not the more.
 
-⚠️ **Deliberately NOT claimed: which way is "forward" or "left".** That depends on how the arm is physically
-turned on the desk, which no file in this repo records. Inventing a label would be exactly the confident,
-plausible, wrong answer §0 is a list of. `map_axes.py` therefore describes the operator's own gesture back
-to them from the reading, and never asserts a gesture-to-axis correspondence that has not been measured.
+⚠️ **Deliberately NOT claimed: which way is "forward" or "left".** That depends on how the arm is physically turned on the desk, which no file in this repo records. Inventing a label would be exactly the confident, plausible, wrong answer §0 is a list of. `map_axes.py` therefore describes the operator's own gesture back to them from the reading, and never asserts a gesture-to-axis correspondence that has not been measured.
 
 ---
 
@@ -472,22 +300,13 @@ Three failures in one attempt. All three are mine, and the first is the importan
 
 ### 11.1 `--no-gripper` silently breaks gravity compensation. The arm falls.
 
-**What Julien saw.** He ran `teleop_session.py --yes --arm B --no-gripper --no-rotation`, which starts in
-GUIDE. His words: *"only the lowest motor… was in weightless mode, and all of the other motors were turned
-off. And therefore it just fell forward because the bottom motor didn't hold it in place."* The status line
-read a calm `hottest 35°C` for **33 seconds** while the arm sank to its own stops (`q [0.21, 0., 0., …]` —
-joints 2 and 3 at their zero limits).
+**What Julien saw.** He ran `teleop_session.py --yes --arm B --no-gripper --no-rotation`, which starts in GUIDE. His words: *"only the lowest motor… was in weightless mode, and all of the other motors were turned off. And therefore it just fell forward because the bottom motor didn't hold it in place."* The status line read a calm `hottest 35°C` for **33 seconds** while the arm sank to its own stops (`q [0.21, 0., 0., …]` — joints 2 and 3 at their zero limits).
 
 **The mechanism, proven in simulation, not guessed:**
 
-1. `GripperType.NO_GRIPPER` does **not** merely leave motor 7 unenabled. It swaps the *dynamics model*
-   `get_yam_robot` uses for gravity compensation (`get_robot.py:186`, `combine_arm_and_gripper_xml`).
-2. The bare arm XML gives its terminal body `mass="1e-6"` — **one microgram** (`yam.xml:38`). The real mass
-   arrives by merging the gripper XML. Summing `linear_4310.xml`: `0.553219 + 0.0710042 + 0.0710042 =`
-   **0.695 kg**, at the far end of the arm.
-3. `zero_gravity_mode=True` sets **`kp = 0`** and commands zero torque (`motor_chain_robot.py:241`), so
-   `motor_torques = joint_commands.torques + g * gravity_comp_factor + friction_comp` reduces to `g` alone
-   (`:366`). **There is no position term to absorb a modelling error.**
+1. `GripperType.NO_GRIPPER` does **not** merely leave motor 7 unenabled. It swaps the *dynamics model* `get_yam_robot` uses for gravity compensation (`get_robot.py:186`, `combine_arm_and_gripper_xml`).
+2. The bare arm XML gives its terminal body `mass="1e-6"` — **one microgram** (`yam.xml:38`). The real mass arrives by merging the gripper XML. Summing `linear_4310.xml`: `0.553219 + 0.0710042 + 0.0710042 =` **0.695 kg**, at the far end of the arm.
+3. `zero_gravity_mode=True` sets **`kp = 0`** and commands zero torque (`motor_chain_robot.py:241`), so `motor_torques = joint_commands.torques + g * gravity_comp_factor + friction_comp` reduces to `g` alone (`:366`). **There is no position term to absorb a modelling error.**
 
 Measured gravity torque at the saved park pose:
 
@@ -499,36 +318,19 @@ shortfall              [ 0.00, -2.14, +2.47, +0.85, -0.07, -0.00] Nm
                                        ^^^^^ joint 3 (elbow_pitch): 39% short
 ```
 
-39% of the elbow's holding torque, unopposed. The arm folds forward. **Julien's observation was exactly
-right, and his interpretation was nearly right:** the other motors were not off, they were commanded with
-`kp = 0` and an under-computed gravity torque, which feels identical. Joint 1 felt free because `base_yaw`
-rotates about the vertical and gravity never loads it — in *any* mode.
+39% of the elbow's holding torque, unopposed. The arm folds forward. **Julien's observation was exactly right, and his interpretation was nearly right:** the other motors were not off, they were commanded with `kp = 0` and an under-computed gravity torque, which feels identical. Joint 1 felt free because `base_yaw` rotates about the vertical and gravity never loads it — in *any* mode.
 
-**⛔ THE RULE THAT FOLLOWS: `--no-gripper` is not a safe subset of normal operation. It is a different, less
-accurate robot.** It was reached for as "the smallest possible experiment", and it is the opposite: it
-removes the one thing that must not be removed.
+**⛔ THE RULE THAT FOLLOWS: `--no-gripper` is not a safe subset of normal operation. It is a different, less accurate robot.** It was reached for as "the smallest possible experiment", and it is the opposite: it removes the one thing that must not be removed.
 
-**Fix:** `build_robot()` now passes `ee_mass=GRIPPER_MASS_KG` (0.695) on the no-gripper path. Worst residual
-falls **2.465 → 0.188 Nm** (3% of the elbow's requirement), verified in simulation.
-⚠️ **`ee_inertia` cannot be used** — the SDK emits an `ipos` attribute MuJoCo rejects (*"Schema violation:
-unrecognized attribute: 'ipos'"*, it should be `pos`). That is a bug in the vendored tree, so the
-centre-of-mass offset stays uncorrected and 0.188 Nm is the residual we cannot remove.
+**Fix:** `build_robot()` now passes `ee_mass=GRIPPER_MASS_KG` (0.695) on the no-gripper path. Worst residual falls **2.465 → 0.188 Nm** (3% of the elbow's requirement), verified in simulation. ⚠️ **`ee_inertia` cannot be used** — the SDK emits an `ipos` attribute MuJoCo rejects (*"Schema violation: unrecognized attribute: 'ipos'"*, it should be `pos`). That is a bug in the vendored tree, so the centre-of-mass offset stays uncorrected and 0.188 Nm is the residual we cannot remove.
 
-**Also fixed: GUIDE now prints live drift** from wherever it went weightless. The cause is gone, but the
-instrument should have existed anyway — nothing on screen was measuring the one quantity that was failing.
-*Same lesson as §9.3's jaw temperature: a readout must show what can fail, not what looks calm.*
+**Also fixed: GUIDE now prints live drift** from wherever it went weightless. The cause is gone, but the instrument should have existed anyway — nothing on screen was measuring the one quantity that was failing. *Same lesson as §9.3's jaw temperature: a readout must show what can fail, not what looks calm.*
 
-> **Considered and rejected: an automatic sink-detector that forces GUIDE → HOLD.** In GUIDE, motion is
-> *expected* — Julien is pushing the arm by hand — and there is no signal that distinguishes "he is lowering
-> it" from "it is falling". Every threshold either false-fires during legitimate hand-guiding or is too slow
-> to matter. Showing the number and fixing the cause beats automating a judgement the code cannot make.
+> **Considered and rejected: an automatic sink-detector that forces GUIDE → HOLD.** In GUIDE, motion is *expected* — Julien is pushing the arm by hand — and there is no signal that distinguishes "he is lowering it" from "it is falling". Every threshold either false-fires during legitimate hand-guiding or is too slow to matter. Showing the number and fixing the cause beats automating a judgement the code cannot make.
 
 ### 11.2 The remap mode destroyed the hand-dialled axis map
 
-The MAP mode written earlier that same session **bound whichever motion was selected the instant any clear
-puck deflection arrived, and then auto-advanced to the next motion.** So the entirely natural act of *"let me
-see what this does"* rewrote the map, cascading through several motions, each binding stealing a puck axis
-and unbinding its previous owner. Then the session **saved it unconditionally on exit.**
+The MAP mode written earlier that same session **bound whichever motion was selected the instant any clear puck deflection arrived, and then auto-advanced to the next motion.** So the entirely natural act of *"let me see what this does"* rewrote the map, cascading through several motions, each binding stealing a puck axis and unbinding its previous owner. Then the session **saved it unconditionally on exit.**
 
 Recovered from the terminal:
 
@@ -538,8 +340,7 @@ axis map saved → config/spacemouse_map.json
   ⚠️  UNBOUND, the arm will not perform these: X, UP, PITCH
 ```
 
-His hand-dialled `[1, -1, -1, 1, 1, 1]`, produced on real hardware, was overwritten. It survived **only
-because the file happened to be committed to git.**
+His hand-dialled `[1, -1, -1, 1, 1, 1]`, produced on real hardware, was overwritten. It survived **only because the file happened to be committed to git.**
 
 **Three compounding faults, all now fixed:**
 
@@ -549,9 +350,7 @@ because the file happened to be committed to git.**
 | auto-advance cascaded one wiggle into many bindings | there is no cursor and no advance any more |
 | unconditional save on exit | saved **only if changed**, and the previous contents are copied to `config/spacemouse_map.prev.json` first |
 
-> ⭐ **The generalisation, and it is the same as §9's:** *ask what path reaches the hazard without passing
-> through your guard.* Here the hazard was data loss and there was no guard at all — because "explore" and
-> "commit a change" had been collapsed into the same gesture.
+> ⭐ **The generalisation, and it is the same as §9's:** *ask what path reaches the hazard without passing through your guard.* Here the hazard was data loss and there was no guard at all — because "explore" and "commit a change" had been collapsed into the same gesture.
 
 ### 11.3 `mjpython --view` cannot start, and I claimed it worked
 
@@ -559,9 +358,7 @@ because the file happened to be committed to git.**
 failed to dlopen '/…/.venv/bin/python3': Library not loaded: @rpath/libpython3.12.dylib
 ```
 
-`mjpython` is a launcher app bundle that dlopens the venv's interpreter, and the uv-managed CPython does not
-place `libpython3.12.dylib` anywhere on mjpython's rpath. **It is present**, at
-`~/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/`, so one environment variable fixes it:
+`mjpython` is a launcher app bundle that dlopens the venv's interpreter, and the uv-managed CPython does not place `libpython3.12.dylib` anywhere on mjpython's rpath. **It is present**, at `~/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib/`, so one environment variable fixes it:
 
 ```bash
 DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/share/uv/python/cpython-3.12.12-macos-aarch64-none/lib" \
@@ -570,23 +367,15 @@ DYLD_FALLBACK_LIBRARY_PATH="$HOME/.local/share/uv/python/cpython-3.12.12-macos-a
 
 Verified: `mjpython OK, mujoco 3.11.0`.
 
-⛔ **The process failure matters more than the fix.** I recommended this command after checking that the
-`mjpython` *binary existed* — `ls` — and reported it as "verified". Presence is not function. That is
-**"verify the consequence, not the mechanism"** (§0, and the founding-session lesson), violated in the same
-turn that quoted it. *An `ls` is never verification of behaviour.*
+⛔ **The process failure matters more than the fix.** I recommended this command after checking that the `mjpython` *binary existed* — `ls` — and reported it as "verified". Presence is not function. That is **"verify the consequence, not the mechanism"** (§0, and the founding-session lesson), violated in the same turn that quoted it. *An `ls` is never verification of behaviour.*
 
 ---
 
 ## 12. CONTROLS mode — Julien's design, and why it replaced mine
 
-Mine was: hold the arm still, select a motion, gesture to bind it. It was wrong for a reason he identified
-immediately: **you cannot decide a direction is wrong until you have watched the arm go that way**, and the
-same document that admits "+X and +Y are horizontal but which one points away from you is not recorded
-anywhere" then asked him to bind X from memory. Incoherent.
+Mine was: hold the arm still, select a motion, gesture to bind it. It was wrong for a reason he identified immediately: **you cannot decide a direction is wrong until you have watched the arm go that way**, and the same document that admits "+X and +Y are horizontal but which one points away from you is not recorded anywhere" then asked him to bind X from memory. Incoherent.
 
-His design, in his words: *"similar to teleoperate, just move the space mouse in different directions and
-only the strongest direction is actually moved, and then I can press some key which reverses the direction of
-that specific control."*
+His design, in his words: *"similar to teleoperate, just move the space mouse in different directions and only the strongest direction is actually moved, and then I can press some key which reverses the direction of that specific control."*
 
 **Why it is better, point by point:**
 
@@ -598,97 +387,53 @@ that specific control."*
 | what a deflection does | **observes only** | *edited the map* — the data-loss bug in §11.2 |
 | the edit | an explicit key on "the control I just used" | a cursor and an auto-advancing wizard |
 
-**Implementation.** `isolate()` keeps only the largest-magnitude axis, with 1.3× hysteresis so two near-equal
-axes cannot make the arm jitter between two motions. The session remembers the last axis that actually moved
-— **with no timeout**, so `f` still works after the puck has sprung back to centre and his hand has left it.
-`f` resolves puck axis → motion via `AxisMap.motion_driven_by()` and flips that motion's sign. `1`-`6`
-reassign that same control to a different motion, taking **the direction he was last pushing** as the new
-motion's positive sense, so "push the way you want it, then name the motion" reads the same as a gesture.
+**Implementation.** `isolate()` keeps only the largest-magnitude axis, with 1.3× hysteresis so two near-equal axes cannot make the arm jitter between two motions. The session remembers the last axis that actually moved — **with no timeout**, so `f` still works after the puck has sprung back to centre and his hand has left it. `f` resolves puck axis → motion via `AxisMap.motion_driven_by()` and flips that motion's sign. `1`-`6` reassign that same control to a different motion, taking **the direction he was last pushing** as the new motion's positive sense, so "push the way you want it, then name the motion" reads the same as a gesture.
 
-Speed is **half** teleop's (`CONTROLS_SCALE = 0.5`): it is the mode you enter with a mapping you have not yet
-confirmed, so a wrong direction should be a slow wrong direction. Everything below the twist is the
-*existing, hardware-proven* chain — IK, per-cycle joint-step clamp, joint limits, workspace box, `SafeRobot`
-rate limiter. **CONTROLS mode adds a twist source, not a control path.**
+Speed is **half** teleop's (`CONTROLS_SCALE = 0.5`): it is the mode you enter with a mapping you have not yet confirmed, so a wrong direction should be a slow wrong direction. Everything below the twist is the *existing, hardware-proven* chain — IK, per-cycle joint-step clamp, joint limits, workspace box, `SafeRobot` rate limiter. **CONTROLS mode adds a twist source, not a control path.**
 
 ### 12.1 What using it on the arm changed — 2026-08-10
 
-It worked, and Julien's live map came out a genuine permutation:
-`X←y+  Y←x+  UP←z−  ROLL←pitch+  PITCH←roll+  YAW←yaw−`. **Sign flips alone could not have expressed that**,
-so the permutation half earned its place rather than being speculative generality. Two things came back:
+It worked, and Julien's live map came out a genuine permutation: `X←y+  Y←x+  UP←z−  ROLL←pitch+  PITCH←roll+  YAW←yaw−`. **Sign flips alone could not have expressed that**, so the permutation half earned its place rather than being speculative generality. Two things came back:
 
-**1. `1`-`6` now SWAP instead of steal-and-unbind.** *"Instead of only changing it to that specific thing and
-then just deleting the other one, it would just swap whatever was on the other… that will make it a lot
-easier."* He is right: the commonest edit is **two controls in each other's places**, and stealing left an
-orphan he then had to notice and re-bind, with a motion silently dead in between. A straight exchange is also
-an **involution** — the same key again undoes it — and preserves injectivity by construction. The sign
-travels with the puck axis, because the unit being exchanged is the whole control (which axis, pushed which
-way), not just the wiring.
+**1. `1`-`6` now SWAP instead of steal-and-unbind.** *"Instead of only changing it to that specific thing and then just deleting the other one, it would just swap whatever was on the other… that will make it a lot easier."* He is right: the commonest edit is **two controls in each other's places**, and stealing left an orphan he then had to notice and re-bind, with a motion silently dead in between. A straight exchange is also an **involution** — the same key again undoes it — and preserves injectivity by construction. The sign travels with the puck axis, because the unit being exchanged is the whole control (which axis, pushed which way), not just the wiring.
 
-**2. `,` and `.` were missing from the CONTROLS key handler**, so rotation speed could not be changed there
-at all while linear could. The keys had been copied from the drive-mode handler and the second pair dropped.
-⚠️ **The reason it took a hardware session to notice is the interesting part:** the status line showed only
-the *resulting* speed of the active axis, so a key that did nothing was indistinguishable from a key that
-worked. Both scales are now printed continuously. *Same shape as the jaw temperature and the GUIDE drift —
-a readout must show the quantity a key is supposed to change.*
+**2. `,` and `.` were missing from the CONTROLS key handler**, so rotation speed could not be changed there at all while linear could. The keys had been copied from the drive-mode handler and the second pair dropped. ⚠️ **The reason it took a hardware session to notice is the interesting part:** the status line showed only the *resulting* speed of the active axis, so a key that did nothing was indistinguishable from a key that worked. Both scales are now printed continuously. *Same shape as the jaw temperature and the GUIDE drift — a readout must show the quantity a key is supposed to change.*
 
 ---
 
 ## 13. Bimanual prerequisites — built 2026-08-10, and one gap that would have bitten silently
 
-**Per-arm axis maps (`AxisMapStore`).** Shared by default — Julien's *"probably the same, actually"* — with an
-override created only by an explicit `--fork-map`. Defaulting to a map per arm would let the two silently
-diverge, after which a puck that feels wrong on G is indistinguishable from a map that was never copied
-across. ⛔ **Whatever reads it must print which scope it is editing**; tuning G and silently changing B
-is the same shape as the bug in §11.2 — an edit whose blast radius was larger than the operator believed.
-A legacy flat file still loads as the shared map, so nothing hand-dialled is lost.
+**Per-arm axis maps (`AxisMapStore`).** Shared by default — Julien's *"probably the same, actually"* — with an override created only by an explicit `--fork-map`. Defaulting to a map per arm would let the two silently diverge, after which a puck that feels wrong on G is indistinguishable from a map that was never copied across. ⛔ **Whatever reads it must print which scope it is editing**; tuning G and silently changing B is the same shape as the bug in §11.2 — an edit whose blast radius was larger than the operator believed. A legacy flat file still loads as the shared map, so nothing hand-dialled is lost.
 
-**⛔ `pick_device_by_wiggle()` could assign the same puck to both arms.** Called twice without an `exclude`,
-its single-device shortcut returns that device unconditionally, and with two attached nothing stopped the
-operator moving the one they had already assigned. **Both failures are silent, and the symptom — two arms
-following one hand — reads as a control bug rather than a device-assignment bug.** Exactly the class of the
-CAN adapter chosen by index that silently retargeted the wrong robot (§0 #5). Now takes `exclude=[path, …]`
-and says plainly when no unassigned puck remains.
+**⛔ `pick_device_by_wiggle()` could assign the same puck to both arms.** Called twice without an `exclude`, its single-device shortcut returns that device unconditionally, and with two attached nothing stopped the operator moving the one they had already assigned. **Both failures are silent, and the symptom — two arms following one hand — reads as a control bug rather than a device-assignment bug.** Exactly the class of the CAN adapter chosen by index that silently retargeted the wrong robot (§0 #5). Now takes `exclude=[path, …]` and says plainly when no unassigned puck remains.
 
-**Two-arm IK, measured (it never had been):** `0.100 ms` mean per cycle, p99 `0.110 ms`, for two
-`CartesianTeleop.step()` calls. Against a 10 ms deadline with ~6.2 ms of CAN for 14 motors, that is ~3.7 ms
-spare. **IK is not the bimanual bottleneck**, and the assumption that it might be is now retired.
+**Two-arm IK, measured (it never had been):** `0.100 ms` mean per cycle, p99 `0.110 ms`, for two `CartesianTeleop.step()` calls. Against a 10 ms deadline with ~6.2 ms of CAN for 14 motors, that is ~3.7 ms spare. **IK is not the bimanual bottleneck**, and the assumption that it might be is now retired.
 
 ---
 
 ## 14. A test whose premise expires
 
-`test_backward_compatible_with_hand_dialled_file` loaded `config/spacemouse_map.json` and asserted it was
-still sign-only. It failed the moment Julien legitimately saved a permutation — **correctly**, but for a
-useless reason: its own guard fired, not the property it was protecting.
+`test_backward_compatible_with_hand_dialled_file` loaded `config/spacemouse_map.json` and asserted it was still sign-only. It failed the moment Julien legitimately saved a permutation — **correctly**, but for a useless reason: its own guard fired, not the property it was protecting.
 
-**The property is about the file FORMAT, not about whatever is currently in the file.** It now runs against a
-pinned fixture string, and a separate test checks that the live config loads, is injective, and round-trips.
+**The property is about the file FORMAT, not about whatever is currently in the file.** It now runs against a pinned fixture string, and a separate test checks that the live config loads, is injective, and round-trips.
 
-⭐ **Generalises: a test whose subject is a file the user edits has a moving target.** Pin the fixture; test
-the live artefact only for properties that must hold *whatever* it contains.
+⭐ **Generalises: a test whose subject is a file the user edits has a moving target.** Pin the fixture; test the live artefact only for properties that must hold *whatever* it contains.
 
 ---
 
 ## 15. ⛔⭐ PARK was a treadmill — it commanded the measurement
 
-**Julien reported PARK broken twice**, after it had been "fixed" once. The first round of fixes was real (a
-7-vs-6 length crash, a bypassed gripper clamp, a skipped command cycle) but **none of them was why it did
-not move**. This is.
+**Julien reported PARK broken twice**, after it had been "fixed" once. The first round of fixes was real (a 7-vs-6 length crash, a bypassed gripper clamp, a skipped command cycle) but **none of them was why it did not move**. This is.
 
 ```python
 robot.command_joint_pos(q + np.clip(park_target - q, -stepmax, stepmax))   # q = MEASURED
 ```
 
-It re-anchored to where the arm actually was, **every cycle**. So the commanded position was never more than
-one step ahead of reality: `PARK_SPEED × dt = 0.40 × 0.01 =` **0.004 rad, about 0.23°.**
+It re-anchored to where the arm actually was, **every cycle**. So the commanded position was never more than one step ahead of reality: `PARK_SPEED × dt = 0.40 × 0.01 =` **0.004 rad, about 0.23°.**
 
-A position controller makes torque from the *error* between command and measurement. Capping that error at
-0.23° caps the torque at `kp × 0.004` — not enough to overcome static friction plus 4.3 kg of arm. So the arm
-does not move; because it does not move the measurement does not change; and because the measurement does not
-change, the next cycle commands the same 0.23° offset. **A treadmill.**
+A position controller makes torque from the *error* between command and measurement. Capping that error at 0.23° caps the torque at `kp × 0.004` — not enough to overcome static friction plus 4.3 kg of arm. So the arm does not move; because it does not move the measurement does not change; and because the measurement does not change, the next cycle commands the same 0.23° offset. **A treadmill.**
 
-⛔ **And it fails in this stack's signature style: it printed `parking… 1.2 rad to go` indefinitely, raised
-nothing, and read as a controller that was merely slow.**
+⛔ **And it fails in this stack's signature style: it printed `parking… 1.2 rad to go` indefinitely, raised nothing, and read as a controller that was merely slow.**
 
 **TELEOP never had the bug, and that contrast is the proof:**
 
@@ -697,98 +442,61 @@ step = q_target - prev_q                                   # prev_q = last COMMA
 q_target = prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
 ```
 
-It integrates from the **command**, never from the measurement, so when the arm lags its command keeps
-advancing, the error grows, and the torque grows with it until the joint moves. PARK was the odd one out.
+It integrates from the **command**, never from the measurement, so when the arm lags its command keeps advancing, the error grows, and the torque grows with it until the joint moves. PARK was the odd one out.
 
-**Fix:** `advance_park_command()` — a trajectory that runs ahead of the arm as far as it needs to.
-`SafeRobot.max_lag` (0.25 rad) is what stops it running away, which is exactly the right place for that guard
-and was already there. Completion is judged on the **measured** pose, never the command, because the command
-always arrives first. A **stall detector** now says so and holds if the measured error stops improving for
-4 s — the silence is precisely how this survived two sessions.
+**Fix:** `advance_park_command()` — a trajectory that runs ahead of the arm as far as it needs to. `SafeRobot.max_lag` (0.25 rad) is what stops it running away, which is exactly the right place for that guard and was already there. Completion is judged on the **measured** pose, never the command, because the command always arrives first. A **stall detector** now says so and holds if the measured error stops improving for 4 s — the silence is precisely how this survived two sessions.
 
-`scripts/test_park_target.py` includes `test_the_old_formula_provably_could_not_converge`, which reproduces
-the old expression and asserts that after 20 simulated seconds the command is still 0.004 rad from a stuck
-arm. **The diagnosis is mechanical, not a story.**
+`scripts/test_park_target.py` includes `test_the_old_formula_provably_could_not_converge`, which reproduces the old expression and asserts that after 20 simulated seconds the command is still 0.004 rad from a stuck arm. **The diagnosis is mechanical, not a story.**
 
-> ⭐ **The generalisation, and it is the deepest one this project has produced so far:**
-> **a controller must command a trajectory, not the thing it is measuring.** Feeding the measurement back
-> into the command caps the error, and the error *is* the actuation. Anywhere you see
-> `command = measured + something_small`, ask what makes it converge — often nothing does.
+> ⭐ **The generalisation, and it is the deepest one this project has produced so far:** **a controller must command a trajectory, not the thing it is measuring.** Feeding the measurement back into the command caps the error, and the error *is* the actuation. Anywhere you see `command = measured + something_small`, ask what makes it converge — often nothing does.
 
 ---
 
 ## 16. A refusal that named the wrong arm
 
-G's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json`
-holds `B` only — and then printed:
+G's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json` holds `B` only — and then printed:
 
 ```
 Run this once:  uv run scripts/calibrate_gripper.py --yes
 ```
 
-**No `--arm G`.** Following that literally drives **B's** jaws into both mechanical stops, while the arm
-you were trying to start stays uncalibrated and the same refusal comes back. The other two refusals in
-`yam_robot.py` both interpolate `--arm {arm}`; this one did not.
+**No `--arm G`.** Following that literally drives **B's** jaws into both mechanical stops, while the arm you were trying to start stays uncalibrated and the same refusal comes back. The other two refusals in `yam_robot.py` both interpolate `--arm {arm}`; this one did not.
 
-⛔ **A remediation message that names the wrong target is worse than no message: it converts a clean refusal
-into a wrong action.** Now fixed, and it also offers `--no-gripper` as the alternative.
+⛔ **A remediation message that names the wrong target is worse than no message: it converts a clean refusal into a wrong action.** Now fixed, and it also offers `--no-gripper` as the alternative.
 
 ---
 
 ## 17. The puck buttons drive the gripper
 
-Julien: *"there are two buttons on the left and the right. One could be open, one could be closed… and then
-pressing whatever the switch button was, I think f, could then switch it back."*
+Julien: *"there are two buttons on the left and the right. One could be open, one could be closed… and then pressing whatever the switch button was, I think f, could then switch it back."*
 
-⛔ **The masks are learned by pressing, never assumed.** Which physical button sets which HID bit has never
-been measured on this unit, and "assumed an identity that was never checked" is the single most repeated
-failure in this file — the CAN adapter by index, the puck by index, the gripper limits in the wrong frame.
-`b` in CONTROLS mode asks for OPEN, then CLOSE, and refuses to give one button both jobs (a button that both
-opens and closes is a coin flip, not a control).
+⛔ **The masks are learned by pressing, never assumed.** Which physical button sets which HID bit has never been measured on this unit, and "assumed an identity that was never checked" is the single most repeated failure in this file — the CAN adapter by index, the puck by index, the gripper limits in the wrong frame. `b` in CONTROLS mode asks for OPEN, then CLOSE, and refuses to give one button both jobs (a button that both opens and closes is a coin flip, not a control).
 
-⭐ **`f` reverses the buttons, because `f` already means "reverse the control I just used".** If that was an
-axis it flips the sign; if it was a button it swaps open and close. One rule, no new vocabulary — Julien
-reached for `f` unprompted, which is the sign the rule is the right one. Like `swap()`, it is an involution.
+⭐ **`f` reverses the buttons, because `f` already means "reverse the control I just used".** If that was an axis it flips the sign; if it was a button it swaps open and close. One rule, no new vocabulary — Julien reached for `f` unprompted, which is the sign the rule is the right one. Like `swap()`, it is an involution.
 
-Buttons are **hold-to-move** at 0.6 normalised units/s (~1.6 s for the full stroke), not step-per-press: a
-gripper wants squeeze-and-hold. `o`/`c` remain as keyboard steps. The assignment lives in the axis map, so it
-is **per-arm** for free, and an unset button writes no key at all rather than a `null`.
+Buttons are **hold-to-move** at 0.6 normalised units/s (~1.6 s for the full stroke), not step-per-press: a gripper wants squeeze-and-hold. `o`/`c` remain as keyboard steps. The assignment lives in the axis map, so it is **per-arm** for free, and an unset button writes no key at all rather than a `null`.
 
 ### 17.1 …and it shipped broken, in the most annoying possible way
 
-Julien, next session: *"the space mouse buttons that should control the gripper don't do anything. And then
-it says press b to set the gripper, and then b does nothing either."*
+Julien, next session: *"the space mouse buttons that should control the gripper don't do anything. And then it says press b to set the gripper, and then b does nothing either."*
 
-`b` was handled **inside the CONTROLS-mode branch**, while the *"press b to set the gripper buttons"* hint
-printed from the button-reading block, which ran in **TELEOP as well**. So in TELEOP the hint appeared, `b`
-fell through to the catch-all, and nothing happened. Buttons were also read only in teleop/map, so they were
-dead in GUIDE and HOLD entirely.
+`b` was handled **inside the CONTROLS-mode branch**, while the *"press b to set the gripper buttons"* hint printed from the button-reading block, which ran in **TELEOP as well**. So in TELEOP the hint appeared, `b` fell through to the catch-all, and nothing happened. Buttons were also read only in teleop/map, so they were dead in GUIDE and HOLD entirely.
 
-⛔ **A message that tells you to press a key which does nothing where you are is the same defect as the
-refusal that named the wrong arm (§16): the text is right, the context is wrong, and it costs a session to
-find out.** Button assignment is a property of the **device**, not of the arm's mode, so it now sits above
-the mode dispatch and works everywhere. The puck is read every cycle in every mode — which also stops HID
-reports queueing up during GUIDE/HOLD and arriving in a burst at the next mode switch.
+⛔ **A message that tells you to press a key which does nothing where you are is the same defect as the refusal that named the wrong arm (§16): the text is right, the context is wrong, and it costs a session to find out.** Button assignment is a property of the **device**, not of the arm's mode, so it now sits above the mode dispatch and works everywhere. The puck is read every cycle in every mode — which also stops HID reports queueing up during GUIDE/HOLD and arriving in a burst at the next mode switch.
 
 ---
 
 ## 18. ⛔⭐ "It moves very incoherently in weird positions" — a pure rotation moved the tool point 44 cm
 
-Julien, 2026-08-11: *"the inverse kinematics being weird and not working as intended, specifically when the
-robot gets into weird positions, and then it starts moving very, very incoherently."*
+Julien, 2026-08-11: *"the inverse kinematics being weird and not working as intended, specifically when the robot gets into weird positions, and then it starts moving very, very incoherently."*
 
 ### The first hypothesis was wrong, and measuring it saved a day
 
-The obvious story — *near a singularity the Jacobian blows up, joint velocities explode, and the per-joint
-`MAX_JOINT_STEP` clamp distorts the direction* — is **refuted**. Measured: mink's `lm_damping` keeps the
-requested joint velocity around **0.45 rad/s against a 1.5 rad/s clamp**, so the clamp never binds, and at a
-genuine singularity (`σ_min = 0.0001`, folded near the base) the arm asks for **0.03 rad/s** — it barely
-moves *at all* rather than blowing up. Direction error from clamping: **0.00°** at every pose tested.
+The obvious story — *near a singularity the Jacobian blows up, joint velocities explode, and the per-joint `MAX_JOINT_STEP` clamp distorts the direction* — is **refuted**. Measured: mink's `lm_damping` keeps the requested joint velocity around **0.45 rad/s against a 1.5 rad/s clamp**, so the clamp never binds, and at a genuine singularity (`σ_min = 0.0001`, folded near the base) the arm asks for **0.03 rad/s** — it barely moves *at all* rather than blowing up. Direction error from clamping: **0.00°** at every pose tested.
 
 ### What is actually happening
 
-Reproducing the real control loop — IK, joint-step clamp, joint-limit clamp, workspace box — and commanding
-**pure roll at 0.6 rad/s** from the park pose:
+Reproducing the real control loop — IK, joint-step clamp, joint-limit clamp, workspace box — and commanding **pure roll at 0.6 rad/s** from the park pose:
 
 ```
    t     |target-EE|    |IK q - commanded q|    tool point moved
@@ -799,28 +507,16 @@ Reproducing the real control loop — IK, joint-step clamp, joint-limit clamp, w
 
 **A pure rotation command translated the tool point 44 cm.** The chain:
 
-1. A wrist joint reaches its limit — the tight ones are ±1.5708 rad. *(Confirmed by the second column: the
-   gap between IK's internal joint state and the commanded one pins at exactly **0.0800**, which **is**
-   `JOINT_LIMIT_MARGIN`. A joint is clamped at the margin while the IK believes it is at the true limit.)*
-2. `CartesianTeleop.step()` advances `self.target` by the twist **unconditionally**. It never asks whether
-   the arm followed, so the orientation goal runs arbitrarily far past anything reachable.
-3. The QP now holds an impossible orientation target, and `position_cost` (1.0) and `orientation_cost` (0.5)
-   are **traded against each other** — so it starts moving the **tool point** to partially satisfy a rotation
-   it can never achieve.
+1. A wrist joint reaches its limit — the tight ones are ±1.5708 rad. *(Confirmed by the second column: the gap between IK's internal joint state and the commanded one pins at exactly **0.0800**, which **is** `JOINT_LIMIT_MARGIN`. A joint is clamped at the margin while the IK believes it is at the true limit.)*
+2. `CartesianTeleop.step()` advances `self.target` by the twist **unconditionally**. It never asks whether the arm followed, so the orientation goal runs arbitrarily far past anything reachable.
+3. The QP now holds an impossible orientation target, and `position_cost` (1.0) and `orientation_cost` (0.5) are **traded against each other** — so it starts moving the **tool point** to partially satisfy a rotation it can never achieve.
 4. The workspace box re-clamps translation, fighting the orientation task — hence the oscillation above.
 
 ### Two fixes, and the second one is the surprise
 
-**(a) Anti-windup on the goal.** `_limit_lead()` bounds how far `target` may run ahead of the pose actually
-achieved — 0.05 m and 0.25 rad, separately, because translation and rotation fail independently (the
-workspace box already happened to bound translation, which is why only rotation misbehaved). **This is
-`SafeRobot.max_lag` one layer up**, and it needs no model of *why* the arm cannot follow: joint limit,
-singularity, rate limiter or an obstacle all present as an unclosable gap, and bounding the gap bounds them
-all. Verified bounded, not merely slowed: the worst lead is **identical at 10 s and 80 s** (0.250060 rad).
+**(a) Anti-windup on the goal.** `_limit_lead()` bounds how far `target` may run ahead of the pose actually achieved — 0.05 m and 0.25 rad, separately, because translation and rotation fail independently (the workspace box already happened to bound translation, which is why only rotation misbehaved). **This is `SafeRobot.max_lag` one layer up**, and it needs no model of *why* the arm cannot follow: joint limit, singularity, rate limiter or an obstacle all present as an unclosable gap, and bounding the gap bounds them all. Verified bounded, not merely slowed: the worst lead is **identical at 10 s and 80 s** (0.250060 rad).
 
-**(b) `orientation_cost` 0.5 → 0.05.** Anti-windup alone cut the wander from 0.44 m to 0.40 m — barely
-anything — because a *persistent* unreachable orientation error still bleeds into position. The cost ratio is
-the real lever, and the measurement is counter-intuitive:
+**(b) `orientation_cost` 0.5 → 0.05.** Anti-windup alone cut the wander from 0.44 m to 0.40 m — barely anything — because a *persistent* unreachable orientation error still bleeds into position. The cost ratio is the real lever, and the measurement is counter-intuitive:
 
 | `position:orientation` | pure-roll tool wander | rotation achieved |
 |---|---|---|
@@ -829,81 +525,46 @@ the real lever, and the measurement is counter-intuitive:
 | **1.0 : 0.05** ← now | **0.002 m** | **134.6°** |
 | 1.0 : 0.01 | 0.000 m | 18.2° |
 
-⭐ **The old default was the worst of both worlds: it wandered 44 cm *and* achieved the least rotation.** A
-*higher* orientation cost produced *less* rotation, because the effort went into satisfying an unreachable
-orientation by translating, which drags the arm into a configuration that can rotate even less. Verified at
-three starting poses; small rotations are unaffected and translation reach is unchanged (0.319 → 0.320 m).
+⭐ **The old default was the worst of both worlds: it wandered 44 cm *and* achieved the least rotation.** A *higher* orientation cost produced *less* rotation, because the effort went into satisfying an unreachable orientation by translating, which drags the arm into a configuration that can rotate even less. Verified at three starting poses; small rotations are unaffected and translation reach is unchanged (0.319 → 0.320 m).
 
-> **The priority this encodes, in one line: never sacrifice where the tool IS to chase where it POINTS.**
-> A wrist that cannot turn should simply not turn — it should not drag the whole arm across the desk.
+> **The priority this encodes, in one line: never sacrifice where the tool IS to chase where it POINTS.** A wrist that cannot turn should simply not turn — it should not drag the whole arm across the desk.
 
-**Also added:** the TELEOP status line now prints `⚠️ STUCK lead 5cm/14°` when the goal is pinned near its
-limit. An arm that cannot follow used to present *only* as an arm behaving strangely.
+**Also added:** the TELEOP status line now prints `⚠️ STUCK lead 5cm/14°` when the goal is pinned near its limit. An arm that cannot follow used to present *only* as an arm behaving strangely.
 
-⚠️ **`scripts/test_teleop_ik.py` reproduces the whole loop, not just `CartesianTeleop`** — the bug only
-appears when the clamps interact with the IK, so testing the class in isolation would have missed it
-entirely. One test deliberately restores `orientation_cost=0.5` and asserts the wander **comes back**: if
-that ever stops failing, the cause has moved.
+⚠️ **`scripts/test_teleop_ik.py` reproduces the whole loop, not just `CartesianTeleop`** — the bug only appears when the clamps interact with the IK, so testing the class in isolation would have missed it entirely. One test deliberately restores `orientation_cost=0.5` and asserts the wander **comes back**: if that ever stops failing, the cause has moved.
 
 ---
 
 ## 19. ⭐ Driving from the camera's point of view is a FRAME question, not a camera question
 
-Julien, 2026-08-11, wanting to use the C920 as a stand-in for the wrist cameras that have not arrived:
-*"I would provisionally like to use the Logitech camera… mounted on one of the arms as a test so that I can
-try to learn to control the arm from the point of view of the camera to get the tilts right and stuff."*
+Julien, 2026-08-11, wanting to use the C920 as a stand-in for the wrist cameras that have not arrived: *"I would provisionally like to use the Logitech camera… mounted on one of the arms as a test so that I can try to learn to control the arm from the point of view of the camera to get the tilts right and stuff."*
 
-**The interesting half of that request has nothing to do with cameras.** Until now every twist was
-interpreted in the **world** frame — and `teleop.py` flagged the consequence from the very first version:
+**The interesting half of that request has nothing to do with cameras.** Until now every twist was interpreted in the **world** frame — and `teleop.py` flagged the consequence from the very first version:
 
-> *"World-frame integration: rotation pre-multiplies, so a twist means the same thing regardless of how the
-> gripper happens to be oriented. Body frame would be more natural to a hand holding the puck, and is a
-> deliberate later choice — not something to leave ambiguous now."*
+> *"World-frame integration: rotation pre-multiplies, so a twist means the same thing regardless of how the gripper happens to be oriented. Body frame would be more natural to a hand holding the puck, and is a deliberate later choice — not something to leave ambiguous now."*
 
-This is that later choice, and the camera is what forces it. Looking **at** the arm, world frame is right:
-"forward" is a fixed direction on the desk, predictable, and a wrong sign only nudges. Looking **through** a
-wrist camera, world frame is wrong the moment you tilt: "push forward" then means forward *in the image*,
-and the image turns with the wrist. **That is exactly what "get the tilts right" is.**
+This is that later choice, and the camera is what forces it. Looking **at** the arm, world frame is right: "forward" is a fixed direction on the desk, predictable, and a wrong sign only nudges. Looking **through** a wrist camera, world frame is wrong the moment you tilt: "push forward" then means forward *in the image*, and the image turns with the wrist. **That is exactly what "get the tilts right" is.**
 
-So `CartesianTeleop` gained `frame = world | tool | camera`, applied as `R_wf @ v` and `R_wf @ ω` before the
-existing world-frame integration — which leaves the anti-windup and the workspace box untouched. `v` cycles
-it live, and that is safe without a resync because a twist is a *velocity*: a frame change alters the
-interpretation from the next cycle and leaves no stale cached state, unlike a mode change.
+So `CartesianTeleop` gained `frame = world | tool | camera`, applied as `R_wf @ v` and `R_wf @ ω` before the existing world-frame integration — which leaves the anti-windup and the workspace box untouched. `v` cycles it live, and that is safe without a resync because a twist is a *velocity*: a frame change alters the interpretation from the next cycle and leaves no stale cached state, unlike a mode change.
 
-⛔ **`camera` is the MODELLED D405 mount and is WRONG for the hand-mounted C920.** The MJCF puts the D405 on
-the flange at a 25° cant with `+Z` along the optical axis; a webcam cable-tied on by hand shares none of
-that, and nobody has measured where it actually sits. **Use `tool` for the stand-in**, mount the camera
-roughly looking the way the gripper points, and dial the remainder out with the axis map. Using `camera` for
-an unmeasured mount would be inventing a transform — the single most repeated failure in this file.
+⛔ **`camera` is the MODELLED D405 mount and is WRONG for the hand-mounted C920.** The MJCF puts the D405 on the flange at a 25° cant with `+Z` along the optical axis; a webcam cable-tied on by hand shares none of that, and nobody has measured where it actually sits. **Use `tool` for the stand-in**, mount the camera roughly looking the way the gripper points, and dial the remainder out with the axis map. Using `camera` for an unmeasured mount would be inventing a transform — the single most repeated failure in this file.
 
 ### Camera capture: two facts worth keeping
 
-**Almost all webcam "lag" is queued frames, not decode time.** A naive `read()` returns the *oldest* frame
-in the driver's queue. `scripts/camera_view.py` grabs repeatedly (cheap, no decode) until the queue is dry
-and decodes only the last one. It also sets **MJPG before the resolution** — left in uncompressed YUY2 the
-C920 cannot fit 1080p through USB2 and collapses to a few fps, which *reads* as latency and is a bandwidth
-problem. `--measure` reports the real frame interval so the claim is checked rather than asserted.
+**Almost all webcam "lag" is queued frames, not decode time.** A naive `read()` returns the *oldest* frame in the driver's queue. `scripts/camera_view.py` grabs repeatedly (cheap, no decode) until the queue is dry and decodes only the last one. It also sets **MJPG before the resolution** — left in uncompressed YUY2 the C920 cannot fit 1080p through USB2 and collapses to a few fps, which *reads* as latency and is a bandwidth problem. `--measure` reports the real frame interval so the claim is checked rather than asserted.
 
-⚠️ **macOS gates camera access, and no code change fixes it.** First run prints
-`OpenCV: not authorized to capture video (status 0)` until the permission is granted to the app running the
-terminal — **System Settings → Privacy & Security → Camera**. Encountered 2026-08-11; the agent cannot
-grant it.
+⚠️ **macOS gates camera access, and no code change fixes it.** First run prints `OpenCV: not authorized to capture video (status 0)` until the permission is granted to the app running the terminal — **System Settings → Privacy & Security → Camera**. Encountered 2026-08-11; the agent cannot grant it.
 
-⚠️ **OpenCV on macOS selects cameras by INDEX**, which collides with this repo's hard rule against selecting
-hardware by index (§0 #5). AVFoundation offers no name-based alternative, so rather than pretend, `--list`
-makes the ambiguity visible and suggests the honest disambiguation: cover the arm-mounted camera with a hand
-and re-run — the index whose mean brightness collapses is the one on the arm.
+⚠️ **OpenCV on macOS selects cameras by INDEX**, which collides with this repo's hard rule against selecting hardware by index (§0 #5). AVFoundation offers no name-based alternative, so rather than pretend, `--list` makes the ambiguity visible and suggests the honest disambiguation: cover the arm-mounted camera with a hand and re-run — the index whose mean brightness collapses is the one on the arm.
 
 
 ---
 
 ## 20. ⭐ "It lags at high speed" is a singularity problem, not a speed problem
 
-Julien, 2026-08-11: *"at high speeds the arm takes longer to follow the path that it's been told to move…
-I can only really control it at speeds of less than half a meter per second."*
+Julien, 2026-08-11: *"at high speeds the arm takes longer to follow the path that it's been told to move… I can only really control it at speeds of less than half a meter per second."*
 
-**Two hypotheses were tested and refuted before the real one.** It is not a constant per-speed cost, and it
-is not a startup transient. Pushing +X at 0.25 m/s from the home pose, joint speed by cycle:
+**Two hypotheses were tested and refuted before the real one.** It is not a constant per-speed cost, and it is not a startup transient. Pushing +X at 0.25 m/s from the home pose, joint speed by cycle:
 
 ```
   cycle   1      0.66 rad/s          <- first cycle, fine
@@ -911,8 +572,7 @@ is not a startup transient. Pushing +X at 0.25 m/s from the home pose, joint spe
   cycle  50-150  3.30 rad/s          <- it ESCALATES with time
 ```
 
-Tracing it against `sigma_min`, the smallest singular value of the Jacobian — the standard measure of how
-close the arm is to a configuration where some direction of motion becomes unreachable:
+Tracing it against `sigma_min`, the smallest singular value of the Jacobian — the standard measure of how close the arm is to a configuration where some direction of motion becomes unreachable:
 
 | cycle | joint rad/s | EE moved | `sigma_min` |
 |---|---|---|---|
@@ -921,20 +581,11 @@ close the arm is to a configuration where some direction of motion becomes unrea
 | 140 | **2.93** | 0.35 m | 0.048 |
 | 180 | 0.12 | 0.38 m | **0.005** ← stalled |
 
-**The same tip speed costs 0.68 rad/s in the middle of the workspace and 2.93 rad/s near full reach**, and
-then the arm stops entirely. `SafeRobot` caps commands at 1.0 rad/s, so past that point the command is
-throttled, the arm falls behind, and it reads as latency.
+**The same tip speed costs 0.68 rad/s in the middle of the workspace and 2.93 rad/s near full reach**, and then the arm stops entirely. `SafeRobot` caps commands at 1.0 rad/s, so past that point the command is throttled, the arm falls behind, and it reads as latency.
 
-⭐ **So speed is not the cause — it only decides how quickly you arrive at the part of the workspace where
-this happens.** That reframing matters, because the obvious fix (raise the cap) would not fix it. It would
-move the wall a little further out and cost the guard that makes a wrong motion catchable, on a rig with
-**no e-stop**.
+⭐ **So speed is not the cause — it only decides how quickly you arrive at the part of the workspace where this happens.** That reframing matters, because the obvious fix (raise the cap) would not fix it. It would move the wall a little further out and cost the guard that makes a wrong motion catchable, on a rig with **no e-stop**.
 
-**The fix is to ask for less.** `CartesianTeleop._apply_speed_scale()` measures the joint speed the solver
-just requested and, if it exceeded `max_joint_rate` (0.9 rad/s, deliberately just under SafeRobot's 1.0),
-scales the twist by exactly that ratio. Tip speed and joint speed are locally proportional, so it lands on
-the allowed rate in a single step. Recovery is slower than reduction — 5% per cycle, ~0.2 s to full — because
-reacting instantly in both directions oscillates at the boundary, which would feel worse than the lag.
+**The fix is to ask for less.** `CartesianTeleop._apply_speed_scale()` measures the joint speed the solver just requested and, if it exceeded `max_joint_rate` (0.9 rad/s, deliberately just under SafeRobot's 1.0), scales the twist by exactly that ratio. Tip speed and joint speed are locally proportional, so it lands on the allowed rate in a single step. Recovery is slower than reduction — 5% per cycle, ~0.2 s to full — because reacting instantly in both directions oscillates at the boundary, which would feel worse than the lag.
 
 **Measured, over 200 cycles (2 s):**
 
@@ -945,17 +596,11 @@ reacting instantly in both directions oscillates at the boundary, which would fe
 | 0.40 m/s | 98 | 1 | 7.0 mm |
 | 1.00 m/s | 42 | 2 | 7.3 mm |
 
-At 0.25 m/s the rate limiter had been intervening on **43% of all cycles**. It now never does, and the
-command stays within 7 mm of the arm instead of pinned at the 50 mm anti-windup bound.
+At 0.25 m/s the rate limiter had been intervening on **43% of all cycles**. It now never does, and the command stays within 7 mm of the arm instead of pinned at the 50 mm anti-windup bound.
 
-⚠️ **The throttle costs time, not workspace.** A first test compared reach after a fixed number of cycles
-and failed — correctly, since a throttled arm is behind at any given moment. Given time both converge on
-**exactly 0.5194 m**. The test now asserts that distinction explicitly, because "it got slower" and "it can
-no longer reach as far" are very different regressions and only one of them is acceptable.
+⚠️ **The throttle costs time, not workspace.** A first test compared reach after a fixed number of cycles and failed — correctly, since a throttled arm is behind at any given moment. Given time both converge on **exactly 0.5194 m**. The test now asserts that distinction explicitly, because "it got slower" and "it can no longer reach as far" are very different regressions and only one of them is acceptable.
 
-Low speeds are untouched: at 0.12 m/s the scale never leaves 1.0, so normal driving is unchanged. The status
-line prints `⚠️ SLOWED to N% (near the reach limit)` — without it, the throttle would present as
-unexplained sluggishness, which is the same class of silent-failure this file exists to catalogue.
+Low speeds are untouched: at 0.12 m/s the scale never leaves 1.0, so normal driving is unchanged. The status line prints `⚠️ SLOWED to N% (near the reach limit)` — without it, the throttle would present as unexplained sluggishness, which is the same class of silent-failure this file exists to catalogue.
 
 
 ---
@@ -964,71 +609,36 @@ unexplained sluggishness, which is the same class of silent-failure this file ex
 
 ### 21.1 ⛔ The agent cannot test the camera. At all. Ever.
 
-**macOS grants camera access per application.** The permission Julien granted covers
-his terminal; the agent's shell runs under a different process and gets
-`OpenCV: not authorized to capture video (status 0)` no matter what the code does.
-There is no flag, no entitlement and no code change that works around it.
+**macOS grants camera access per application.** The permission Julien granted covers his terminal; the agent's shell runs under a different process and gets `OpenCV: not authorized to capture video (status 0)` no matter what the code does. There is no flag, no entitlement and no code change that works around it.
 
 **Consequences, and they shape how this file should be built:**
 
-- Anything camera-related must be verified either by **Julien running a command**, or
-  by making the logic a **pure function of an image** and testing that. Both
-  camera bugs so far — the stretched aspect ratio and the 5 fps drain loop — lived in
-  exactly such pure functions. `scripts/test_camera_render.py` exists for this.
-- ⚠️ **`--probe` once measured a code path the viewer never ran** and reported a
-  healthy 30 fps while the viewer delivered 5. *A measurement that does not exercise
-  the real path measures nothing.* `--measure` now runs through `FrameGrabber`, the
-  same class the viewer uses.
-- The agent also cannot read the terminal's identity: its shell has no TTY and
-  reports `TERM_PROGRAM` unset. **`--term-info` exists so the program reports what
-  the agent cannot detect.**
+- Anything camera-related must be verified either by **Julien running a command**, or by making the logic a **pure function of an image** and testing that. Both camera bugs so far — the stretched aspect ratio and the 5 fps drain loop — lived in exactly such pure functions. `scripts/test_camera_render.py` exists for this.
+- ⚠️ **`--probe` once measured a code path the viewer never ran** and reported a healthy 30 fps while the viewer delivered 5. *A measurement that does not exercise the real path measures nothing.* `--measure` now runs through `FrameGrabber`, the same class the viewer uses.
+- The agent also cannot read the terminal's identity: its shell has no TTY and reports `TERM_PROGRAM` unset. **`--term-info` exists so the program reports what the agent cannot detect.**
 
 ### 21.2 A two-way toggle whose sides can be identical is not a toggle
 
-`b` switched between `"blocks"` and `detect_term_mode()`. In any terminal the
-detector did not recognise, **both sides were `"blocks"`** and pressing it changed
-nothing — indistinguishable from a broken key. Kitty was worse: *detected* and then
-silently discarded because its protocol was unimplemented, so a kitty user was
-downgraded with no indication at all.
+`b` switched between `"blocks"` and `detect_term_mode()`. In any terminal the detector did not recognise, **both sides were `"blocks"`** and pressing it changed nothing — indistinguishable from a broken key. Kitty was worse: *detected* and then silently discarded because its protocol was unimplemented, so a kitty user was downgraded with no indication at all.
 
-Now `b` **cycles** blocks → iterm → kitty (a three-way cycle cannot be a no-op),
-prints the mode it moved to, and says when that differs from what was detected. The
-kitty graphics protocol is implemented rather than detected-and-dropped.
-`detect_term_mode()` returns **the mode and the reason**, and the reason is printed
-on entry.
+Now `b` **cycles** blocks → iterm → kitty (a three-way cycle cannot be a no-op), prints the mode it moved to, and says when that differs from what was detected. The kitty graphics protocol is implemented rather than detected-and-dropped. `detect_term_mode()` returns **the mode and the reason**, and the reason is printed on entry.
 
-⭐ **Generalises past this key:** a fallback that is invisible is a bug report waiting
-to happen. Say which path was taken *and why*, especially when the fallback is the
-degraded one.
+⭐ **Generalises past this key:** a fallback that is invisible is a bug report waiting to happen. Say which path was taken *and why*, especially when the fallback is the degraded one.
 
-**✅ Confirmed 2026-08-11.** Julien's terminal is **Ghostty 1.3.1** (`TERM_PROGRAM=ghostty`,
-`TERM=xterm-ghostty`, `COLORTERM=truecolor`), and `--term-info` correctly reports
-*"Ghostty detected (speaks the kitty graphics protocol)"* with `best mode: kitty`. So
-`--term` already draws real images with no flag needed.
+**✅ Confirmed 2026-08-11.** Julien's terminal is **Ghostty 1.3.1** (`TERM_PROGRAM=ghostty`, `TERM=xterm-ghostty`, `COLORTERM=truecolor`), and `--term-info` correctly reports *"Ghostty detected (speaks the kitty graphics protocol)"* with `best mode: kitty`. So `--term` already draws real images with no flag needed.
 
 ### 21.2.1 ⛔ `f=100` is PNG, not "some compressed image" — the blank-screen bug
 
-Julien's screenshots showed **blocks working and kitty blank**. The cause: the first
-kitty renderer encoded **JPEG** and labelled it `f=100`.
+Julien's screenshots showed **blocks working and kitty blank**. The cause: the first kitty renderer encoded **JPEG** and labelled it `f=100`.
 
-In the kitty graphics protocol `f` takes exactly three values — `f=24` (raw RGB),
-`f=32` (raw RGBA) and `f=100` (**PNG**). **There is no JPEG.** So the terminal was
-handed JPEG bytes, told they were PNG, failed to decode, and said nothing —
-**because `q=2` had suppressed the very error that explains it.**
+In the kitty graphics protocol `f` takes exactly three values — `f=24` (raw RGB), `f=32` (raw RGBA) and `f=100` (**PNG**). **There is no JPEG.** So the terminal was handed JPEG bytes, told they were PNG, failed to decode, and said nothing — **because `q=2` had suppressed the very error that explains it.**
 
 Two lessons, and the second is the more expensive one:
 
-- **A format code is not a MIME type.** `f=100` names a specific container. Reading
-  it as "compressed image" is the same class of error as assuming an SDK flag means
-  what its name suggests — which is how `--no-gripper` dropped an arm (§11.1).
-- ⚠️ **Suppressing errors cost far more than the noise it saved.** `q=2` is correct
-  for a 30 fps redraw loop, and it turned a one-line diagnosis into a session of
-  guessing. **`--term-test` now exists to send exactly one image with errors
-  ENABLED** and print the terminal's reply verbatim. *When a display path can fail
-  silently, ship the diagnostic that makes it speak.*
+- **A format code is not a MIME type.** `f=100` names a specific container. Reading it as "compressed image" is the same class of error as assuming an SDK flag means what its name suggests — which is how `--no-gripper` dropped an arm (§11.1).
+- ⚠️ **Suppressing errors cost far more than the noise it saved.** `q=2` is correct for a 30 fps redraw loop, and it turned a one-line diagnosis into a session of guessing. **`--term-test` now exists to send exactly one image with errors ENABLED** and print the terminal's reply verbatim. *When a display path can fail silently, ship the diagnostic that makes it speak.*
 
-**PNG forces a size decision, because PNG of a photo is large.** Measured on a
-photo-like frame:
+**PNG forces a size decision, because PNG of a photo is large.** Measured on a photo-like frame:
 
 ```
   1280x720   998 KB   31 ms encode   -> 40 MB/s at 30 fps. Impossible.
@@ -1037,75 +647,42 @@ photo-like frame:
    320x180    78 KB    1.6 ms        -> still 22x the detail of blocks
 ```
 
-⭐ Even the smallest is a large win: a 67x19 cell grid is 67x38 = **2,546 pixels**,
-while 320x180 is **57,600**. `IMWRITE_PNG_COMPRESSION=1` is deliberate — level 1
-costs ~1.6 ms where the default costs several times that, for a few percent of size.
+⭐ Even the smallest is a large win: a 67x19 cell grid is 67x38 = **2,546 pixels**, while 320x180 is **57,600**. `IMWRITE_PNG_COMPRESSION=1` is deliberate — level 1 costs ~1.6 ms where the default costs several times that, for a few percent of size.
 
-⚠️ Two further kitty-protocol facts that would each have broken a 30 fps redraw loop,
-both found by reading the spec rather than by running it — the agent cannot test
-this:
+⚠️ Two further kitty-protocol facts that would each have broken a 30 fps redraw loop, both found by reading the spec rather than by running it — the agent cannot test this:
 
-- **Images persist until deleted.** One per frame at 30 fps would accumulate
-  placements without bound. `a=d,d=A` clears the previous frame first.
-- **The terminal replies to every image**, on **stdin** — which this viewer reads for
-  keypresses. Without `q=2` every frame would inject escape bytes the key handler
-  sees as junk input.
+- **Images persist until deleted.** One per frame at 30 fps would accumulate placements without bound. `a=d,d=A` clears the previous frame first.
+- **The terminal replies to every image**, on **stdin** — which this viewer reads for keypresses. Without `q=2` every frame would inject escape bytes the key handler sees as junk input.
 
 ### 21.3 The remaining latency is the camera, and software cannot fix it
 
-Measured by Julien on 2026-08-11 with the on-screen draw-cost readout: **~2 ms per
-frame.** So the render, the terminal and the grabber are all irrelevant to the
-~0.2 s he perceives.
+Measured by Julien on 2026-08-11 with the on-screen draw-cost readout: **~2 ms per frame.** So the render, the terminal and the grabber are all irrelevant to the ~0.2 s he perceives.
 
-What is left is the **C920 itself** — sensor readout, onboard MJPEG encoding, and USB
-transport. For consumer webcams that is typically **100-200 ms**, and no software
-change removes it.
+What is left is the **C920 itself** — sensor readout, onboard MJPEG encoding, and USB transport. For consumer webcams that is typically **100-200 ms**, and no software change removes it.
 
-**The only lever that helps is resolution** (fewer pixels to read out, encode and
-transfer), which is why key `1` selects 320×180. Beyond that this needs different
-hardware; the D405 wrist cameras, when they arrive, are the real answer.
+**The only lever that helps is resolution** (fewer pixels to read out, encode and transfer), which is why key `1` selects 320×180. Beyond that this needs different hardware; the D405 wrist cameras, when they arrive, are the real answer.
 
-⚠️ **Do not spend more time optimising the software path.** It was measured at 2 ms
-against a ~200 ms budget. The next person to look at this should confirm that number
-is still ~2 ms and then stop.
+⚠️ **Do not spend more time optimising the software path.** It was measured at 2 ms against a ~200 ms budget. The next person to look at this should confirm that number is still ~2 ms and then stop.
 
 ### 21.4 ⛔⭐ "The resolution is stuck and the number keys do nothing" — 2026-08-11
 
-Julien, session 9: *"the resolution is not great. It definitely doesn't let me go back
-up to 1920x1080 … When pressing the numbers, that doesn't matter. It doesn't do
-anything."*
+Julien, session 9: *"the resolution is not great. It definitely doesn't let me go back up to 1920x1080 … When pressing the numbers, that doesn't matter. It doesn't do anything."*
 
-**The keys were working perfectly. They were invisible.** `1`-`6` change the **capture**
-resolution — what the camera sends the Mac — and the viewer then handed the terminal an
-image resized to `--image-width`, which defaulted to a **fixed 480 px**. So a 1080p
-capture and a 480p capture produced a pixel-identical picture, and the only evidence
-anything had happened was a `1280x720` → `1920x1080` string in a status line nobody
-reads while looking at a picture.
+**The keys were working perfectly. They were invisible.** `1`-`6` change the **capture** resolution — what the camera sends the Mac — and the viewer then handed the terminal an image resized to `--image-width`, which defaulted to a **fixed 480 px**. So a 1080p capture and a 480p capture produced a pixel-identical picture, and the only evidence anything had happened was a `1280x720` → `1920x1080` string in a status line nobody reads while looking at a picture.
 
-⚠️ **This is the same defect shape as `b` toggling between two identical states
-([21.2](#212-a-two-way-toggle-whose-sides-can-be-identical-is-not-a-toggle)), and it is
-worth naming as a class: a control whose effect is not observable is indistinguishable
-from a broken one.** The fix is never only "make it work" — it is "make the effect
-visible". Every number a key can now change is on the status line.
+⚠️ **This is the same defect shape as `b` toggling between two identical states ([21.2](#212-a-two-way-toggle-whose-sides-can-be-identical-is-not-a-toggle)), and it is worth naming as a class: a control whose effect is not observable is indistinguishable from a broken one.** The fix is never only "make it work" — it is "make the effect visible". Every number a key can now change is on the status line.
 
-**The fix: three ceilings, smallest wins.** The image sent to the terminal is now
-`min(pane in real pixels, what was actually captured, the protocol's budget)`:
+**The fix: three ceilings, smallest wins.** The image sent to the terminal is now `min(pane in real pixels, what was actually captured, the protocol's budget)`:
 
-1. **The pane.** Pixels beyond what the terminal can display are scaled straight back
-   out again — pure cost.
-2. **The capture.** Upscaling before transmission invents nothing and costs bytes. This
-   is the ceiling that makes keys `1`-`6` visible: a bigger capture now genuinely
-   produces a bigger image.
+1. **The pane.** Pixels beyond what the terminal can display are scaled straight back out again — pure cost.
+2. **The capture.** Upscaling before transmission invents nothing and costs bytes. This is the ceiling that makes keys `1`-`6` visible: a bigger capture now genuinely produces a bigger image.
 3. **The protocol's budget**, which is the interesting one.
 
 #### The budget, measured — and why Ghostty is soft where iTerm2 would not be
 
-⛔ **The kitty graphics protocol has exactly one compressed format, and it is PNG.**
-`f` takes `24` (raw RGB), `32` (raw RGBA) or `100` (PNG). **There is no JPEG.** iTerm2's
-inline-image escape, by contrast, carries whatever the image is — JPEG included.
+⛔ **The kitty graphics protocol has exactly one compressed format, and it is PNG.** `f` takes `24` (raw RGB), `32` (raw RGBA) or `100` (PNG). **There is no JPEG.** iTerm2's inline-image escape, by contrast, carries whatever the image is — JPEG included.
 
-MEASURED 2026-08-11, best of five, on a synthetic but realistic 16:9 frame (gradients,
-hard edges, text and sensor grain; a flat wall is cheaper, pure noise dearer):
+MEASURED 2026-08-11, best of five, on a synthetic but realistic 16:9 frame (gradients, hard edges, text and sensor grain; a flat wall is cheaper, pure noise dearer):
 
 | width | kitty: PNG level 1 | iTerm2: JPEG q60 | PNG as % of a 33 ms frame |
 |---|---|---|---|
@@ -1114,110 +691,53 @@ hard edges, text and sensor grain; a flat wall is cheaper, pure noise dearer):
 | 960 px | 16.1 ms, 1266 KB | 0.6 ms, 46 KB | 48% |
 | 1280 px | 28.8 ms, 2259 KB | 1.1 ms, 70 KB | 87% |
 
-**~25x on time, ~30x on bytes.** That single protocol fact is the whole reason the
-terminal view is soft, and it is not a bug anyone can fix in this repo. Hence the caps:
-**720 px for kitty/Ghostty, 1280 px for iTerm2.** Sizes are `KB/frame`; multiply by 30
-for the per-second load into a pty that also has to draw them.
+**~25x on time, ~30x on bytes.** That single protocol fact is the whole reason the terminal view is soft, and it is not a bug anyone can fix in this repo. Hence the caps: **720 px for kitty/Ghostty, 1280 px for iTerm2.** Sizes are `KB/frame`; multiply by 30 for the per-second load into a pty that also has to draw them.
 
-⚠️ Compression level is **not** the lever. At 640 px: level 0 = 2.1 ms but 676 KB;
-level 1 = 6.7 ms, 391 KB; level 6 = 28.8 ms for 371 KB. Level 6 costs 4x the time for
-5% of the size. Level 1 stays.
+⚠️ Compression level is **not** the lever. At 640 px: level 0 = 2.1 ms but 676 KB; level 1 = 6.7 ms, 391 KB; level 6 = 28.8 ms for 371 KB. Level 6 costs 4x the time for 5% of the size. Level 1 stays.
 
-⛔ **ANSWERED 2026-08-12: Ghostty does NOT accept iTerm2's escape** (§25.4). Does yours?
-If it does, the sharpness ceiling doubles for free. `--term-test` now sends **one image
-in each protocol** so the answer is a look at the screen rather than a guess.
+⛔ **ANSWERED 2026-08-12: Ghostty does NOT accept iTerm2's escape** (§25.4). Does yours? If it does, the sharpness ceiling doubles for free. `--term-test` now sends **one image in each protocol** so the answer is a look at the screen rather than a guess.
 
 #### The second silent guess: the character cell was assumed to be exactly 2:1
 
-The grid geometry needs to know how tall a character cell is relative to its width, and
-it hard-coded `2`. Whenever the font disagrees, a 16:9 picture is displayed stretched —
-**the same bug Julien caught in a screenshot in session 7, in a second disguise.**
+The grid geometry needs to know how tall a character cell is relative to its width, and it hard-coded `2`. Whenever the font disagrees, a 16:9 picture is displayed stretched — **the same bug Julien caught in a screenshot in session 7, in a second disguise.**
 
-Terminals already know: `TIOCGWINSZ` returns `ws_xpixel`/`ws_ypixel` beside the row and
-column counts. kitty and Ghostty fill them in; Apple Terminal reports zeros; a piped or
-captured run has no terminal at all. So the cell is now **measured** where possible, and
-where it is not, the status line prints `ASSUMED` — because a fallback you cannot see is
-indistinguishable from a bug, which is this section's whole theme.
+Terminals already know: `TIOCGWINSZ` returns `ws_xpixel`/`ws_ypixel` beside the row and column counts. kitty and Ghostty fill them in; Apple Terminal reports zeros; a piped or captured run has no terminal at all. So the cell is now **measured** where possible, and where it is not, the status line prints `ASSUMED` — because a fallback you cannot see is indistinguishable from a bug, which is this section's whole theme.
 
 ### 21.5 ⛔ The flicker — two causes, and one of them was wasting half the machine
 
-Julien, 2026-08-11: *"the image in the terminal is flickering because some frames seem
-to not be drawn or something like that."*
+Julien, 2026-08-11: *"the image in the terminal is flickering because some frames seem to not be drawn or something like that."*
 
-**Cause 1 — delete-then-draw.** Every kitty frame began with `a=d,d=A` (**delete all
-images**) and only then transmitted the new one. Between the delete and the new image
-being decoded there is nothing on screen, so the picture was blanked 30 times a second.
-Whether that reads as flicker depends on how fast the terminal decodes — which is why
-it got worse as the image was allowed to grow.
+**Cause 1 — delete-then-draw.** Every kitty frame began with `a=d,d=A` (**delete all images**) and only then transmitted the new one. Between the delete and the new image being decoded there is nothing on screen, so the picture was blanked 30 times a second. Whether that reads as flicker depends on how fast the terminal decodes — which is why it got worse as the image was allowed to grow.
 
-The fix is double buffering, exactly as in any graphics pipeline: two image ids used
-alternately, the new image **placed over** the old one, and only then the old id
-deleted from underneath. There is never a moment with nothing on screen. Deleting still
-has to happen — `d=I` frees the image data too, and without it a 30 fps stream leaks
-one image per frame into the terminal's memory.
+The fix is double buffering, exactly as in any graphics pipeline: two image ids used alternately, the new image **placed over** the old one, and only then the old id deleted from underneath. There is never a moment with nothing on screen. Deleting still has to happen — `d=I` frees the image data too, and without it a 30 fps stream leaks one image per frame into the terminal's memory.
 
-**Cause 2 — redrawing frames the terminal already had.** ⭐ This one is worth
-internalising. The display loop ran as fast as it could while the camera delivered 30
-fps: with an ~18 ms draw it went round about **55 times a second**, so nearly half of
-every second was spent re-encoding and re-transmitting a **pixel-identical** picture.
-The loop tracked a frame sequence number and used it only to count fps — never to
-decide whether drawing was worth doing. Skipping unchanged frames halves the terminal's
-load and removes half the flashes at the same time.
+**Cause 2 — redrawing frames the terminal already had.** ⭐ This one is worth internalising. The display loop ran as fast as it could while the camera delivered 30 fps: with an ~18 ms draw it went round about **55 times a second**, so nearly half of every second was spent re-encoding and re-transmitting a **pixel-identical** picture. The loop tracked a frame sequence number and used it only to count fps — never to decide whether drawing was worth doing. Skipping unchanged frames halves the terminal's load and removes half the flashes at the same time.
 
-⚠️ Both fixes are reasoned and structurally tested; neither can be *seen* by the agent
-([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). Confirmation is Julien's
-eye, and it should be asked for explicitly rather than assumed.
+⚠️ Both fixes are reasoned and structurally tested; neither can be *seen* by the agent ([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). Confirmation is Julien's eye, and it should be asked for explicitly rather than assumed.
 
 ### 21.6 The number keys were offering another camera's modes
 
-*"The numbers when I press them don't allow for all the quality options. They cycle
-between about three, and not in the correct order either."*
+*"The numbers when I press them don't allow for all the quality options. They cycle between about three, and not in the correct order either."*
 
-`SIZES` in `camera_view.py` is a list of **C920** modes, and it was used for every
-camera. A UVC device asked for a mode it does not have substitutes the nearest one it
-does, so on the MacBook Air camera — whose seven modes are 640x480, 1280x720,
-1552x1552, 1760x1328, 1328x1760, 1920x1080, 1080x1920 — keys 1 to 4 all land on
-640x480. **Three distinct results from six keys, and its portrait modes are why the
-order looked wrong too.**
+`SIZES` in `camera_view.py` is a list of **C920** modes, and it was used for every camera. A UVC device asked for a mode it does not have substitutes the nearest one it does, so on the MacBook Air camera — whose seven modes are 640x480, 1280x720, 1552x1552, 1760x1328, 1328x1760, 1920x1080, 1080x1920 — keys 1 to 4 all land on 640x480. **Three distinct results from six keys, and its portrait modes are why the order looked wrong too.**
 
-Keys are now bound to the selected camera's **own** modes, read from AVFoundation:
-deduplicated, ascending, at most six spread across the range, bounds-checked, so key
-`6` is always the best that camera can do. On the C920 that is **2560x1472**, which was
-never on offer before — the hard-coded list stopped at 1920x1080.
+Keys are now bound to the selected camera's **own** modes, read from AVFoundation: deduplicated, ascending, at most six spread across the range, bounds-checked, so key `6` is always the best that camera can do. On the C920 that is **2560x1472**, which was never on offer before — the hard-coded list stopped at 1920x1080.
 
-⭐ **The symptom was also evidence.** "Only three distinct sizes" is the signature of
-the MacBook Air camera, not the C920 — so the complaint about the number keys was, in
-hindsight, an independent report that the tool was driving the wrong camera. It was not
-recognised as such at the time. **When two complaints arrive together, check whether
-one is a symptom of the other before fixing them separately.**
+⭐ **The symptom was also evidence.** "Only three distinct sizes" is the signature of the MacBook Air camera, not the C920 — so the complaint about the number keys was, in hindsight, an independent report that the tool was driving the wrong camera. It was not recognised as such at the time. **When two complaints arrive together, check whether one is a symptom of the other before fixing them separately.**
 
 ---
 
 ## 22. ⛔⭐ Which camera is which — and how a careful, checked, published inference was still wrong
 
-> **Read this section for the method, not just the answer.** It is the cleanest example in this
-> repo of [§0](#0-the-one-thing-to-internalise-before-touching-anything) — the stack failing by
-> lying — being reproduced *by the code written to prevent it*.
+> **Read this section for the method, not just the answer.** It is the cleanest example in this repo of [§0](#0-the-one-thing-to-internalise-before-touching-anything) — the stack failing by lying — being reproduced *by the code written to prevent it*.
 
-**The problem.** Four cameras are visible on this Mac: the built-in one, the D405 on arm B, the
-C920, and Julien's iPhone over Continuity. **OpenCV opens them by integer index and reports no
-name at all** — verified on OpenCV 5.0, where `cv2.videoio_registry` enumerates *backends* and
-never *devices*. Indices also move on replug, which is
-[§0 #5](#0-the-one-thing-to-internalise-before-touching-anything) — *an adapter chosen by index
-silently retargeted the other robot* — with a different cable.
+**The problem.** Four cameras are visible on this Mac: the built-in one, the D405 on arm B, the C920, and Julien's iPhone over Continuity. **OpenCV opens them by integer index and reports no name at all** — verified on OpenCV 5.0, where `cv2.videoio_registry` enumerates *backends* and never *devices*. Indices also move on replug, which is [§0 #5](#0-the-one-thing-to-internalise-before-touching-anything) — *an adapter chosen by index silently retargeted the other robot* — with a different cable.
 
 ### What was tried first, and why it looked sound
 
-macOS *will* name cameras (`system_profiler -json SPCameraDataType`), and ⭐ it needs no camera
-permission, so even the agent can run it — the only reason naming was approachable at all
-([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). The first implementation paired
-macOS's n-th camera with OpenCV's n-th index.
+macOS *will* name cameras (`system_profiler -json SPCameraDataType`), and ⭐ it needs no camera permission, so even the agent can run it — the only reason naming was approachable at all ([§21.1](#211--the-agent-cannot-test-the-camera-at-all-ever)). The first implementation paired macOS's n-th camera with OpenCV's n-th index.
 
-It was **not** done casually. The pairing was labelled an inference in the code, in the docs and
-in the chat; the device counts were checked to agree (macOS listed 4, indices 0-3 opened, and
-OpenCV's own `out device of bound (0-3): 4` confirmed the count); a falsifier was coded — a D405
-cannot deliver a frame wider than 1280, so a shuffled order would strand it on a 1920-px index —
-and a falsification procedure was published: *cover each camera and see which index goes dark.*
+It was **not** done casually. The pairing was labelled an inference in the code, in the docs and in the chat; the device counts were checked to agree (macOS listed 4, indices 0-3 opened, and OpenCV's own `out device of bound (0-3): 4` confirmed the count); a falsifier was coded — a D405 cannot deliver a frame wider than 1280, so a shuffled order would strand it on a 1920-px index — and a falsification procedure was published: *cover each camera and see which index goes dark.*
 
 **Julien ran it. It failed.**
 
@@ -1228,32 +748,19 @@ and a falsification procedure was published: *cover each camera and see which in
 | index 2 | HD Pro Webcam C920 | **MacBook Air Camera** |
 | index 3 | iPhone (Continuity) | iPhone (Continuity) ✅ |
 
-Two of four names were wrong, and the tool was confident about both. He had already driven a whole
-session with `--camera c920` while looking at his laptop's own camera.
+Two of four names were wrong, and the tool was confident about both. He had already driven a whole session with `--camera c920` while looking at his laptop's own camera.
 
 ⭐ **Three lessons, and the third is the one that generalises.**
 
-1. **The falsifier only covered the case it was written for.** It knew one fact — the D405's
-   width — so it could only catch a permutation that moved the D405. The D405 happened to be in
-   the right place. **A check that can only fire for one of N possibilities is not a check on the
-   claim; it is a check on a corner of it.**
-2. **Agreement between sources is not independence.** `system_profiler` and AVFoundation agree
-   because they read the same CoreMedia list. Counting them as two confirmations was counting one
-   fact twice — the same error as [§1](#1-the-hardware-as-measured)'s "two arms verified identical
-   by evidence that could not tell them apart from one arm read twice".
-3. ⛔ **Nothing that could be read off a list would have worked.** Three separate macOS
-   enumerations — `system_profiler`, `AVCaptureDevice.devicesWithMediaType:`, and an
-   `AVCaptureDeviceDiscoverySession` asked in two different device-type orders — return the **same**
-   order, and it is not OpenCV's. The information simply is not in any list.
+1. **The falsifier only covered the case it was written for.** It knew one fact — the D405's width — so it could only catch a permutation that moved the D405. The D405 happened to be in the right place. **A check that can only fire for one of N possibilities is not a check on the claim; it is a check on a corner of it.**
+2. **Agreement between sources is not independence.** `system_profiler` and AVFoundation agree because they read the same CoreMedia list. Counting them as two confirmations was counting one fact twice — the same error as [§1](#1-the-hardware-as-measured)'s "two arms verified identical by evidence that could not tell them apart from one arm read twice".
+3. ⛔ **Nothing that could be read off a list would have worked.** Three separate macOS enumerations — `system_profiler`, `AVCaptureDevice.devicesWithMediaType:`, and an `AVCaptureDeviceDiscoverySession` asked in two different device-type orders — return the **same** order, and it is not OpenCV's. The information simply is not in any list.
 
-*(One observation, offered only as a lead if the measurement below ever fails: OpenCV's order looks
-like USB cameras sorted by location ID first, then built-in, then Continuity — `0x1120000` (C920) <
-`0x1210000` (D405). One data point. Do not build on it.)*
+*(One observation, offered only as a lead if the measurement below ever fails: OpenCV's order looks like USB cameras sorted by location ID first, then built-in, then Continuity — `0x1120000` (C920) < `0x1210000` (D405). One data point. Do not build on it.)*
 
 ### ⭐ The fix: ask the hardware a question only one camera can answer
 
-Every camera advertises a set of modes, and AVFoundation will list them. On this rig they differ
-sharply:
+Every camera advertises a set of modes, and AVFoundation will list them. On this rig they differ sharply:
 
 | camera | modes | one that is **its alone** |
 |---|---|---|
@@ -1262,56 +769,28 @@ sharply:
 | HD Pro Webcam C920 | 18 | `160x90` |
 | iPhone (Continuity) | 4 | `1920x1440` |
 
-Ask an index for a mode only one camera owns. If it comes back **exactly**, that camera is on that
-index. A camera cannot deliver a mode it does not have — **it substitutes the nearest one it does**,
-which is how `424x240` turned into `640x360` in session 7. That measured substitution behaviour is
-the foundation the scheme rests on, and it is stated in `identify_indices()` where it can be
-re-checked: if a future OpenCV ever echoes the request instead of the result, every index matches
-every mode, which surfaces as *everything ambiguous* rather than as a wrong name.
+Ask an index for a mode only one camera owns. If it comes back **exactly**, that camera is on that index. A camera cannot deliver a mode it does not have — **it substitutes the nearest one it does**, which is how `424x240` turned into `640x360` in session 7. That measured substitution behaviour is the foundation the scheme rests on, and it is stated in `identify_indices()` where it can be re-checked: if a future OpenCV ever echoes the request instead of the result, every index matches every mode, which surfaces as *everything ambiguous* rather than as a wrong name.
 
-**Deliberately not cached.** A replug can reorder indices without changing anything a cache could
-key on, so a stored map is the same failure with a longer fuse. Identification costs a few seconds
-at startup; the viewer then runs for minutes.
+**Deliberately not cached.** A replug can reorder indices without changing anything a cache could key on, so a stored map is the same failure with a longer fuse. Identification costs a few seconds at startup; the viewer then runs for minutes.
 
-**What it refuses to answer, out loud:** an index that matches two cameras · two indices claiming
-the same camera · a listed camera no index answers for (normal for Continuity when the phone is
-asleep) · and ⚠️ **two D405s, which share every mode and therefore cannot be told apart this way at
-all.** The second D405 is on the desk waiting to be plugged in, so that case is not hypothetical —
-when it arrives, tell them apart by covering one, and select with `--index`.
+**What it refuses to answer, out loud:** an index that matches two cameras · two indices claiming the same camera · a listed camera no index answers for (normal for Continuity when the phone is asleep) · and ⚠️ **two D405s, which share every mode and therefore cannot be told apart this way at all.** The second D405 is on the desk waiting to be plugged in, so that case is not hypothetical — when it arrives, tell them apart by covering one, and select with `--index`.
 
 ### ⛔ Two measurement bugs that made the evidence murky in the first place
 
-Both were in the code that was supposed to help identify cameras, and both produced confident wrong
-readings rather than errors.
+Both were in the code that was supposed to help identify cameras, and both produced confident wrong readings rather than errors.
 
-1. **The probe read one frame the instant the camera opened.** Apple's built-in camera takes roughly
-   half a second to expose and Continuity longer, so the built-in camera reported **brightness 5
-   while pointing at a bright room**, and the iPhone reported `NO FRAME`. Both numbers were about
-   sensor warm-up — in the column the operator is told to use to tell cameras apart. It now reads
-   until a frame has actual variation, and reports how long that took.
-2. **A black frame was called mono.** Three all-zero channels are identical, so `frame_is_mono`
-   printed `MONO — depth/IR, not a picture` about **an iPhone**. A frame with no variation carries
-   no colour information; the honest answer is "cannot say", which is now what it returns.
+1. **The probe read one frame the instant the camera opened.** Apple's built-in camera takes roughly half a second to expose and Continuity longer, so the built-in camera reported **brightness 5 while pointing at a bright room**, and the iPhone reported `NO FRAME`. Both numbers were about sensor warm-up — in the column the operator is told to use to tell cameras apart. It now reads until a frame has actual variation, and reports how long that took.
+2. **A black frame was called mono.** Three all-zero channels are identical, so `frame_is_mono` printed `MONO — depth/IR, not a picture` about **an iPhone**. A frame with no variation carries no colour information; the honest answer is "cannot say", which is now what it returns.
 
 ### ⭐ The D405 over UVC gives a PICTURE, not a depth map — an earlier claim here, corrected
 
-This section briefly claimed the opposite, on the strength of the device's **name**: macOS lists
-exactly one entry for the D405 and calls it `Intel(R) RealSense(TM) Depth Camera 405  Depth`, from
-which it was concluded that plain UVC reaches only a depth stream and that
-`brew install librealsense` was therefore required before the wrist camera could be driven by eye.
+This section briefly claimed the opposite, on the strength of the device's **name**: macOS lists exactly one entry for the D405 and calls it `Intel(R) RealSense(TM) Depth Camera 405  Depth`, from which it was concluded that plain UVC reaches only a depth stream and that `brew install librealsense` was therefore required before the wrist camera could be driven by eye.
 
-**Wrong, and the tool's own output said so.** `--list` reported index 1 as `colour`, and the live
-view shows a textured photographic image of the room — wall pattern, wood grain, print on a
-t-shirt. A depth map has no texture. The D405's imagers are colour-capable, and what arrives over
-the single UVC entry is an ordinary picture with a cold white balance.
+**Wrong, and the tool's own output said so.** `--list` reported index 1 as `colour`, and the live view shows a textured photographic image of the room — wall pattern, wood grain, print on a t-shirt. A depth map has no texture. The D405's imagers are colour-capable, and what arrives over the single UVC entry is an ordinary picture with a cold white balance.
 
-⚠️ **The error was reasoning from a label instead of from the pixels** — a name is not a contract,
-which is the same lesson as `--no-gripper` in [§11.1](#111---no-gripper-silently-breaks-gravity-compensation-the-arm-falls),
-where a flag named for one thing changed another and dropped the arm.
+⚠️ **The error was reasoning from a label instead of from the pixels** — a name is not a contract, which is the same lesson as `--no-gripper` in [§11.1](#111---no-gripper-silently-breaks-gravity-compensation-the-arm-falls), where a flag named for one thing changed another and dropped the arm.
 
-**So:** the "no SDK needed" shortcut **does** work for teleop. `librealsense` is still the route to
-depth data, intrinsics, alignment and camera controls — but it is an upgrade, not a prerequisite,
-and the wrist view can be driven today.
+**So:** the "no SDK needed" shortcut **does** work for teleop. `librealsense` is still the route to depth data, intrinsics, alignment and camera controls — but it is an upgrade, not a prerequisite, and the wrist view can be driven today.
 
 ### Using it
 
@@ -1320,9 +799,7 @@ uv run scripts/camera_view.py --list                    # names, indices, and th
 uv run scripts/camera_view.py --camera c920 --term      # select by name, not index
 ```
 
-`--camera` accepts any part of the name, plus the aliases `d405`, `realsense`, `c920`,
-`iphone`, `builtin`, and a `vid:pid`. It **refuses** on no match or an ambiguous one and
-never falls back to index 0.
+`--camera` accepts any part of the name, plus the aliases `d405`, `realsense`, `c920`, `iphone`, `builtin`, and a `vid:pid`. It **refuses** on no match or an ambiguous one and never falls back to index 0.
 
 ---
 
@@ -1343,135 +820,73 @@ $ ioreg -p IOUSB -l -w 0 | grep '"USB Product Name"'
    Intel(R) RealSense(TM) Depth Camera 405 · AX88179A · 5 hubs · USB BillBoard
 ```
 
-⛔ **This is [§0](#0-the-one-thing-to-internalise-before-touching-anything) in its purest
-form.** The command does not fail, does not warn, and does not exit non-zero. It returns a
-well-formed, empty, confident answer — and the natural reading of that answer is *"nothing
-is plugged in"*. A session that opens by checking the rig this way would conclude the arms
-had been unplugged and go looking for a hardware fault that does not exist.
+⛔ **This is [§0](#0-the-one-thing-to-internalise-before-touching-anything) in its purest form.** The command does not fail, does not warn, and does not exit non-zero. It returns a well-formed, empty, confident answer — and the natural reading of that answer is *"nothing is plugged in"*. A session that opens by checking the rig this way would conclude the arms had been unplugged and go looking for a hardware fault that does not exist.
 
-⚠️ It is not a stale-cache fluke: it was run twice, in both JSON and plain-text form, with
-everything connected. Reproducible. Whether it is a macOS regression or a permissions
-change was not chased, because the workaround is one line and the answer would not change
-what we do.
+⚠️ It is not a stale-cache fluke: it was run twice, in both JSON and plain-text form, with everything connected. Reproducible. Whether it is a macOS regression or a permissions change was not chased, because the workaround is one line and the answer would not change what we do.
 
-**Use `ioreg` for USB enumeration.** It is also what earlier sessions used for the
-unbounded USB scans, so nothing here needs rewriting:
+**Use `ioreg` for USB enumeration.** It is also what earlier sessions used for the unbounded USB scans, so nothing here needs rewriting:
 
 ```bash
 ioreg -p IOUSB -l -w 0 | grep '"USB Product Name"'                    # what is attached
 ioreg -p IOUSB -l -w 0 | grep -E '"USB (Product Name|Serial Number)"' # with serials
 ```
 
-⭐ **Serials are the point.** `2081337C594E5018` is arm **B** and `20593383594E5018` is arm
-**G** ([§1](#1-the-hardware-as-measured)), and the D405 is `255323071773`. Checking those,
-rather than a device count, is what makes "the rig is unchanged" a measurement instead of an
-impression. The two SpaceMice still report **no serial at all**, which is why they are still
-assigned by asking the operator to wiggle one.
+⭐ **Serials are the point.** `2081337C594E5018` is arm **B** and `20593383594E5018` is arm **G** ([§1](#1-the-hardware-as-measured)), and the D405 is `255323071773`. Checking those, rather than a device count, is what makes "the rig is unchanged" a measurement instead of an impression. The two SpaceMice still report **no serial at all**, which is why they are still assigned by asking the operator to wiggle one.
 
-**The general lesson, which is the same one this repo keeps paying for:** an empty result and
-a failed query are indistinguishable unless the tool distinguishes them for you. When a check
-returns "nothing", ask what a *broken* check would have returned — and if the answer is "the
-same thing", the check has told you nothing at all.
+**The general lesson, which is the same one this repo keeps paying for:** an empty result and a failed query are indistinguishable unless the tool distinguishes them for you. When a check returns "nothing", ask what a *broken* check would have returned — and if the answer is "the same thing", the check has told you nothing at all.
 
 ---
 
 ## 24. ⛔⭐ Three holes in the safety guards, found by READING — 2026-08-12
 
-Found while reading `teleop_session.py` end to end before restructuring it. **None had
-ever fired on hardware**, which is why none is in [§0](#0-the-one-thing-to-internalise-before-touching-anything)'s
-table — and is also exactly why they were worth finding first. This is the same
-exercise as [§9](#9-four-defects-found-by-reading-2026-08-10-session-3--no-hardware-involved),
-and it found the same class of thing: **guards with a path around them, and messages
-that promise what the code does not do.**
+Found while reading `teleop_session.py` end to end before restructuring it. **None had ever fired on hardware**, which is why none is in [§0](#0-the-one-thing-to-internalise-before-touching-anything)'s table — and is also exactly why they were worth finding first. This is the same exercise as [§9](#9-four-defects-found-by-reading-2026-08-10-session-3--no-hardware-involved), and it found the same class of thing: **guards with a path around them, and messages that promise what the code does not do.**
 
-⚠️ **All three fixes are tested headlessly and NONE is confirmed on the arm.** Session
-4 is the standing warning here — three changes that passed 34 tests, three dry runs and
-a simulated IK loop produced three failures on first hardware contact, one of which
-dropped 4.3 kg.
+⚠️ **All three fixes are tested headlessly and NONE is confirmed on the arm.** Session 4 is the standing warning here — three changes that passed 34 tests, three dry runs and a simulated IK loop produced three failures on first hardware contact, one of which dropped 4.3 kg.
 
 ### 24.1 The thermal guard disarmed itself on any read error
 
-The temperature block wrapped the read **and every decision that followed** in one
-`try`, whose handler was:
+The temperature block wrapped the read **and every decision that followed** in one `try`, whose handler was:
 
 ```python
 except Exception:
     temps, hottest, jaw_temp = [], 0.0, None
 ```
 
-So **any** failure of `chain.read_states()` — a CAN hiccup, a decode error, a short
-state list — reported the hottest motor as **0 °C**. Then `if hottest >= TEMP_STOP`
-could not fire, the thermal stop was gone for that cycle, and the status line printed a
-calm `hottest 0°C`. Nothing warned. If the read failed persistently, the session would
-run to completion with **no thermal protection at all**, reassuring the operator the
-whole way.
+So **any** failure of `chain.read_states()` — a CAN hiccup, a decode error, a short state list — reported the hottest motor as **0 °C**. Then `if hottest >= TEMP_STOP` could not fire, the thermal stop was gone for that cycle, and the status line printed a calm `hottest 0°C`. Nothing warned. If the read failed persistently, the session would run to completion with **no thermal protection at all**, reassuring the operator the whole way.
 
-Motor 7 has been cooked three times on this rig
-([§3.5](#35--the-gripper-two-2π-frame-errors-not-a-broken-mechanism)), so this is not a
-theoretical guard.
+Motor 7 has been cooked three times on this rig ([§3.5](#35--the-gripper-two-2π-frame-errors-not-a-broken-mechanism)), so this is not a theoretical guard.
 
-**Fixed** by `ThermalGuard` in `src/yam_robot.py`: only the *read* is wrapped, never the
-decisions; a failed read is `None` and never a temperature; blindness is announced once
-and becomes a **stop** after 100 cycles (1 s at 100 Hz), because a session that cannot
-see temperatures has lost the thing between the gripper and a stall burn. The readout
-now shows `hottest ??°C ⚠️BLIND` rather than a number.
+**Fixed** by `ThermalGuard` in `src/yam_robot.py`: only the *read* is wrapped, never the decisions; a failed read is `None` and never a temperature; blindness is announced once and becomes a **stop** after 100 cycles (1 s at 100 Hz), because a session that cannot see temperatures has lost the thing between the gripper and a stall burn. The readout now shows `hottest ??°C ⚠️BLIND` rather than a number.
 
 ### 24.2 The 55 °C warning was advertised and never issued
 
-The startup plan has always printed `temperature : warn 55°C, stop 65°C`. An exhaustive
-grep over `scripts/` and `src/` found `TEMP_WARN` used in exactly two places: its own
-definition, and that line of the plan. **The warning did not exist.** Only the 65 °C
-stop was ever implemented, so the operator's first notice of a heating motor was the
-session ending.
+The startup plan has always printed `temperature : warn 55°C, stop 65°C`. An exhaustive grep over `scripts/` and `src/` found `TEMP_WARN` used in exactly two places: its own definition, and that line of the plan. **The warning did not exist.** Only the 65 °C stop was ever implemented, so the operator's first notice of a heating motor was the session ending.
 
-Same defect class as [§16](#16-a-refusal-that-named-the-wrong-arm), where a refusal
-named the wrong arm: the text is right, the behaviour is absent, and only somebody at
-the bench finds out. ⭐ **A constant that is printed but never compared against is a
-promise, and this repo should grep for those on purpose.**
+Same defect class as [§16](#16-a-refusal-that-named-the-wrong-arm), where a refusal named the wrong arm: the text is right, the behaviour is absent, and only somebody at the bench finds out. ⭐ **A constant that is printed but never compared against is a promise, and this repo should grep for those on purpose.**
 
 ### 24.3 Ctrl-C released the arm, going around the consent flow
 
-This session exists partly because *"quitting released the arm on a timer"* and **a 5 s
-countdown is not consent** — so `q` was changed to go to HOLD and wait for an explicit
-second key. That fix is real and it works.
+This session exists partly because *"quitting released the arm on a timer"* and **a 5 s countdown is not consent** — so `q` was changed to go to HOLD and wait for an explicit second key. That fix is real and it works.
 
-**Ctrl-C went around all of it.** `SIGINT` raised past the consent flow, past the
-`with KeyReader()`, into the outer handler, and straight into `finally` — which calls
-`shutdown_robot()` and disables the motors. On a raised arm that is a sag, and ⚠️
-**Ctrl-C is precisely what a person presses when something looks wrong**, which is the
-worst possible moment to release 4.3 kg.
+**Ctrl-C went around all of it.** `SIGINT` raised past the consent flow, past the `with KeyReader()`, into the outer handler, and straight into `finally` — which calls `shutdown_robot()` and disables the motors. On a raised arm that is a sag, and ⚠️ **Ctrl-C is precisely what a person presses when something looks wrong**, which is the worst possible moment to release 4.3 kg.
 
-Working contract rule 7, verbatim: *what path reaches the hazard without passing through
-your guard?* Here it was the interrupt, and the guard was the newest code in the file.
+Working contract rule 7, verbatim: *what path reaches the hazard without passing through your guard?* Here it was the interrupt, and the guard was the newest code in the file.
 
-**Fixed** with a SIGINT handler rather than a `try/except`, so the ~540-line loop body
-did not have to be re-indented for it: the first Ctrl-C sets a flag **and restores the
-default handler**, so the loop stops at the top of its next cycle and falls into the
-same consent flow `q` uses — and a **second** Ctrl-C is a genuine force quit, which is
-what pressing it twice means. There is a deliberate remaining gap: a Ctrl-C during
-`build_robot()`, before the handler is installed, still exits the old way. That is
-correct — the arm has only just been energised and is where the operator left it.
+**Fixed** with a SIGINT handler rather than a `try/except`, so the ~540-line loop body did not have to be re-indented for it: the first Ctrl-C sets a flag **and restores the default handler**, so the loop stops at the top of its next cycle and falls into the same consent flow `q` uses — and a **second** Ctrl-C is a genuine force quit, which is what pressing it twice means. There is a deliberate remaining gap: a Ctrl-C during `build_robot()`, before the handler is installed, still exits the old way. That is correct — the arm has only just been energised and is where the operator left it.
 
 ### ⭐ What to take from this, beyond the three fixes
 
-**Every one of these was found by reading the code against its own documentation**, and
-each is invisible to testing that only exercises the happy path: the thermal hole needs
-a CAN failure, the warning needs a hot motor, the Ctrl-C hole needs someone to panic.
-The pattern worth repeating on any file that guards hardware:
+**Every one of these was found by reading the code against its own documentation**, and each is invisible to testing that only exercises the happy path: the thermal hole needs a CAN failure, the warning needs a hot motor, the Ctrl-C hole needs someone to panic. The pattern worth repeating on any file that guards hardware:
 
-1. For each constant that names a limit, **grep for where it is compared.** If it only
-   appears in its definition and in a printed message, it is decoration.
-2. For each `except`, ask **what the handler makes the next check believe.** A handler
-   that substitutes a safe-looking default has silently answered a safety question.
-3. For each guard, ask **which exits skip it** — `break`, `return`, exceptions, and
-   signals. Signals are the one people forget, because they do not appear in the code.
+1. For each constant that names a limit, **grep for where it is compared.** If it only appears in its definition and in a printed message, it is decoration.
+2. For each `except`, ask **what the handler makes the next check believe.** A handler that substitutes a safe-looking default has silently answered a safety question.
+3. For each guard, ask **which exits skip it** — `break`, `return`, exceptions, and signals. Signals are the one people forget, because they do not appear in the code.
 
 ---
 
 ## 25. ⭐ The camera identification held up, and four things around it did not
 
-**2026-08-12. First, the good news, because it is the part worth trusting.** Julien ran
-`--list` and the measurement reproduced his hand experiment exactly:
+**2026-08-12. First, the good news, because it is the part worth trusting.** Julien ran `--list` and the measurement reproduced his hand experiment exactly:
 
 ```
 ✅ index 0 delivered 160x90,     which only C920 webcam offers.
@@ -1480,10 +895,7 @@ The pattern worth repeating on any file that guards hardware:
 ✅ index 3 delivered 1920x1440,  which only Julien's iPhone Camera offers.
 ```
 
-That is the wiring he found by covering each camera, and the exact opposite of what
-three macOS enumerations claim ([§22](#22--which-camera-is-which--and-how-a-careful-checked-published-inference-was-still-wrong)).
-**Ask the hardware a question only one device can answer.** It works, it is fast, and it
-needs no list to be correct.
+That is the wiring he found by covering each camera, and the exact opposite of what three macOS enumerations claim ([§22](#22--which-camera-is-which--and-how-a-careful-checked-published-inference-was-still-wrong)). **Ask the hardware a question only one device can answer.** It works, it is fast, and it needs no list to be correct.
 
 Everything below is a defect he found by *using* it.
 
@@ -1492,86 +904,45 @@ Everything below is a defect he found by *using* it.
 *"When I press number six the frame rate drops to like two frames per second."*
 
 MEASURED: the C920 advertises **2560x1472 at 2.0 fps**. Every other mode it has runs at
-30. `key_sizes()` sorted modes by pixel count and put the largest on key 6, which for a
-**live view** is the wrong idea entirely — the right one is *the sharpest mode that still
-moves*. AVFoundation reports a max frame rate per format, so this is a measurement and
-not a matter of taste: modes below `MIN_LIVE_FPS` (15) are now excluded.
+30. `key_sizes()` sorted modes by pixel count and put the largest on key 6, which for a **live view** is the wrong idea entirely — the right one is *the sharpest mode that still moves*. AVFoundation reports a max frame rate per format, so this is a measurement and not a matter of taste: modes below `MIN_LIVE_FPS` (15) are now excluded.
 
-⭐ The general shape: **"biggest" and "best" are the same only when one dimension
-matters.** Here there were two, and the code only knew about one.
+⭐ The general shape: **"biggest" and "best" are the same only when one dimension matters.** Here there were two, and the code only knew about one.
 
 ### 25.2 `--camera c920` took ~20 seconds to open one named camera
 
-*"It takes like twenty seconds for the camera to start running, which shouldn't be the
-case because I deliberately said which camera I want."*
+*"It takes like twenty seconds for the camera to start running, which shouldn't be the case because I deliberately said which camera I want."*
 
-Correct. `--camera` called the full `identify_indices()`, which opens **every** camera
-and asks **every** camera's question at **every** index — 4 opens and 16 reconfigurations
-to answer a question about one device. It also woke his iPhone over Continuity every
-single time, which is the slowest thing on the bus and was never wanted.
+Correct. `--camera` called the full `identify_indices()`, which opens **every** camera and asks **every** camera's question at **every** index — 4 opens and 16 reconfigurations to answer a question about one device. It also woke his iPhone over Continuity every single time, which is the slowest thing on the bus and was never wanted.
 
-**Now:** one question per index, stopping at the first exact match (safe *because* the
-mode is unique to one camera), plus `config/camera_index_hint.json` remembering where
-that camera was last found.
+**Now:** one question per index, stopping at the first exact match (safe *because* the mode is unique to one camera), plus `config/camera_index_hint.json` remembering where that camera was last found.
 
-⚠️ **The hint is an ordering of the search, not a cached answer**, and that distinction
-is what keeps it consistent with §22's refusal to cache identity. The camera at the
-remembered index is asked the same question as any other; a stale hint costs one extra
-open and falls through to the scan. **A cache that is verified on every use is not a
-cache of the answer.**
+⚠️ **The hint is an ordering of the search, not a cached answer**, and that distinction is what keeps it consistent with §22's refusal to cache identity. The camera at the remembered index is asked the same question as any other; a stale hint costs one extra open and falls through to the scan. **A cache that is verified on every use is not a cache of the answer.**
 
 ### 25.3 The detail cap was a constant where it needed to be a measurement
 
-*"The max resolution that can be sent is 720x405 … it doesn't really make any sort of
-difference."*
+*"The max resolution that can be sent is 720x405 … it doesn't really make any sort of difference."*
 
-720 px came from the PNG encode benchmark in [§21.4](#214--the-resolution-is-stuck-and-the-number-keys-do-nothing--2026-08-11). That
-benchmark was right and the conclusion drawn from it was too narrow: on his machine
-encoding is ~8 ms of a ~40 ms draw, and **the rest is writing ~650 KB into a pty**. That
-ratio depends on the terminal, the font size, the window and the machine's load — none
-of which a constant measured on one afternoon can know.
+720 px came from the PNG encode benchmark in [§21.4](#214--the-resolution-is-stuck-and-the-number-keys-do-nothing--2026-08-11). That benchmark was right and the conclusion drawn from it was too narrow: on his machine encoding is ~8 ms of a ~40 ms draw, and **the rest is writing ~650 KB into a pty**. That ratio depends on the terminal, the font size, the window and the machine's load — none of which a constant measured on one afternoon can know.
 
-The viewer now **climbs toward what it actually sustains**: spend at most half the frame
-interval drawing, back off quickly (×0.85), climb slowly (×1.15), with the ceiling set by
-the pane and the capture rather than by any protocol budget. Same discipline as the rest
-of the rig — *measure the consequence rather than predicting it*.
+The viewer now **climbs toward what it actually sustains**: spend at most half the frame interval drawing, back off quickly (×0.85), climb slowly (×1.15), with the ceiling set by the pane and the capture rather than by any protocol budget. Same discipline as the rest of the rig — *measure the consequence rather than predicting it*.
 
 ### 25.4 ⛔ The diagnostic itself produced a confident wrong answer
 
-`--term-test` reported **"the terminal said NOTHING → it does not implement this
-protocol"** about Ghostty 1.3.1 — which was, at that moment, drawing the camera view in
-kitty mode.
+`--term-test` reported **"the terminal said NOTHING → it does not implement this protocol"** about Ghostty 1.3.1 — which was, at that moment, drawing the camera view in kitty mode.
 
-**The kitty protocol keys its response to an image id** (`i=`) or number (`I=`). The test
-sent neither, so the terminal had nothing to answer *about* and correctly stayed silent.
-The test then read silence as absence.
+**The kitty protocol keys its response to an image id** (`i=`) or number (`I=`). The test sent neither, so the terminal had nothing to answer *about* and correctly stayed silent. The test then read silence as absence.
 
-⭐ Worth keeping for its own sake: **silence is not evidence unless you asked a question
-that requires an answer.** The same shape as [§23](#23--system_profiler-spusbdatatype-reports-an-empty-bus-while-15-devices-are-plugged-in)'s
-empty USB list, and it appeared here in the code written to diagnose exactly this class
-of problem. Fixed by giving the test image an id; "no reply" now says plainly that it
-proves nothing and asks the operator to look at the screen.
+⭐ Worth keeping for its own sake: **silence is not evidence unless you asked a question that requires an answer.** The same shape as [§23](#23--system_profiler-spusbdatatype-reports-an-empty-bus-while-15-devices-are-plugged-in)'s empty USB list, and it appeared here in the code written to diagnose exactly this class of problem. Fixed by giving the test image an id; "no reply" now says plainly that it proves nothing and asks the operator to look at the screen.
 
-✅ **ANSWERED 2026-08-12, and the answer is no.** With the image-id fix in place,
-`--term-test` got a clean `ESC _G i=771;OK ESC \` back — so Ghostty implements the
-kitty protocol properly — and Julien reported seeing **one** set of bars, the KITTY
-set. The iTerm2 image never appeared.
+✅ **ANSWERED 2026-08-12, and the answer is no.** With the image-id fix in place, `--term-test` got a clean `ESC _G i=771;OK ESC \` back — so Ghostty implements the kitty protocol properly — and Julien reported seeing **one** set of bars, the KITTY set. The iTerm2 image never appeared.
 
-⛔ **So PNG is the ceiling on this terminal, and that is a closed question rather than
-a hope.** The ~25x cheaper JPEG path is unavailable in Ghostty, which is exactly why
-the sent-image size is decided by the adaptive controller measuring the real draw cost
-([§25.3](#253-the-detail-cap-was-a-constant-where-it-needed-to-be-a-measurement))
-rather than by a constant chosen from encode benchmarks. If sharper is ever wanted
-badly enough, the lever is a different terminal — iTerm2 and WezTerm both take JPEG —
-not more code here.
+⛔ **So PNG is the ceiling on this terminal, and that is a closed question rather than a hope.** The ~25x cheaper JPEG path is unavailable in Ghostty, which is exactly why the sent-image size is decided by the adaptive controller measuring the real draw cost ([§25.3](#253-the-detail-cap-was-a-constant-where-it-needed-to-be-a-measurement)) rather than by a constant chosen from encode benchmarks. If sharper is ever wanted badly enough, the lever is a different terminal — iTerm2 and WezTerm both take JPEG — not more code here.
 
 ---
 
 ## 26. ⛔⭐ The key reader was swallowing keys — including the ones that stop the arm
 
-**2026-08-12, found by chasing something else entirely.** Julien reported that after a
-park stalled, the session *"kind of went back into a mode"*. It had, and the cause was
-not in the park.
+**2026-08-12, found by chasing something else entirely.** Julien reported that after a park stalled, the session *"kind of went back into a mode"*. It had, and the cause was not in the park.
 
 ### The defect
 
@@ -1582,11 +953,7 @@ if select.select([sys.stdin], [], [], 0)[0]:
     return sys.stdin.read(1)
 ```
 
-**Those two lines do not see the same thing.** `sys.stdin` is a `TextIOWrapper` over a
-`BufferedReader`: `read(1)` returns one character, but the buffer underneath first pulls
-**everything available** off the file descriptor. `select()` then asks the *descriptor*
-whether data is waiting, the descriptor says no — and the remaining keys sit in Python's
-buffer, invisible, until the next keystroke happens to arrive and flushes them out.
+**Those two lines do not see the same thing.** `sys.stdin` is a `TextIOWrapper` over a `BufferedReader`: `read(1)` returns one character, but the buffer underneath first pulls **everything available** off the file descriptor. `select()` then asks the *descriptor* whether data is waiting, the descriptor says no — and the remaining keys sit in Python's buffer, invisible, until the next keystroke happens to arrive and flushes them out.
 
 **Reproduced on a pty:**
 
@@ -1596,33 +963,19 @@ first  drain(): ['p']
 second drain(): []
 ```
 
-`drain()`'s own docstring promises *"every pending keypress"*. It returned one of three
-and lost the rest.
+`drain()`'s own docstring promises *"every pending keypress"*. It returned one of three and lost the rest.
 
 ### Why this one matters more than a dropped keystroke usually would
 
-These keys are **`h` for HOLD**, **`q` for the quit-and-consent flow**, and **"any key"
-to stop a park while the arm is moving.** ⛔ **A burst of keys is exactly what a person
-produces when they want the arm to stop**, and a burst was precisely the broken case.
+These keys are **`h` for HOLD**, **`q` for the quit-and-consent flow**, and **"any key" to stop a park while the arm is moving.** ⛔ **A burst of keys is exactly what a person produces when they want the arm to stop**, and a burst was precisely the broken case.
 
-It also explains the reported symptom directly: a swallowed key surfaces later, next to
-input that had nothing to do with it, so a mode appears to change by itself. In his log a
-park announced itself and reported `park stopped.` in the same breath — cancelled by a
-keystroke typed seconds earlier, for something else.
+It also explains the reported symptom directly: a swallowed key surfaces later, next to input that had nothing to do with it, so a mode appears to change by itself. In his log a park announced itself and reported `park stopped.` in the same breath — cancelled by a keystroke typed seconds earlier, for something else.
 
-**Fixed** by reading the descriptor with `os.read(fd, 1)`, so `select` and the read are
-talking about the same buffer. `scripts/test_keyboard.py` covers it on a **real pty** —
-6 tests — because the bug lived in the seam between two real objects and a mocked stdin
-would have passed while the arm still ate keystrokes.
+**Fixed** by reading the descriptor with `os.read(fd, 1)`, so `select` and the read are talking about the same buffer. `scripts/test_keyboard.py` covers it on a **real pty** — 6 tests — because the bug lived in the seam between two real objects and a mocked stdin would have passed while the arm still ate keystrokes.
 
-⚠️ **The same defect was in `--term-test`**, and it is how that command reported
-`⛔ ERROR` about a terminal that had answered correctly: it read a single `\x1b` of a
-longer reply and judged the rest missing. Same fix.
+⚠️ **The same defect was in `--term-test`**, and it is how that command reported `⛔ ERROR` about a terminal that had answered correctly: it read a single `\x1b` of a longer reply and judged the rest missing. Same fix.
 
-⭐ **The general lesson, and it is not really about terminals:** `select()` answers
-questions about a *file descriptor*, and every buffered reader layered on top of one
-holds data the descriptor no longer knows about. Mixing the two is a silent data-loss
-bug in any language. Ask both questions of the same object.
+⭐ **The general lesson, and it is not really about terminals:** `select()` answers questions about a *file descriptor*, and every buffered reader layered on top of one holds data the descriptor no longer knows about. Mixing the two is a silent data-loss bug in any language. Ask both questions of the same object.
 
 ### 26.1 The park stall was a knife edge, not a fault
 
@@ -1633,70 +986,32 @@ Same session, two consecutive runs, same arm and same pose:
 ⛔ PARK STALLED — 0.021 rad still to go       # Ctrl-C park, next session
 ```
 
-`PARK_TOLERANCE` is **0.02**. The arm was landing either side of the threshold by a
-thousandth of a radian — and that is not a fault, it is **the noise floor**. A
-position-controlled arm holding itself against gravity settles where its stiffness
-balances the load, a fraction of a degree short of the commanded pose.
-`park_target_from`'s own comment said so all along: *"it must allow for a position
-controller's steady-state error."* 0.02 rad (1.1°) turned out to sit **on** that error
-rather than safely above it.
+`PARK_TOLERANCE` is **0.02**. The arm was landing either side of the threshold by a thousandth of a radian — and that is not a fault, it is **the noise floor**. A position-controlled arm holding itself against gravity settles where its stiffness balances the load, a fraction of a degree short of the commanded pose. `park_target_from`'s own comment said so all along: *"it must allow for a position controller's steady-state error."* 0.02 rad (1.1°) turned out to sit **on** that error rather than safely above it.
 
-⭐ **The fix is not a bigger number.** Loosening the tolerance would also make a
-genuinely obstructed arm look parked — and the obstruction might be a hand. What
-separates the two cases is **how far away it stopped**:
+⭐ **The fix is not a bigger number.** Loosening the tolerance would also make a genuinely obstructed arm look parked — and the obstruction might be a hand. What separates the two cases is **how far away it stopped**:
 
 | stopped improving, and | verdict | why |
 |---|---|---|
 | **close** (< 0.06 rad) | `settled` — success | the remaining error is the controller, not an obstacle |
 | **far** | `blocked` — hold and ask | something is in the way, or the pose is unreachable |
 
-One threshold was doing two jobs; it is now two thresholds doing one each
-(`park_verdict()`, pure, 5 tests). Both park paths — the interleaved one and the
-blocking one — now share the single rule, so they can no longer disagree about the same
-arm at the same pose.
+One threshold was doing two jobs; it is now two thresholds doing one each (`park_verdict()`, pure, 5 tests). Both park paths — the interleaved one and the blocking one — now share the single rule, so they can no longer disagree about the same arm at the same pose.
 
 ### 26.2 Two smaller things from the same log
 
-- **A park could be cancelled by a keystroke typed before it started.** "Any key stops
-  it" must mean a key pressed *at the moving arm*, not one left over from teleop or from
-  the menu that led there. Both park paths now drain stale input first.
-- ⭐ **"Smooth motion" meant two different mechanisms, and I built the wrong one.**
-  Julien asked for smoothing between saved poses. I implemented a trapezoidal **speed
-  ramp along each leg** — ease in, cruise, ease out — which makes a single move gentler
-  and leaves the arm **stopping dead at every waypoint**. He meant **corner blending**:
-  one continuous motion that curves *through* the corner.
+- **A park could be cancelled by a keystroke typed before it started.** "Any key stops it" must mean a key pressed *at the moving arm*, not one left over from teleop or from the menu that led there. Both park paths now drain stale input first.
+- ⭐ **"Smooth motion" meant two different mechanisms, and I built the wrong one.** Julien asked for smoothing between saved poses. I implemented a trapezoidal **speed ramp along each leg** — ease in, cruise, ease out — which makes a single move gentler and leaves the arm **stopping dead at every waypoint**. He meant **corner blending**: one continuous motion that curves *through* the corner.
 
-  Both are real features, both were wanted, and the word "smooth" covers both. ⚠️ The
-  tell was there in the original request — *"move from point one to point two … in a
-  smooth curve it would go to the next point"* describes a **path**, not a speed — and
-  I read it as a speed because that was the cheaper thing to build. **When a request
-  could name two different mechanisms, say which one you are building before building
-  it.** One sentence would have saved the round trip. Both now exist and are
-  independent: the ramp decides *how fast* the cursor moves, the blend decides *what
-  shape* it follows.
+Both are real features, both were wanted, and the word "smooth" covers both. ⚠️ The tell was there in the original request — *"move from point one to point two … in a smooth curve it would go to the next point"* describes a **path**, not a speed — and I read it as a speed because that was the cheaper thing to build. **When a request could name two different mechanisms, say which one you are building before building it.** One sentence would have saved the round trip. Both now exist and are independent: the ramp decides *how fast* the cursor moves, the blend decides *what shape* it follows.
 
-- **Every clean exit printed a traceback.** The SDK's `robot_server` thread raises
-  `motor chain is not running` when we stop the chain — i.e. on success, immediately
-  before `motors confirmed disabled`. ⚠️ Harmless, and worth removing anyway: a scary
-  traceback on every successful exit is a training exercise in ignoring tracebacks, and
-  this project depends on people reading the ones that matter. Suppressed **narrowly** —
-  only during our own shutdown, only that thread, only that exception, only that
-  message; anything else prints in full. If it does,
-that protocol carries JPEG — ~25× cheaper in time and ~30× in bytes than the PNG the
-kitty protocol forces — and the sharpness ceiling roughly doubles for free. One look at
-the screen settles it.
+- **Every clean exit printed a traceback.** The SDK's `robot_server` thread raises `motor chain is not running` when we stop the chain — i.e. on success, immediately before `motors confirmed disabled`. ⚠️ Harmless, and worth removing anyway: a scary traceback on every successful exit is a training exercise in ignoring tracebacks, and this project depends on people reading the ones that matter. Suppressed **narrowly** — only during our own shutdown, only that thread, only that exception, only that message; anything else prints in full. If it does, that protocol carries JPEG — ~25× cheaper in time and ~30× in bytes than the PNG the kitty protocol forces — and the sharpness ceiling roughly doubles for free. One look at the screen settles it.
 ---
 
 ## 27. ⛔⭐ One function explained all three of the complaints from session 19 — 2026-08-12
 
-Julien's report after driving the arm through GUIDE / TELEOP / PARK for ~4½ minutes:
-*"everything worked as it should. However, a couple things was still a bit weird. Hold
-sometimes gets overwritten … I feel like the second hold, or the first hold, was
-overwritten"*, plus an observation that some output looked duplicated and an explicit
-invitation to work out **where** it had duplicated.
+Julien's report after driving the arm through GUIDE / TELEOP / PARK for ~4½ minutes: *"everything worked as it should. However, a couple things was still a bit weird. Hold sometimes gets overwritten … I feel like the second hold, or the first hold, was overwritten"*, plus an observation that some output looked duplicated and an explicit invitation to work out **where** it had duplicated.
 
-⭐ **All of it was `StatusLine.say()`, and the evidence was in the paste he sent back.**
-Every message line in it carries a fragment of the status line welded onto its end:
+⭐ **All of it was `StatusLine.say()`, and the evidence was in the paste he sent back.** Every message line in it carries a fragment of the status line welded onto its end:
 
 ```
 ⭐ MODE: GUIDE — arm is weightless°C  jaw   33°C  q [-0.49  1.    0.88 …]
@@ -1706,33 +1021,20 @@ Every message line in it carries a fragment of the status line welded onto its e
   PARK to which?  0 = base, 1-9 = a waypoint, Enter = base. 0.98  0.76  0.27 …
 ```
 
-`weightless°C`, `drivesC`, `to stop. 0.216`, `cancelled.6.0s` — the tail after each
-message is **the surviving right-hand end of the status row underneath it.**
+`weightless°C`, `drivesC`, `to stop. 0.216`, `cancelled.6.0s` — the tail after each message is **the surviving right-hand end of the status row underneath it.**
 
 ### 27.1 The defect
 
-`say()` cleared **one** row and then wrote its payload. But `print` is shadowed for the
-whole of `main()`, and its ~60 call sites were written for the builtin, so they all look
-like `print("\n⭐ MODE: HOLD\n")`. The payload therefore *contains newlines*:
+`say()` cleared **one** row and then wrote its payload. But `print` is shadowed for the whole of `main()`, and its ~60 call sites were written for the builtin, so they all look like `print("\n⭐ MODE: HOLD\n")`. The payload therefore *contains newlines*:
 
 1. `\x1b[K` clears the hint row.
-2. The payload's first line (empty) emits `\n` → **the cursor moves onto the status row,
-   which is never cleared.**
+2. The payload's first line (empty) emits `\n` → **the cursor moves onto the status row, which is never cleared.**
 3. `⭐ MODE: HOLD` is written over its first 13 columns. The rest of the status survives.
-4. `_rows` is then wrong by the number of embedded newlines, so the next `_rewind()`
-   moves the cursor to a row the live block was never on, and repaints the block there —
-   **leaving the previous copy on screen.**
+4. `_rows` is then wrong by the number of embedded newlines, so the next `_rewind()` moves the cursor to a row the live block was never on, and repaints the block there — **leaving the previous copy on screen.**
 
-⭐ **That fourth step is the "duplicate print", and it is not a copy-paste artefact.**
-His log contains the same three rows twice with only the timestamp differing —
-`[HOLD] t= 198.0s` and `[HOLD] t= 256.0s`, **58 seconds apart**, each under an identical
-`⭐ PARK reached in 0.9s (0.036 rad off …)` and `RUN 1 → 2 → 3 … Enter=go`. A stale copy
-of a live row, still holding the timestamp it had when it was orphaned.
+⭐ **That fourth step is the "duplicate print", and it is not a copy-paste artefact.** His log contains the same three rows twice with only the timestamp differing — `[HOLD] t= 198.0s` and `[HOLD] t= 256.0s`, **58 seconds apart**, each under an identical `⭐ PARK reached in 0.9s (0.036 rad off …)` and `RUN 1 → 2 → 3 … Enter=go`. A stale copy of a live row, still holding the timestamp it had when it was orphaned.
 
-⭐ **And `⭐ MODE: HOLD` is the shortest banner in the program** — 13 columns against a
-~90-column status row. It therefore overwrote the least and looked, correctly, like *the
-one that got eaten*. Julien's *"hold sometimes gets overwritten"* was a precise
-description of a real mechanism, not an impression.
+⭐ **And `⭐ MODE: HOLD` is the shortest banner in the program** — 13 columns against a ~90-column status row. It therefore overwrote the least and looked, correctly, like *the one that got eaten*. Julien's *"hold sometimes gets overwritten"* was a precise description of a real mechanism, not an impression.
 
 ### 27.2 The test that should have caught it, and why it could not
 
@@ -1741,39 +1043,16 @@ screen.say("⭐ MODE: PARK")          # the test
 print("\n⭐ MODE: PARK → …\n")       # every actual call site
 ```
 
-**The test passed a single-line message. No call site in the program produces one.** It
-asserted `out.count("\n") == 1`, which is exactly the property that breaks the moment the
-payload has newlines of its own — so the assertion was measuring the thing it was
-supposed to protect, on input that could not violate it.
+**The test passed a single-line message. No call site in the program produces one.** It asserted `out.count("\n") == 1`, which is exactly the property that breaks the moment the payload has newlines of its own — so the assertion was measuring the thing it was supposed to protect, on input that could not violate it.
 
-⛔ This is working contract rule 7 again — *what path reaches the hazard without passing
-through your guard?* — in a new place. The guard was a **test**, written against the
-interface rather than against its callers. The repo already knew this shape: a thermal
-test that could not detect the thing it tested (§9), a refusal that named the wrong arm
-(§16), a hint advertising a key that did nothing where it was printed (§17.1).
-**A test is a guard, and it decays the same way.**
+⛔ This is working contract rule 7 again — *what path reaches the hazard without passing through your guard?* — in a new place. The guard was a **test**, written against the interface rather than against its callers. The repo already knew this shape: a thermal test that could not detect the thing it tested (§9), a refusal that named the wrong arm (§16), a hint advertising a key that did nothing where it was printed (§17.1). **A test is a guard, and it decays the same way.**
 
-⭐ **The fix that makes it hard to repeat:** `test_screen.py` now replays the escape
-codes into a grid of rows (`rows_of()`) and asserts on **what each row ends up holding**,
-not on the stream. `assert "MODE: HOLD" in out` was true throughout the bug. The text was
-never missing; only its *position* was wrong, and only a model of the screen can see that.
+⭐ **The fix that makes it hard to repeat:** `test_screen.py` now replays the escape codes into a grid of rows (`rows_of()`) and asserts on **what each row ends up holding**, not on the stream. `assert "MODE: HOLD" in out` was true throughout the bug. The text was never missing; only its *position* was wrong, and only a model of the screen can see that.
 
 ### 27.3 Two more ways the same row accounting could break, both now closed
 
-- **A message longer than the terminal wraps**, consuming two physical rows where the
-  class counts one. `say()` never truncated, and the PARK banner is ~110 columns.
-  ⭐ **Truncation is now applied only when a live block exists** — with nothing live there
-  is nothing to rewind over, so the startup plan and HELP still print in full. Getting
-  this wrong in the other direction would silently cut the information he reads to decide
-  whether to pass `--yes`.
-- **Width was measured with `len()`.** `⭐` is one character and **two columns**; `⚠️` is
-  two characters (`⚠` + VS16) and two columns. Every line in this program has emoji in
-  it, so a line "fitted" to 99 columns could be 105 wide, wrap, and desynchronise the
-  same arithmetic. ⚠️ First attempt keyed the VS16 promotion on east-asian-width `A`
-  (ambiguous) — but `⚠` is `N`, *neutral*, so the rule missed the commonest symbol in the
-  codebase. The test caught it. **Ambiguous-width characters (`→ · °`) are still counted
-  as one column, which is right outside a CJK locale and wrong inside one**; `width()`
-  keeps a spare column for that.
+- **A message longer than the terminal wraps**, consuming two physical rows where the class counts one. `say()` never truncated, and the PARK banner is ~110 columns. ⭐ **Truncation is now applied only when a live block exists** — with nothing live there is nothing to rewind over, so the startup plan and HELP still print in full. Getting this wrong in the other direction would silently cut the information he reads to decide whether to pass `--yes`.
+- **Width was measured with `len()`.** `⭐` is one character and **two columns**; `⚠️` is two characters (`⚠` + VS16) and two columns. Every line in this program has emoji in it, so a line "fitted" to 99 columns could be 105 wide, wrap, and desynchronise the same arithmetic. ⚠️ First attempt keyed the VS16 promotion on east-asian-width `A` (ambiguous) — but `⚠` is `N`, *neutral*, so the rule missed the commonest symbol in the codebase. The test caught it. **Ambiguous-width characters (`→ · °`) are still counted as one column, which is right outside a CJK locale and wrong inside one**; `width()` keeps a spare column for that.
 
 ### 27.4 ⛔ The stale hint row — and it is why `e` "did nothing"
 
@@ -1783,9 +1062,7 @@ never missing; only its *position* was wrong, and only a model of the screen can
 RUN 1 → 2 → 3 · speed 0.78 (-/+) · corners smooth 0.15 (,/.) · ease s-curve over 0.20 (e, [/]) · Enter=go
 ```
 
-stayed live for the rest of the session — after the run was cancelled, through mode
-changes, sitting above a `[HOLD]` status. It is a *live* row, repainted every cycle, which
-is the other half of why the same block appears twice in his paste.
+stayed live for the rest of the session — after the run was cancelled, through mode changes, sitting above a `[HOLD]` status. It is a *live* row, repainted every cycle, which is the other half of why the same block appears twice in his paste.
 
 ⭐ **Worse than untidy, because it advertises keys.** His log reads:
 
@@ -1795,91 +1072,45 @@ is the other half of why the same block appears twice in his paste.
   (key 'e' does nothing — press ? for the list)
 ```
 
-He cancelled a run, the stale row went on offering `(e, [/])`, he pressed `e` twice, and
-was told the key does nothing. **Both halves were defects:** the row should have gone, and
-`e` should have worked. `e` was bound only inside the "typing a park sequence" branch,
-although the ease profile describes how the *next* park will move, which is meaningful in
-any mode. It is now global.
+He cancelled a run, the stale row went on offering `(e, [/])`, he pressed `e` twice, and was told the key does nothing. **Both halves were defects:** the row should have gone, and `e` should have worked. `e` was bound only inside the "typing a park sequence" branch, although the ease profile describes how the *next* park will move, which is meaningful in any mode. It is now global.
 
-⚠️ **`e` is still handled in the pending branch as well, and that duplication is
-deliberate:** an unrecognised key while typing a sequence *cancels the run*, so a key
-bound only further down the dispatch would abort the very move it was meant to configure.
+⚠️ **`e` is still handled in the pending branch as well, and that duplication is deliberate:** an unrecognised key while typing a sequence *cancels the run*, so a key bound only further down the dispatch would abort the very move it was meant to configure.
 
 ### 27.5 Two live rows, and the ones that were fighting for the status row
 
-`hint()` exists so a knob change repaints instead of scrolling. Two places still wrote
-their transient readout through `print(…, end="")`, which the shadowed `print` routes to
-`screen.set` — **the heartbeat row**:
+`hint()` exists so a knob change repaints instead of scrolling. Two places still wrote their transient readout through `print(…, end="")`, which the shadowed `print` routes to `screen.set` — **the heartbeat row**:
 
 - the park-sequence echo (`park sequence: 1 → 2   (another digit, or Enter)`), and
 - the once-a-second park progress (`moving… 2.31 rad of path left, …`).
 
-Both replaced the temperature readout and were then wiped by the next repaint. ⛔ The
-second is the worse one: during the one motion where an operator most wants to watch a
-temperature climb, the temperature row was the one being painted over. Both are hints now.
+Both replaced the temperature readout and were then wiped by the next repaint. ⛔ The second is the worse one: during the one motion where an operator most wants to watch a temperature climb, the temperature row was the one being painted over. Both are hints now.
 
 ### 27.6 ⛔ An arrow key was silently changing a motion parameter
 
-An arrow key sends `ESC` `[` `A`. The key reader returned those as **three keypresses**,
-and **`[` is bound** — gripper step in the drive modes, ease-ramp length while a run is
-being typed. So pressing ↑ halved a motion parameter and then printed
-`(key 'A' does nothing)`, which reads as the program having lost track of itself.
+An arrow key sends `ESC` `[` `A`. The key reader returned those as **three keypresses**, and **`[` is bound** — gripper step in the drive modes, ease-ramp length while a run is being typed. So pressing ↑ halved a motion parameter and then printed `(key 'A' does nothing)`, which reads as the program having lost track of itself.
 
-⚠️ **A test asserted this behaviour and called it *"documented, not desired"*.** Writing a
-defect into a test does not make it safe; it makes it permanent. That wording is the tell
-— a test recording behaviour nobody wanted, with a comment explaining why it was fine.
-Escape sequences now arrive as one non-printable token, which the session's
-`k.isprintable()` filter drops in silence. A bare `ESC` still arrives as `ESC`, because it
-cancels a pending park.
+⚠️ **A test asserted this behaviour and called it *"documented, not desired"*.** Writing a defect into a test does not make it safe; it makes it permanent. That wording is the tell — a test recording behaviour nobody wanted, with a comment explaining why it was fine. Escape sequences now arrive as one non-printable token, which the session's `k.isprintable()` filter drops in silence. A bare `ESC` still arrives as `ESC`, because it cancels a pending park.
 
 ### 27.7 ⭐ `ö` and `ä` — and why the reader could not have seen them
 
-Julien: *"I don't like the fact that the brackets are used because I have a German
-keyboard, and they're awkward to reach. Maybe ä and ö could be used."*
+Julien: *"I don't like the fact that the brackets are used because I have a German keyboard, and they're awkward to reach. Maybe ä and ö could be used."*
 
-He is right, and it is worse than awkward: **on a German QWERTZ layout `[` and `]` are
-AltGr+8 and AltGr+9** — a three-finger chord, on a rig whose input design rule is *no
-shift keys*, for a knob adjusted while 4.3 kg is moving.
+He is right, and it is worse than awkward: **on a German QWERTZ layout `[` and `]` are AltGr+8 and AltGr+9** — a three-finger chord, on a rig whose input design rule is *no shift keys*, for a knob adjusted while 4.3 kg is moving.
 
-⛔ **But the keys could not simply be bound, because the reader was structurally
-incapable of receiving them.** `KeyReader.get()` did `os.read(fd, 1)` and decoded that
-**single byte** with `errors="replace"`. `ö` is two bytes in UTF-8 (`0xC3 0xB6`), `ä` is
-`0xC3 0xA4` — so each half decoded independently to `U+FFFD` and **one keypress produced
-two replacement characters and no key.** No exception, no log line: this file's opening
-rule, in the input layer.
+⛔ **But the keys could not simply be bound, because the reader was structurally incapable of receiving them.** `KeyReader.get()` did `os.read(fd, 1)` and decoded that **single byte** with `errors="replace"`. `ö` is two bytes in UTF-8 (`0xC3 0xB6`), `ä` is `0xC3 0xA4` — so each half decoded independently to `U+FFFD` and **one keypress produced two replacement characters and no key.** No exception, no log line: this file's opening rule, in the input layer.
 
-Fixed with a UTF-8 **incremental** decoder held on the instance, because the two bytes of
-one character can land in different reads and a per-call decoder would mangle a key that
-arrived intact. Tested by writing the halves separately into a pty.
+Fixed with a UTF-8 **incremental** decoder held on the instance, because the two bytes of one character can land in different reads and a per-call decoder would mangle a key that arrived intact. Tested by writing the halves separately into a pty.
 
-⭐ **Why `ö`/`ä` and not something else** — the alternatives were checked rather than
-assumed. Unshifted keys free on a German layout: `ö`, `ä`, `ü`, `#`, `<`, `ß`, and `+`
-(already "faster"); `^` and `´` are **dead keys** that emit nothing until a second press.
-`ö` and `ä` are adjacent, on the home row, in the physical position US layouts give `;`
-and `'`. ⚠️ **They are ALIASES — `[` and `]` still work**, because they are in every doc
-and a US keyboard (a colleague's, or a clone of this repo) must not lose the feature.
+⭐ **Why `ö`/`ä` and not something else** — the alternatives were checked rather than assumed. Unshifted keys free on a German layout: `ö`, `ä`, `ü`, `#`, `<`, `ß`, and `+` (already "faster"); `^` and `´` are **dead keys** that emit nothing until a second press. `ö` and `ä` are adjacent, on the home row, in the physical position US layouts give `;` and `'`. ⚠️ **They are ALIASES — `[` and `]` still work**, because they are in every doc and a US keyboard (a colleague's, or a clone of this repo) must not lose the feature.
 
 ### 27.8 A mode key pressed twice reported itself as unknown
 
-`(key 'g' does nothing — press ? for the list)` appears in his log **immediately after
-`⭐ MODE: GUIDE`**, which reads as the program having lost track of its own state. It had
-not: the mode branches are guarded by `mode != "guide"`, so a second press fell past them
-to the catch-all for unrecognised keys. Now answered with `already in GUIDE`.
+`(key 'g' does nothing — press ? for the list)` appears in his log **immediately after `⭐ MODE: GUIDE`**, which reads as the program having lost track of its own state. It had not: the mode branches are guarded by `mode != "guide"`, so a second press fell past them to the catch-all for unrecognised keys. Now answered with `already in GUIDE`.
 
-⚠️ **The mode is deliberately not re-entered.** `enter_guide()` re-arms gravity
-compensation and re-takes the drift reference; that cannot be tested from the bench, so
-this fixes the *message* and changes nothing the motors see.
+⚠️ **The mode is deliberately not re-entered.** `enter_guide()` re-arms gravity compensation and re-takes the drift reference; that cannot be tested from the bench, so this fixes the *message* and changes nothing the motors see.
 
 ### ⭐ What to take from this one
 
-**Four of the eight items above were guards or tests that had stopped describing their
-subject** — a screen test asserting on a payload shape no caller produces, a keyboard test
-pinning an unwanted behaviour, a hint outliving the state it described, a mode branch
-whose fall-through reported the wrong thing. None of them failed. They all passed, kept
-passing, and stopped meaning anything.
+**Four of the eight items above were guards or tests that had stopped describing their subject** — a screen test asserting on a payload shape no caller produces, a keyboard test pinning an unwanted behaviour, a hint outliving the state it described, a mode branch whose fall-through reported the wrong thing. None of them failed. They all passed, kept passing, and stopped meaning anything.
 
-⛔ **The corollary for this repo's method: "245 tests pass" is a statement about the tests
-as much as about the code.** Session 4's lesson was that reading does not find what only
-hardware knows. This is its twin: **a test does not find what its input cannot express.**
-The cheapest defence found here was to assert on the *user-visible artefact* — the grid of
-rows a terminal ends up displaying — rather than on the call that produced it.
+⛔ **The corollary for this repo's method: "245 tests pass" is a statement about the tests as much as about the code.** Session 4's lesson was that reading does not find what only hardware knows. This is its twin: **a test does not find what its input cannot express.** The cheapest defence found here was to assert on the *user-visible artefact* — the grid of rows a terminal ends up displaying — rather than on the call that produced it.

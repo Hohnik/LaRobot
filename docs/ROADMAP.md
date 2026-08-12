@@ -1,33 +1,20 @@
 # Roadmap — from "the arm twitches" to "I drive it with the SpaceMouse"
 
-> **Purpose of this file.** The README says what is *true now*. This says what we are going to do,
-> **in what order, and why that order** — because the ordering is the part that carries the reasoning,
-> and it is the part that gets lost between sessions.
+> **Purpose of this file.** The README says what is *true now*. This says what we are going to do, **in what order, and why that order** — because the ordering is the part that carries the reasoning, and it is the part that gets lost between sessions.
 >
-> Julien's stated near-term goal (2026-08-10): *"be able to control the arm with the space mouse — a single
-> arm with a single space mouse — and then we can go from there."* Everything below is ordered to reach that
-> as directly as safety allows, and no more.
+> Julien's stated near-term goal (2026-08-10): *"be able to control the arm with the space mouse — a single arm with a single space mouse — and then we can go from there."* Everything below is ordered to reach that as directly as safety allows, and no more.
 
 > ## ⚠️ Steps 1-4 below are DONE. Read [HANDOFF.md §5.5](HANDOFF.md) for the live task list.
 >
-> This file is kept because the **ordering arguments** are still the valuable part — why simulation came
-> before hardware, why gravity compensation came before teleop, why the gripper was the safe first mover.
-> But as a to-do list it is spent: teleop works on the real arm, and step 5 (the MCAP recorder) is the next
-> unbuilt thing. **Step 4's caution about rotation signs is now refined by measurement** — see
-> [FINDINGS §10](FINDINGS.md): rotation happens about the tool point, so a wrong rotation sign twists the
-> wrist in place rather than swinging the gripper through space.
+> This file is kept because the **ordering arguments** are still the valuable part — why simulation came before hardware, why gravity compensation came before teleop, why the gripper was the safe first mover. But as a to-do list it is spent: teleop works on the real arm, and step 5 (the MCAP recorder) is the next unbuilt thing. **Step 4's caution about rotation signs is now refined by measurement** — see [FINDINGS §10](FINDINGS.md): rotation happens about the tool point, so a wrong rotation sign twists the wrist in place rather than swinging the gripper through space.
 >
-> **Axis remapping is also built** (2026-08-10): `scripts/map_axes.py` decides which puck axis drives which
-> motion with no hardware at all, and `teleop_sim.py` now applies the same map — so the entire "step 1 in
-> simulation first" argument below finally holds for axis conventions too, which was the one thing it could
-> not previously test.
+> **Axis remapping is also built** (2026-08-10): `scripts/map_axes.py` decides which puck axis drives which motion with no hardware at all, and `teleop_sim.py` now applies the same map — so the entire "step 1 in simulation first" argument below finally holds for axis conventions too, which was the one thing it could not previously test.
 
 ---
 
 ## ⭐ STATUS, 2026-08-10 — steps 1-4 are DONE. Read this before the step list below.
 
-The numbered steps were written before any of them had been attempted, and most are now history. What is
-still live is **step 6**, which is where Julien wants to go next.
+The numbered steps were written before any of them had been attempted, and most are now history. What is still live is **step 6**, which is where Julien wants to go next.
 
 | step | state |
 |---|---|
@@ -37,40 +24,28 @@ still live is **step 6**, which is where Julien wants to go next.
 | 5 recorder → MCAP | open. Deliberately after teleop feels right, but **before** collecting demos in anger |
 | 7 cameras | open, nothing depends on it yet |
 
-⚠️ The step *ordering* below is therefore stale — step 5 now follows step 6. The **reasoning** in each step
-is not stale, which is why they are kept rather than deleted.
+⚠️ The step *ordering* below is therefore stale — step 5 now follows step 6. The **reasoning** in each step is not stale, which is why they are kept rather than deleted.
 
 ## The target, stated precisely
 
-**One SpaceMouse produces a 6-DoF cartesian twist. One YAM arm accepts joint positions. Teleop is the
-function between them, run at 100 Hz, safely.**
+**One SpaceMouse produces a 6-DoF cartesian twist. One YAM arm accepts joint positions. Teleop is the function between them, run at 100 Hz, safely.**
 
 ```
 SpaceMouse twist  →  integrate to a target EE pose  →  IK  →  joint targets  →  arm
    (6 numbers)          (a pose that persists)      (mink)     (7 numbers)
 ```
 
-The middle two boxes are the whole problem. The outer two are done: the SpaceMouse is decoded and verified on
-all six axes (README §4), and the arm accepts joint commands and moves (README §5).
+The middle two boxes are the whole problem. The outer two are done: the SpaceMouse is decoded and verified on all six axes (README §4), and the arm accepts joint commands and moves (README §5).
 
-⚠️ **Why the arm cannot simply be driven by the SpaceMouse directly.** A SpaceMouse gives *cartesian velocity*
-of the end effector. The arm takes *joint angles*. There is no fixed mapping between them — it depends on the
-arm's current configuration — which is exactly what inverse kinematics computes. `docs/Setup-Plan.md` §4.2
-names this as the single largest deviation from the papers, which all teleoperate with GELLO leader arms that
-hand over joint angles directly and need no IK at all.
+⚠️ **Why the arm cannot simply be driven by the SpaceMouse directly.** A SpaceMouse gives *cartesian velocity* of the end effector. The arm takes *joint angles*. There is no fixed mapping between them — it depends on the arm's current configuration — which is exactly what inverse kinematics computes. `docs/Setup-Plan.md` §4.2 names this as the single largest deviation from the papers, which all teleoperate with GELLO leader arms that hand over joint angles directly and need no IK at all.
 
 ---
 
 ## ⛔ The binding constraint is the desk, not the software — 2026-08-10
 
-Julien: *"it's not really safe right now. The only thing that should be moved is the gripper opening and
-closing and the gripper twisting… as soon as the SpaceMouse is connected I can move everything from the desk
-and we can control the whole thing."*
+Julien: *"it's not really safe right now. The only thing that should be moved is the gripper opening and closing and the gripper twisting… as soon as the SpaceMouse is connected I can move everything from the desk and we can control the whole thing."*
 
-**So the ordering below changed, and this is why.** The cartesian IK loop is *already working* in simulation —
-software is ahead of the workspace. Steps that move the whole arm through space (gravity comp, cartesian
-teleop on hardware) are **blocked on clearing the desk**, not on code. Meanwhile motors 6 and 7 —
-`gripper_twist` and `gripper_jaws` — can move freely, because neither changes the arm's reach.
+**So the ordering below changed, and this is why.** The cartesian IK loop is *already working* in simulation — software is ahead of the workspace. Steps that move the whole arm through space (gravity comp, cartesian teleop on hardware) are **blocked on clearing the desk**, not on code. Meanwhile motors 6 and 7 — `gripper_twist` and `gripper_jaws` — can move freely, because neither changes the arm's reach.
 
 ⭐ **That makes a real SpaceMouse-driven robot possible today**, which is step 1b.
 
@@ -83,17 +58,11 @@ teleop on hardware) are **blocked on clearing the desk**, not on code. Meanwhile
     puck YAW (twist)     →  motor 6, gripper_twist
     puck Z (push / lift) →  motor 7, gripper_jaws
 
-**Why this is not a throwaway detour.** It proves the exact half of the teleop stack that IK cannot: reading
-the device and driving real motors together in one 100 Hz loop, with a deadman, bounds and a clean shutdown.
-When the desk is clear, IK drops in *above* this — the loop, the safety envelope and the shutdown path all
-survive unchanged. It is the same code shape, minus the coordinate transform.
+**Why this is not a throwaway detour.** It proves the exact half of the teleop stack that IK cannot: reading the device and driving real motors together in one 100 Hz loop, with a deadman, bounds and a clean shutdown. When the desk is clear, IK drops in *above* this — the loop, the safety envelope and the shutdown path all survive unchanged. It is the same code shape, minus the coordinate transform.
 
-**And it answers the question Julien actually cares about right now:** is the SpaceMouse connected and does
-moving it move the robot.
+**And it answers the question Julien actually cares about right now:** is the SpaceMouse connected and does moving it move the robot.
 
-⚠️ `gripper_jaws` has no trustworthy limits (`gripper_limits: null`, `needs_calibration: true`), so it is
-clamped to a window around wherever it starts, never to an absolute target, and `--max-torque` is what stops
-it closing hard on itself. `--no-jaws` runs twist only.
+⚠️ `gripper_jaws` has no trustworthy limits (`gripper_limits: null`, `needs_calibration: true`), so it is clamped to a window around wherever it starts, never to an absolute target, and `--max-torque` is what stops it closing hard on itself. `--no-jaws` runs twist only.
 
 **Done when:** Julien twists the puck and the gripper twists.
 
@@ -103,39 +72,24 @@ it closing hard on itself. `--no-jaws` runs twist only.
 
 **Do this first, and do all of it, before the real arm is involved.**
 
-**Why first.** `get_yam_robot(sim=True)` returns a `SimRobot` exposing the *same* API as the hardware object —
-`get_joint_pos()`, `command_joint_pos()`, `get_observations()`, `enable_gravity_comp()`. Verified working on
-macOS 2026-08-10. So the entire teleop chain can be written, run and debugged against simulation and then
-moved to hardware **by changing one flag**, with no rewrite and no second code path.
+**Why first.** `get_yam_robot(sim=True)` returns a `SimRobot` exposing the *same* API as the hardware object — `get_joint_pos()`, `command_joint_pos()`, `get_observations()`, `enable_gravity_comp()`. Verified working on macOS 2026-08-10. So the entire teleop chain can be written, run and debugged against simulation and then moved to hardware **by changing one flag**, with no rewrite and no second code path.
 
-**Why that matters more than it sounds.** The first version of any IK loop is wrong — wrong axis conventions,
-wrong frame, wrong sign, wrong integration order, singularities near the workspace edge. Each of those, on a
-physical arm, is a joint slamming toward a limit. Debugging them in simulation costs nothing and risks
-nothing. **This is not a detour on the way to the real arm; it is the cheapest possible way to get there.**
+**Why that matters more than it sounds.** The first version of any IK loop is wrong — wrong axis conventions, wrong frame, wrong sign, wrong integration order, singularities near the workspace edge. Each of those, on a physical arm, is a joint slamming toward a limit. Debugging them in simulation costs nothing and risks nothing. **This is not a detour on the way to the real arm; it is the cheapest possible way to get there.**
 
 **Also:** it needs no hardware at all, so it can proceed while the arms are unplugged, at LaVita, anywhere.
 
 Sub-steps:
-1. `mink` IK against the vendored YAM MJCF (`yam_linear_4310_d405.xml`, which already carries a `tcp_site`
-   end-effector frame). Drive it with a *scripted* target first — a slow circle — so IK is validated with no
-   input device in the loop.
+1. `mink` IK against the vendored YAM MJCF (`yam_linear_4310_d405.xml`, which already carries a `tcp_site` end-effector frame). Drive it with a *scripted* target first — a slow circle — so IK is validated with no input device in the loop.
 2. Swap the scripted target for the real SpaceMouse. Still simulation, so a wrong sign is a shrug.
-3. Optional MuJoCo viewer. **Optional on purpose:** Julien asked to skip visualisation if it slows things
-   down, and he is right that it is not on the critical path. It is one line when wanted, and it is the
-   fastest way to see *why* an IK bug is a bug.
+3. Optional MuJoCo viewer. **Optional on purpose:** Julien asked to skip visualisation if it slows things down, and he is right that it is not on the critical path. It is one line when wanted, and it is the fastest way to see *why* an IK bug is a bug.
 
-**Done when:** moving the SpaceMouse moves the simulated arm sensibly in all six axes, joint limits hold, and
-nothing diverges near a singularity.
+**Done when:** moving the SpaceMouse moves the simulated arm sensibly in all six axes, joint limits hold, and nothing diverges near a singularity.
 
 ---
 
 ## Step 2 — Make the full-arm chain work over gs_usb
 
-**Why this is a step at all.** Everything working today drives *one motor at a time* through
-`DMSingleMotorCanInterface`. Teleop needs all seven at once, and the layer that does that —
-`DMChainCanInterface`, used by `get_yam_robot()` — **hardcodes SocketCAN** (`dm_driver.py:409`,
-`if "can" in channel:`), with no argument to override it. That is the same wall §2.1 of the README describes,
-one layer up, and it has to come down the same way.
+**Why this is a step at all.** Everything working today drives *one motor at a time* through `DMSingleMotorCanInterface`. Teleop needs all seven at once, and the layer that does that — `DMChainCanInterface`, used by `get_yam_robot()` — **hardcodes SocketCAN** (`dm_driver.py:409`, `if "can" in channel:`), with no argument to override it. That is the same wall §2.1 of the README describes, one layer up, and it has to come down the same way.
 
 **What it unlocks — none of which is optional for teleop:**
 
@@ -146,29 +100,19 @@ one layer up, and it has to come down the same way.
 | Gripper force limiter | `linear_4310.yml`'s clog-force thresholds; the safe way to close on an object |
 | `motor_offsets` / ±2π wrap fix | `get_yam_robot()` does this at init; hand-rolled control silently does not |
 
-**Approach.** Same shape as `patch_gs_usb_for_macos()`: a small, documented, verified monkeypatch in
-`src/yam_can.py` that makes `DMSingleMotorCanInterface` resolve to the gs_usb backend when handed an adapter
-index, so `DMChainCanInterface` and `get_yam_robot()` work unmodified. ⛔ Not a fork of the vendor tree —
-`third_party/i2rt` stays a clean upstream checkout that can be re-pulled.
+**Approach.** Same shape as `patch_gs_usb_for_macos()`: a small, documented, verified monkeypatch in `src/yam_can.py` that makes `DMSingleMotorCanInterface` resolve to the gs_usb backend when handed an adapter index, so `DMChainCanInterface` and `get_yam_robot()` work unmodified. ⛔ Not a fork of the vendor tree — `third_party/i2rt` stays a clean upstream checkout that can be re-pulled.
 
-**Done when:** `get_yam_robot(channel=<B>, sim=False)` returns a working robot and `get_joint_pos()`
-returns the same seven numbers `ping_motors.py` reports.
+**Done when:** `get_yam_robot(channel=<B>, sim=False)` returns a working robot and `get_joint_pos()` returns the same seven numbers `ping_motors.py` reports.
 
 ---
 
 ## Step 3 — Gravity compensation, and hand-guiding
 
-**Why before teleop, not after.** A YAM arm weighs ~4.3 kg and holds itself up with motor torque alone. At the
-gentle gains used so far, commanding all six joints *without* gravity compensation means the arm sags under
-its own weight, the controller fights it, and everything reads as "the IK is wrong" when it is not.
-**Gravity compensation is what makes joint position commands mean what they say.**
+**Why before teleop, not after.** A YAM arm weighs ~4.3 kg and holds itself up with motor torque alone. At the gentle gains used so far, commanding all six joints *without* gravity compensation means the arm sags under its own weight, the controller fights it, and everything reads as "the IK is wrong" when it is not. **Gravity compensation is what makes joint position commands mean what they say.**
 
-It is also the **safest possible whole-arm test**: the arm holds its current pose and follows no trajectory,
-so there is nothing to overshoot. And it is the first genuinely impressive moment — the arm becomes
-back-drivable and you can push it around by hand.
+It is also the **safest possible whole-arm test**: the arm holds its current pose and follows no trajectory, so there is nothing to overshoot. And it is the first genuinely impressive moment — the arm becomes back-drivable and you can push it around by hand.
 
-⚠️ This is the first time the arm holds real torque against gravity. It gets its own gated step, its own
-command, and the 400 ms firmware timeout intact (README §5).
+⚠️ This is the first time the arm holds real torque against gravity. It gets its own gated step, its own command, and the 400 ms firmware timeout intact (README §5).
 
 **Done when:** the arm holds position without sagging, and can be pushed by hand and stays where put.
 
@@ -190,36 +134,19 @@ Additional guards that only make sense on hardware:
 
 ## Step 5 — Recorder → MCAP in ABC's exact schema
 
-**Why it comes straight after teleop and not later.** The moment teleop works, every session is potentially
-training data. `docs/Setup-Plan.md` §6.1 is unambiguous: write MCAP with ABC's exact topic names and the whole
-data → training → eval half of the stack works **unmodified**. Get it wrong and every demo has to be
-re-collected, which is hours of a human's time rather than minutes of a computer's.
+**Why it comes straight after teleop and not later.** The moment teleop works, every session is potentially training data. `docs/Setup-Plan.md` §6.1 is unambiguous: write MCAP with ABC's exact topic names and the whole data → training → eval half of the stack works **unmodified**. Get it wrong and every demo has to be re-collected, which is hours of a human's time rather than minutes of a computer's.
 
-Log everything from the start — SpaceMouse input, resulting EE pose, **and** the IK-produced joint angles —
-so the action space can be chosen per experiment without re-collecting (Setup-Plan §4.3).
+Log everything from the start — SpaceMouse input, resulting EE pose, **and** the IK-produced joint angles — so the action space can be chosen per experiment without re-collecting (Setup-Plan §4.3).
 
 ### ⭐ No, this does not mean running ROS2 — the question, answered once
 
-**There is no middleware anywhere in this system, and none is needed.** Julien asked on 2026-08-12; the answer
-is worth writing down because it will be asked again, especially by anyone coming from `Hohnik/LaRobot`, which
-targets Ubuntu.
+**There is no middleware anywhere in this system, and none is needed.** Julien asked on 2026-08-12; the answer is worth writing down because it will be asked again, especially by anyone coming from `Hohnik/LaRobot`, which targets Ubuntu.
 
-- **The transport is direct USB CAN.** `python-can` with the **`gs_usb`** (candleLight) backend over libusb,
-  in **one process** that talks straight to the motors at 100 Hz. No ROS2, no DDS, no ZeroMQ, no gRPC, no
-  sockets. Verified by search: no `rclpy`, `rospy`, `zmq` or equivalent in `src/`, `scripts/` or the vendored
-  I2RT SDK.
-- **The only ROS2 that appears anywhere is a set of schema NAMES**, inside `third_party/i2rt/i2rt/utils/
-  recording.py`: `sensor_msgs/msg/JointState` and `sensor_msgs/msg/Temperature`. ⭐ **MCAP is a file format,
-  and ROS2 message definitions are being used as a serialisation schema inside it.** Writing a file that
-  *describes* its records with ROS2 message definitions requires no ROS2 installation, no node, no bus and no
-  running graph — which is why `mcap-ros2-support` is a dependency and `rclpy` is not.
-- ⚠️ **So the interop point with ABC is a FILE, not a bus.** That is a good thing and it should stay that
-  way: a middleware would add latency and failure modes to a 100 Hz loop that currently has ~3.7 ms of spare
-  budget, in exchange for nothing this rig needs. Everything runs on one machine.
+- **The transport is direct USB CAN.** `python-can` with the **`gs_usb`** (candleLight) backend over libusb, in **one process** that talks straight to the motors at 100 Hz. No ROS2, no DDS, no ZeroMQ, no gRPC, no sockets. Verified by search: no `rclpy`, `rospy`, `zmq` or equivalent in `src/`, `scripts/` or the vendored I2RT SDK.
+- **The only ROS2 that appears anywhere is a set of schema NAMES**, inside `third_party/i2rt/i2rt/utils/ recording.py`: `sensor_msgs/msg/JointState` and `sensor_msgs/msg/Temperature`. ⭐ **MCAP is a file format, and ROS2 message definitions are being used as a serialisation schema inside it.** Writing a file that *describes* its records with ROS2 message definitions requires no ROS2 installation, no node, no bus and no running graph — which is why `mcap-ros2-support` is a dependency and `rclpy` is not.
+- ⚠️ **So the interop point with ABC is a FILE, not a bus.** That is a good thing and it should stay that way: a middleware would add latency and failure modes to a 100 Hz loop that currently has ~3.7 ms of spare budget, in exchange for nothing this rig needs. Everything runs on one machine.
 
-⚠️ Declared in `pyproject.toml` but **not imported by our code yet**: `mcap`, `mcap-ros2-support`, `dm-env`,
-`tyro`, `pydantic`. They arrived with the I2RT SDK and with this step's plan. That is fine, but it means
-their presence is *not* evidence that anything uses them — check before assuming.
+⚠️ Declared in `pyproject.toml` but **not imported by our code yet**: `mcap`, `mcap-ros2-support`, `dm-env`, `tyro`, `pydantic`. They arrived with the I2RT SDK and with this step's plan. That is fine, but it means their presence is *not* evidence that anything uses them — check before assuming.
 
 ---
 
@@ -237,35 +164,21 @@ Both were checked rather than assumed:
 | CAN budget, 14 motors | ~6.2 ms/cycle against a 10 ms deadline | **fits** |
 | **two IK solves per cycle** — never previously measured | **0.100 ms** mean, p99 0.110 ms | **negligible** |
 
-So ~6.3 ms of a 10 ms budget, ~3.7 ms spare. ⚠️ The 6.2 ms figure came from register reads and is a lower
-bound; it says nothing about the loop once cameras and inference compete for CPU.
+So ~6.3 ms of a 10 ms budget, ~3.7 ms spare. ⚠️ The 6.2 ms figure came from register reads and is a lower bound; it says nothing about the loop once cameras and inference compete for CPU.
 
-**The actual blocker is that `teleop_session.py` is single-arm all the way through.** `robot`, `teleop`,
-`mode`, `gripper_value`, `prev_q`, `home_ee`, `park_target`, `last_active_axis`, `guide_ref`, `stall_since`
-and `max_temp_seen` are all one arm's state, held in one function's locals.
+**The actual blocker is that `teleop_session.py` is single-arm all the way through.** `robot`, `teleop`, `mode`, `gripper_value`, `prev_q`, `home_ee`, `park_target`, `last_active_axis`, `guide_ref`, `stall_since` and `max_temp_seen` are all one arm's state, held in one function's locals.
 
 ### The design: extract `ArmSession`, then run N of them
 
-One object owns **one arm's** robot, `CartesianTeleop`, axis map, mode and cached state, exposing roughly
-`enter_mode()` / `step(dt)` / `shutdown()`. The script holds a list and the loop iterates. Single-arm and
-bimanual then become the same code with N=1 or N=2.
+One object owns **one arm's** robot, `CartesianTeleop`, axis map, mode and cached state, exposing roughly `enter_mode()` / `step(dt)` / `shutdown()`. The script holds a list and the loop iterates. Single-arm and bimanual then become the same code with N=1 or N=2.
 
-⛔ **Why extraction and not a second `teleop_bimanual.py`.** Duplication has bitten this repo three times:
-`src/spacemouse.py` exists because device logic was copy-pasted and a fix landed in only one copy; the
-simulator's own `twist_from_axes()` ignored the axis map for the same reason; and PARK went around the
-gripper clamp because the clamp lived only in the teleop branch. A second control loop would be the fourth —
-and it would be the one driving two arms at once.
+⛔ **Why extraction and not a second `teleop_bimanual.py`.** Duplication has bitten this repo three times: `src/spacemouse.py` exists because device logic was copy-pasted and a fix landed in only one copy; the simulator's own `twist_from_axes()` ignored the axis map for the same reason; and PARK went around the gripper clamp because the clamp lived only in the teleop branch. A second control loop would be the fourth — and it would be the one driving two arms at once.
 
 ### ⭐ The de-risking that matters: `--arms B` must run the N-arm code with N=1
 
-Then the **refactor** is verifiable against a single arm — behaviour Julien already knows the feel of —
-**independently of** the bimanual hardware risk. If N=1 feels identical, the restructure is sound, and going
-to N=2 introduces exactly one new variable.
+Then the **refactor** is verifiable against a single arm — behaviour Julien already knows the feel of — **independently of** the bimanual hardware risk. If N=1 feels identical, the restructure is sound, and going to N=2 introduces exactly one new variable.
 
-Without that, the first bimanual run tests a ~400-line restructure *and* two-arm coordination at once, and
-any failure is unattributable. Session 4 is the argument: three changes that passed 34 tests, three dry runs
-and a simulated IK loop produced three failures on first hardware contact, one of which dropped 4.3 kg.
-**Stage the variables.**
+Without that, the first bimanual run tests a ~400-line restructure *and* two-arm coordination at once, and any failure is unattributable. Session 4 is the argument: three changes that passed 34 tests, three dry runs and a simulated IK loop produced three failures on first hardware contact, one of which dropped 4.3 kg. **Stage the variables.**
 
 ### Decisions this needs, with the recommendation
 
@@ -281,46 +194,23 @@ and a simulated IK loop produced three failures on first hardware contact, one o
 ### Order of work
 
 1. ⏳ Extract `ArmSession` with **no behaviour change**; run `--arms B` and confirm it feels identical.
-   - ✅ **The class exists and is tested** — `src/arm_session.py`, 17 tests against a fake robot
-     (2026-08-12). State, mode transitions, park stepping with the ramp, the queue, and the thermal
-     guard per arm. **The class decides, the script narrates:** no method prints, so every decision
-     is testable without hardware.
-   - ⬜ **Wiring it into `teleop_session.py` — the remaining half, and the risky one.** ~1000 lines of
-     `main()` currently hold that state as locals. Deliberately left for a session of its own:
-     mixing "write the class" and "restructure the loop" produces a diff nobody can review and that
-     only Julien can test. Session 4 is the standing warning.
-   - ⚠️ **Not in the class on purpose:** building the robot (it energises motors — stays visible in
-     the script), reading the SpaceMouse, key handling (which arm a key applies to is a *session*
-     question), and IK stepping (`CartesianTeleop` owns it).
+   - ✅ **The class exists and is tested** — `src/arm_session.py`, 17 tests against a fake robot (2026-08-12). State, mode transitions, park stepping with the ramp, the queue, and the thermal guard per arm. **The class decides, the script narrates:** no method prints, so every decision is testable without hardware.
+   - ⬜ **Wiring it into `teleop_session.py` — the remaining half, and the risky one.** ~1000 lines of `main()` currently hold that state as locals. Deliberately left for a session of its own: mixing "write the class" and "restructure the loop" produces a diff nobody can review and that only Julien can test. Session 4 is the standing warning.
+   - ⚠️ **Not in the class on purpose:** building the robot (it energises motors — stays visible in the script), reading the SpaceMouse, key handling (which arm a key applies to is a *session* question), and IK stepping (`CartesianTeleop` owns it).
 2. Add the `a` selector and per-arm status lines. Still one arm.
 3. `--arms B,G`, starting in HOLD, gripper enabled, desk clear.
 4. Only then GUIDE and CONTROLS on two arms.
-5. Mirror mode on top — `src/mirror.py` and its 14 tests already exist; it needs the two-arm process
-   from step 3 and nothing else.
+5. Mirror mode on top — `src/mirror.py` and its 14 tests already exist; it needs the two-arm process from step 3 and nothing else.
 
 ## Step 6.5 — ⭐ Saved positions, sequences, and smooth motion between them
 
-**Julien's idea, 2026-08-12**, and it is a better one than it first looks: *"it would
-make sense to have more options to save more positions … hit `s` and then a number every
-time we wanna save a position, and then hitting `p` and then the number would park to
-that position. And then if we would hit `p` and multiple numbers following each other,
-then the robot arm could go from each position to each next position … we also wanted to
-include the smoother motions, so we would have to have an option to increase the speed
-between the positions."*
+**Julien's idea, 2026-08-12**, and it is a better one than it first looks: *"it would make sense to have more options to save more positions … hit `s` and then a number every time we wanna save a position, and then hitting `p` and then the number would park to that position. And then if we would hit `p` and multiple numbers following each other, then the robot arm could go from each position to each next position … we also wanted to include the smoother motions, so we would have to have an option to increase the speed between the positions."*
 
-⭐ **Why this is on the critical path rather than a nicety.** A named list of poses the
-arm can be driven through, repeatably, is the first half of **demo collection** — step 5,
-which is the professor's SFT milestone. It is also the first thing in this repo that
-moves the arm through a plan rather than under a hand. Build it as if the recorder will
-be attached to it, because it will be.
+⭐ **Why this is on the critical path rather than a nicety.** A named list of poses the arm can be driven through, repeatably, is the first half of **demo collection** — step 5, which is the professor's SFT milestone. It is also the first thing in this repo that moves the arm through a plan rather than under a hand. Build it as if the recorder will be attached to it, because it will be.
 
 ### What is already done (2026-08-12)
 
-✅ **Storage**, pure and tested in `src/yam_robot.py`: `park_slots()` and
-`with_park_slot()`, 6 tests. ⚠️ **The legacy file shape is read, not replaced** —
-`config/park_pose.json` is `{"B": [q…]}` on the rig right now, it is *measured
-calibration*, and `q p d` depends on it. A bare list is read as the `default` slot, so
-nothing that works today stops working.
+✅ **Storage**, pure and tested in `src/yam_robot.py`: `park_slots()` and `with_park_slot()`, 6 tests. ⚠️ **The legacy file shape is read, not replaced** — `config/park_pose.json` is `{"B": [q…]}` on the rig right now, it is *measured calibration*, and `q p d` depends on it. A bare list is read as the `default` slot, so nothing that works today stops working.
 
 ### The interaction — decided, with the reasoning
 
@@ -335,68 +225,38 @@ nothing that works today stops working.
 
 ### The smoothing — the part that needs care
 
-Today `advance_park_command()` moves every joint at a **constant** rate until it arrives:
-a trapezoid with no ramps, so it starts and stops abruptly. That is fine for one short
-move to a park pose and it is *not* fine for a sequence, where every waypoint becomes a
-jerk in the middle of a motion someone is watching.
+Today `advance_park_command()` moves every joint at a **constant** rate until it arrives: a trapezoid with no ramps, so it starts and stops abruptly. That is fine for one short move to a park pose and it is *not* fine for a sequence, where every waypoint becomes a jerk in the middle of a motion someone is watching.
 
-**The recommendation: a trapezoidal velocity profile** — ease in over a fixed distance,
-cruise, ease out into the target — implemented as an optional `ease` argument so the
-default stays bit-for-bit what is on hardware today:
+**The recommendation: a trapezoidal velocity profile** — ease in over a fixed distance, cruise, ease out into the target — implemented as an optional `ease` argument so the default stays bit-for-bit what is on hardware today:
 
 ```
 speed_factor = min(1, travelled / ramp, remaining / ramp)     # clamped to [floor, 1]
 ```
 
-⚠️ **Three reasons to keep it opt-in at first.** `advance_park_command()` is pure with
-15 tests and its behaviour is *confirmed on the arm*; the ramp distance is a feel
-question only Julien can answer; and a deceleration bug shows up as **overshoot**, which
-in park is the arm arriving somewhere it was not aimed. Ship it behind a flag, tune the
-ramp on hardware, then make it the default.
+⚠️ **Three reasons to keep it opt-in at first.** `advance_park_command()` is pure with 15 tests and its behaviour is *confirmed on the arm*; the ramp distance is a feel question only Julien can answer; and a deceleration bug shows up as **overshoot**, which in park is the arm arriving somewhere it was not aimed. Ship it behind a flag, tune the ramp on hardware, then make it the default.
 
-⭐ **Deliberately NOT doing: spline/blended waypoints** — smoothing *through* a waypoint
-rather than stopping at each. It is the obviously nicer motion and it is a much larger
-change: it needs a real trajectory representation, it makes "which pose is the arm at"
-ambiguous, and it removes the per-leg stall check that currently catches an obstruction.
-Stop-at-each-waypoint first, blended later, and only if the motion genuinely needs it.
+⭐ **Deliberately NOT doing: spline/blended waypoints** — smoothing *through* a waypoint rather than stopping at each. It is the obviously nicer motion and it is a much larger change: it needs a real trajectory representation, it makes "which pose is the arm at" ambiguous, and it removes the per-leg stall check that currently catches an obstruction. Stop-at-each-waypoint first, blended later, and only if the motion genuinely needs it.
 
 ### Order of work
 
 1. ✅ Storage + tests *(done 2026-08-12)*.
 2. ✅ `s`+digit and `p`+digit, on the interleaved park.
-3. ✅ Sequences: the queue, the echo, the abort — and ⛔ **leaving PARK for any reason
-   abandons the rest**, said out loud when it happens.
+3. ✅ Sequences: the queue, the echo, the abort — and ⛔ **leaving PARK for any reason abandons the rest**, said out loud when it happens.
 4. ✅ Park speed on `+`/`-` while in PARK mode.
-5. ✅ **Easing** — on by default, `--no-smooth` disables it. The opt-in caution was
-   withdrawn after reading `advance_park_command`: scaling an already-clamped step
-   *down* cannot overshoot, so the risk that justified the flag did not exist.
-6. ✅ **Corner blending** (`src/motion.py`, 12 tests) — ⛔ **and this was the feature
-   actually being asked for.** Item 5 shapes *speed*; this shapes the *path*. Building
-   only the first left the arm stopping dead at every waypoint, which is the jitter
-   Julien described. Both now exist and are independent.
-7. ✅ **The interaction**: `p Enter` base · `p 1 Enter` one pose · `p 1 2 3 Enter` shows
-   the plan and waits for a second Enter · `-/+` speed and `,/.` corners work **while
-   typing as well as while moving**.
+5. ✅ **Easing** — on by default, `--no-smooth` disables it. The opt-in caution was withdrawn after reading `advance_park_command`: scaling an already-clamped step *down* cannot overshoot, so the risk that justified the flag did not exist.
+6. ✅ **Corner blending** (`src/motion.py`, 12 tests) — ⛔ **and this was the feature actually being asked for.** Item 5 shapes *speed*; this shapes the *path*. Building only the first left the arm stopping dead at every waypoint, which is the jitter Julien described. Both now exist and are independent.
+7. ✅ **The interaction**: `p Enter` base · `p 1 Enter` one pose · `p 1 2 3 Enter` shows the plan and waits for a second Enter · `-/+` speed and `,/.` corners work **while typing as well as while moving**.
 
-8. ✅ **Easing as its own axis** (2026-08-12) — five profiles cycled with `e`:
-   `none` · `in` · `out` · `both` · `s-curve`. ⭐ **Corner blending and easing are
-   independent and both are needed**: blending decides the *shape*, easing decides the
-   *speed along it*. Ctrl-C uses `out` — full speed from the first step, soft landing —
-   because a shutdown move should leave at once.
-9. ✅ **The end-of-park wait** — `settled` had shared the `blocked` timer, so every park
-   finishing outside the 0.02 rad tolerance idled for four seconds before admitting it
-   had arrived. Two questions, two patiences: 0.5 s and 4 s.
+8. ✅ **Easing as its own axis** (2026-08-12) — five profiles cycled with `e`: `none` · `in` · `out` · `both` · `s-curve`. ⭐ **Corner blending and easing are independent and both are needed**: blending decides the *shape*, easing decides the *speed along it*. Ctrl-C uses `out` — full speed from the first step, soft landing — because a shutdown move should leave at once.
+9. ✅ **The end-of-park wait** — `settled` had shared the `blocked` timer, so every park finishing outside the 0.02 rad tolerance idled for four seconds before admitting it had arrived. Two questions, two patiences: 0.5 s and 4 s.
 
-⬜ **What is left in this area:** nothing structural — only Julien's judgement on the
-arm about the default corner radius (`smooth`, 0.15 rad), the default ease (`both`) and
-the default speed. All three are live knobs, so tuning them needs no code.
+⬜ **What is left in this area:** nothing structural — only Julien's judgement on the arm about the default corner radius (`smooth`, 0.15 rad), the default ease (`both`) and the default speed. All three are live knobs, so tuning them needs no code.
 
 ### ⭐ What the five ease profiles actually mean, in plain terms
 
 Julien asked, and "I don't know what s-curve is" is a fair thing not to know.
 
-Every profile answers one question: **how does the speed change at the two ends of a
-move?** The middle is always full speed.
+Every profile answers one question: **how does the speed change at the two ends of a move?** The middle is always full speed.
 
 | profile | start | stop | when you want it |
 |---|---|---|---|
@@ -406,161 +266,66 @@ move?** The middle is always full speed.
 | `both` | gentle | gentle | the general-purpose one |
 | `s-curve` | *very* gentle | *very* gentle | the smoothest, and the slowest off the mark |
 
-**The difference between `both` and `s-curve`** is what is being smoothed. `both`
-ramps the **speed** — but the *acceleration* still jumps from nothing to a constant
-value the instant it starts, which the arm feels as a small shove. `s-curve` ramps the
-acceleration too, so the force builds up gradually. In an editor this is the
-difference between dragging a linear keyframe handle and a Bézier one.
+**The difference between `both` and `s-curve`** is what is being smoothed. `both` ramps the **speed** — but the *acceleration* still jumps from nothing to a constant value the instant it starts, which the arm feels as a small shove. `s-curve` ramps the acceleration too, so the force builds up gradually. In an editor this is the difference between dragging a linear keyframe handle and a Bézier one.
 
-⚠️ **Both ends use `√` now, not a straight line, and that is why the tail stopped
-crawling.** With a straight ramp the speed is proportional to the distance left, which
-is exponential decay — it halves in equal time steps and never quite arrives.
-Constant deceleration is `v ∝ √s` and it *does* arrive. Measured: the last 0.1 rad of
-a 1 rad move went from 1.08 s to 0.59 s while the rest was unchanged.
+⚠️ **Both ends use `√` now, not a straight line, and that is why the tail stopped crawling.** With a straight ramp the speed is proportional to the distance left, which is exponential decay — it halves in equal time steps and never quite arrives. Constant deceleration is `v ∝ √s` and it *does* arrive. Measured: the last 0.1 rad of a 1 rad move went from 1.08 s to 0.59 s while the rest was unchanged.
 
 ### ⭐ The two "patiences", and whether they are smart
 
-Also a fair question. **They exist because two different things look identical from
-outside: an arm that has finished, and an arm that is stuck.** Both stop making
-progress. The only way to tell them apart is *how far from the target it stopped* and
-*how long you are willing to wait before deciding*.
+Also a fair question. **They exist because two different things look identical from outside: an arm that has finished, and an arm that is stuck.** Both stop making progress. The only way to tell them apart is *how far from the target it stopped* and *how long you are willing to wait before deciding*.
 
-- **0.5 s — "has the controller finished settling?"** The arm never lands exactly on
-  the commanded pose; it settles a fraction of a degree short, where its stiffness
-  balances gravity. Half a second of no improvement while already *close* means it has
-  arrived as well as it ever will.
-- **4 s — "is something in the way?"** Stopping *far* from the target is a different
-  claim, and a much more serious one. Four seconds before saying so avoids crying wolf
-  over a slow patch.
+- **0.5 s — "has the controller finished settling?"** The arm never lands exactly on the commanded pose; it settles a fraction of a degree short, where its stiffness balances gravity. Half a second of no improvement while already *close* means it has arrived as well as it ever will.
+- **4 s — "is something in the way?"** Stopping *far* from the target is a different claim, and a much more serious one. Four seconds before saying so avoids crying wolf over a slow patch.
 
-**Is it necessary?** Yes, and the history says so: they were one timer, and every park
-that finished outside the 0.02 rad tolerance — most of them — sat apparently idle for
-four seconds before admitting it had arrived. **Is it smart?** It is the minimum
-honest answer. The alternative is one number, which either declares arrival too
-eagerly (and hides an obstruction) or waits too long (which is what he saw). ⚠️ If it
-ever needs revisiting, the number to change is the 0.5 s, and the symptom would be a
-park declaring success while the arm is visibly still moving.
+**Is it necessary?** Yes, and the history says so: they were one timer, and every park that finished outside the 0.02 rad tolerance — most of them — sat apparently idle for four seconds before admitting it had arrived. **Is it smart?** It is the minimum honest answer. The alternative is one number, which either declares arrival too eagerly (and hides an obstruction) or waits too long (which is what he saw). ⚠️ If it ever needs revisiting, the number to change is the 0.5 s, and the symptom would be a park declaring success while the arm is visibly still moving.
 
 ### ⭐⭐ Is waypoint playback good training data? — thought through, 2026-08-12
 
-Julien's idea: *"define the waypoints in guide mode and then just play it without the
-hands in the way, so the robot can see all of the positions and the camera input as it
-should be — but at the same time it's predefined and not done with a mouse. Is that
-good data for the robot to learn?"*
+Julien's idea: *"define the waypoints in guide mode and then just play it without the hands in the way, so the robot can see all of the positions and the camera input as it should be — but at the same time it's predefined and not done with a mouse. Is that good data for the robot to learn?"*
 
-It is a genuinely good question and the answer is **no for policy learning, yes for
-almost everything around it** — and the reason is precise enough to be worth keeping.
+It is a genuinely good question and the answer is **no for policy learning, yes for almost everything around it** — and the reason is precise enough to be worth keeping.
 
-⛔ **Why it fails as training data.** An imitation policy learns a mapping from *what
-it sees* to *what to do*. A replayed trajectory is **the same every time regardless of
-what the camera sees**. So in the training set the action is statistically independent
-of the observation — and a model fitting that data has **no reason to look at the
-image at all**. It can score perfectly by memorising the trajectory and ignoring the
-camera, which is exactly the model you do not want. Move the object 5 cm and it does
-the identical thing.
+⛔ **Why it fails as training data.** An imitation policy learns a mapping from *what it sees* to *what to do*. A replayed trajectory is **the same every time regardless of what the camera sees**. So in the training set the action is statistically independent of the observation — and a model fitting that data has **no reason to look at the image at all**. It can score perfectly by memorising the trajectory and ignoring the camera, which is exactly the model you do not want. Move the object 5 cm and it does the identical thing.
 
-⛔ **The second failure is subtler and worse: no corrective behaviour.** A human
-teleoperating drifts slightly off, notices, and pulls back — so the demos naturally
-contain thousands of tiny examples of *"you are a bit off, here is the way back."* A
-replay is perfect every time, so the policy never sees a single recovery. The first
-time it makes a small error at run time it is in a state the training data never
-contained, and errors compound. This is the standard covariate-shift argument that
-motivates DAgger, and it is the reason scripted demos underperform human ones even
-when the scripted ones look cleaner.
+⛔ **The second failure is subtler and worse: no corrective behaviour.** A human teleoperating drifts slightly off, notices, and pulls back — so the demos naturally contain thousands of tiny examples of *"you are a bit off, here is the way back."* A replay is perfect every time, so the policy never sees a single recovery. The first time it makes a small error at run time it is in a state the training data never contained, and errors compound. This is the standard covariate-shift argument that motivates DAgger, and it is the reason scripted demos underperform human ones even when the scripted ones look cleaner.
 
 ✅ **What it IS excellent for, and these are real:**
 
-1. **Validating the recording pipeline** — a repeatable trajectory is the perfect test
-   signal for MCAP schema, timestamp alignment, camera-to-joint sync and dropped
-   frames. You cannot debug a recorder against data that is different every time.
-2. **Measuring the rig** — tracking error, latency, repeatability, thermal drift over
-   a hundred identical cycles. All of that needs a motion that does not vary.
-3. ~~⭐ **AUTOMATED SCENE RESET, which is the one with real leverage.** The genuine
-   bottleneck in demo collection is not performing the task, it is *putting everything
-   back* between takes. A waypoint run that picks the object up and returns it to a
-   randomised start position means Julien can record demo after demo without touching
-   the scene — the playback creates the conditions, the human still provides the
-   demonstration.~~
-   ⛔ **REFUTED BY JULIEN ON 2026-08-12, on both of its claims. Struck rather than
-   deleted so nobody inherits it.** The bottleneck is *executing* the task with the
-   SpaceMouse, not resetting the scene — and an automated reset is close to circular,
-   because placing an object at a chosen position **is** the task being learned. Full
-   account, and what replaces it, in
-   [§6.6 below](#66-where-the-training-data-comes-from).
+1. **Validating the recording pipeline** — a repeatable trajectory is the perfect test signal for MCAP schema, timestamp alignment, camera-to-joint sync and dropped frames. You cannot debug a recorder against data that is different every time.
+2. **Measuring the rig** — tracking error, latency, repeatability, thermal drift over a hundred identical cycles. All of that needs a motion that does not vary.
+3. ~~⭐ **AUTOMATED SCENE RESET, which is the one with real leverage.** The genuine bottleneck in demo collection is not performing the task, it is *putting everything back* between takes. A waypoint run that picks the object up and returns it to a randomised start position means Julien can record demo after demo without touching the scene — the playback creates the conditions, the human still provides the demonstration.~~ ⛔ **REFUTED BY JULIEN ON 2026-08-12, on both of its claims. Struck rather than deleted so nobody inherits it.** The bottleneck is *executing* the task with the SpaceMouse, not resetting the scene — and an automated reset is close to circular, because placing an object at a chosen position **is** the task being learned. Full account, and what replaces it, in [§6.6 below](#66-where-the-training-data-comes-from).
 
-⚠️ **The one way playback could become training data** is if the waypoints were
-*generated per episode from the observed scene* — object detected here, so approach
-there — because then the action genuinely depends on the observation. That is a
-different and much larger project (a scripted policy with perception), and it is worth
-knowing it exists rather than assuming replay is simply unusable.
+⚠️ **The one way playback could become training data** is if the waypoints were *generated per episode from the observed scene* — object detected here, so approach there — because then the action genuinely depends on the observation. That is a different and much larger project (a scripted policy with perception), and it is worth knowing it exists rather than assuming replay is simply unusable.
 
-⚠️ **If a future session wants more interpolation options** — he compared this to
-Premiere Pro — the honest ranking is: (a) per-waypoint speed, so one leg can be slow and
-the next quick, which needs the slot file to carry more than a pose; (b) *dwell* at a
-waypoint, i.e. pause N seconds before continuing, which is what a pick-and-place demo
-actually needs; (c) true spline interpolation through the waypoints rather than
-blended corners, which is prettier and much harder to bound. **(b) is the one with real
-downstream value** — it is the difference between a motion and a *task*, and it is what
-the MCAP recorder will want to replay.
+⚠️ **If a future session wants more interpolation options** — he compared this to Premiere Pro — the honest ranking is: (a) per-waypoint speed, so one leg can be slow and the next quick, which needs the slot file to carry more than a pose; (b) *dwell* at a waypoint, i.e. pause N seconds before continuing, which is what a pick-and-place demo actually needs; (c) true spline interpolation through the waypoints rather than blended corners, which is prettier and much harder to bound. **(b) is the one with real downstream value** — it is the difference between a motion and a *task*, and it is what the MCAP recorder will want to replay.
 
-⭐ **Julien's ruling on all three, 2026-08-12:** *"all three sound really good, but they
-don't have to be done right now and they don't have to be main options. They could just
-be extra options that we can press a button for."* So they are **deferred, and they are
-extras** — additional knobs on the run that already exists, not a redesign.
+⭐ **Julien's ruling on all three, 2026-08-12:** *"all three sound really good, but they don't have to be done right now and they don't have to be main options. They could just be extra options that we can press a button for."* So they are **deferred, and they are extras** — additional knobs on the run that already exists, not a redesign.
 
-The place they attach is already built: the run plan line and the `pending`/`confirm`
-key handler in `teleop_session.py`, where speed, corners, ease profile and ramp length
-already live. **Per-waypoint dwell is the one to do first**, because it needs the slot
-file to carry `{pose, dwell}` instead of a bare pose — and `park_slots()` /
-`with_park_slot()` already tolerate that shape change, since a slot's value only has to
-be a non-empty list. ⚠️ Adding dwell also turns a saved sequence into a *task
-description* rather than a path, which is exactly what the recorder wants to replay —
-see the data-collection analysis above for why that matters more than a prettier curve.
+The place they attach is already built: the run plan line and the `pending`/`confirm` key handler in `teleop_session.py`, where speed, corners, ease profile and ramp length already live. **Per-waypoint dwell is the one to do first**, because it needs the slot file to carry `{pose, dwell}` instead of a bare pose — and `park_slots()` / `with_park_slot()` already tolerate that shape change, since a slot's value only has to be a non-empty list. ⚠️ Adding dwell also turns a saved sequence into a *task description* rather than a path, which is exactly what the recorder wants to replay — see the data-collection analysis above for why that matters more than a prettier curve.
 
-⚠️ **Deliberately still NOT doing: Cartesian-space blending.** These are *joint* poses,
-so a joint-space path needs no IK, cannot hit a singularity, and provably stays inside
-the joint range the waypoints span. A Cartesian blend would look smoother in the world
-at the cost of an IK solve per sample and a singularity risk on every corner, for poses
-that were never Cartesian to begin with. Revisit only if a task genuinely needs a
-straight line *in the world*, and note that recorded demos would then need Cartesian
-waypoints too.
+⚠️ **Deliberately still NOT doing: Cartesian-space blending.** These are *joint* poses, so a joint-space path needs no IK, cannot hit a singularity, and provably stays inside the joint range the waypoints span. A Cartesian blend would look smoother in the world at the cost of an IK solve per sample and a singularity risk on every corner, for poses that were never Cartesian to begin with. Revisit only if a task genuinely needs a straight line *in the world*, and note that recorded demos would then need Cartesian waypoints too.
 
-⭐ **One decision arrived during implementation and is worth keeping:** Julien ruled that
-Ctrl-C must *always* return to the base pose regardless of what has been saved since —
-which turned "the park pose" from one variable into **two different things**. Slot `0` is
-the base: the pose the arm is released in, changed only by a deliberate `s 0`. Slots 1-9
-are waypoints, and Ctrl-C ignores them entirely. **A pose that is safe to be let go in is
-not the same as a pose you want to return to mid-task**, and before this the two shared a
-variable that `s` silently overwrote.
+⭐ **One decision arrived during implementation and is worth keeping:** Julien ruled that Ctrl-C must *always* return to the base pose regardless of what has been saved since — which turned "the park pose" from one variable into **two different things**. Slot `0` is the base: the pose the arm is released in, changed only by a deliberate `s 0`. Slots 1-9 are waypoints, and Ctrl-C ignores them entirely. **A pose that is safe to be let go in is not the same as a pose you want to return to mid-task**, and before this the two shared a variable that `s` silently overwrote.
 
 ## 6.6 Where the training data comes from
 
-> **Read this section if you read nothing else in this file.** It decides what the
-> recorder (step 5) has to do, and the recorder is the next big piece of engineering.
+> **Read this section if you read nothing else in this file.** It decides what the recorder (step 5) has to do, and the recorder is the next big piece of engineering.
 >
-> Written 2026-08-12, **in plain language on purpose**, because Julien reads this section
-> himself. ⛔ **Almost nothing in it is built yet** — see the last table for exactly what
-> exists.
+> Written 2026-08-12, **in plain language on purpose**, because Julien reads this section himself. ⛔ **Almost nothing in it is built yet** — see the last table for exactly what exists.
 
 ### First: what a demo is, and what the robot learns from one
 
-A **demo** is one recording of the robot doing the task once. Several times a second it
-stores two things: what the cameras saw, and what the joints were told to move to.
+A **demo** is one recording of the robot doing the task once. Several times a second it stores two things: what the cameras saw, and what the joints were told to move to.
 
 Training turns a pile of those recordings into a single rule: *when you see this, do that.*
 
-⭐ **That rule can only work if what the robot sees actually predicts what it should do.**
-Keep that sentence in mind. Everything below follows from it.
+⭐ **That rule can only work if what the robot sees actually predicts what it should do.** Keep that sentence in mind. Everything below follows from it.
 
 ### Why a plain replay does not work
 
-Suppose we teach the arm a path by hand, then play that path back a hundred times with the
-object always in the same place.
+Suppose we teach the arm a path by hand, then play that path back a hundred times with the object always in the same place.
 
-Every recording now has the same picture and the same movement. Nothing in the training
-rewards looking at the picture, because the picture never changes. The model can score
-perfectly by memorising the movement and ignoring the camera completely. Move the object
-5 cm and it does the same thing as before, into empty air.
+Every recording now has the same picture and the same movement. Nothing in the training rewards looking at the picture, because the picture never changes. The model can score perfectly by memorising the movement and ignoring the camera completely. Move the object 5 cm and it does the same thing as before, into empty air.
 
 That is the whole objection to replaying a fixed scene, and it is real.
 
@@ -568,157 +333,86 @@ That is the whole objection to replaying a fixed scene, and it is real.
 
 His version differs in one way, and that one way changes everything:
 
-> *"If we slightly move the object, placing a new waypoint for the new object isn't
-> difficult. If we just use `g` mode for that it's very easy, compared to trying to find it
-> with the mouse."*
+> *"If we slightly move the object, placing a new waypoint for the new object isn't difficult. If we just use `g` mode for that it's very easy, compared to trying to find it with the mouse."*
 
-Move the object by hand. Then hand-guide the arm to the new grab position and save it. Now
-the movement is different in every recording **and so is the picture**, and the two change
-together. The picture predicts the movement. That is real training signal.
+Move the object by hand. Then hand-guide the arm to the new grab position and save it. Now the movement is different in every recording **and so is the picture**, and the two change together. The picture predicts the movement. That is real training signal.
 
-⭐ **So the rule is: the variety has to come from the object moving, not from the path
-moving on its own.** That single line settles most of the design questions below.
+⭐ **So the rule is: the variety has to come from the object moving, not from the path moving on its own.** That single line settles most of the design questions below.
 
 ### The one thing a replay is missing, and how to put it back
 
-A person driving the robot wobbles. They go a bit wrong, notice, and pull back. So a human
-demo is full of small examples of *"you have drifted, here is the way back."*
+A person driving the robot wobbles. They go a bit wrong, notice, and pull back. So a human demo is full of small examples of *"you have drifted, here is the way back."*
 
-A replay never wobbles, so the model never sees a single recovery. The first time it goes
-slightly wrong in real use, it is in a situation that was not in the training data, and
-from there things get worse rather than better.
+A replay never wobbles, so the model never sees a single recovery. The first time it goes slightly wrong in real use, it is in a situation that was not in the training data, and from there things get worse rather than better.
 
-⭐ **We can create those recoveries on purpose, and more evenly than a human produces them
-by accident.** Two ways, both cheap on this rig:
+⭐ **We can create those recoveries on purpose, and more evenly than a human produces them by accident.** Two ways, both cheap on this rig:
 
-1. **Start the replay slightly off the path.** The arm drives back onto it. Every frame of
-   that is a recording of *"I am off, here is the way back"*, paired with a picture that
-   shows the arm off the path.
-2. **Add a small wobble during the replay**, while still aiming at the correct path, so the
-   arm drifts and the recorded movement is the correction.
+1. **Start the replay slightly off the path.** The arm drives back onto it. Every frame of that is a recording of *"I am off, here is the way back"*, paired with a picture that shows the arm off the path.
+2. **Add a small wobble during the replay**, while still aiming at the correct path, so the arm drifts and the recorded movement is the correction.
 
-This is a known technique with a paper behind it: *DART: Noise Injection for Robust
-Imitation Learning* (Laskey et al., 2017). It exists to buy back exactly what clean
-recordings lack.
+This is a known technique with a paper behind it: *DART: Noise Injection for Robust Imitation Learning* (Laskey et al., 2017). It exists to buy back exactly what clean recordings lack.
 
-⛔ **One requirement, and getting it wrong ruins the dataset silently.** The recording must
-store what the arm was **actually told to do**, not the tidy path we planned. Store the
-plan instead and every recording claims "I was perfectly on track" while the picture shows
-the arm off to one side. The model then learns nothing useful, and nothing about the files
-looks wrong. Write this into the recorder's design.
+⛔ **One requirement, and getting it wrong ruins the dataset silently.** The recording must store what the arm was **actually told to do**, not the tidy path we planned. Store the plan instead and every recording claims "I was perfectly on track" while the picture shows the arm off to one side. The model then learns nothing useful, and nothing about the files looks wrong. Write this into the recorder's design.
 
 ### Noise per waypoint: Julien's refinement, and it is right
 
 His idea, 2026-08-12:
 
-> *"Maybe not put noise on the waypoints like when the object is being picked up, those
-> waypoints might need to be exact, and maybe the jittering needs to be very, very slight
-> on those. But the others, how to get there, the waypoints for those could be very
-> different, maybe the noise could be higher."*
+> *"Maybe not put noise on the waypoints like when the object is being picked up, those waypoints might need to be exact, and maybe the jittering needs to be very, very slight on those. But the others, how to get there, the waypoints for those could be very different, maybe the noise could be higher."*
 
-This is better than one noise setting for the whole path, and the reason is that the two
-kinds of waypoint have completely different tolerances.
+This is better than one noise setting for the whole path, and the reason is that the two kinds of waypoint have completely different tolerances.
 
 | waypoint | how much error it survives | so what noise is right |
 |---|---|---|
 | where the gripper closes on the object | millimetres, set by the size of the object | none, or very little. Its position should come from the object, re-taught by hand |
 | on the way there: above, around, retreating | centimetres, set by "do not hit anything" | plenty. Different approach routes are useful variety |
 
-⭐ Noise on the approach teaches the model that many routes to the same grab are fine,
-which is real robustness. Noise on the grab teaches it to be sloppy at the one moment when
-precision decides success or failure.
+⭐ Noise on the approach teaches the model that many routes to the same grab are fine, which is real robustness. Noise on the grab teaches it to be sloppy at the one moment when precision decides success or failure.
 
-⛔ **And a failed grab is worse than a wasted minute: it is a bad demo labelled as a good
-one.** So we have to know whether each episode actually worked.
+⛔ **And a failed grab is worse than a wasted minute: it is a bad demo labelled as a good one.** So we have to know whether each episode actually worked.
 
-⭐ **Which we can detect for free, using hardware we already read every cycle.** The gripper
-is position controlled and we read its position. If the jaws close on a 3 cm object they
-stop at 3 cm; if nothing is there they close further, to the empty-hand position. **So "did
-the grab work" is a number we already have.** That gives an automatic success-or-failure
-label per episode, which is exactly what is needed to throw out the poisoned ones.
-⚠️ It needs one calibration step per object (measure where the jaws stop when holding it),
-and it cannot tell a good grab from an awkward one. It can tell "holding something" from
-"holding nothing", which is the case that matters.
+⭐ **Which we can detect for free, using hardware we already read every cycle.** The gripper is position controlled and we read its position. If the jaws close on a 3 cm object they stop at 3 cm; if nothing is there they close further, to the empty-hand position. **So "did the grab work" is a number we already have.** That gives an automatic success-or-failure label per episode, which is exactly what is needed to throw out the poisoned ones. ⚠️ It needs one calibration step per object (measure where the jaws stop when holding it), and it cannot tell a good grab from an awkward one. It can tell "holding something" from "holding nothing", which is the case that matters.
 
 ### Recording your voice while driving: his other idea
 
-> *"Maybe later in the process we want a possibility to record data with a microphone where
-> as a user I can also say, like, 'I like this. No, this is bad. This way is bad. I'm
-> currently doing something bad. This is good again.' And then we could match the text to
-> the specific time code of the waypoints and then maybe custom score the waypoints, so
-> that it's clear later during reinforcement learning into the model which of the pathways
-> are good and which are bad."*
+> *"Maybe later in the process we want a possibility to record data with a microphone where as a user I can also say, like, 'I like this. No, this is bad. This way is bad. I'm currently doing something bad. This is good again.' And then we could match the text to the specific time code of the waypoints and then maybe custom score the waypoints, so that it's clear later during reinforcement learning into the model which of the pathways are good and which are bad."*
 
-The mechanism is easy and everything needed runs locally. Record the microphone with
-timestamps, transcribe it with Whisper on the laptop, and store the words with their times
-alongside the joint and camera data.
+The mechanism is easy and everything needed runs locally. Record the microphone with timestamps, transcribe it with Whisper on the laptop, and store the words with their times alongside the joint and camera data.
 
-⭐ **The valuable part is the label, not the audio.** So there are two versions, and the
-cheap one is worth having first:
+⭐ **The valuable part is the label, not the audio.** So there are two versions, and the cheap one is worth having first:
 
-- **A keypress.** One key for good, another for bad, pressed while the arm moves. Instant,
-  exactly timed, no transcription, and it fits the key handling that already exists.
-- **Voice.** Better when both hands are busy, which they are during teleop. That is the
-  argument for doing it his way, and it is a good one. Both can coexist.
+- **A keypress.** One key for good, another for bad, pressed while the arm moves. Instant, exactly timed, no transcription, and it fits the key handling that already exists.
+- **Voice.** Better when both hands are busy, which they are during teleop. That is the argument for doing it his way, and it is a good one. Both can coexist.
 
-⚠️ **The timing needs care, and this is the part that would quietly go wrong.** A person
-comments *after* the event, roughly half a second to two seconds later. So a comment at
-time `t` marks the stretch from about `t − 2s` to `t`, not the instant of `t`. Attach the
-label to the moment of the words and it lands on the recovery rather than on the mistake,
-teaching the opposite of what was meant.
+⚠️ **The timing needs care, and this is the part that would quietly go wrong.** A person comments *after* the event, roughly half a second to two seconds later. So a comment at time `t` marks the stretch from about `t − 2s` to `t`, not the instant of `t`. Attach the label to the moment of the words and it lands on the recovery rather than on the mistake, teaching the opposite of what was meant.
 
 **What the labels are actually good for, cheapest first:**
 
-1. ⭐ **Throwing away the bad stretches before training.** Reliable, simple, and it works
-   with ordinary imitation learning. This alone justifies building it.
+1. ⭐ **Throwing away the bad stretches before training.** Reliable, simple, and it works with ordinary imitation learning. This alone justifies building it.
 2. **Training more heavily on the good stretches** (weighting rather than deleting).
-3. **Proper reinforcement learning from the comments.** Real, and a much larger project:
-   human comments are sparse and loosely timed, which is its own research area (learning a
-   reward model from human feedback). Worth knowing it exists; not the thing to build
-   first.
+3. **Proper reinforcement learning from the comments.** Real, and a much larger project: human comments are sparse and loosely timed, which is its own research area (learning a reward model from human feedback). Worth knowing it exists; not the thing to build first.
 
-⭐ **A second, unrelated use for the microphone, possibly worth more.** Modern policies are
-often *told* what to do in words as well as shown pictures. Saying *"pick up the red
-block"* at the start of each episode gives us the text half of that for free, at a cost of
-one sentence per recording. ⛔ **If there is any chance of using a model that takes a
-language instruction, record it from the very first episode. It cannot be added
-afterwards.**
+⭐ **A second, unrelated use for the microphone, possibly worth more.** Modern policies are often *told* what to do in words as well as shown pictures. Saying *"pick up the red block"* at the start of each episode gives us the text half of that for free, at a cost of one sentence per recording. ⛔ **If there is any chance of using a model that takes a language instruction, record it from the very first episode. It cannot be added afterwards.**
 
 ### Recording in guide mode: he likes this, and it may beat waypoints
 
-> *"One good idea is definitely recording everything in the guide mode and then replaying
-> it. That's a smart idea, definitely."*
+> *"One good idea is definitely recording everything in the guide mode and then replaying it. That's a smart idea, definitely."*
 
-Instead of saving a handful of poses and letting the code interpolate between them, stream
-the joint positions continuously while he hand-guides the arm through the whole task. Then
-replay that recording with the scene reset, and record the cameras on the replay pass.
+Instead of saving a handful of poses and letting the code interpolate between them, stream the joint positions continuously while he hand-guides the arm through the whole task. Then replay that recording with the scene reset, and record the cameras on the replay pass.
 
 **Why this is likely better than waypoints:**
 
 - The movement carries human timing and hesitation, so it is much closer to a real demo.
-- No inverse kinematics anywhere, so no singularities and nothing to solve. Hand-guiding is
-  already a demonstration in joint angles, which is the form the arm wants.
+- No inverse kinematics anywhere, so no singularities and nothing to solve. Hand-guiding is already a demonstration in joint angles, which is the form the arm wants.
 - The path is physically achievable by definition, because the arm actually went there.
-- His hands are in the frame only during teaching. The recorded pass contains nothing but
-  the robot and the object. Ordinary hand-guided teaching puts the human's arms in every
-  frame, and a model then either learns to look for a hand (which is absent when it runs on
-  its own) or the frames have to be masked.
+- His hands are in the frame only during teaching. The recorded pass contains nothing but the robot and the object. Ordinary hand-guided teaching puts the human's arms in every frame, and a model then either learns to look for a hand (which is absent when it runs on its own) or the frames have to be masked.
 
-⭐ **And there is a reason this is the natural thing to do.** The papers this project
-follows all use **GELLO leader arms**: a small copy of the arm that a person moves, which
-hands over joint angles directly with no IK at all. `docs/Setup-Plan.md` §4.2 names using a
-SpaceMouse instead as the single biggest difference between this rig and the papers. **A YAM
-arm in guide mode is very close to being a leader arm already.** So the difficulty with the
-SpaceMouse is the expected cost of that difference, not a personal failing.
+⭐ **And there is a reason this is the natural thing to do.** The papers this project follows all use **GELLO leader arms**: a small copy of the arm that a person moves, which hands over joint angles directly with no IK at all. `docs/Setup-Plan.md` §4.2 names using a SpaceMouse instead as the single biggest difference between this rig and the papers. **A YAM arm in guide mode is very close to being a leader arm already.** So the difficulty with the SpaceMouse is the expected cost of that difference, not a personal failing.
 
 ⚠️ **Two things to watch:**
 
-- The movements come from the teaching pass and the pictures from the replay pass, so the
-  replay has to follow the taught path closely enough that picture and movement still line
-  up. Checkable: the park loop already reports how far the arm is running behind the
-  command.
-- Hand-guiding smoothly is its own skill. A wobbly taught path replayed at speed could be
-  jerky. Light smoothing, or replaying at the speed it was taught, both help.
+- The movements come from the teaching pass and the pictures from the replay pass, so the replay has to follow the taught path closely enough that picture and movement still line up. Checkable: the park loop already reports how far the arm is running behind the command.
+- Hand-guiding smoothly is its own skill. A wobbly taught path replayed at speed could be jerky. Light smoothing, or replaying at the speed it was taught, both help.
 
 ### The three ways to collect demos, side by side
 
@@ -730,87 +424,48 @@ SpaceMouse is the expected cost of that difference, not a personal failing.
 
 ⭐ **Best guess at the right answer, which is not one of the three on its own:**
 
-1. Most of the dataset from **guide-mode teaching and replay**, with the object moved by
-   hand every episode and the grab re-taught to match it.
+1. Most of the dataset from **guide-mode teaching and replay**, with the object moved by hand every episode and the grab re-taught to match it.
 2. **Recoveries added** by starting some replays slightly off the path and by adding wobble.
-3. **The SpaceMouse kept, with a different job.** Not for whole demos, but for nudging a
-   trained model in the moments where it fails. That needs a few seconds of input rather
-   than a whole task, which is the one situation where a hard six-axis device is fine.
-   ⭐ **None of the teleop work is wasted by this.**
+3. **The SpaceMouse kept, with a different job.** Not for whole demos, but for nudging a trained model in the moments where it fails. That needs a few seconds of input rather than a whole task, which is the one situation where a hard six-axis device is fine. ⭐ **None of the teleop work is wasted by this.**
 
 ### The measurement that settles it, and it takes 20 minutes
 
 Everything above is argument. The comparison is cheap and it is real:
 
-⭐ **Do five demos each way** and write down, per demo: the wall-clock seconds, whether the
-task actually worked, and where the time went.
+⭐ **Do five demos each way** and write down, per demo: the wall-clock seconds, whether the task actually worked, and where the time went.
 
-⚠️ Rough guesses only, so we can judge whether the experiment is worth running.
-Teach-and-replay looks like 40 to 70 seconds an episode (move the object, about 5 s;
-re-teach the grab in guide mode, 20 to 40 s; replay and record, 10 to 20 s), so 100
-episodes in under two hours. Teleop at 60 to 90 seconds an attempt with a high failure rate
-is several times that, and its failures cost more than time. Published work on this kind of
-task usually uses somewhere between 50 and 200 demos, so 100 is the right number to plan
-for. ⚠️ **That last figure comes from the literature, not from anything measured here.**
+⚠️ Rough guesses only, so we can judge whether the experiment is worth running. Teach-and-replay looks like 40 to 70 seconds an episode (move the object, about 5 s; re-teach the grab in guide mode, 20 to 40 s; replay and record, 10 to 20 s), so 100 episodes in under two hours. Teleop at 60 to 90 seconds an attempt with a high failure rate is several times that, and its failures cost more than time. Published work on this kind of task usually uses somewhere between 50 and 200 demos, so 100 is the right number to plan for. ⚠️ **That last figure comes from the literature, not from anything measured here.**
 
 ### His answers to the three questions this section used to ask
 
-**Which task?** Not decided, and deliberately not yet: *"I have no idea about the task yet.
-That's irrelevant right now because we first have to get the setup right."*
-⭐ **So build the collection machinery to be task-agnostic.** Do not bake in a number of
-waypoints, a grab shape, or an object size anywhere.
+**Which task?** Not decided, and deliberately not yet: *"I have no idea about the task yet. That's irrelevant right now because we first have to get the setup right."* ⭐ **So build the collection machinery to be task-agnostic.** Do not bake in a number of waypoints, a grab shape, or an object size anywhere.
 
-**Which kind of model?** ⭐ **Most likely diffusion**, because *"we want to have the newest
-research"*, plus interest in vision-language-action models and world models, and
-specifically the ABC research. He has papers to share and will send them.
+**Which kind of model?** ⭐ **Most likely diffusion**, because *"we want to have the newest research"*, plus interest in vision-language-action models and world models, and specifically the ABC research. He has papers to share and will send them.
 
-⭐ **This closes a question that was open, and it closes it in his favour.** A **diffusion
-policy** is a model that can hold *several* valid answers for the same picture instead of
-being forced to pick one. A simpler model trained to minimise squared error averages the
-answers instead, so two different good routes come out as one bad route between them.
-**So deliberately collecting several different ways to do the same task is safe with
-diffusion, and would have been harmful with the simpler kind.** His *"many different ways
-to do the actual task"* is fine.
+⭐ **This closes a question that was open, and it closes it in his favour.** A **diffusion policy** is a model that can hold *several* valid answers for the same picture instead of being forced to pick one. A simpler model trained to minimise squared error averages the answers instead, so two different good routes come out as one bad route between them. **So deliberately collecting several different ways to do the same task is safe with diffusion, and would have been harmful with the simpler kind.** His *"many different ways to do the actual task"* is fine.
 
-⚠️ **What to check against the papers when he sends them.** He asked specifically where our
-code might not match the research and where connecting pieces are missing. These are the
-candidates, to be confirmed against real papers rather than guessed at:
+⚠️ **What to check against the papers when he sends them.** He asked specifically where our code might not match the research and where connecting pieces are missing. These are the candidates, to be confirmed against real papers rather than guessed at:
 
-- **What counts as an "action".** We command joint positions. Much of the literature
-  commands end-effector movements instead. Both can be recorded, and step 5 already says to
-  record both. ⛔ Deciding late is only possible if both are recorded from the start.
-- **A fixed recording rate.** Diffusion policies usually predict a short block of future
-  moves at once, which assumes evenly spaced samples. Our loop runs at 100 Hz; recordings
-  are normally reduced to 10 to 30 Hz. That has to be a deliberate, timestamped resampling,
-  not "whatever the loop happened to manage".
-- **A fixed image size and frame rate**, per camera, decided before collecting rather than
-  after.
+- **What counts as an "action".** We command joint positions. Much of the literature commands end-effector movements instead. Both can be recorded, and step 5 already says to record both. ⛔ Deciding late is only possible if both are recorded from the start.
+- **A fixed recording rate.** Diffusion policies usually predict a short block of future moves at once, which assumes evenly spaced samples. Our loop runs at 100 Hz; recordings are normally reduced to 10 to 30 Hz. That has to be a deliberate, timestamped resampling, not "whatever the loop happened to manage".
+- **A fixed image size and frame rate**, per camera, decided before collecting rather than after.
 - **A text field for the instruction**, if a language-conditioned model is possible at all.
 - **A success or failure flag per episode**, which the gripper trick above can fill in.
 - **Which camera produced which image**, since B and G currently have different cameras.
 
 **Does the provenance matter?** ⭐ **Yes, a lot**, and he defined what he means by it:
 
-> *"As far as I understand, like, having the history and everything we found and problems we
-> had and being able to reproduce everything and connect it to other research papers,
-> because we're doing a student project and would want to connect everything to research
-> and maybe build on this research."*
+> *"As far as I understand, like, having the history and everything we found and problems we had and being able to reproduce everything and connect it to other research papers, because we're doing a student project and would want to connect everything to research and maybe build on this research."*
 
-⭐ **That is a concrete requirement on the recorder, not a vague wish.** Every episode has
-to carry enough information to be reproduced and cited later:
+⭐ **That is a concrete requirement on the recorder, not a vague wish.** Every episode has to carry enough information to be reproduced and cited later:
 
 - which arm, and the git commit of the code that recorded it
 - which cameras, by serial, at what resolution and frame rate
 - the calibration in force at the time (gripper limits, axis map, control frame)
-- how it was collected: taught by hand or driven; which waypoints; what noise settings;
-  what speed and easing
+- how it was collected: taught by hand or driven; which waypoints; what noise settings; what speed and easing
 - a timestamp, and the success-or-failure flag
 
-⚠️ **All of that is cheap to write at collection time and impossible to reconstruct
-afterwards.** A dataset without it is a folder of videos nobody can cite.
-⭐ This is also the one place where this repo's existing habit already pays off:
-`FINDINGS.md`, the long commit messages and this file are the *"everything we found and the
-problems we had"* half of what he described, and they already exist.
+⚠️ **All of that is cheap to write at collection time and impossible to reconstruct afterwards.** A dataset without it is a folder of videos nobody can cite. ⭐ This is also the one place where this repo's existing habit already pays off: `FINDINGS.md`, the long commit messages and this file are the *"everything we found and the problems we had"* half of what he described, and they already exist.
 
 ### What exists today, and what does not
 
@@ -828,49 +483,23 @@ He asked directly whether the features under discussion are built. Mostly they a
 | writing recordings to a file at all | ⬜ **nothing exists.** This is step 5 |
 | both D405 depth cameras working together | ⬜ **one works, the second is unplugged.** ROADMAP step 7 |
 
-⛔ **One thing that IS already true and matters: a saved pose carries all seven joints,
-including the gripper, and a park drives the gripper to it.** Checked in the code
-(`src/yam_robot.py`, `park_target_from`). So a saved sequence can already open and close the
-jaws, which means a pick-and-place is in principle replayable today.
+⛔ **One thing that IS already true and matters: a saved pose carries all seven joints, including the gripper, and a park drives the gripper to it.** Checked in the code (`src/yam_robot.py`, `park_target_from`). So a saved sequence can already open and close the jaws, which means a pick-and-place is in principle replayable today.
 
-⛔ **But blended corners and grabbing fight each other, and this is the missing piece.**
-"Blending" means the arm curves *through* a waypoint without stopping. A grab needs the
-opposite: stop, let the jaws travel, wait. Worse, the gripper is just another number in the
-joint list, so a smooth corner between "above the object, jaws open" and "at the object,
-jaws closed" closes the jaws **during the descent**, which either grabs early or shoves the
-object away.
+⛔ **But blended corners and grabbing fight each other, and this is the missing piece.** "Blending" means the arm curves *through* a waypoint without stopping. A grab needs the opposite: stop, let the jaws travel, wait. Worse, the gripper is just another number in the joint list, so a smooth corner between "above the object, jaws open" and "at the object, jaws closed" closes the jaws **during the descent**, which either grabs early or shoves the object away.
 
-⭐ **So a pause at each waypoint is required, not an extra.** §6.5 above already ranked it
-first among the deferred options; this promotes it to a prerequisite. A grab needs roughly:
-approach with the jaws open, arrive, pause, close the jaws, pause, lift. A pause also
-implies a stop, which switches blending off exactly where blending is wrong, so one setting
-covers both needs and no separate per-waypoint blending switch is required. The storage
-(`park_slots()` / `with_park_slot()`) already tolerates the shape change.
+⭐ **So a pause at each waypoint is required, not an extra.** §6.5 above already ranked it first among the deferred options; this promotes it to a prerequisite. A grab needs roughly: approach with the jaws open, arrive, pause, close the jaws, pause, lift. A pause also implies a stop, which switches blending off exactly where blending is wrong, so one setting covers both needs and no separate per-waypoint blending switch is required. The storage (`park_slots()` / `with_park_slot()`) already tolerates the shape change.
 
 ## Step 7 — Cameras
 
-C920 plus the wrist D405s. Needed for data collection, not for teleop. Deliberately last of the near-term set
-because nothing else depends on it.
+C920 plus the wrist D405s. Needed for data collection, not for teleop. Deliberately last of the near-term set because nothing else depends on it.
 
-**Where it actually stands, 2026-08-11.** The C920 works in a window and in the terminal, cameras are
-selectable **by name** — identified by measurement, not by any list order, after a positional guess turned
-out to be wrong about two of four ([FINDINGS §22](FINDINGS.md)) — and one D405 is mounted on arm B, measured,
-and **delivering a colour picture over plain UVC with no SDK at all**. So this step is further along than
-"needed for data collection" suggests: the wrist view is drivable today, and `librealsense` is an upgrade for
-depth, intrinsics and camera controls rather than a prerequisite.
+**Where it actually stands, 2026-08-11.** The C920 works in a window and in the terminal, cameras are selectable **by name** — identified by measurement, not by any list order, after a positional guess turned out to be wrong about two of four ([FINDINGS §22](FINDINGS.md)) — and one D405 is mounted on arm B, measured, and **delivering a colour picture over plain UVC with no SDK at all**. So this step is further along than "needed for data collection" suggests: the wrist view is drivable today, and `librealsense` is an upgrade for depth, intrinsics and camera controls rather than a prerequisite.
 
 ### 7.1 What the D405 can and cannot do right now — asked by Julien, 2026-08-12
 
-He asked: *"I don't even know what's capable with them and how they should be used."* Written in plain
-language, because he reads this. **Current wiring: arm B has a D405, arm G has the Logitech C920, and he is
-about to put the second D405 on arm G.** Photographs of both arms were provided on 2026-08-12.
+He asked: *"I don't even know what's capable with them and how they should be used."* Written in plain language, because he reads this. **Current wiring: arm B has a D405, arm G has the Logitech C920, and he is about to put the second D405 on arm G.** Photographs of both arms were provided on 2026-08-12.
 
-**What a D405 is.** A small stereo depth camera. Two lenses, a few centimetres apart, and a chip on board
-that compares the two views to work out how far away things are. It is built for close-up work, roughly a
-hand's reach, which is exactly the distance from a wrist mount to whatever the gripper is holding.
-⚠️ **The exact usable range is from the product datasheet and has not been confirmed on this unit** — the
-manual is at `intelrealsense.com/get-started`, and `rs-enumerate-devices` reports it once librealsense is
-installed.
+**What a D405 is.** A small stereo depth camera. Two lenses, a few centimetres apart, and a chip on board that compares the two views to work out how far away things are. It is built for close-up work, roughly a hand's reach, which is exactly the distance from a wrist mount to whatever the gripper is holding. ⚠️ **The exact usable range is from the product datasheet and has not been confirmed on this unit** — the manual is at `intelrealsense.com/get-started`, and `rs-enumerate-devices` reports it once librealsense is installed.
 
 | | works today | needs `librealsense` |
 |---|---|---|
@@ -881,90 +510,47 @@ installed.
 | exposure, gain and other camera controls | ⛔ no | ✅ yes |
 | **telling two D405s apart by serial number** | ⛔ **no, and this is the one that bites** | ✅ yes |
 
-⛔ **The second D405 breaks how cameras are currently identified, and this is the single most important thing
-in this section.** Cameras are identified by asking each one for a picture size that only one of them
-supports ([FINDINGS §22](FINDINGS.md)). **Two identical D405s support exactly the same sizes, so that method
-cannot separate them.** They do have real serial numbers, unlike the two SpaceMice — but the plain-webcam path
-cannot read a serial. So there are two options and no third:
+⛔ **The second D405 breaks how cameras are currently identified, and this is the single most important thing in this section.** Cameras are identified by asking each one for a picture size that only one of them supports ([FINDINGS §22](FINDINGS.md)). **Two identical D405s support exactly the same sizes, so that method cannot separate them.** They do have real serial numbers, unlike the two SpaceMice — but the plain-webcam path cannot read a serial. So there are two options and no third:
 
-1. **Install `librealsense`** (`brew install librealsense`, a prebuilt package, no compiling) and select each
-   camera by serial. ⭐ **This is the recommendation** — it also unlocks depth, intrinsics and exposure, so it
-   pays for itself.
-2. **Identify by hand each session**: cover one lens, see which index goes dark, note it. ⚠️ Works, but it is
-   a manual step before every session and it is exactly the kind of thing that gets skipped and then produces
-   a dataset where the two arms' images are swapped.
+1. **Install `librealsense`** (`brew install librealsense`, a prebuilt package, no compiling) and select each camera by serial. ⭐ **This is the recommendation** — it also unlocks depth, intrinsics and exposure, so it pays for itself.
+2. **Identify by hand each session**: cover one lens, see which index goes dark, note it. ⚠️ Works, but it is a manual step before every session and it is exactly the kind of thing that gets skipped and then produces a dataset where the two arms' images are swapped.
 
 ### 7.2 What actually needs doing, in order
 
-1. ⭐ **Install `librealsense` and select by serial.** Unblocks the identification problem above before it can
-   corrupt a recording. Also answers what the camera can do, via `realsense-viewer`.
-2. ⭐ **Measure the mount: where each camera sits and which way it points, relative to the wrist.**
-   ⛔ There is already a `camera` control frame in the code, and it assumes a **modelled** mount with a 25°
-   tilt. The photographs show a bracket on the side of the wrist that is very unlikely to match that model.
-   **Until it is measured, drive in the `tool` frame (`v` cycles them), not `camera`** — the existing warning
-   in [COMMANDS.md](COMMANDS.md) is correct and this confirms why.
-3. **Plug in the second D405 and measure USB bandwidth.** Two USB-3 cameras streaming at once can exceed what
-   one laptop controller carries. ⚠️ It fails as dropped frames, not as an error message, which is the worst
-   failure mode for training data. [FINDINGS §8](FINDINGS.md) already flags this as needing a re-check.
-4. **Measure the D405's latency.** The C920 is about 200 ms and that is the camera's own doing, not software
-   ([FINDINGS §21.3](FINDINGS.md)). A machine-vision camera may be far quicker. ⚠️ **Re-measure rather than
-   assuming the number carries over.**
-5. **Decide whether depth is wanted at all.** Most image-based policies use colour only. So depth is a
-   "know what we have" item, not a blocker on anything.
-6. ✅ **Put the same camera on both arms** — he is already doing this. Two different cameras means two
-   different fields of view, colours and latencies, which is an avoidable inconsistency in a bimanual dataset.
+1. ⭐ **Install `librealsense` and select by serial.** Unblocks the identification problem above before it can corrupt a recording. Also answers what the camera can do, via `realsense-viewer`.
+2. ⭐ **Measure the mount: where each camera sits and which way it points, relative to the wrist.** ⛔ There is already a `camera` control frame in the code, and it assumes a **modelled** mount with a 25° tilt. The photographs show a bracket on the side of the wrist that is very unlikely to match that model. **Until it is measured, drive in the `tool` frame (`v` cycles them), not `camera`** — the existing warning in [COMMANDS.md](COMMANDS.md) is correct and this confirms why.
+3. **Plug in the second D405 and measure USB bandwidth.** Two USB-3 cameras streaming at once can exceed what one laptop controller carries. ⚠️ It fails as dropped frames, not as an error message, which is the worst failure mode for training data. [FINDINGS §8](FINDINGS.md) already flags this as needing a re-check.
+4. **Measure the D405's latency.** The C920 is about 200 ms and that is the camera's own doing, not software ([FINDINGS §21.3](FINDINGS.md)). A machine-vision camera may be far quicker. ⚠️ **Re-measure rather than assuming the number carries over.**
+5. **Decide whether depth is wanted at all.** Most image-based policies use colour only. So depth is a "know what we have" item, not a blocker on anything.
+6. ✅ **Put the same camera on both arms** — he is already doing this. Two different cameras means two different fields of view, colours and latencies, which is an avoidable inconsistency in a bimanual dataset.
 
 ### 7.3 ⭐ The cable — asked by Julien, 2026-08-12, with photographs
 
-> *"Currently the depth cameras are connected via a cable directly to the computer, but the cable's very
-> short, and it's kind of in the way of the robots. So is that the best possible way to do it? Or is it
-> usually connected to the robot in some way?"*
+> *"Currently the depth cameras are connected via a cable directly to the computer, but the cable's very short, and it's kind of in the way of the robots. So is that the best possible way to do it? Or is it usually connected to the robot in some way?"*
 
 **No, the current arrangement is not good, and the photographs show two separate problems.**
 
-1. ⛔ **The plug takes the strain.** The cable leaves the camera sideways and hangs in a free loop. When the
-   wrist twists (motor 6), that loop winds up and pulls on the connector. A USB-C socket is not built for
-   repeated pulling and twisting, and it is glued to a camera that costs real money.
-2. ⛔ **The cable is loose inside the workspace**, where the arm can catch, drag or pinch it. On a rig with no
-   emergency stop ([HANDOFF §4.5](HANDOFF.md)) that is a snag risk during a motion nobody is holding a hand
-   over.
+1. ⛔ **The plug takes the strain.** The cable leaves the camera sideways and hangs in a free loop. When the wrist twists (motor 6), that loop winds up and pulls on the connector. A USB-C socket is not built for repeated pulling and twisting, and it is glued to a camera that costs real money.
+2. ⛔ **The cable is loose inside the workspace**, where the arm can catch, drag or pinch it. On a rig with no emergency stop ([HANDOFF §4.5](HANDOFF.md)) that is a snag risk during a motion nobody is holding a hand over.
 
-**What is normally done, and it is worth copying.** Route the camera cable **along the arm**: clip or tie it
-to each link, and leave a small loop of slack at each joint so the joint moves the loop instead of pulling the
-plug. Then run one longer cable from the base of the arm to the computer. ⭐ **The photographs show a black
-braided sleeve already running along the arm** (the motor and CAN wiring), so there is an existing path to
-follow and clip to.
+**What is normally done, and it is worth copying.** Route the camera cable **along the arm**: clip or tie it to each link, and leave a small loop of slack at each joint so the joint moves the loop instead of pulling the plug. Then run one longer cable from the base of the arm to the computer. ⭐ **The photographs show a black braided sleeve already running along the arm** (the motor and CAN wiring), so there is an existing path to follow and clip to.
 
-⚠️ **Do not simply buy a long USB cable.** A passive USB-3 cable at 5 Gbps is reliable to about 2 m and
-sometimes 3 m; beyond that it needs either an **active** cable (with a chip in it) or a **powered USB-3 hub**
-acting as a repeater partway along. Over-long passive cable shows up as dropped frames and random
-disconnects, never as a clear error.
+⚠️ **Do not simply buy a long USB cable.** A passive USB-3 cable at 5 Gbps is reliable to about 2 m and sometimes 3 m; beyond that it needs either an **active** cable (with a chip in it) or a **powered USB-3 hub** acting as a repeater partway along. Over-long passive cable shows up as dropped frames and random disconnects, never as a clear error.
 
 ⭐ **Recommended shape**, cheapest first:
 
-1. A **short** USB-C cable from the camera down the arm to a **powered USB-3 hub** clamped near the arm's
-   base, then one cable from the hub to the laptop. Keeps the flexing part short and replaceable, and the hub
-   is where the second D405 plugs in too. ⚠️ The hub must be **USB 3** and **externally powered** — a bus
-   powered USB-2 hub will silently throttle both cameras. (A "Selore" hub is visible on the desk in the arm G
-   photograph; check which kind it is.)
-2. If a hub is not wanted, a single **active** USB-C cable of the length actually needed, clipped along the
-   arm.
+1. A **short** USB-C cable from the camera down the arm to a **powered USB-3 hub** clamped near the arm's base, then one cable from the hub to the laptop. Keeps the flexing part short and replaceable, and the hub is where the second D405 plugs in too. ⚠️ The hub must be **USB 3** and **externally powered** — a bus powered USB-2 hub will silently throttle both cameras. (A "Selore" hub is visible on the desk in the arm G photograph; check which kind it is.)
+2. If a hub is not wanted, a single **active** USB-C cable of the length actually needed, clipped along the arm.
 
-⚠️ **There is no wireless option worth considering.** The D405 has no computer of its own; it must be cabled
-to a host.
+⚠️ **There is no wireless option worth considering.** The D405 has no computer of its own; it must be cabled to a host.
 
-⭐ **And one thing that must happen after any re-cabling: re-verify the camera identification.** Moving a
-camera to a different port changes its index, and index is not identity ([FINDINGS §22](FINDINGS.md)) —
-this is the mistake that got two of four cameras wrong once already.
+⭐ **And one thing that must happen after any re-cabling: re-verify the camera identification.** Moving a camera to a different port changes its index, and index is not identity ([FINDINGS §22](FINDINGS.md)) — this is the mistake that got two of four cameras wrong once already.
 
 ---
 
 ## Deliberately NOT doing, and why
 
-- **Joint-space jogging as a stepping stone** (SpaceMouse axis → one joint each, no IK). Genuinely simpler and
-  it would prove the plumbing sooner. Rejected as the *main* path because it is throwaway — the plan needs
-  cartesian control — and because simulation already provides a risk-free place to debug the real thing.
-  **Kept as a fallback:** if IK fights us, joint jogging still gets a SpaceMouse driving the arm the same day.
+- **Joint-space jogging as a stepping stone** (SpaceMouse axis → one joint each, no IK). Genuinely simpler and it would prove the plumbing sooner. Rejected as the *main* path because it is throwaway — the plan needs cartesian control — and because simulation already provides a risk-free place to debug the real thing. **Kept as a fallback:** if IK fights us, joint jogging still gets a SpaceMouse driving the arm the same day.
 - **Anything on the ABC training side.** No data exists yet. Training is downstream of step 5.
 - **Forking `third_party/i2rt`.** Patch from outside; keep the upstream checkout re-pullable.
 - **Chasing the 100 Hz question further.** Measured, answered, 3× headroom (README §2).
@@ -985,8 +571,7 @@ this is the mistake that got two of four cameras wrong once already.
 
 ## ⛔ Do NOT connect the second SpaceMouse yet — and this is measured, not a preference
 
-Julien offered to free a USB port and connect the second SpaceMouse. **Recommendation: don't, yet.** Not
-because "one thing at a time", but because of a specific fact checked on 2026-08-10:
+Julien offered to free a USB port and connect the second SpaceMouse. **Recommendation: don't, yet.** Not because "one thing at a time", but because of a specific fact checked on 2026-08-10:
 
 ```
 hid.enumerate() for VID 0x256f:
@@ -995,16 +580,10 @@ hid.enumerate() for VID 0x256f:
   usage=0x33  serial=''  path=b'DevSrvsID:4295192284'
 ```
 
-**The SpaceMouse reports an empty serial number.** So the trick that saved us on the CAN adapters — select by
-serial, never by index — **does not transfer**. Two SpaceMice would be indistinguishable except by
-`path`, a macOS IOService registry ID that changes on replug and carries no meaning.
+**The SpaceMouse reports an empty serial number.** So the trick that saved us on the CAN adapters — select by serial, never by index — **does not transfer**. Two SpaceMice would be indistinguishable except by `path`, a macOS IOService registry ID that changes on replug and carries no meaning.
 
-That is exactly the bug class that already bit twice today: `find_device()` returns `multi[0]`, so with two
-pucks attached, *which arm a given puck drives would be arbitrary and would silently change between runs.*
-Connecting the second one before fixing selection means debugging teleop and device-identity at once.
+That is exactly the bug class that already bit twice today: `find_device()` returns `multi[0]`, so with two pucks attached, *which arm a given puck drives would be arbitrary and would silently change between runs.* Connecting the second one before fixing selection means debugging teleop and device-identity at once.
 
-**What to do instead, in order:** get one puck driving one arm (step 1b) → then build selection by **USB
-topology** (which hub port a device is on, stable while nothing is re-cabled) → *then* connect the second.
+**What to do instead, in order:** get one puck driving one arm (step 1b) → then build selection by **USB topology** (which hub port a device is on, stable while nothing is re-cabled) → *then* connect the second.
 
-**And keep the camera plugged in.** Nothing needs to be freed up: the camera is not competing for anything we
-need today, and unplugging it costs a re-verification later for no gain.
+**And keep the camera plugged in.** Nothing needs to be freed up: the camera is not competing for anything we need today, and unplugging it costs a re-verification later for no gain.
