@@ -114,9 +114,12 @@ from yam_robot import (  # noqa: E402
     advance_park_command,
     build_robot,
     motor_temperatures,
+    park_slots,
     park_target_from,
     park_verdict,
+    resolve_park_legs,
     shutdown_robot,
+    with_park_slot,
 )
 
 CONTROL_HZ = 100.0
@@ -136,6 +139,9 @@ JOINT_LIMIT_MARGIN = 0.08
 TEMP_WARN = 55.0
 TEMP_STOP = 65.0
 PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
+# ⭐ Slot "0" in the UI. The one pose Ctrl-C returns to before releasing the motors,
+# and the only one `s 0` may overwrite — see where it is loaded for why that matters.
+BASE_SLOT = "default"
 # Judged on the MEASURED pose, so it must allow for a position controller's
 # steady-state error. 0.02 rad is 1.1°, which is "arrived" for parking.
 PARK_TOLERANCE = 0.02
@@ -191,7 +197,10 @@ BACKUP_FILE = REPO / "config" / "spacemouse_map.prev.json"
 PARK_FILE = REPO / "config" / "park_pose.json"
 
 HELP = """
-  MODES     g GUIDE (weightless)   t TELEOP   h HOLD   p PARK   s save park pose
+  MODES     g GUIDE (weightless)   t TELEOP   h HOLD
+  POSES     s then 0-9  SAVE here (0 = the BASE pose Ctrl-C returns to, 1-9 waypoints)
+            p then 0-9  PARK to it · several digits then Enter = run them in order
+            p then Enter = the base pose        +/- change park speed while parking
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
@@ -396,7 +405,25 @@ def main() -> int:  # noqa: PLR0915
     axis_map = map_store.for_arm(args.arm, control_frame)
     map_store_at_start = map_store.copy()
     axis_map_at_start = axis_map.copy()
-    park = load_json(PARK_FILE, {}).get(args.arm)
+    # ⭐⭐ THE BASE POSE AND THE WAYPOINTS ARE DIFFERENT THINGS. Julien's ruling,
+    # 2026-08-12: *"the control-c park to disable needs to always go back to the stable
+    # parking save. If I save a new parking option it shouldn't go back to that and then
+    # disable. It should always go back to the base parking option."*
+    #
+    # ⛔ That is a safety requirement, not a preference. Ctrl-C is the "get me out of
+    # here" key: it parks and then RELEASES the motors, so the pose it chooses must be
+    # one that is safe to be let go in. A waypoint saved mid-task — arm extended over
+    # the desk, gripper holding something — is exactly what that must never be.
+    #
+    # So `park` (slot 0, the base) is only ever changed deliberately with `s 0`, while
+    # `s 1`…`s 9` fill waypoints that Ctrl-C ignores completely.
+    slots = park_slots(load_json(PARK_FILE, {}), args.arm)
+    park = slots.get(BASE_SLOT)
+    park_speed = PARK_SPEED
+    # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
+    pending: str | None = None
+    park_sequence: list[str] = []
+    park_queue: list[tuple[str, list]] = []
     angular_scale = ANGULAR_SCALE
     gripper_step = GRIPPER_STEP
     # CONTROLS mode remembers the last puck axis that actually moved, with no
@@ -583,6 +610,31 @@ def main() -> int:  # noqa: PLR0915
                 return
             print("  ⚠️  enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)")
 
+        def begin_park(pose, what: str) -> None:
+            """Start driving to `pose`. The one place a park leg is set up.
+
+            ⭐ Shared by `p`, by every leg of a sequence, and by the queue advancing —
+            so a waypoint run cannot drift away from a plain park. `park_target_from`
+            still does the length-reconciling and gripper clamping that dropping an
+            arm once taught us to centralise.
+            """
+            nonlocal mode, park_target, park_cmd, park_best_err, park_progress_t
+            tgt, warn = park_target_from(robot.get_joint_pos(), pose,
+                                         gripper_index=N_ARM, clamp=clamp_gripper)
+            if warn:
+                print(f"\n  ⚠️  {warn}.")
+            park_target = tgt
+            mode = "park"
+            enter_hold()
+            # Seed the trajectory at the arm's real pose, then let it run ahead.
+            # enter_hold() has just resynced SafeRobot, so the rate limiter starts
+            # anchored here too.
+            park_cmd = np.asarray(robot.get_joint_pos(), dtype=float)
+            park_best_err = float(np.max(np.abs(park_target - park_cmd)))
+            park_progress_t = t
+            print(f"\n⭐ MODE: PARK → {what} {np.round(park_target[:N_ARM], 2)} "
+                  f"at {park_speed:.2f} rad/s. Press h or t to stop.\n")
+
         if mode == "teleop":
             enter_teleop()
         elif mode == "hold":
@@ -702,6 +754,65 @@ def main() -> int:  # noqa: PLR0915
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
+                    # ---- a pending s/p consumes the NEXT key as its argument ----
+                    # ⭐ Two-key sequences, because a bare digit is already taken: 1-3
+                    # flip rotation axes in the drive modes and 1-6 select motions in
+                    # CONTROLS. A digit AFTER s or p is an argument, not a command, so
+                    # nothing has to be re-bound. This is the shape Julien proposed.
+                    #
+                    # ⚠️ It is a mode, in a loop that drives 4.3 kg — so it is bounded:
+                    # exactly one keypress wide for `s`, echoed at every keystroke for
+                    # `p`, and cancelled by anything unexpected rather than guessing.
+                    if pending == "save":
+                        pending = None
+                        if k.isdigit():
+                            q = np.asarray(robot.get_joint_pos(), dtype=float)
+                            name = BASE_SLOT if k == "0" else k
+                            data = with_park_slot(load_json(PARK_FILE, {}), args.arm,
+                                                  name, q.tolist())
+                            save_json(PARK_FILE, data)
+                            slots = park_slots(data, args.arm)
+                            if k == "0":
+                                park = q.tolist()
+                                print(f"\n  ⭐ BASE pose (0) saved — this is where Ctrl-C "
+                                      f"parks before disabling:\n     {np.round(q[:N_ARM], 3)}\n")
+                            else:
+                                print(f"\n  ✓ waypoint {k} saved: {np.round(q[:N_ARM], 3)}"
+                                      f"     (p {k} drives back to it; Ctrl-C ignores it)\n")
+                        else:
+                            print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
+                        continue
+
+                    if pending == "park":
+                        if k.isdigit():
+                            park_sequence.append(k)
+                            print(f"\r  park sequence: {' → '.join(park_sequence)}"
+                                  f"   (another digit to add, Enter to run)   ",
+                                  end="", flush=True)
+                            continue
+                        pending = None
+                        if k in ("\r", "\n", " ", "p"):
+                            wanted = park_sequence[:] or ["0"]
+                            park_sequence.clear()
+                            legs, missing = resolve_park_legs(wanted, park, slots)
+                            if missing:
+                                print(f"\n  ⚠️  nothing saved in slot(s) "
+                                      f"{', '.join(missing)} — press s then that digit "
+                                      "to record one.")
+                            if legs:
+                                first, rest = legs[0], legs[1:]
+                                park_queue = rest
+                                if rest:
+                                    print(f"\n⭐ running {len(legs)} poses: "
+                                          f"{' → '.join(n for n, _ in legs)}")
+                                begin_park(first[1], f"slot {first[0]}")
+                            else:
+                                print("\n  nothing to park to.\n")
+                        else:
+                            park_sequence.clear()
+                            print("\n  park cancelled.\n")
+                        continue
+
                     # ---- device configuration: works in EVERY mode ------------
                     # ⛔ `b` USED TO LIVE IN THE CONTROLS BRANCH ONLY, while the
                     # "press b to set the gripper buttons" hint printed in TELEOP as
@@ -892,48 +1003,20 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "h" and mode != "hold":
                         mode = "hold"; enter_hold(); print("\n⭐ MODE: HOLD\n")
                     elif k == "s":
-                        q = np.asarray(robot.get_joint_pos(), dtype=float)
-                        data = load_json(PARK_FILE, {}); data[args.arm] = q.tolist()
-                        save_json(PARK_FILE, data); park = q.tolist()
-                        print(f"\n  park pose saved: {np.round(q[:N_ARM], 3)}\n")
+                        pending = "save"
+                        saved_now = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
+                        print(f"\n  SAVE this pose to which slot?  0 = the BASE pose "
+                              f"(where Ctrl-C parks), 1-9 = a waypoint.")
+                        print(f"     waypoints already saved: {saved_now or 'none'}"
+                              f"        any other key cancels\n")
                     elif k == "p":
-                        if park is None:
-                            print("\n  no park pose saved — press s first\n")
-                        else:
-                            # ⛔ Build the target from the MEASURED pose and overlay only
-                            # the joints the saved pose actually carries.
-                            #
-                            # A pose saved in a --no-gripper session has 6 entries; this
-                            # robot may have 7 (or the reverse). `park_target - q` on
-                            # mismatched lengths raises ValueError, and that exception
-                            # escaped the loop entirely: it skipped the "the arm is
-                            # HOLDING, press g or d" consent flow and went straight to
-                            # `finally`, which DISABLES THE MOTORS — dropping a raised
-                            # arm. And `--no-gripper` is exactly the escape hatch the
-                            # gripper instructions tell you to fall back to, so the
-                            # fallback path was the broken one. Found by reading the
-                            # code, not by dropping an arm.
-                            # ⛔ PARK was also the ONE path that bypassed clamp_gripper,
-                            # so a pose saved with the jaws on a stop would be driven
-                            # back onto it and HELD. Both defects are fixed inside
-                            # park_target_from(), which is pure and has tests:
-                            #   uv run scripts/test_park_target.py
-                            park_target, warn = park_target_from(
-                                robot.get_joint_pos(), park,
-                                gripper_index=N_ARM, clamp=clamp_gripper,
-                            )
-                            if warn:
-                                print(f"\n  ⚠️  {warn}.")
-                            mode = "park"
-                            enter_hold()
-                            # Seed the trajectory at the arm's real pose, then let it run
-                            # ahead. enter_hold() has just resynced SafeRobot, so the
-                            # rate limiter starts anchored here too.
-                            park_cmd = np.asarray(robot.get_joint_pos(), dtype=float)
-                            park_best_err = float(np.max(np.abs(park_target - park_cmd)))
-                            park_progress_t = t
-                            print(f"\n⭐ MODE: PARK — driving to {np.round(park_target[:N_ARM], 2)} "
-                                  f"at {PARK_SPEED} rad/s. Press h or t to stop.\n")
+                        pending = "park"
+                        park_sequence.clear()
+                        have = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
+                        print(f"\n  PARK to which?  0 = base, 1-9 = a waypoint, "
+                              f"Enter = base.")
+                        print(f"     Type several digits for a SEQUENCE, then Enter."
+                              f"   waypoints: {have or 'none'}\n")
                     elif k == "o" and mode == "teleop":
                         gripper_value = clamp_gripper(gripper_value + gripper_step)
                     elif k == "c" and mode == "teleop":
@@ -973,15 +1056,36 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  {motions_for(control_frame)[idx]['short']} flipped → "
                               f"{axis_map.row(idx, control_frame).strip()}\n")
                     elif k == "+" or k == "=":
-                        args.linear_scale *= 1.25
-                        print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                        # ⭐ In PARK these mean the park speed. The teleop linear scale
+                        # is meaningless while the puck is not driving, and a key that
+                        # does nothing where you are is the defect class that made `b`
+                        # look broken (FINDINGS §17.1).
+                        if mode == "park":
+                            park_speed = min(1.5, park_speed * 1.25)
+                            print(f"\n  park speed → {park_speed:.2f} rad/s\n")
+                        else:
+                            args.linear_scale *= 1.25
+                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
                     elif k == "-":
-                        args.linear_scale /= 1.25
-                        print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                        if mode == "park":
+                            park_speed = max(0.05, park_speed / 1.25)
+                            print(f"\n  park speed → {park_speed:.2f} rad/s\n")
+                        else:
+                            args.linear_scale /= 1.25
+                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
                     elif k == "?":
                         print(HELP)
                     elif k.isprintable() and k.strip():
                         print(f"\n  (key {k!r} does nothing — press ? for the list)\n")
+                # ⛔ Leaving PARK for ANY reason abandons the rest of a sequence. One
+                # line rather than a `park_queue.clear()` in each of g/t/h/m/blocked,
+                # because the one that gets forgotten is the one that matters: an arm
+                # that resumes a queued trajectory after the operator pressed HOLD is
+                # doing something nobody asked for.
+                if mode != "park" and park_queue:
+                    print(f"\n  ⚠️  {len(park_queue)} queued pose(s) abandoned — "
+                          "leaving PARK cancels the rest of a sequence.\n")
+                    park_queue.clear()
                 if stop_reason:
                     break
 
@@ -1095,10 +1199,21 @@ def main() -> int:  # noqa: PLR0915
                     leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
                                        PARK_TOLERANCE, PARK_SETTLED)
                     if leg in ("arrived", "settled"):
-                        mode = "hold"; enter_hold()
                         extra = ("" if leg == "arrived" else
                                  " — as close as the arm holds itself under load")
-                        print(f"\n⭐ PARK reached ({err:.3f} rad off{extra}) → HOLD\n")
+                        if park_queue:
+                            # ⭐ The next leg of a sequence, started from inside the
+                            # 100 Hz loop rather than by a blocking call — so keys, the
+                            # thermal guard and the chain-alive check all keep running
+                            # for the whole run. See ROADMAP step 6.5 for why that is
+                            # the load-bearing decision in this feature.
+                            name, pose = park_queue.pop(0)
+                            print(f"\n⭐ reached ({err:.3f} rad off{extra}) → next: "
+                                  f"slot {name}, {len(park_queue)} after it\n")
+                            begin_park(pose, f"slot {name}")
+                        else:
+                            mode = "hold"; enter_hold()
+                            print(f"\n⭐ PARK reached ({err:.3f} rad off{extra}) → HOLD\n")
                     elif leg == "blocked":
                         # ⛔ Never spin silently. If the arm has stopped closing the gap
                         # the honest thing is to say so and hold, not to keep printing a
@@ -1113,7 +1228,7 @@ def main() -> int:  # noqa: PLR0915
                     else:
                         # ⛔ Advance the COMMAND, not the measurement. See
                         # yam_robot.advance_park_command() for why this is the whole bug.
-                        park_cmd = advance_park_command(park_cmd, park_target, PARK_SPEED * dt)
+                        park_cmd = advance_park_command(park_cmd, park_target, park_speed * dt)
                         robot.command_joint_pos(park_cmd)
                         if err < park_best_err - PARK_PROGRESS_EPS:
                             park_best_err, park_progress_t = err, t

@@ -28,6 +28,7 @@ from yam_robot import (  # noqa: E402
     park_slots,
     park_target_from,
     park_verdict,
+    resolve_park_legs,
     with_park_slot,
 )
 
@@ -272,6 +273,51 @@ def test_slots_are_per_arm() -> None:
 def test_a_slot_can_be_overwritten() -> None:
     data = with_park_slot(with_park_slot({}, "B", "2", [1.0]), "B", "2", [5.0])
     assert park_slots(data, "B")["2"] == [5.0]
+
+
+BASE = [0.0] * 7
+SLOTS = {"1": [1.0] * 7, "3": [3.0] * 7}
+
+
+def test_zero_always_means_the_base_pose() -> None:
+    """⛔⭐ Julien's ruling: Ctrl-C parks and then RELEASES the motors, so the pose it
+    picks must be one that is safe to be let go in. `0` is that pose, and saving a
+    waypoint mid-task must never move it."""
+    legs, missing = resolve_park_legs(["0"], BASE, SLOTS)
+    assert legs == [("0", BASE)] and missing == []
+
+
+def test_a_sequence_keeps_the_order_it_was_typed() -> None:
+    legs, missing = resolve_park_legs(["1", "3", "0"], BASE, SLOTS)
+    assert [n for n, _ in legs] == ["1", "3", "0"]
+    assert missing == []
+
+
+def test_an_empty_slot_is_SKIPPED_never_substituted() -> None:
+    """⛔ The tempting alternative — fall back to the base when a waypoint is empty —
+    would send the arm somewhere nobody asked for, mid-sequence, while it is being
+    watched. A pose the arm MOVES TO is never a default."""
+    legs, missing = resolve_park_legs(["1", "7", "3"], BASE, SLOTS)
+    assert [n for n, _ in legs] == ["1", "3"], "an empty slot must not become a move"
+    assert missing == ["7"]
+
+
+def test_a_repeated_slot_is_visited_twice() -> None:
+    """`p 1 2 1 Enter` is the obvious way to type a there-and-back."""
+    legs, _ = resolve_park_legs(["1", "3", "1"], BASE, SLOTS)
+    assert [n for n, _ in legs] == ["1", "3", "1"]
+
+
+def test_no_base_saved_and_zero_requested_is_reported_not_invented() -> None:
+    legs, missing = resolve_park_legs(["0", "1"], None, SLOTS)
+    assert [n for n, _ in legs] == ["1"]
+    assert missing == ["0"]
+
+
+def test_the_legs_are_copies_so_a_run_cannot_edit_the_saved_pose() -> None:
+    legs, _ = resolve_park_legs(["1"], BASE, SLOTS)
+    legs[0][1][0] = 99.0
+    assert SLOTS["1"][0] == 1.0, "running a sequence mutated the saved waypoint"
 
 
 def test_junk_in_the_file_is_ignored_rather_than_crashing_the_session() -> None:

@@ -291,6 +291,33 @@ def park_target_from(
     return target, warning
 
 
+def resolve_park_legs(wanted: list[str], base: list | None, slots: dict[str, list],
+                      ) -> tuple[list[tuple[str, list]], list[str]]:
+    """Turn typed digits into `(legs, missing)` — the poses to visit, in order.
+
+    `"0"` always means the **base** pose, whatever it is called in the file. Anything
+    else is a waypoint. A digit with nothing saved behind it lands in `missing` and is
+    **skipped**, never substituted.
+
+    ⛔ Why skipped and not substituted: the tempting alternative — fall back to the
+    base when a waypoint is empty — would send the arm somewhere the operator did not
+    ask for, in the middle of a sequence they are watching. A pose the arm moves to is
+    never a default.
+
+    Duplicates are kept: `p 1 2 1 Enter` visits slot 1, slot 2, then slot 1 again,
+    which is the obvious reading and makes a there-and-back trivial to type.
+    """
+    legs: list[tuple[str, list]] = []
+    missing: list[str] = []
+    for name in wanted:
+        pose = base if name == "0" else slots.get(name)
+        if pose:
+            legs.append((name, list(pose)))
+        else:
+            missing.append(name)
+    return legs, missing
+
+
 def park_verdict(err: float, stopped_improving: bool, tolerance: float,
                  settled_band: float) -> str:
     """`"arrived"` · `"settled"` · `"blocked"` · `"moving"` — has the park finished?
