@@ -367,8 +367,28 @@ Stop-at-each-waypoint first, blended later, and only if the motion genuinely nee
 3. ✅ Sequences: the queue, the echo, the abort — and ⛔ **leaving PARK for any reason
    abandons the rest**, said out loud when it happens.
 4. ✅ Park speed on `+`/`-` while in PARK mode.
-5. ⬜ **Easing behind a flag; tune the ramp with Julien on the arm; then default it on.**
-   The only part left, and the only part that touches a function confirmed on hardware.
+5. ✅ **Easing** — on by default, `--no-smooth` disables it. The opt-in caution was
+   withdrawn after reading `advance_park_command`: scaling an already-clamped step
+   *down* cannot overshoot, so the risk that justified the flag did not exist.
+6. ✅ **Corner blending** (`src/motion.py`, 12 tests) — ⛔ **and this was the feature
+   actually being asked for.** Item 5 shapes *speed*; this shapes the *path*. Building
+   only the first left the arm stopping dead at every waypoint, which is the jitter
+   Julien described. Both now exist and are independent.
+7. ✅ **The interaction**: `p Enter` base · `p 1 Enter` one pose · `p 1 2 3 Enter` shows
+   the plan and waits for a second Enter · `-/+` speed and `,/.` corners work **while
+   typing as well as while moving**.
+
+⬜ **What is left in this area:** nothing structural — only Julien's judgement on the
+arm about the default corner radius (`smooth`, 0.15 rad) and default speed. Both are
+live knobs, so tuning them needs no code.
+
+⚠️ **Deliberately still NOT doing: Cartesian-space blending.** These are *joint* poses,
+so a joint-space path needs no IK, cannot hit a singularity, and provably stays inside
+the joint range the waypoints span. A Cartesian blend would look smoother in the world
+at the cost of an IK solve per sample and a singularity risk on every corner, for poses
+that were never Cartesian to begin with. Revisit only if a task genuinely needs a
+straight line *in the world*, and note that recorded demos would then need Cartesian
+waypoints too.
 
 ⭐ **One decision arrived during implementation and is worth keeping:** Julien ruled that
 Ctrl-C must *always* return to the base pose regardless of what has been saved since —

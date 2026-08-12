@@ -1123,7 +1123,7 @@ for the per-second load into a pty that also has to draw them.
 level 1 = 6.7 ms, 391 KB; level 6 = 28.8 ms for 371 KB. Level 6 costs 4x the time for
 5% of the size. Level 1 stays.
 
-⭐ **The open question worth ten seconds:** does Ghostty also accept iTerm2's escape?
+⛔ **ANSWERED 2026-08-12: Ghostty does NOT accept iTerm2's escape** (§25.4). Does yours?
 If it does, the sharpness ceiling doubles for free. `--term-test` now sends **one image
 in each protocol** so the answer is a look at the screen rather than a guess.
 
@@ -1552,7 +1552,18 @@ empty USB list, and it appeared here in the code written to diagnose exactly thi
 of problem. Fixed by giving the test image an id; "no reply" now says plainly that it
 proves nothing and asks the operator to look at the screen.
 
-⚠️ **Still unanswered:** whether Ghostty draws the **iTerm2** inline image.
+✅ **ANSWERED 2026-08-12, and the answer is no.** With the image-id fix in place,
+`--term-test` got a clean `ESC _G i=771;OK ESC \` back — so Ghostty implements the
+kitty protocol properly — and Julien reported seeing **one** set of bars, the KITTY
+set. The iTerm2 image never appeared.
+
+⛔ **So PNG is the ceiling on this terminal, and that is a closed question rather than
+a hope.** The ~25x cheaper JPEG path is unavailable in Ghostty, which is exactly why
+the sent-image size is decided by the adaptive controller measuring the real draw cost
+([§25.3](#253-the-detail-cap-was-a-constant-where-it-needed-to-be-a-measurement))
+rather than by a constant chosen from encode benchmarks. If sharper is ever wanted
+badly enough, the lever is a different terminal — iTerm2 and WezTerm both take JPEG —
+not more code here.
 
 ---
 
@@ -1649,6 +1660,21 @@ arm at the same pose.
 - **A park could be cancelled by a keystroke typed before it started.** "Any key stops
   it" must mean a key pressed *at the moving arm*, not one left over from teleop or from
   the menu that led there. Both park paths now drain stale input first.
+- ⭐ **"Smooth motion" meant two different mechanisms, and I built the wrong one.**
+  Julien asked for smoothing between saved poses. I implemented a trapezoidal **speed
+  ramp along each leg** — ease in, cruise, ease out — which makes a single move gentler
+  and leaves the arm **stopping dead at every waypoint**. He meant **corner blending**:
+  one continuous motion that curves *through* the corner.
+
+  Both are real features, both were wanted, and the word "smooth" covers both. ⚠️ The
+  tell was there in the original request — *"move from point one to point two … in a
+  smooth curve it would go to the next point"* describes a **path**, not a speed — and
+  I read it as a speed because that was the cheaper thing to build. **When a request
+  could name two different mechanisms, say which one you are building before building
+  it.** One sentence would have saved the round trip. Both now exist and are
+  independent: the ramp decides *how fast* the cursor moves, the blend decides *what
+  shape* it follows.
+
 - **Every clean exit printed a traceback.** The SDK's `robot_server` thread raises
   `motor chain is not running` when we stop the chain — i.e. on success, immediately
   before `motors confirmed disabled`. ⚠️ Harmless, and worth removing anyway: a scary

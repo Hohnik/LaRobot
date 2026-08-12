@@ -21,8 +21,26 @@
 >    one raised an exception. Check values for plausibility, never merely for the absence of an exception.
 > 4. **§5.5 is the task list**, ordered, with the reasoning for the order. Item 1 is the next thing to build.
 >
-> Run `uv run scripts/test_*.py` first — **156 headless tests, no hardware needed** — to confirm the tree
-> is sound before changing anything.
+> Run `for f in scripts/test_*.py; do uv run "$f"; done` first — **245 headless tests, no hardware
+> needed** — to confirm the tree is sound before changing anything. Also `uv run scripts/check_links.py`
+> (docs cross-reference each other constantly; one broken pointer is in `Setup-Plan.md` and is not ours).
+>
+> ## ⭐ Where this actually stands, 2026-08-12 — read this paragraph if you read nothing else
+>
+> **Single-arm teleop is finished and confirmed on hardware.** GUIDE, TELEOP, HOLD, PARK, CONTROLS, the
+> gripper, the axis map, control frames, saved poses and blended multi-pose runs all work and Julien has
+> driven them. The camera view works and cameras are identified by measurement.
+>
+> **The next real piece of work is bimanual**, and it is half done in a specific way:
+> `src/arm_session.py` **exists and is tested (17 tests)** — it is one arm's state and mode machine,
+> written so N of them can run in one loop. ⬜ **It is not wired into `scripts/teleop_session.py` yet.**
+> That wiring is the job: ~1000 lines of `main()` currently hold one arm's state as locals.
+> ⭐ Do it as [ROADMAP step 6](ROADMAP.md) says — **`--arms B` running the N-arm code with N=1 first**,
+> confirm it feels identical, and only then N=2. Then mirror mode is just the two-arm process plus
+> `src/mirror.py`, which already exists with 14 tests.
+>
+> ⚠️ **Nothing is pushed** (working contract rule 9). A snapshot branch `julien/yam-teleop-wip` exists on
+> `Hohnik/LaRobot` from 2026-08-12 and is **not kept in sync** — it was taken once, for his colleagues.
 
 ---
 
@@ -222,7 +240,7 @@ work, not repair. In the order I would do it, with the reasoning:
 
 | # | task | why, and what is already known |
 |---|---|---|
-| 0 | ⚠️ **Confirm on the arm — the short list** | ✅ **Confirmed 2026-08-12:** Ctrl-C → park → disable; and `h`/`t`/`h` switching *"instantly"*, which is the mode machinery and the key reader both behaving. Still unconfirmed: **the pose slots** (`s 0` base, `s 1-9` waypoints, `p 1 2 3 Enter` runs them in order, `+/-` changes park speed while parking) · a park stopping ~0.02-0.05 rad short should now say **PARKED … as close as the arm holds itself** rather than STALLED · the **55 °C warning** on any run that works the shoulder. The **blind-thermal stop** cannot be triggered without unplugging CAN mid-session, so it stays unverified — stated rather than assumed |
+| 0 | ⚠️ **Confirm on the arm — the short list** | ✅ **Confirmed 2026-08-12:** Ctrl-C → park → disable · `h`/`t`/`h` switching *"instantly"* (mode machinery **and** the fixed key reader) · `p 1 2 3 Enter` running a sequence · park speed adjustable while moving. ⬜ **New and unconfirmed:** the **blended corners** — a 3-pose run should now be *one continuous curve* with no stop at each pose (`,`/`.` switches sharp ↔ smooth ↔ flowing, and `sharp` reproduces the old stop-at-each behaviour exactly, so the two are directly comparable on the arm) · the **plan-and-confirm** step on multi-pose runs · **`-/+` and `,/.` while typing** the sequence · a park stopping ~0.02-0.05 rad short saying **PARKED … as close as the arm holds itself** rather than STALLED · the **55 °C warning**. The **blind-thermal stop** cannot be triggered without unplugging CAN mid-session, so it stays unverified — stated rather than assumed |
 | 0b | ✅ **Smoothing between poses — done 2026-08-12, on by default** | Eases in and out over 0.2 rad (15% → 100% → 15%), both park paths, each leg of a sequence getting its own ramp. `--no-smooth` restores the constant rate. ⭐ **The opt-in caution in the original plan was wrong and checking it changed the decision:** "a deceleration bug shows up as overshoot" is true of a new integrator with velocity state, and false here — `advance_park_command` is `command + clip(target - command, -step, step)`, so a step is already bounded by the distance remaining and **scaling it down cannot overshoot**. Feel is still Julien's to judge on the arm; `PARK_RAMP` is the dial |
 | 0c | ⏳ **Wire `ArmSession` into the session** — the remaining half of the bimanual work | ✅ The class is **built and tested** (`src/arm_session.py`, 17 tests, fake robot). ⬜ What remains is restructuring ~1000 lines of `main()` to use it — deliberately its own session, because mixing "write the class" with "restructure the loop" produces a diff nobody can review and only Julien can test. ⭐ Do it as [ROADMAP step 6](ROADMAP.md) says: **`--arms B` with N=1 first**, confirm it feels identical, and only then N=2 |
 | 1 | ⭐⭐ **Mirror mode — the SCRIPT. The logic is done.** | Julien's idea, and **the right first two-arm feature**: ✅ **`src/mirror.py` + 14 tests are DONE** — `MirrorLink` handles copy/mirror, staged engagement and the stop-rather-than-chase guard, with no robot handle so it is fully testable without an arm. ❌ **What is missing is the script** that opens both arms, reads B and commands G. That is the same two-arm process `ArmSession` needs, so **build them together**. ✅ Julien answered the design question: **both modes exist, `copy` is the default, and the arms are side by side** — so copy is correct today. ⚠️ **`MIRROR_SIGNS` is a geometric PREDICTION, not a measurement** — reflecting through a vertical plane should negate base_yaw, wrist_roll and gripper_twist and leave the three pitches alone. Expect to adjust it the first time `mirror` is used. |
@@ -307,6 +325,8 @@ diff. A pushed branch is not a proposal; opening the PR is.
 | 15 | 2026-08-12, ~12:50-13:4x | ⭐ **Julien confirmed `h`/`t`/`h` switching instantly on the arm** — the mode machinery and the fixed key reader both good. Built the **saved-pose slots and sequences** he asked for (`s 0-9`, `p` + digits + Enter, `+/-` park speed), on the interleaved park so the thermal guard runs throughout. ⛔ **His ruling split "the park pose" into two things:** slot 0 is the **base**, the only pose Ctrl-C returns to before releasing the motors, and waypoints 1-9 are ignored by Ctrl-C — because *a pose that is safe to be let go in is not the same as a pose you want to return to mid-task*, and they had been sharing one variable that `s` silently overwrote. 205 → 211 headless tests. Remaining in that feature: the smoothing ramp only. |
 
 | 16 | 2026-08-12, ~13:50-15:0x | **Smoothing done and on by default** — and the reasoning that had made it opt-in turned out to be wrong: scaling an already-clamped step *down* cannot overshoot, so the risk that justified the flag does not exist in this shape. ⭐ **`ArmSession` built and tested** (`src/arm_session.py`, 17 tests on a fake robot) — the extraction that unblocks bimanual, with the rule that **the class decides and the script narrates** so none of it needs hardware to prove. ⚠️ **Not wired into `teleop_session.py`**, on purpose and in writing: that restructure is its own session, N=1 first. 211 → 233 headless tests. |
+
+| 17 | 2026-08-12, ~14:20-15:3x | ⛔ **The smoothing built in session 16 was the wrong feature** — a speed ramp per leg, so the arm still stopped at every waypoint. Julien meant **corner blending**: one continuous motion curving *through* each pose. Built `src/motion.py` — `JointPath`, quadratic-Bézier corners, exact arc length, 12 tests — and rewired the park onto it, so there is **one motion engine** and the per-leg queue is gone. ⭐ Also the UX he specified: `p Enter` base, `p 1 Enter` one pose, `p 1 2 3 Enter` shows the plan and waits for a second Enter, and **`-/+` speed and `,/.` corners now work while typing**, not only while moving. ✅ `--term-test` answered: Ghostty replies `OK` to the kitty protocol and draws **only** the KITTY bars — **it does not implement iTerm2's**, so PNG is the ceiling and that question is closed. 233 → 245 headless tests. |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed
