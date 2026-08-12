@@ -83,18 +83,32 @@ EASINGS = [
 
 
 def easing_factor(easing: Easing, travelled: float, remaining: float, ramp: float,
-                  floor: float = 0.15) -> float:
+                  floor: float = 0.2) -> float:
     """Speed multiplier in `[floor, 1]` for a move `travelled` in and `remaining` to go.
 
-    ⚠️ `floor` is load-bearing. Without it the factor reaches zero at whichever end is
-    eased and the arm creeps for ever, which the stall detector would eventually — and
-    wrongly — call an obstruction.
+    ⛔⭐ THE SHAPE IS `sqrt`, NOT A STRAIGHT LINE, AND THE REASON IS THE COMPLAINT THAT
+    PRODUCED IT. Julien, 2026-08-12: *"it shouldn't take the same amount of time to go
+    from one to zero point one as it takes from zero point one to zero — that is too
+    long at the bottom end."*
 
-    ⭐ `smooth` applies smoothstep (`3f² − 2f³`) to the ramp, which removes the corner
-    in the *acceleration* as well as in the speed. A linear ramp still starts moving
-    abruptly in the sense that acceleration jumps from 0 to constant; smoothstep eases
-    that too, and it is the difference between "ease" and "ease with a Bézier handle"
-    in an editor.
+    He had found a real property, not a tuning annoyance. With a **straight** ramp the
+    speed is proportional to the distance left, `v ∝ s`, which is an exponential decay:
+    `s` halves in equal time steps and **never actually reaches zero**. Every decade
+    costs the same time as the one before it, which is exactly what he described.
+
+    Constant deceleration — what a car does when braking normally, and what every
+    motion controller means by a trapezoidal profile — is `v ∝ √s`. That one *does*
+    arrive, in finite time, and the last tenth takes a small fraction of the time
+    rather than the same again. Same softness at the end, no crawl.
+
+    ⚠️ `floor` is still load-bearing: it bounds the very last instant so the arm cannot
+    creep, which the stall detector would eventually — and wrongly — call an
+    obstruction. It is 0.2 rather than 0.15 for the same reason the shape changed.
+
+    ⭐ `smooth` (the `s-curve` profile) instead applies smoothstep, `3f² − 2f³`. That
+    eases the **acceleration** as well as the speed: the arm does not merely start
+    slowly, it starts *gently*, with no step change in the force it applies. It is the
+    gentlest profile here and the slowest off the mark.
     """
     if ramp <= 0:
         return 1.0
@@ -104,8 +118,7 @@ def easing_factor(easing: Easing, travelled: float, remaining: float, ramp: floa
     if easing.ease_out:
         f = min(f, remaining / ramp)
     f = max(0.0, min(1.0, f))
-    if easing.smooth:
-        f = f * f * (3.0 - 2.0 * f)
+    f = f * f * (3.0 - 2.0 * f) if easing.smooth else f ** 0.5
     return max(floor, f)
 
 

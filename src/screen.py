@@ -37,12 +37,31 @@ CLEAR_LINE = "\r\x1b[K"
 
 
 class StatusLine:
-    """Owns the bottom line. Everything else scrolls above it."""
+    """Owns the bottom **two** lines. Everything else scrolls above them.
+
+    ⭐ TWO LINES, NOT ONE, AND JULIEN DIAGNOSED WHY HIMSELF: *"I can now see the line
+    that it gets overwritten by is the normal line that always shows the seconds and
+    the temperature… so maybe that could just be a line below, and the e cycling and
+    the speed adjustment could be a line above when I'm still editing."*
+
+    Exactly right. With one live line the once-a-second status and the thing being
+    edited were fighting for the same row, so a knob change flashed up and vanished
+    half a second later. They are different kinds of information and they need
+    different rows:
+
+    - **`status`** (bottom) — the heartbeat: time, temperatures, joint angles. Always
+      there, always changing on its own.
+    - **`hint`** (above it) — what *you* are doing right now: the run being typed, the
+      speed you just changed, the ease profile you just cycled. Silent when there is
+      nothing to say.
+    """
 
     def __init__(self, stream: Any = None, width: int | None = None) -> None:
         self.stream = stream if stream is not None else sys.stdout
         self._width = width
         self._current = ""
+        self._hint = ""
+        self._rows = 0          # how many rows the live block currently occupies
 
     def width(self) -> int:
         if self._width is not None:
@@ -60,28 +79,62 @@ class StatusLine:
         limit = self.width()
         return text if len(text) <= limit else text[: limit - 1] + "…"
 
-    def set(self, text: str) -> None:
-        """Repaint the live line in place. Cheap enough to call every cycle."""
-        self._current = text
-        self.stream.write(CLEAR_LINE + self._fit(text))
+    def _rewind(self) -> str:
+        """Escape sequence that puts the cursor back at the top of the live block."""
+        return "\r" + (f"\x1b[{self._rows - 1}A" if self._rows > 1 else "")
+
+    def _paint(self) -> None:
+        rows = [r for r in (self._hint, self._current) if r]
+        out = [self._rewind()]
+        for i, row in enumerate(rows):
+            out.append("\x1b[K" + self._fit(row))
+            if i < len(rows) - 1:
+                out.append("\n")
+        # ⚠️ If the block just shrank, the old bottom row is still on screen. Wipe
+        # every row the previous paint used, or a stale line survives underneath.
+        for _ in range(max(0, self._rows - len(rows))):
+            out.append("\n\x1b[K")
+        if self._rows > len(rows):
+            out.append(f"\x1b[{self._rows - len(rows)}A")
+        self._rows = len(rows)
+        self.stream.write("".join(out))
         self.stream.flush()
+
+    def set(self, text: str) -> None:
+        """Repaint the bottom line — the heartbeat. Cheap enough to call every cycle."""
+        self._current = text
+        self._paint()
+
+    def hint(self, text: str = "") -> None:
+        """Repaint the line above the status — what the operator is doing right now.
+
+        ⭐ This is where a changed value goes. `linear speed → 0.188 m/s` printed as a
+        message six times in a row is six rows of scrollback saying the same word;
+        as a hint it is one row whose number changes, which is what Julien asked for.
+        Pass `""` to clear it.
+        """
+        self._hint = text
+        self._paint()
 
     def say(self, text: str = "") -> None:
-        """Print a message ABOVE the live line, then repaint the live line under it."""
-        self.stream.write(CLEAR_LINE + text + "\n")
-        if self._current:
-            self.stream.write(self._fit(self._current))
-        self.stream.flush()
+        """Print a message ABOVE the live block, then repaint the block under it."""
+        self.stream.write(self._rewind() + "\x1b[K" + text + "\n")
+        for _ in range(max(0, self._rows - 1)):
+            self.stream.write("\x1b[K\n")
+        if self._rows > 1:
+            self.stream.write(f"\x1b[{self._rows - 1}A")
+        self._rows = 0
+        self._paint()
 
     def clear(self) -> None:
-        """Drop the live line entirely — used before long blocks of plain output."""
-        self._current = ""
-        self.stream.write(CLEAR_LINE)
-        self.stream.flush()
+        """Drop the live block entirely — used before long blocks of plain output."""
+        self._current = self._hint = ""
+        self._paint()
 
     def done(self) -> None:
-        """End the live line so ordinary printing can resume on a fresh row."""
-        if self._current:
+        """End the live block so ordinary printing can resume on a fresh row."""
+        if self._rows:
             self.stream.write("\n")
-        self._current = ""
+        self._current = self._hint = ""
+        self._rows = 0
         self.stream.flush()

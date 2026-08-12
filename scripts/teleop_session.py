@@ -227,8 +227,8 @@ HELP = """
             p then Enter          drive to the base pose
             p then 1 then Enter   drive to waypoint 1
             p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
-            while choosing OR moving:  - / +  speed   , / .  corners sharp↔flowing
-                                       e  ease: none / in / out / both / s-curve
+            while choosing OR moving:  - / + speed   , / . corners   e ease profile
+                                       [ / ] how long the ease lasts
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
   SPEED     - / +  linear             , / .  rotation          [ / ]  gripper step
@@ -450,6 +450,16 @@ def main() -> int:  # noqa: PLR0915
     # live line, repaint it in place"; anything else scrolls above it. See src/screen.py.
     screen = StatusLine()
 
+    def hint(text: str = "") -> None:
+        """A value the operator just changed, on its own live row above the status.
+
+        ⭐ `linear speed → 0.188 m/s` printed as a MESSAGE six times is six rows of
+        scrollback saying the same word. As a hint it is one row whose number changes
+        — and, crucially, it no longer loses a race with the once-a-second status,
+        which is what made a knob change flash up and vanish.
+        """
+        screen.hint(text)
+
     def print(*args, sep=" ", end="\n", flush=False):  # noqa: A001, ARG001
         text = sep.join(str(a) for a in args)
         if end == "":
@@ -494,6 +504,7 @@ def main() -> int:  # noqa: PLR0915
     blend_idx = 1                       # "smooth" — the sensible default
     ease_idx = 3                        # "both" — see motion.EASINGS
     park_leg_t = 0.0                    # when the current run started
+    park_ramp = PARK_RAMP               # how much of the move is eased
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
@@ -694,9 +705,9 @@ def main() -> int:  # noqa: PLR0915
             name, radius = BLEND_MODES[blend_idx]
             # ⭐ ONE line, so changing a knob repaints instead of appending. Six taps
             # on `+` should leave one line showing the final speed, not six blocks.
-            return (f"  RUN {seq}  ·  speed {park_speed:.2f} (-/+)  ·  corners {name} "
-                    f"{radius:.2f} (,/.)  ·  ease {EASINGS[ease_idx].name} (e)  ·  "
-                    f"Enter=go  other=cancel")
+            return (f"RUN {seq} · speed {park_speed:.2f} (-/+) · corners {name} "
+                    f"{radius:.2f} (,/.) · ease {EASINGS[ease_idx].name} over "
+                    f"{park_ramp:.2f} (e, [/]) · Enter=go")
 
         def begin_path(legs: list, what: str) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
@@ -891,23 +902,34 @@ def main() -> int:  # noqa: PLR0915
                         # the moment you are choosing the move.
                         if k in "+=":
                             park_speed = min(1.5, park_speed * 1.25)
-                            print(park_plan_line(), end=""); continue
+                            hint(park_plan_line()); continue
                         if k == "-":
                             park_speed = max(0.05, park_speed / 1.25)
-                            print(park_plan_line(), end=""); continue
+                            hint(park_plan_line()); continue
                         if k == ".":
                             blend_idx = min(len(BLEND_MODES) - 1, blend_idx + 1)
-                            print(park_plan_line(), end=""); continue
+                            hint(park_plan_line()); continue
                         if k == ",":
                             blend_idx = max(0, blend_idx - 1)
-                            print(park_plan_line(), end=""); continue
+                            hint(park_plan_line()); continue
+                        if k == "]":
+                            # ⭐ How LONG the ease lasts, separately from its shape.
+                            # Julien: *"the smoothing should maybe be adjustable at the
+                            # beginning of the park, similar to the parking speed."*
+                            # [ and ] mean gripper step elsewhere, which is meaningless
+                            # while choosing a park — same context-dependence as +/-.
+                            park_ramp = min(1.0, park_ramp * 1.4)
+                            hint(park_plan_line()); continue
+                        if k == "[":
+                            park_ramp = max(0.0, park_ramp / 1.4 if park_ramp > 0.03 else 0.0)
+                            hint(park_plan_line()); continue
                         if k == "e":
                             # ⭐ Start/stop easing is INDEPENDENT of corner blending.
                             # Julien wanted the ends toggleable without giving up the
                             # smooth corners; `none` leaves immediately, which is what
                             # a shutdown move wants.
                             ease_idx = (ease_idx + 1) % len(EASINGS)
-                            print(park_plan_line(), end=""); continue
+                            hint(park_plan_line()); continue
 
                     if pending == "park":
                         if k.isdigit():
@@ -924,7 +946,7 @@ def main() -> int:  # noqa: PLR0915
                             # trajectory and how it moves is worth a glance first.
                             if len(park_sequence) >= 2:
                                 pending = "confirm"
-                                print(park_plan_line(), end="")
+                                hint(park_plan_line())
                                 continue
                             pending = None
                             wanted = park_sequence[:] or ["0"]
@@ -1098,10 +1120,10 @@ def main() -> int:  # noqa: PLR0915
                         # a key that silently does nothing is visible rather than inferred.
                         elif k in "+=":
                             args.linear_scale *= 1.25
-                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                            hint(f"linear speed {args.linear_scale:.3f} m/s")
                         elif k == "-":
                             args.linear_scale /= 1.25
-                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                            hint(f"linear speed {args.linear_scale:.3f} m/s")
                         elif k == ".":
                             angular_scale *= 1.25
                             print(f"\n  rotation speed → {angular_scale:.2f} rad/s "
@@ -1170,19 +1192,19 @@ def main() -> int:  # noqa: PLR0915
                         gripper_value = clamp_gripper(gripper_value - gripper_step)
                     elif k == "]":
                         gripper_step = min(0.20, gripper_step * 1.5)
-                        print(f"\n  gripper step → {gripper_step:.3f} per press\n")
+                        hint(f"gripper step {gripper_step:.3f} per press")
                     elif k == "[":
                         gripper_step = max(0.002, gripper_step / 1.5)
-                        print(f"\n  gripper step → {gripper_step:.3f} per press\n")
+                        hint(f"gripper step {gripper_step:.3f} per press")
                     elif k == "r":
                         rotation = not rotation
-                        print(f"\n  wrist rotation {'ON' if rotation else 'OFF'}\n")
+                        hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
                     elif k == ".":
                         angular_scale *= 1.25
-                        print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
+                        hint(f"rotation speed {angular_scale:.2f} rad/s")
                     elif k == ",":
                         angular_scale /= 1.25
-                        print(f"\n  rotation speed → {angular_scale:.2f} rad/s\n")
+                        hint(f"rotation speed {angular_scale:.2f} rad/s")
                     elif k in "xyz":
                         # ⚠️ These now flip a ROBOT MOTION, not a puck axis. Under the
                         # identity map that is the same arithmetic, which is why the
@@ -1209,17 +1231,17 @@ def main() -> int:  # noqa: PLR0915
                         # look broken (FINDINGS §17.1).
                         if mode == "park":
                             park_speed = min(1.5, park_speed * 1.25)
-                            print(f"\n  park speed → {park_speed:.2f} rad/s\n")
+                            hint(f"park speed {park_speed:.2f} rad/s")
                         else:
                             args.linear_scale *= 1.25
-                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                            hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "-":
                         if mode == "park":
                             park_speed = max(0.05, park_speed / 1.25)
-                            print(f"\n  park speed → {park_speed:.2f} rad/s\n")
+                            hint(f"park speed {park_speed:.2f} rad/s")
                         else:
                             args.linear_scale /= 1.25
-                            print(f"\n  linear speed → {args.linear_scale:.3f} m/s\n")
+                            hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "?":
                         print(HELP)
                     elif k.isprintable() and k.strip():
@@ -1357,7 +1379,7 @@ def main() -> int:  # noqa: PLR0915
                         if lag < MAX_CURSOR_LAG:
                             ramp = easing_factor(
                                 EASINGS[ease_idx], park_s, park_path.length - park_s,
-                                0.0 if args.no_smooth else PARK_RAMP)
+                                0.0 if args.no_smooth else park_ramp)
                             park_s = min(park_path.length,
                                          park_s + park_speed * ramp * dt)
                             advanced = True
@@ -1519,7 +1541,7 @@ def main() -> int:  # noqa: PLR0915
                 print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
                 outcome = park_and_wait(robot, keys, park, clamp_gripper,
-                                        speed=park_speed)
+                                        ramp=park_ramp, speed=park_speed)
                 if outcome == "arrived":
                     auto_parked = True
                     print("\n   Disabling the motors now.\n")
