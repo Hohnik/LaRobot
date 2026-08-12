@@ -98,7 +98,10 @@ drift — but prefer running **with** the gripper. Full account: [FINDINGS §11]
 - **PARK is fixed but untested on hardware** — three separate defects now: it was cancelled by any
   unrecognised key (Enter included); a length mismatch against a `--no-gripper` robot **raised and dropped
   the arm**; and it bypassed the gripper clamp. See §5.5 item 2.
-- **No git remote.** Everything exists only on Julien's Mac. See §6.
+- **Still no remote of Julien's own** — but as of 2026-08-12 there *is* an off-machine copy:
+  **`larobot/julien/yam-teleop-wip`**, 56 commits, pushed to his friend's public repo
+  `Hohnik/LaRobot`. ⚠️ **That is not a backup he controls** — it is a branch in someone else's
+  repository, and it can be deleted by someone who is not him. See §6.
 
 ## 3. The commands that matter
 
@@ -217,7 +220,7 @@ work, not repair. In the order I would do it, with the reasoning:
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected |
 | 6 | ⭐⭐ **The D405 wrist cameras — and the cheap shortcut WORKS** | One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **2026-08-11: OpenCV opens it over plain UVC and gets a real picture** — Julien's live view shows a textured photographic image and `--list` reports `colour`. *(An earlier note here said "depth only". That was inferred from the device's NAME — macOS calls it `… Depth` — and it was wrong; the pixels say otherwise. FINDINGS §22.)* **So driving from the wrist camera needs no SDK at all**, and `brew install librealsense` is an upgrade for depth data, intrinsics and camera controls rather than a prerequisite. Next: mount it properly, then `v` → **tool** frame (⛔ *not* `camera`, until the real mount transform is measured — COMMANDS). He gave the manual's link: `intelrealsense.com/get-started` |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
-| 7 | **Give this repo a git remote** | ~57 commits exist on one Mac only. Julien has deliberately deferred pushing; not forgotten |
+| 7 | **A remote of Julien's own** | ⚠️ Partly addressed 2026-08-12 — 56 commits now sit on the branch `julien/yam-teleop-wip` in his friend's public repo, so the work is no longer on one Mac alone. That branch is not a backup he controls, so a private remote of his own remains open |
 
 ⚠️ **Untested on hardware, all built and verified in simulation or headlessly.** Treat the first run of
 each as a test: the speed throttle near the workspace edge, and all of `src/mirror.py`.
@@ -246,11 +249,25 @@ it describes will quietly start lying.
 
 **The one item that is not in §5.5 because it is not engineering work:**
 
-⭐ **Give this repo a git remote.** ~57 commits exist only on one Mac, including every hardware finding
-above and four documents written specifically so a contextless reader could recover them. Julien's own
-private GitHub first; `Hohnik/LaRobot` is planned separately — see README §7.5 for the fork-and-PR approach
-and the "clean" checklist. **Do not push to a collaborator's `main`.** He has deliberately deferred this;
-it is not forgotten, and it is the only single-point-of-failure left in the project.
+⭐ **A remote of Julien's own — still open, and now the *only* part of this still open.**
+
+**What happened on 2026-08-12:** he asked for the work to reach his friend's repo immediately, explicitly
+waiving the "cleaned up and clear" bar in README §7.5 — *"I don't care if it's clean because they said they
+don't care either… we'll just work however we want and clean everything up as we go along."* So 56 commits
+went to **`Hohnik/LaRobot`** as the branch **`julien/yam-teleop-wip`**, whose name says what it is.
+
+**What held, and was never in question:** ⛔ **`main` of a collaborator's repo was not touched.** A branch is
+reviewable and deletable; a push to their `main` is a fait accompli. That rule survives the waiver — it is
+about *their* repo, not about polish.
+
+**What is still missing, and why it is not the same thing:** a branch in someone else's public repository is
+**not a backup Julien controls.** It can be deleted by someone who is not him, and nothing private can ever
+go there. His own private remote remains the real item. *(Skipped for now because creating it needs his
+GitHub account; `gh` is not installed here.)*
+
+**Before this becomes a pull request**, README §7.5 still applies in full: ask Hohnik what structure he wants
+*first* — it is a social step, not a technical one — and only then open the PR, with Julien reviewing the
+diff. A pushed branch is not a proposal; opening the PR is.
 
 ## 7. Session log
 
@@ -266,6 +283,8 @@ it is not forgotten, and it is the only single-point-of-failure left in the proj
 | 8 | 2026-08-11, ~16:10-16:29 | **Kitty images fixed** — they showed nothing because `f=100` means PNG and the renderer sent JPEG, with `q=2` suppressing the error that would have said so. `--term-test` added to make a silent display path speak. ⭐ **The D405 arrived and was measured**: serial `255323071773` (a real one, unlike the SpaceMice), USB SuperSpeed, and **it also enumerates as a plain UVC camera** — so OpenCV may open it with no SDK at all. `pyrealsense2` has no macOS wheels at any version (verified), but `librealsense` is a prebuilt Homebrew bottle. 143 headless tests. |
 | 9 | 2026-08-11, ~16:30-17:15 | **No hardware touched.** Fixed Julien's *"the resolution is stuck … pressing the numbers doesn't do anything"*: keys 1-6 changed the **capture** while the image sent to the terminal stayed pinned at 480 px, so they were **working perfectly and invisible**. Measured the PNG-vs-JPEG gap that makes kitty mode soft (~25x on both time and bytes) — the kitty protocol has no JPEG at all. Cameras given names. ⛔ **Two conclusions from this session were REFUTED in session 10 and are struck here so nobody inherits them:** ~~names paired to indices by macOS's list order, cross-checked~~ (the order is not OpenCV's — it was wrong about two of four cameras) and ~~the D405's UVC entry is depth only~~ (it delivers a colour picture; the claim came from reading the device's *name*). 143 → 156 headless tests. |
 | 10 | 2026-08-11, ~17:20-18:0x | ⛔⭐ **Session 9's naming was wrong, and Julien's own falsification procedure is what caught it** — he covered each camera in turn and the C920 answered on index 0 where macOS lists the built-in. **Identity is now MEASURED**: each index is asked for a resolution only one camera supports, and whoever answers exactly is that camera ([FINDINGS §22](FINDINGS.md)). Three macOS enumerations all agree with each other and none is OpenCV's, so no list could ever have supplied this. Also fixed: **the probe read one frame at open**, so Apple's slow-exposing camera reported brightness 5 in a bright room and Continuity reported NO FRAME — warm-up, in the column used to identify cameras; **a black frame was reported as MONO depth/IR** — about an iPhone; **the number keys** now offer the selected camera's own modes (the old list was C920 modes, which collapse to three on the built-in — itself an unrecognised second report of the naming bug); and **the flicker**, which was delete-then-draw plus redrawing unchanged frames ~25 times a second. ⭐ **The D405's UVC stream is a real picture**, so the wrist view needs no SDK. 156 → 165 headless tests. |
+
+| 11 | 2026-08-12, 09:54-10:3x | ⭐ **The work left the Mac.** Rig re-verified after an overnight break — both CANables by serial (`2081337C594E5018` = B, `20593383594E5018` = G), both SpaceMice, the C920 and the one D405 (`255323071773`), all unchanged; second D405 still unplugged. 166/166 headless tests. **56 commits pushed to `Hohnik/LaRobot` as `julien/yam-teleop-wip`** — Julien explicitly waived the "clean" bar (§6), and ⛔ their `main` was not touched. Secrets scan run against the tracked files first, because that repo is public: 43 files, nothing matching key/token/password patterns, no `.env`, nothing large. Full `github/gitignore` Python template adopted, with a warning block naming the three things that must **stay** tracked (`uv.lock`, `.python-version`, `config/*.json` — the last is measured calibration, not config). ⚠️ **New trap found:** `system_profiler SPUSBDataType` returns an **empty list** on this Mac while `ioreg -p IOUSB` shows 15 devices — see [FINDINGS §23](FINDINGS.md). |
 
 **Time accounting:** session 2 ran 09:30 → ~14:00 with a 12:35-13:15 break — **~3 h 45 m of working time.**
 ⚠️ Earlier estimates in this session were badly wrong (~2.4× over) because per-turn effort was being summed

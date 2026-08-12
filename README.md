@@ -450,14 +450,23 @@ skeleton — *"an environment for recording, simulating and training robot arms"
 **optional platform layer**, never as the main path — otherwise it reads as "here is my OS's problem, now it
 is yours."
 
-**Sequence, in order:**
+**Sequence, in order** — ⚠️ **and what actually happened on 2026-08-12 diverged from it, deliberately:**
 
-1. **Give this repo its own remote first** (still open — §4 of Mind Understanding's `NOW.md`). Julien's own
-   private backup should not depend on a collaborator's repo.
-2. Reach the "clean" bar below.
-3. Ask Hohnik what structure he wants.
-4. Fork `Hohnik/LaRobot` to Julien's account, add it as a second remote, push a feature branch, open a PR.
-5. **Julien reviews the diff and says go.** Nothing is pushed to a third party's repo without that.
+1. ~~Give this repo its own remote first.~~ **Still open.** Julien's own private backup should not depend on
+   a collaborator's repo — and it still does, because this step was skipped rather than done.
+2. ~~Reach the "clean" bar below.~~ **Waived by Julien**, explicitly: *"I don't care if it's clean because
+   they said they don't care either… we'll just work however we want and clean everything up as we go
+   along."* The branch name says so.
+3. ~~Ask Hohnik what structure he wants.~~ **Julien reports it is already agreed** that the work goes over
+   as-is. ⚠️ This still applies before a **pull request** — a pushed branch is not a proposal.
+4. ✅ **Done 2026-08-12:** 56 commits pushed as **`julien/yam-teleop-wip`**. ⛔ Their `main` was not touched,
+   and that rule did **not** move: it is about someone else's repository, not about polish.
+5. **Still required before a PR:** Julien reviews the diff and says go.
+
+⭐ **The one thing to carry from this:** the "clean" bar was his to waive and he waived it, but *"do not push
+to a collaborator's `main`"* was never the same kind of rule and survived unchanged. When a standard is
+relaxed, be explicit about which parts were relaxed and which were not — otherwise the whole checklist
+quietly reads as optional next time.
 
 **The "cleaned up and clear" bar** — concretely, so it is not a matter of taste:
 

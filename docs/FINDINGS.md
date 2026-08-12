@@ -1323,3 +1323,52 @@ uv run scripts/camera_view.py --camera c920 --term      # select by name, not in
 `--camera` accepts any part of the name, plus the aliases `d405`, `realsense`, `c920`,
 `iphone`, `builtin`, and a `vid:pid`. It **refuses** on no match or an ambiguous one and
 never falls back to index 0.
+
+---
+
+## 23. ⛔ `system_profiler SPUSBDataType` reports an empty bus while 15 devices are plugged in
+
+Found 2026-08-12, checking that the rig was unchanged after an overnight break.
+
+```
+$ system_profiler -json SPUSBDataType
+{ "SPUSBDataType" : [ ] }          # and the plain-text form prints nothing at all
+```
+
+Every device was in fact connected. `ioreg` says so:
+
+```
+$ ioreg -p IOUSB -l -w 0 | grep '"USB Product Name"'
+   2x CANable 2.5 Candlelight · 2x SpaceMouse Compact · HD Pro Webcam C920
+   Intel(R) RealSense(TM) Depth Camera 405 · AX88179A · 5 hubs · USB BillBoard
+```
+
+⛔ **This is [§0](#0-the-one-thing-to-internalise-before-touching-anything) in its purest
+form.** The command does not fail, does not warn, and does not exit non-zero. It returns a
+well-formed, empty, confident answer — and the natural reading of that answer is *"nothing
+is plugged in"*. A session that opens by checking the rig this way would conclude the arms
+had been unplugged and go looking for a hardware fault that does not exist.
+
+⚠️ It is not a stale-cache fluke: it was run twice, in both JSON and plain-text form, with
+everything connected. Reproducible. Whether it is a macOS regression or a permissions
+change was not chased, because the workaround is one line and the answer would not change
+what we do.
+
+**Use `ioreg` for USB enumeration.** It is also what earlier sessions used for the
+unbounded USB scans, so nothing here needs rewriting:
+
+```bash
+ioreg -p IOUSB -l -w 0 | grep '"USB Product Name"'                    # what is attached
+ioreg -p IOUSB -l -w 0 | grep -E '"USB (Product Name|Serial Number)"' # with serials
+```
+
+⭐ **Serials are the point.** `2081337C594E5018` is arm **B** and `20593383594E5018` is arm
+**G** ([§1](#1-the-hardware-as-measured)), and the D405 is `255323071773`. Checking those,
+rather than a device count, is what makes "the rig is unchanged" a measurement instead of an
+impression. The two SpaceMice still report **no serial at all**, which is why they are still
+assigned by asking the operator to wiggle one.
+
+**The general lesson, which is the same one this repo keeps paying for:** an empty result and
+a failed query are indistinguishable unless the tool distinguishes them for you. When a check
+returns "nothing", ask what a *broken* check would have returned — and if the answer is "the
+same thing", the check has told you nothing at all.
