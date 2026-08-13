@@ -40,6 +40,8 @@ uv run scripts/read_arm_state.py --yes --arm B
 | `p` then digits then `Enter` | drive to one pose, or **one blended motion through several** (`p 1 2 3 Enter` shows the plan, `Enter` again runs it) |
 | `o` / `c` | open / close the gripper |
 | `ö` / `ä` | gripper step smaller / bigger — **and how long the ease lasts while a run is being typed**. ⭐ `[` / `]` are aliases and still work; `ö`/`ä` exist because the brackets are **AltGr+8 / AltGr+9** on a German layout ([FINDINGS §27.7](FINDINGS.md)) |
+| **`w`** | ⭐ **RECORD a movement** taught by hand. Press again to stop, then `0`-`9` to save it. Works in any mode; GUIDE is the point of it. Recording moves nothing, so a mis-press is harmless |
+| **`l`** then `0`-`9` | ⭐ **PLAY a recording back.** Shows the plan and waits for **Enter**, so a slip on `l` (which sits beside `ö`/`ä`) can never start the arm. It parks to the recording's start pose first, then follows it in real time. `-`/`+` set the speed, capped from the recording's own measured top speed |
 | `e` | cycle the **ease profile** — `none` / `in` / `out` / `both` / `s-curve`. Works in **any** mode |
 | `v` | control **frame** — world / tool / camera. ⚠️ Each frame keeps its **own** axis map |
 | `r` | wrist rotation on / off *(on by default)* |

@@ -77,9 +77,11 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -108,6 +110,7 @@ from spacemouse import (  # noqa: E402
     pick_device_by_wiggle,
 )
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
+from recording import Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine  # noqa: E402
 from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
@@ -245,6 +248,24 @@ GRIPPER_STALL_SECONDS = 0.4
 MAP_FILE = REPO / "config" / "spacemouse_map.json"
 BACKUP_FILE = REPO / "config" / "spacemouse_map.prev.json"
 PARK_FILE = REPO / "config" / "park_pose.json"
+# ⭐ Hand-taught movements live OUTSIDE config/, and the distinction is deliberate.
+# `config/` holds measured calibration that the code refuses to start without, so it is
+# tracked in git. A recording is *data*: a five-minute one is megabytes, there will be
+# hundreds, and losing one costs a minute of re-teaching rather than a session of
+# re-calibrating. Gitignored, and the dataset itself will live somewhere else again
+# (ROADMAP step 5).
+TAKES_DIR = REPO / "recordings"
+# ⛔ The hard ceiling on playback speed, in radians per second for any single joint.
+# 1.5 matches the park speed cap, which is the fastest planned motion Julien has driven
+# and judged acceptable. `safe_time_scale()` turns this plus the recording's OWN measured
+# top speed into the largest multiplier allowed — so the limit is derived from what was
+# actually taught rather than guessed. See src/recording.py.
+REPLAY_JOINT_SPEED_CAP = 1.5
+# ⚠️ How long one recording may run before it stops itself. ~16 minutes at 100 Hz, which
+# is well past the ~4.5 minutes of context a long-horizon policy wants (ROADMAP §9.3).
+# It exists because nothing else would ever stop a recording, and an unbounded list in a
+# process that is driving an arm is a memory problem waiting for the worst moment.
+MAX_TAKE_SAMPLES = 100_000
 
 HELP = """
   MODES     g GUIDE (weightless)   t TELEOP   h HOLD
@@ -254,6 +275,8 @@ HELP = """
             p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
             while choosing OR moving:  - / + speed   , / . corners
                                        ö / ä  how long the ease lasts  (also [ / ])
+  TAKES     w  record a movement (any mode; GUIDE is the point). w again stops, then 0-9 saves
+            l then 0-9   play a recording back — shows the plan, Enter runs it
   EASE      e  cycle none / in / out / both / s-curve — works in ANY mode
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
@@ -299,6 +322,27 @@ def load_json(path: Path, default):  # noqa: ANN001, ANN201
 def save_json(path: Path, data) -> None:  # noqa: ANN001
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def git_commit() -> str:
+    """Short hash of the code that is running, or `"unknown"`.
+
+    ⭐ Written into every recording. Julien's requirement, 2026-08-12: *"being able to
+    reproduce everything and connect it to other research papers."* Which version of the
+    code produced a demonstration is free to record now and unrecoverable later.
+    ⚠️ Never raises: a missing git is not a reason to lose a recording.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
+                             capture_output=True, text=True, timeout=5, check=False)
+        return out.stdout.strip() or "unknown"
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+def dt_now() -> str:
+    """Wall-clock time as text, for the record. Local time, because a human reads it."""
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def chain_alive(robot) -> bool:  # noqa: ANN001
@@ -531,6 +575,23 @@ def main() -> int:  # noqa: PLR0915
     ease_idx = 3                        # "both" — see motion.EASINGS
     park_leg_t = 0.0                    # when the current run started
     park_ramp = PARK_RAMP               # how much of the move is eased
+    # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"one good idea is definitely
+    # recording everything in the guide mode and then replaying it. That's a smart idea,
+    # definitely."* `w` records, `l` plays one back. The reasoning for why this may beat
+    # saved waypoints is docs/ROADMAP.md §6.6; the movement itself lives in
+    # src/recording.py so every decision about it is testable without an arm.
+    #
+    # ⚠️ Only these few names are held here. That is on purpose: this whole block moves
+    # into ArmSession when main() is restructured (HANDOFF task 0c), and the fewer locals
+    # it owns the smaller that diff is.
+    take: Trajectory | None = None      # being recorded right now, or None
+    take_t0 = 0.0
+    replay: Trajectory | None = None    # being played back right now, or None
+    replay_t0 = 0.0
+    replay_s = 0.0                      # seconds into the recording, held back on lag
+    replay_speed = 1.0
+    replay_progress_t = 0.0             # last cycle in which the clock actually moved
+    replay_pending: Trajectory | None = None   # parked to its start, waiting to run
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
@@ -922,6 +983,85 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
                         continue
 
+                    if pending == "take_save":
+                        pending = None
+                        if k.isdigit() and take is not None:
+                            TAKES_DIR.mkdir(exist_ok=True)
+                            path = TAKES_DIR / f"{k}.json"
+                            # ⭐ The commit goes in at SAVE time, not at load time. Julien
+                            # on provenance: he wants *"being able to reproduce everything
+                            # and connect it to other research papers."* Which version of
+                            # the code produced a recording is cheap to write now and
+                            # impossible to reconstruct later. Same argument as the whole
+                            # metadata block in ROADMAP §6.6.
+                            take.meta["commit"] = git_commit()
+                            take.meta["recorded_at"] = dt_now()
+                            take.save(path)
+                            print(f"\n  ✓ recording {k} saved: {take.duration:.1f}s, "
+                                  f"{len(take)} samples → {path.name}")
+                            print(f"     (l then {k} plays it back)\n")
+                        else:
+                            print("\n  recording discarded.\n")
+                        take = None
+                        continue
+
+                    if pending == "take_play":
+                        pending = None
+                        if not k.isdigit():
+                            print("\n  play cancelled.\n")
+                            continue
+                        path = TAKES_DIR / f"{k}.json"
+                        if not path.is_file():
+                            print(f"\n  ⚠️  nothing saved in recording {k} — "
+                                  "press w to record one.\n")
+                            continue
+                        loaded = Trajectory.load(path)
+                        allowed = safe_time_scale(loaded.max_joint_speed(),
+                                                  REPLAY_JOINT_SPEED_CAP)
+                        replay_speed = min(replay_speed, allowed)
+                        replay_pending = loaded
+                        pending = "take_go"
+                        # ⭐ The plan says what the arm will DO, including the number that
+                        # bounds it. `allowed` comes from the recording's own measured top
+                        # speed, so a careful teaching run shows more headroom than a brisk
+                        # one — see src/recording.py::safe_time_scale.
+                        hint(f"PLAY {k} · {loaded.duration:.1f}s · "
+                             f"{len(loaded)} samples · speed {replay_speed:.2f}x "
+                             f"(max {allowed:.2f}x) (-/+) · Enter=go")
+                        continue
+
+                    if pending == "take_go":
+                        if k in ("+", "="):
+                            loaded = replay_pending
+                            allowed = safe_time_scale(loaded.max_joint_speed(),
+                                                      REPLAY_JOINT_SPEED_CAP) if loaded else 1.0
+                            replay_speed = min(allowed, replay_speed * 1.25)
+                            hint(f"PLAY · speed {replay_speed:.2f}x (max {allowed:.2f}x) "
+                                 "(-/+) · Enter=go")
+                            continue
+                        if k == "-":
+                            replay_speed = max(0.1, replay_speed / 1.25)
+                            hint(f"PLAY · speed {replay_speed:.2f}x (-/+) · Enter=go")
+                            continue
+                        pending = None
+                        if k in ("\r", "\n", " ") and replay_pending is not None:
+                            # ⛔⭐ PARK TO THE START POSE FIRST, AND THIS IS THE SAFETY
+                            # POINT OF THE WHOLE FEATURE. Playback commands poses the arm
+                            # is known to reach, because a hand physically put it there.
+                            # The dangerous command is the FIRST one: if the arm is
+                            # somewhere else right now, commanding the recording's opening
+                            # pose is a jump across whatever separates them. So the
+                            # existing, tested, interruptible park drives there, and only
+                            # when it arrives does playback begin.
+                            begin_path([("recording start", list(replay_pending.start_pose()))],
+                                       "the recording's start pose")
+                            print("     then it plays the recording. Press h or t to stop.\n")
+                        else:
+                            replay_pending = None
+                            hint("")
+                            print("\n  play cancelled.\n")
+                        continue
+
                     if pending in ("park", "confirm"):
                         # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
                         # moving. Julien: *"I can change the park speeds whilst it's
@@ -1244,6 +1384,46 @@ def main() -> int:  # noqa: PLR0915
                         # and this cannot be tested on the arm from here — so this fixes
                         # the message and changes nothing the motors see.
                         hint(f"already in {MODE_KEYS[k]}")
+                    elif k == "w":
+                        # ⭐ START OR STOP RECORDING. Deliberately allowed in EVERY mode,
+                        # not only GUIDE. Hand-guiding is the intended use and the reason
+                        # the feature exists, but a teleop run is also a demonstration and
+                        # refusing to record one would be an arbitrary restriction. The
+                        # mode in force is written into the metadata instead.
+                        #
+                        # ⚠️ Recording moves nothing, so a mis-press is harmless. That is
+                        # why `w` needs no confirmation while `l` does.
+                        if take is None:
+                            take = Trajectory(meta={
+                                "arm": args.arm,
+                                "method": f"live:{mode}",
+                                "nominal_hz": CONTROL_HZ,
+                                "frame": control_frame,
+                            })
+                            take_t0 = t
+                            print(f"\n⏺  RECORDING — {mode.upper()} mode. Press w again to stop.\n")
+                        else:
+                            n, secs = len(take), take.duration
+                            if n < 2:
+                                take = None
+                                print("\n  nothing recorded (too short) — discarded.\n")
+                            else:
+                                pending = "take_save"
+                                fastest = take.max_joint_speed()
+                                print(f"\n⏹  RECORDED {secs:.1f}s, {n} samples, "
+                                      f"fastest joint {fastest:.2f} rad/s.")
+                                print("     SAVE to which slot? 0-9, any other key discards.\n")
+                    elif k == "l":
+                        # ⛔ PLAY A RECORDING, AND IT ASKS TWICE ON PURPOSE. `l` sits next
+                        # to `ö` and `ä` on a German keyboard, which now adjust the ease
+                        # ramp — so a slip lands on a key that would otherwise start 4.3 kg
+                        # moving. Showing the plan and waiting for Enter means a stray `l`
+                        # can never move the arm. Same shape as `p 1 2 3 Enter`.
+                        pending = "take_play"
+                        have = ", ".join(sorted(p.stem for p in TAKES_DIR.glob("*.json"))) \
+                            if TAKES_DIR.is_dir() else ""
+                        print("\n  PLAY which recording?  0-9, any other key cancels.")
+                        print(f"     saved: {have or 'none'}\n")
                     elif k == "s":
                         pending = "save"
                         saved_now = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
@@ -1340,8 +1520,63 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  ⚠️  run abandoned with {left:.2f} rad of path left — "
                               "leaving PARK cancels the rest.\n")
                     park_path, park_marks = None, []
+                    # ⛔ A park that was interrupted must not hand over to a playback. The
+                    # handover lives in the arrival branch, but this is the second gate:
+                    # pressing h or t while driving to the start pose cancels the whole
+                    # thing, rather than leaving a recording queued to fire later.
+                    if replay_pending is not None:
+                        replay_pending = None
+                        hint("")
+                        print("  ⚠️  playback cancelled — it never reached the start pose.\n")
+                # ⛔ Same rule for a playback in progress: leaving the mode abandons it.
+                # An arm resuming a recorded movement after the operator pressed HOLD is
+                # doing something nobody asked for.
+                if mode != "replay" and replay is not None:
+                    left = replay.duration - replay_s
+                    if left > 0.05:
+                        print(f"\n  ⚠️  playback abandoned with {left:.1f}s left.\n")
+                    replay = None
+                    hint("")
                 if stop_reason:
                     break
+
+                # ---- 3.4 sample the recording, if one is running ---------------
+                # ⭐ EVERY CYCLE, IN EVERY MODE, and before the mode acts. Recording is a
+                # property of the session rather than of a mode, so putting it in a branch
+                # would silently stop capturing the moment the operator switched modes —
+                # which is the same defect shape as the puck being read only inside the
+                # teleop branch, fixed just below.
+                #
+                # ⚠️ It records the MEASURED position. For a hand-guided demonstration that
+                # is the only thing that means anything: in GUIDE the position gain is zero,
+                # so there is no command to record, and the arm is wherever the hand put it.
+                if take is not None:
+                    # ⛔⭐ A RECORDING PROBLEM MUST NEVER TAKE DOWN THE SESSION, and this
+                    # wrapper is the whole reason the block exists. `append` raises on a
+                    # non-monotonic timestamp or a changed joint count. Unwrapped, that
+                    # exception would leave the control loop, skip the "the arm is HOLDING,
+                    # press g or d" consent flow, and fall into `finally`, which disables
+                    # the motors. On a raised arm that is a sag. It is the exact path that
+                    # dropped 4.3 kg once already (FINDINGS §11, park_target_from), and
+                    # recording is a convenience feature: it has no business being able to
+                    # release the arm.
+                    try:
+                        take.append(t - take_t0, robot.get_joint_pos())
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
+                        print("     The arm is unaffected. Press w to start a new one.\n")
+                        take = None
+                    else:
+                        # ⚠️ A bound, because this grows in memory for as long as it runs and
+                        # nothing else would ever stop it. 100 000 samples is ~16 minutes at
+                        # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
+                        # wants (ROADMAP §9.3). Stopping and saying so beats running out of
+                        # memory in a process that is driving an arm.
+                        if len(take) >= MAX_TAKE_SAMPLES:
+                            pending = "take_save"
+                            print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
+                                  f"limit ({take.duration:.0f}s).")
+                            print("     SAVE to which slot? 0-9, any other key discards.\n")
 
                 # ---- 4. act on the mode -----------------------------------
                 # ---- 3.5 the puck, read EVERY cycle in EVERY mode -------------
@@ -1441,6 +1676,59 @@ def main() -> int:  # noqa: PLR0915
                     robot.command_joint_pos(full)
                     prev_q = q_target.copy()
 
+                elif mode == "replay" and replay is not None:
+                    # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
+                    # whole reason the feature exists rather than reusing the waypoint
+                    # runner: a park traverses a *shape* at a constant joint speed, which
+                    # throws away exactly the thing hand-guiding provides. Human timing and
+                    # hesitation are the signal (docs/ROADMAP.md §6.6), so the cursor here
+                    # is a clock.
+                    q = np.asarray(robot.get_joint_pos(), dtype=float)
+                    # ⭐ The decision is made by `replay_step` in src/recording.py, which
+                    # has its own tests. This branch only carries it out and narrates it —
+                    # same split as ArmSession, and the reason is that this code path
+                    # commands the arm and could not otherwise be exercised without one.
+                    #
+                    # ⛔ `n_compare=N_ARM` leaves the gripper out of the "is the arm
+                    # keeping up" check. The jaws legitimately sit far from their commanded
+                    # value while closing on an object, and counting that as falling behind
+                    # would stall every playback that grips anything.
+                    rs = replay_step(replay, replay_s, q, dt, speed=replay_speed,
+                                     max_lag=MAX_CURSOR_LAG, n_compare=N_ARM)
+                    replay_s = rs.cursor
+                    full = q.copy()
+                    full[:N_ARM] = rs.target[:N_ARM]
+                    if robot.num_dofs() > N_ARM and len(rs.target) > N_ARM:
+                        # ⛔ Through the clamp, never straight from the file. A recording
+                        # made while the jaws rested on a stop would otherwise drive them
+                        # back onto it and HOLD there. That is stall torque, and it is how
+                        # motor 7 was cooked three times (FINDINGS §4).
+                        full[N_ARM] = clamp_gripper(float(rs.target[N_ARM]))
+                    robot.command_joint_pos(full)
+
+                    if not rs.held:
+                        replay_progress_t = t
+                    if rs.finished:
+                        mode = "hold"; enter_hold(); hint("")
+                        print(f"⭐ PLAYBACK finished in {t - replay_t0:.1f}s "
+                              f"(recording is {replay.duration:.1f}s at "
+                              f"{replay_speed:.2f}x) → HOLD")
+                        replay = None
+                    elif t - replay_progress_t > PARK_STALL_SECONDS:
+                        # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
+                        # and wrong for ever: an arm that cannot catch up is blocked, and a
+                        # playback that sits silently holding its clock is the treadmill
+                        # bug again (FINDINGS §24). Same patience the park uses.
+                        mode = "hold"; enter_hold(); hint("")
+                        print(f"\n⛔ PLAYBACK BLOCKED — the arm stopped following "
+                              f"{rs.lag:.3f} rad behind the recording, no progress for "
+                              f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
+                        replay = None
+                    elif t >= next_park_report:
+                        next_park_report = t + 1.0
+                        hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
+                             f"{rs.lag:.3f} rad behind")
+
                 elif mode == "park" and park_path is not None and park_target is not None:
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     # ⭐ Completion is judged from the MEASURED pose, never from the
@@ -1512,6 +1800,19 @@ def main() -> int:  # noqa: PLR0915
                             hint("")        # the progress readout has nothing left to say
                             print(f"⭐ PARK reached in {t - park_leg_t:.1f}s "
                                   f"({err:.3f} rad off{extra}) → HOLD")
+                            # ⭐ The handover from "drive to the start pose" to "play the
+                            # recording". It lives HERE, in the arrival branch, so a park
+                            # that was blocked or interrupted can never roll into a
+                            # playback: only a park that actually arrived does.
+                            if replay_pending is not None:
+                                replay = replay_pending
+                                replay_pending = None
+                                replay_t0, replay_s = t, 0.0
+                                replay_progress_t = t
+                                mode = "replay"
+                                print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
+                                      f"movement at {replay_speed:.2f}x. "
+                                      "Press h or t to stop.\n")
                         elif leg == "blocked":
                             # ⛔ Never spin silently. If the arm has stopped closing the
                             # gap the honest thing is to say so and hold, not to keep
@@ -1597,8 +1898,14 @@ def main() -> int:  # noqa: PLR0915
                     if mode == "guide" and guide_ref is not None:
                         sank = float(np.max(np.abs(q[:N_ARM] - guide_ref[:N_ARM])))
                         extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
+                    # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT ROW, not only in the
+                    # message that started it. A session where recording is silently still
+                    # running produces a demonstration full of whatever happened next, and
+                    # the operator finds out at training time. So it rides the one line
+                    # that is always on screen.
+                    rec = f"  ⏺ REC {t - take_t0:5.1f}s" if take is not None else ""
                     print(f"\r[{'CONTROLS' if mode == 'map' else mode.upper():8}] t={t:6.1f}s  {therm}"
-                          f"  q {np.round(q[:N_ARM], 2)}{extra}   ", end="", flush=True)
+                          f"{rec}  q {np.round(q[:N_ARM], 2)}{extra}   ", end="", flush=True)
 
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))
 

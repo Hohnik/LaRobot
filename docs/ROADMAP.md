@@ -476,7 +476,7 @@ He asked directly whether the features under discussion are built. Mostly they a
 | single-arm driving: guide, teleop, hold, park, waypoint runs, blended corners, easing | ✅ **built, and confirmed on the arm** |
 | both arms from one script | ⬜ **not built.** `--arms` does not exist. `src/arm_session.py` is the class it needs, with 17 tests, but nothing uses it yet. ROADMAP step 6 |
 | mirroring one arm onto the other | ⬜ **half built.** `src/mirror.py` and its 14 tests exist. The script that opens both arms does not. Needs the two-arm work first |
-| recording a movement in guide mode and replaying it | ⏳ **half built, 2026-08-12.** ✅ `src/recording.py` holds the movement itself: `Trajectory`, with a guard against time going backwards, interpolation between samples, resampling onto an even clock, time scaling, a measured `max_joint_speed()` to check a playback speed against, and JSON that stays diffable. **23 tests, no hardware.** ⬜ Missing: the wiring. Sample `q` every cycle while in GUIDE, a key to start and stop, and playback that **parks to `start_pose()` first** and only then follows the samples |
+| recording a movement in guide mode and replaying it | ✅ **BUILT 2026-08-13, and unconfirmed on the arm.** ✅ `src/recording.py` holds the movement itself: `Trajectory`, with a guard against time going backwards, interpolation between samples, resampling onto an even clock, time scaling, a measured `max_joint_speed()` to check a playback speed against, and JSON that stays diffable. **23 tests, no hardware.** ✅ Wired in: `w` records (every cycle, every mode), `w` again then a digit saves to `recordings/<n>.json` with the git commit and a timestamp, and `l` then a digit plays it back after parking to the start pose. ⛔ **Never run on hardware yet** |
 | noise on waypoints, chosen per waypoint | ⬜ **nothing exists** |
 | a pause at a waypoint, so a grab has time to happen | ⬜ **nothing exists**, and it is needed before any grab can be replayed at all. See below |
 | microphone or keypress labels | ⬜ **nothing exists** |
@@ -584,7 +584,7 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | # | what | state |
 |---|---|---|
 | 1 | **Both arms from one script** | class + 17 tests exist (`src/arm_session.py`), nothing uses it. [ROADMAP step 6](#step-6--two-arms-two-spacemice--what-julien-asked-for-next-2026-08-10) |
-| 2 | ⭐ **Record a movement in GUIDE, then replay it** | ⏳ **half built.** `src/recording.py` + 23 tests hold the movement; the wiring into the session does not exist. He chose this one. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 2 | ⭐ **Record a movement in GUIDE, then replay it** | ✅ **built 2026-08-13** (`src/recording.py` + 37 tests, wired into the session as `w` and `l`). ⛔ Unconfirmed on the arm. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
 | 3 | ⛔ **A pause at each waypoint** | nothing exists, and **no grab can be replayed without it**. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
 | 4 | **Mirroring** | logic + 14 tests exist (`src/mirror.py`), the two-arm script does not. Needs 1 |
 | 5 | **Telling two identical D405s apart** | nothing exists. Use the wiggle approach, [FINDINGS §28.5](FINDINGS.md) |

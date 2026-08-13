@@ -196,3 +196,8 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Hand-taught movements (scripts/teleop_session.py, key w). Data, not calibration:
+# a five-minute recording is megabytes and losing one costs a minute of re-teaching.
+# config/*.json stays tracked because it is measured calibration; these do not.
+recordings/

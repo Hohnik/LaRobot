@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
+__all__ = ["Sample", "Trajectory", "ReplayStep", "replay_step", "safe_time_scale"]
+
 # ⚠️ Radians, rounded on save. 1e-5 rad is 0.0006°, which is roughly a thousand times
 # finer than the controller's own steady-state error (0.02 rad is "arrived" for a park,
 # see PARK_TOLERANCE). So this loses nothing real and roughly halves the file.
@@ -41,6 +43,33 @@ SAVE_PRECISION = 5
 # should never produce that, and if it does, every later calculation here (speed,
 # resampling, duration) silently returns nonsense rather than raising.
 MIN_STEP = 0.0
+
+
+def safe_time_scale(recorded_max_speed: float, cap: float) -> float:
+    """Fastest playback multiplier that keeps every joint under `cap` radians/second.
+
+    ⛔ WHY A PLAYBACK NEEDS A CEILING AT ALL. A hand-taught path is known safe **at the
+    speed it was taught**, because a person was holding the arm while it happened.
+    Played back at twice that speed it is a different motion with twice the momentum,
+    and this rig has **no emergency stop** ([HANDOFF §4.5](../docs/HANDOFF.md)) so there
+    is no hardware backstop under a bad guess.
+
+    ⭐ The ceiling is computed from a MEASUREMENT rather than picked. `Trajectory` reports
+    the fastest any single joint actually moved; this converts that into the largest
+    multiplier that still respects `cap`. So a slow, careful teaching run can be replayed
+    faster than a brisk one, which is the correct behaviour and not something a constant
+    could express.
+
+    Returns `1.0` when the recording is already at or above the cap, because **replaying
+    at the taught speed is always allowed**: the arm demonstrably survived it. ⚠️ That is
+    a deliberate choice, not an oversight. Refusing to replay a fast recording at 1x
+    would make the feature useless exactly when the demonstration was natural.
+    """
+    if cap <= 0:
+        raise ValueError(f"cap must be positive, got {cap}")
+    if recorded_max_speed <= 0:
+        return 1.0                      # nothing moved, so no speed can be unsafe
+    return max(1.0, cap / recorded_max_speed)
 
 
 @dataclass(frozen=True)
@@ -264,3 +293,58 @@ class Trajectory:
     @classmethod
     def load(cls, path: Path) -> Trajectory:
         return cls.from_dict(json.loads(path.read_text()))
+
+
+@dataclass(frozen=True)
+class ReplayStep:
+    """What one cycle of playback should do. Every field is a decision, not a report."""
+
+    cursor: float                    # where the clock now stands, in seconds
+    target: tuple[float, ...]        # the pose to command
+    lag: float                       # how far the arm is behind that pose, radians
+    finished: bool                   # the recording has been played to its end
+    held: bool                       # the clock did NOT advance, because of lag
+
+
+def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
+                speed: float = 1.0, max_lag: float = 0.15,
+                n_compare: int | None = None) -> ReplayStep:
+    """Advance a playback by one control cycle.
+
+    ⭐ WHY A CLOCK AND NOT A DISTANCE ALONG THE PATH. The waypoint runner
+    (`src/motion.py`) walks a *shape* at a constant joint speed, which is right for a
+    planned move between saved poses. It is wrong here, because it discards the one thing
+    hand-guiding provides: **human timing and hesitation**. Those are the signal
+    ([ROADMAP.md](../docs/ROADMAP.md) §6.6), so the cursor is measured in seconds.
+
+    ⛔ WHY THE CLOCK CAN BE HELD. If the arm has fallen behind the pose being commanded,
+    advancing anyway widens the gap, and the motion stops being the one that was recorded.
+    Worse, when whatever was holding it back lets go, the arm crosses the accumulated gap
+    at once, which is a lurch. So the clock waits for the arm. Borrowed from the park loop,
+    where the same reasoning produced `MAX_CURSOR_LAG`.
+
+    ⚠️ `held` is returned rather than acted on, because "the arm has been stuck for four
+    seconds" is a *session* judgement: only the caller knows how long it has been true and
+    what to say about it. Same division of labour as `src/arm_session.py`.
+
+    `n_compare` limits the lag measurement to the first N joints. Pass the arm's joint
+    count to leave the gripper out: the jaws legitimately sit far from their commanded
+    value while closing on an object, and counting that as "the arm cannot follow" would
+    stall every playback that grips anything.
+    """
+    if not traj.samples:
+        raise ValueError("cannot play back an empty recording")
+    if speed <= 0:
+        raise ValueError(f"speed must be positive, got {speed}")
+    target = traj.pose_at(cursor)
+    n = len(target) if n_compare is None else min(n_compare, len(target), len(measured))
+    lag = max((abs(target[i] - measured[i]) for i in range(n)), default=0.0)
+    held = lag >= max_lag
+    moved = cursor if held else cursor + dt * speed
+    return ReplayStep(
+        cursor=moved,
+        target=target,
+        lag=lag,
+        finished=moved >= traj.duration,
+        held=held,
+    )

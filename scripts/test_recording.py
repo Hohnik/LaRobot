@@ -20,7 +20,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from recording import Sample, Trajectory  # noqa: E402
+from recording import Sample, Trajectory, replay_step, safe_time_scale  # noqa: E402
 
 
 def straight_line(n: int = 11, hz: float = 10.0) -> Trajectory:
@@ -207,6 +207,151 @@ def test_time_scaling_by_a_non_positive_factor_is_refused() -> None:
             pass
         else:
             raise AssertionError(f"factor={bad} was accepted")
+
+
+# ------------------------------------------------------ one playback cycle ----
+#
+# ⛔ THIS BRANCH COMMANDS THE ARM, which is why the decision lives in a pure function and
+# is tested here rather than only in the session script. Session 4's lesson runs the other
+# way (reading does not find what hardware knows), and this is its pair: code that reaches
+# the motors and has never been executed is the shape that dropped 4.3 kg.
+
+
+def test_a_playback_advances_by_dt_when_the_arm_is_keeping_up() -> None:
+    traj = straight_line()
+    on_track = traj.pose_at(0.5)
+    step = replay_step(traj, 0.5, on_track, dt=0.01, speed=1.0)
+    assert abs(step.cursor - 0.51) < 1e-9
+    assert not step.held
+    assert not step.finished
+    assert step.lag < 1e-9
+
+
+def test_the_speed_multiplier_scales_the_clock_not_the_path() -> None:
+    traj = straight_line()
+    on_track = traj.pose_at(0.2)
+    step = replay_step(traj, 0.2, on_track, dt=0.01, speed=2.0)
+    assert abs(step.cursor - 0.22) < 1e-9
+    assert step.target == traj.pose_at(0.2), "the pose asked for must not change with speed"
+
+
+def test_the_CLOCK_IS_HELD_when_the_arm_has_fallen_behind() -> None:
+    """⛔ The safety rule of the playback loop. Advancing while the arm is behind widens
+    the gap, and when whatever was holding it back lets go, the arm crosses the whole
+    accumulated gap at once. That is a lurch, not a replay."""
+    traj = straight_line()
+    behind = tuple(x - 0.5 for x in traj.pose_at(0.5))       # 0.5 rad behind on every joint
+    step = replay_step(traj, 0.5, behind, dt=0.01, speed=1.0, max_lag=0.15)
+    assert step.held, "the clock advanced while the arm was 0.5 rad behind"
+    assert step.cursor == 0.5, "a held clock must not move at all"
+    assert abs(step.lag - 0.5) < 1e-9
+
+
+def test_a_held_clock_can_never_report_finished_early() -> None:
+    """Otherwise a stuck arm would be announced as a completed playback."""
+    traj = straight_line()
+    behind = tuple(x - 1.0 for x in traj.samples[-1].q)
+    step = replay_step(traj, traj.duration - 0.001, behind, dt=0.01)
+    assert step.held
+    assert not step.finished
+
+
+def test_the_gripper_is_LEFT_OUT_of_the_lag_measurement_when_asked() -> None:
+    """⛔ The jaws legitimately sit far from their commanded value while closing on an
+    object. Counting that as "the arm cannot follow" would stall every playback that grips
+    anything, which is every playback worth recording."""
+    traj = straight_line()
+    q = list(traj.pose_at(0.5))
+    q[6] -= 0.4                                              # jaws well off target
+    all_joints = replay_step(traj, 0.5, q, dt=0.01, max_lag=0.15)
+    arm_only = replay_step(traj, 0.5, q, dt=0.01, max_lag=0.15, n_compare=6)
+    assert all_joints.held, "counting the gripper, this looks stuck"
+    assert not arm_only.held, "ignoring the gripper, the arm is following fine"
+
+
+def test_reaching_the_end_reports_finished() -> None:
+    traj = straight_line()
+    step = replay_step(traj, traj.duration - 0.005, traj.samples[-1].q, dt=0.01)
+    assert step.finished
+
+
+def test_playing_an_empty_recording_is_refused() -> None:
+    try:
+        replay_step(Trajectory(), 0.0, (0.0,) * 7, dt=0.01)
+    except ValueError as exc:
+        assert "empty" in str(exc)
+    else:
+        raise AssertionError("an empty recording was played")
+
+
+def test_a_non_positive_speed_is_refused() -> None:
+    traj = straight_line()
+    for bad in (0.0, -1.0):
+        try:
+            replay_step(traj, 0.0, traj.start_pose(), dt=0.01, speed=bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"speed={bad} was accepted")
+
+
+def test_a_whole_playback_run_reaches_the_end_and_follows_the_path() -> None:
+    """⭐ The loop as the session actually runs it, with an arm that tracks perfectly.
+    Checks the two things that matter: it terminates, and it commands the taught path."""
+    traj = straight_line(n=21, hz=20.0)
+    cursor, measured, cycles = 0.0, traj.start_pose(), 0
+    seen = []
+    while cycles < 10_000:
+        step = replay_step(traj, cursor, measured, dt=0.01, speed=1.0, n_compare=6)
+        cursor, measured = step.cursor, step.target
+        seen.append(step.target[0])
+        cycles += 1
+        if step.finished:
+            break
+    assert step.finished, "the playback never terminated"
+    assert 95 <= cycles <= 105, f"a 1.0 s recording at 0.01 s per cycle took {cycles}"
+    assert seen == sorted(seen), "the commanded path must move monotonically here"
+    assert abs(seen[-1] - 1.0) < 0.02, "it must arrive at the taught end pose"
+
+
+# --------------------------------------------------- the playback speed cap ----
+
+
+def test_a_slow_recording_may_be_replayed_faster() -> None:
+    """⭐ The ceiling comes from a MEASUREMENT, not a constant. A careful teaching run
+    earns more headroom than a brisk one, which no fixed number could express."""
+    assert abs(safe_time_scale(0.5, 1.5) - 3.0) < 1e-9
+
+
+def test_a_recording_already_at_the_cap_is_allowed_at_1x() -> None:
+    """⚠️ Deliberate. Replaying at the taught speed is always permitted, because the arm
+    demonstrably survived it with a hand on it. Refusing would make the feature useless
+    exactly when the demonstration was natural."""
+    assert safe_time_scale(1.5, 1.5) == 1.0
+    assert safe_time_scale(9.0, 1.5) == 1.0
+
+
+def test_a_recording_that_never_moved_cannot_be_unsafe() -> None:
+    assert safe_time_scale(0.0, 1.5) == 1.0
+
+
+def test_a_non_positive_cap_is_refused() -> None:
+    for bad in (0.0, -1.0):
+        try:
+            safe_time_scale(1.0, bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"cap={bad} was accepted")
+
+
+def test_the_cap_and_the_measurement_agree_end_to_end() -> None:
+    """The two halves used together: measure what was taught, derive what is allowed,
+    and confirm the scaled recording really does respect the cap."""
+    traj = straight_line(n=11, hz=10.0)          # 1.0 rad/s taught
+    allowed = safe_time_scale(traj.max_joint_speed(), 1.5)
+    assert abs(allowed - 1.5) < 1e-9
+    assert traj.time_scaled(allowed).max_joint_speed() <= 1.5 + 1e-9
 
 
 # -------------------------------------------------------------------- files ----
