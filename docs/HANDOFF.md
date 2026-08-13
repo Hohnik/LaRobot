@@ -1,8 +1,16 @@
 # Handoff — start here if you have no context
 
-> **Written 2026-08-10, kept current — last updated 2026-08-12, end of session 19.** This file exists so a fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
+> **Written 2026-08-10, kept current — last updated 2026-08-13, end of session 28.** This file exists so a fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) → [ROADMAP.md](ROADMAP.md). ⚠️ **§2 below is the live state, not the README** — the README's "what works right now" is session 2's snapshot and says so. `git log` carries the reasoning for every change, and the commit messages are deliberately long because they hold the *why*.
+>
+> ## ⛔⭐⭐ READ THIS FIRST — the state at the end of 2026-08-13, and the ONE thing that is broken
+>
+> ⛔ **THE RIG IS DOWN, and it is a hardware state rather than a code fault.** Both CAN adapters are sitting in their **DFU bootloader** (`ioreg` shows `DFU in FS Mode`, serials truncated to `2081337C594E` and `20593383594E`). Replugging did not clear it. ⭐ **The most likely cause is a BOOT jumper or button on each board left in the boot position, which forces the bootloader on every power-up.** The recovery ladder, cheapest first, is [FINDINGS §32.0](FINDINGS.md), and step 1 costs nothing: look at the two boards. **No arm can run until this is cleared.** The camera is fine and recovered on its own.
+>
+> ⭐ **Everything else is in good order.** 353 headless tests pass, the working tree is clean, and nothing is pushed. **Three changes to `teleop_session.py` are built and UNVERIFIED on the arm**, and [§5.5 task 0](HANDOFF.md) says which order to test them in and what a pass looks like. Do that first once the adapters are back, because a failure is otherwise unattributable.
+>
+> ⚠️ **The saved recordings in `recordings/` (slots 1, 3, 4, 5, 6) are all PADDED** and should be discarded rather than used. They were made before the `w` freeze fix, so each carries 1.8 to 4.4 seconds of near-still time appended while the save prompt waited ([FINDINGS §30.1](FINDINGS.md)). Re-record; it takes seconds.
 >
 > ## ⭐ If you are a fresh agent, the four things that matter most
 >
@@ -13,15 +21,7 @@
 >
 > Run `for f in scripts/test_*.py; do uv run "$f"; done` first — **353 headless tests, no hardware needed** — to confirm the tree is sound before changing anything. Also `uv run scripts/check_links.py` (docs cross-reference each other constantly; one broken pointer is in `Setup-Plan.md` and is not ours).
 >
-> ## ⛔⭐⭐ READ THIS FIRST — the state at the end of 2026-08-13, and the ONE thing that is broken
->
-> ⛔ **THE RIG IS DOWN, and it is a hardware state rather than a code fault.** Both CAN adapters are sitting in their **DFU bootloader** (`ioreg` shows `DFU in FS Mode`, serials truncated to `2081337C594E` and `20593383594E`). Replugging did not clear it. ⭐ **The most likely cause is a BOOT jumper or button on each board left in the boot position, which forces the bootloader on every power-up.** The recovery ladder, cheapest first, is [FINDINGS §32.0](FINDINGS.md), and step 1 costs nothing: look at the two boards. **No arm can run until this is cleared.** The camera is fine and recovered on its own.
->
-> ⭐ **Everything else is in good order.** 353 headless tests pass, the working tree is clean, and nothing is pushed. **Three changes to `teleop_session.py` are built and UNVERIFIED on the arm**, and [§5.5 task 0](HANDOFF.md) says which order to test them in and what a pass looks like. Do that first once the adapters are back, because a failure is otherwise unattributable.
->
-> ⚠️ **The saved recordings in `recordings/` (slots 1, 3, 4, 5, 6) are all PADDED** and should be discarded rather than used. They were made before the `w` freeze fix, so each carries 1.8 to 4.4 seconds of near-still time appended while the save prompt waited ([FINDINGS §30.1](FINDINGS.md)). Re-record; it takes seconds.
->
-> ## ⭐ Where the single-arm work stands, 2026-08-12 — read this paragraph if you read nothing else
+> ## ⭐ Where the single-arm work stands, as of 2026-08-13
 >
 > **Single-arm teleop is finished and confirmed on hardware.** GUIDE, TELEOP, HOLD, PARK, CONTROLS, the gripper, the axis map, control frames, saved poses and blended multi-pose runs all work and Julien has driven them. The camera view works and cameras are identified by measurement.
 >
