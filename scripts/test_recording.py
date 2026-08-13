@@ -20,7 +20,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from recording import Sample, Trajectory, replay_step, safe_time_scale  # noqa: E402
+from recording import (  # noqa: E402
+    Sample, Trajectory, TrackingLog, replay_step, safe_time_scale,
+)
 
 
 def straight_line(n: int = 11, hz: float = 10.0) -> Trajectory:
@@ -443,6 +445,50 @@ def test_a_long_recording_is_handled_without_a_linear_scan_per_lookup() -> None:
         traj.append(i / 100.0, (i / 30_000.0,) * 7)
     assert abs(traj.duration - 299.99) < 1e-6
     assert abs(traj.pose_at(150.0)[0] - 0.5) < 1e-3
+
+
+# --------------------------------------------- how well each joint kept up ----
+
+
+def test_tracking_records_the_worst_lag_and_the_speed_at_that_moment() -> None:
+    """⭐ Answers Julien's question about arm speed with no new motion. Every playback
+    already commands a path and already measures how far behind the arm is."""
+    log = TrackingLog(2)
+    log.observe((0.10, 0.0), (0.00, 0.0), (0.05, 0.0), 0.01)   # joint 0: 10 rad/s, lag 0.05
+    log.observe((0.12, 0.0), (0.10, 0.0), (0.11, 0.0), 0.01)   # slower, smaller lag
+    rows = log.rows()
+    assert abs(rows[0][1] - 0.05) < 1e-9, "worst lag"
+    assert abs(rows[0][2] - 10.0) < 1e-9, "the speed when the worst lag happened"
+    assert rows[1][1] == 0.0, "a joint that never moved has no lag"
+
+
+def test_tracking_records_the_top_speed_separately_from_the_worst_lag() -> None:
+    """⭐ The two pairs answer different questions. Where the limit is, and whether a
+    given speed is usable at all."""
+    log = TrackingLog(1)
+    log.observe((0.30,), (0.00,), (0.29,), 0.01)   # 30 rad/s, tiny lag
+    log.observe((0.35,), (0.30,), (0.15,), 0.01)   # 5 rad/s, big lag
+    joint, worst_lag, speed_then, top_speed, lag_then = log.rows()[0]
+    assert abs(top_speed - 30.0) < 1e-9
+    assert abs(lag_then - 0.01) < 1e-9
+    assert abs(worst_lag - 0.20) < 1e-9
+    assert abs(speed_then - 5.0) < 1e-9
+
+
+def test_tracking_ignores_a_zero_or_negative_timestep() -> None:
+    """A cycle with no elapsed time would divide by zero and report an infinite speed."""
+    log = TrackingLog(1)
+    log.observe((0.1,), (0.0,), (0.0,), 0.0)
+    assert log.cycles == 0
+    assert log.rows()[0][3] == 0.0
+
+
+def test_tracking_handles_a_shorter_measurement_than_the_target() -> None:
+    """A 6-joint robot playing a 7-joint recording must not raise inside the loop."""
+    log = TrackingLog(7)
+    log.observe((0.1,) * 7, (0.0,) * 7, (0.0,) * 6, 0.01)
+    assert log.cycles == 1
+    assert log.rows()[6][1] == 0.0, "the joint with no measurement stays empty"
 
 
 def main() -> int:

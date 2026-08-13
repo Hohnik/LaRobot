@@ -110,7 +110,7 @@ from spacemouse import (  # noqa: E402
     pick_device_by_wiggle,
 )
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
-from recording import Trajectory, replay_step, safe_time_scale  # noqa: E402
+from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine  # noqa: E402
 from teleop import FRAMES, CartesianTeleop  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
@@ -624,6 +624,8 @@ def main() -> int:  # noqa: PLR0915
     replay_slot = "?"                   # which saved recording is being played
     replay_held_s = 0.0                 # seconds spent waiting for the arm to catch up
     replay_worst_lag = 0.0              # furthest behind the arm ever got, radians
+    replay_prev_target: list[float] | None = None
+    tracking: TrackingLog | None = None   # per-joint answer to "how fast can it go?"
     replay_pending: Trajectory | None = None   # parked to its start, waiting to run
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
@@ -1826,6 +1828,13 @@ def main() -> int:  # noqa: PLR0915
                     robot.command_joint_pos(full)
 
                     replay_worst_lag = max(replay_worst_lag, rs.lag)
+                    # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
+                    # motion Julien is already running rather than from a speed sweep that
+                    # would command the arm faster than any existing code allows. Reasoning
+                    # in src/recording.py::TrackingLog and ROADMAP §7.5.
+                    if tracking is not None and replay_prev_target is not None:
+                        tracking.observe(rs.target, replay_prev_target, q, real_dt)
+                    replay_prev_target = list(rs.target)
                     if rs.held:
                         replay_held_s += real_dt
                     else:
@@ -1860,6 +1869,21 @@ def main() -> int:  # noqa: PLR0915
                                   f"of the run waiting. Try a lower speed for a faithful replay.\n")
                         else:
                             print()
+                        if tracking is not None and tracking.cycles > 20:
+                            # ⚠️ MEASURED, so read it as such. The playback holds its clock
+                            # once the arm falls behind, so the speeds here are not an even
+                            # sweep, and load changes with the arm's pose. It is the cheap
+                            # first answer; ROADMAP §7.5 has the active sweep if this is
+                            # ambiguous.
+                            print("     how well each joint kept up "
+                                  f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
+                            for i, worst, at_speed, top, lag_top in tracking.rows():
+                                if top < 0.01:
+                                    continue
+                                name = YAM_JOINTS.get(i + 1, ("joint",))[0]
+                                print(f"       {name:<14} worst lag {worst:.3f} rad at "
+                                      f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
+                                      f"with {lag_top:.3f} rad of lag")
                         replay = None
                     elif t - replay_progress_t > PARK_STALL_SECONDS:
                         # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
@@ -1957,6 +1981,8 @@ def main() -> int:  # noqa: PLR0915
                                 replay_t0, replay_s = t, 0.0
                                 replay_progress_t = t
                                 replay_held_s, replay_worst_lag = 0.0, 0.0
+                                replay_prev_target = list(replay.start_pose() or ())
+                                tracking = TrackingLog(replay.n_joints)
                                 mode = "replay"
                                 print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
                                       f"movement at {replay_speed:.2f}x. "

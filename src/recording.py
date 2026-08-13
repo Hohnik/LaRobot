@@ -32,7 +32,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
-__all__ = ["Sample", "Trajectory", "ReplayStep", "replay_step", "safe_time_scale"]
+__all__ = ["Sample", "Trajectory", "ReplayStep", "replay_step", "safe_time_scale",
+           "TrackingLog"]
 
 # ⚠️ Radians, rounded on save. 1e-5 rad is 0.0006°, which is roughly a thousand times
 # finer than the controller's own steady-state error (0.02 rad is "arrived" for a park,
@@ -384,3 +385,76 @@ def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: 
         finished=moved >= traj.duration,
         held=held,
     )
+
+
+class TrackingLog:
+    """Per joint: how far behind the arm ran, and how fast it was being asked to move.
+
+    ⭐⭐ WHY THIS EXISTS RATHER THAN A SPEED SWEEP. Julien asked on 2026-08-13 how fast the
+    arms can really move, and whether the 1.5 rad/s limit could be raised. The obvious way
+    to find out is a script that drives one joint faster and faster until it cannot keep up.
+    ⛔ **That script would deliberately command the arm faster than any existing code
+    allows, and the agent cannot test it.** Session 4 is the standing warning: three changes
+    passed their tests and produced three failures on first hardware contact, one of which
+    dropped 4.3 kg ([FINDINGS §11](../docs/FINDINGS.md)).
+
+    ⭐ **There is a version that needs no new motion at all.** Every playback already
+    commands a hand-taught path and already measures how far behind the arm is. Recording
+    that per joint, against the speed each joint was being asked for, answers the same
+    question using hardware time Julien is already spending. His recordings reach 2.9 rad/s
+    at the 99th percentile, so the interesting range is already covered.
+
+    ⚠️ WHAT THIS CANNOT TELL YOU, and it matters when reading the table:
+
+    - The playback holds its clock once the arm falls behind, so the commanded speed is not
+      a clean sweep. The pairs are still real; the coverage is uneven.
+    - Load depends on the arm's pose, so the same joint at the same speed lags differently
+      with the arm extended and folded.
+    - It only ever reports speeds a recording happened to contain.
+
+    ⭐ **So this is the cheap first answer.** If it comes out ambiguous, the active sweep is
+    designed in [ROADMAP.md](../docs/ROADMAP.md) §7.5 and can be built then, with a reason.
+    """
+
+    def __init__(self, n_joints: int) -> None:
+        self.n_joints = n_joints
+        self.cycles = 0
+        self._worst_lag = [0.0] * n_joints
+        self._speed_at_worst_lag = [0.0] * n_joints
+        self._top_speed = [0.0] * n_joints
+        self._lag_at_top_speed = [0.0] * n_joints
+
+    def observe(self, target: Sequence[float], prev_target: Sequence[float],
+                measured: Sequence[float], dt: float) -> None:
+        """One control cycle. `dt` must be MEASURED time, not the nominal loop period.
+
+        ⚠️ The nominal period is wrong by about 13% on this rig, because the loop runs near
+        87 Hz rather than 100 ([FINDINGS §31.1](../docs/FINDINGS.md)). Feeding it here would
+        overstate every speed by the same amount and quietly bias the answer.
+        """
+        if dt <= 0:
+            return
+        self.cycles += 1
+        n = min(self.n_joints, len(target), len(prev_target), len(measured))
+        for i in range(n):
+            speed = abs(target[i] - prev_target[i]) / dt
+            lag = abs(target[i] - measured[i])
+            if lag > self._worst_lag[i]:
+                self._worst_lag[i] = lag
+                self._speed_at_worst_lag[i] = speed
+            if speed > self._top_speed[i]:
+                self._top_speed[i] = speed
+                self._lag_at_top_speed[i] = lag
+
+    def rows(self) -> list[tuple[int, float, float, float, float]]:
+        """`(joint index, worst lag, speed then, top speed, lag then)`, one row per joint.
+
+        ⭐ Both pairs are reported because they answer different questions. "How far behind
+        did it get, and how fast was it going" tells you where the limit is. "How fast was it
+        asked to go, and did it manage" tells you whether that speed is usable at all.
+        """
+        return [
+            (i, self._worst_lag[i], self._speed_at_worst_lag[i],
+             self._top_speed[i], self._lag_at_top_speed[i])
+            for i in range(self.n_joints)
+        ]

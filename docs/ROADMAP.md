@@ -609,7 +609,21 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 
    **The three wrist joints have a position gain of 10, eight times softer than the shoulder and elbow.** A soft joint that is told to move faster does not move faster, it lags further behind. ⚠️ So raising `MAX_JOINT_STEP` on its own would buy very little on the wrist and would mostly increase the tracking error.
 
-### ⭐ The measurement that would replace all of this guessing
+### ⭐⭐ BUILT 2026-08-13: the cheap half of the measurement, with no new motion
+
+⭐ **Every playback now reports how well each joint kept up.** `src/recording.py::TrackingLog` records, per joint, the worst lag and the commanded speed at that moment, plus the top commanded speed and the lag at that moment. The table prints at the end of any playback longer than 20 cycles.
+
+⛔ **WHY THIS RATHER THAN A SPEED SWEEP, and the reasoning is the point.** The obvious tool is a script that drives one joint faster and faster until it cannot keep up. That script would deliberately command the arm faster than any existing code allows, and **the agent cannot test it.** Session 4 is the standing warning: three changes passed their tests and produced three failures on first hardware contact, one of which dropped 4.3 kg ([FINDINGS §11](FINDINGS.md)). ⭐ A playback already commands a hand-taught path and already measures the lag, so **the same question can be answered with hardware time Julien is already spending and no new risk at all.**
+
+⚠️ **How to read the table, because it is not a clean experiment:**
+
+- The playback **holds its clock** once the arm falls behind, so the commanded speeds are uneven rather than a sweep. Every pair is real; the coverage is patchy.
+- **Load depends on the arm's pose.** The same joint at the same speed lags differently with the arm extended and folded.
+- It only reports speeds a recording happened to contain. His reach 2.9 rad/s at the 99th percentile, which covers the range in question.
+
+⭐ **What to look for.** A joint whose worst lag reaches 0.15 rad at a low commanded speed is soft and needs a stiffer gain rather than a higher limit. A joint that reaches 2 rad/s with 0.05 rad of lag has room, and the clamp is what is holding it back. **Expect the three wrist joints to look much worse than the shoulder and elbow**, because their gain is 10 against 80. If they do, that confirms the gains are the limit and not the clamp.
+
+### ⭐ The active sweep, if the table above turns out ambiguous
 
 Everything above is reading. The number nobody has is **how fast a joint can be commanded before the arm falls further behind than we accept**, which is currently 0.15 rad for a playback and 0.25 rad inside `SafeRobot`.
 
@@ -690,7 +704,7 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | 8 | **Good/bad labels while driving** | nothing exists. Keypress first, microphone second |
 | 9 | **Noise per waypoint** | nothing exists |
 | 10 | **Detecting whether a grab worked**, from the gripper position | nothing exists, and it is nearly free. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
-| 11 | ⭐ **Measure how fast a joint can actually be commanded** | nothing exists. ⭐ **This one unblocks a question that affects teleop feel, playback fidelity and every speed limit in the file**, and the design is written out ready to build. [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
+| 11 | ⭐ **Measure how fast a joint can actually be commanded** | ⏳ **half built 2026-08-13.** ✅ The passive half is done and needs no new motion: every playback now prints a per-joint table of worst lag against commanded speed (`src/recording.py::TrackingLog`, 4 tests). ⬜ The active sweep is designed and deliberately unbuilt, because it would command the arm faster than any existing code allows and cannot be tested from the bench. ⛔ **Run a playback and read the table before building the sweep.** [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
 | 12 | ⭐ **Mixed runs: planned legs and hand-taught legs in one sequence** | nothing exists. His idea, and it turns the noise rule into a data structure. Needs 3 first. [ROADMAP §6.6.1](#661-mixing-waypoints-and-recordings-in-one-run--his-idea-2026-08-13) |
 | 13 | **The second SpaceMouse as a continuous speed dial** | nothing exists. His idea. ⚠️ Needs 1 first, because the second puck currently belongs to arm G. [ROADMAP §7.6](#76-the-second-spacemouse-as-a-continuous-speed-dial--his-idea-2026-08-13) |
 | 14 | ⚠️ **Find out why the control loop runs at ~87 Hz** | the loop rate is now displayed when it drops, so the next session can see which mode is slow. [FINDINGS §31.1](FINDINGS.md) |

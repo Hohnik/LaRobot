@@ -1194,7 +1194,7 @@ Both readings come from the same evening, minutes apart, with exactly **one** Re
 
 ⛔ **So one camera answers the question "what is your serial number" with two different numbers, depending on which tool asks.** Anyone writing "select the camera by serial" into a config file must record *which* serial, or the value is right in one tool and wrong in the other while both look plausible. Same class of trap as [§5](FINDINGS.md) trap 2, where cached raw motor positions were frame-dependent and it cost a motor.
 
-⚠️ **Not explained, and two stories fit: librealsense reporting an internal serial that differs from the USB descriptor string, or a second D405 having been briefly involved.** ⛔ **Do not pick one.** The hardware was unplugged at the end of 2026-08-12. Settle it on the next hardware session, with both cameras connected:
+✅ **SETTLED AS A FACT ON 2026-08-13, though not as a mechanism.** Julien ran both commands back to back in one shell, on one camera, with the second D405 still unplugged. So the "a second camera was briefly involved" story is ruled out: **this single camera really does answer with two different numbers depending on which tool asks.** ⚠️ *Why* is still unverified. The likely reason is that the two tools read different places, one being the camera's own firmware and one being the USB descriptor, but nothing here proves that. ⭐ **The practical rule is what matters and it does not depend on the mechanism: whoever writes a serial into a config file records which command produced it.** The comparison, for reference:
 
 ```bash
 sudo rs-enumerate-devices -s; ioreg -p IOUSB -w0 -l | grep -A2 RealSense | grep Serial
