@@ -124,7 +124,14 @@ def unwrap(text: str) -> str:
             prefix = f"{indent}{bullet}{gap}"
             raw = [rest]
         else:
-            prefix = ""
+            # ⛔ KEEP THE PARAGRAPH'S OWN INDENTATION. Found 2026-08-13 while writing
+            # ROADMAP §7.5: a paragraph indented three spaces, belonging to a numbered
+            # list item and sitting after a fenced code block, had its indentation
+            # stripped. In Markdown that lifts it out of the list, so item 5's second
+            # paragraph would have become a new top-level paragraph and the numbering
+            # after it would restart. The content check could never catch this, because
+            # indentation is whitespace and that is exactly what the check ignores.
+            prefix = line[: len(line) - len(line.lstrip())]
             raw = [line]
         i += 1
         while i < n and not HARD_BREAK.search(raw[-1]):

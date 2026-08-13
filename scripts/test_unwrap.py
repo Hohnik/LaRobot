@@ -119,6 +119,25 @@ def test_the_repo_docs_all_survive_the_content_check() -> None:
         assert content(unwrap(text)) == content(text), f"{path.name} would lose content"
 
 
+def test_an_indented_paragraph_KEEPS_its_indentation() -> None:
+    """⛔ Found while writing ROADMAP §7.5. A paragraph indented three spaces belongs to a
+    numbered list item. Strip the indent and Markdown lifts it out of the list, so the
+    numbering after it restarts. ⚠️ The content check cannot catch this, because indentation
+    is whitespace and that is precisely what the check ignores."""
+    doc = "1. first\n\n2. second\n\n   a paragraph inside item two\n   wrapped here\n\n3. third"
+    out = unwrap(doc)
+    assert "   a paragraph inside item two wrapped here" in out, out
+
+
+def test_a_paragraph_after_a_code_block_inside_a_list_keeps_its_indent() -> None:
+    """The exact shape that failed: list item, fenced code, then more of the same item."""
+    doc = ("5. the item\n\n   ```\n   kp: [80, 80]\n   ```\n\n"
+           "   the rest of item five,\n   wrapped\n")
+    out = unwrap(doc)
+    assert "   the rest of item five, wrapped" in out, out
+    assert "   kp: [80, 80]" in out, "the code block must be untouched"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

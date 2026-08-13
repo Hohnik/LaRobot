@@ -590,6 +590,58 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 
 ---
 
+## ⭐⭐ 7.5 How fast can the arms actually move? — asked 2026-08-13, answered as far as reading allows
+
+> Julien: *"why is there a 1.5 rad/s max speed? Is that based on the arms or our code? Could this be increased? Seems to be the same issue when we control the arms in teleop, and it lags behind, or moves longer than the mouse controls, right? Can we build our code in a way where the arms can move faster? What is the fastest theoretical movement for the arms?"*
+
+### The short answers
+
+1. ⭐ **1.5 rad/s is OUR number, not the arm's.** It is `MAX_JOINT_STEP` (0.015 rad per cycle) times `CONTROL_HZ` (100). Somebody chose 0.015 as a safety clamp on how far a joint may be told to move in one cycle.
+2. ⭐ **Yes, it is the same limit that makes teleop feel laggy.** The clamp is applied to the joint targets the IK produces, so a quick push on the puck is trimmed and the arm falls behind the goal. `CartesianTeleop.lead()` already measures that gap and the status line warns `⚠️ STUCK lead` when it pins.
+3. ⛔ **The model files do not state a real limit.** `yam.urdf` carries `velocity="1"` and `effort="1"` on every joint. Those are placeholders: 1 Nm cannot hold a 4.3 kg arm up, so the file was never filled in. **Nothing in the vendored SDK gives a joint speed limit for the arm.** (`flow_base_client.py` has velocity caps, and those belong to a mobile base, not to this.)
+4. ⚠️ **The motors are very unlikely to be the limit at 1.5 rad/s.** Joints 1-3 are DM4340, joints 4-7 are DM4310, with gear ratios read off the bus as 40/40/40/10/10/10/10. A geared quasi-direct-drive motor of this class runs far above 1.5 rad/s at the output. ⛔ **Marked unverified**: no datasheet is vendored here, so this is not a measurement.
+5. ⭐⭐ **What actually limits tracking is the position gain, and this is the useful finding.** From `third_party/i2rt/i2rt/robots/config/yam_v1.yml`:
+
+   ```
+   kp: [80.0, 80.0, 80.0, 10.0, 10.0, 10.0]
+   kd: [ 5.0,  5.0,  5.0,  1.5,  1.5,  1.5]
+   ```
+
+   **The three wrist joints have a position gain of 10, eight times softer than the shoulder and elbow.** A soft joint that is told to move faster does not move faster, it lags further behind. ⚠️ So raising `MAX_JOINT_STEP` on its own would buy very little on the wrist and would mostly increase the tracking error.
+
+### ⭐ The measurement that would replace all of this guessing
+
+Everything above is reading. The number nobody has is **how fast a joint can be commanded before the arm falls further behind than we accept**, which is currently 0.15 rad for a playback and 0.25 rad inside `SafeRobot`.
+
+⭐ **Evidence already collected, from Julien's playbacks:** at roughly 1.5 to 2 rad/s commanded, the worst lag was **0.156, 0.162 and 0.163 rad**, three runs in a row. ⛔ **That is already at the 0.15 limit.** So the usable speed today is *at or slightly below* 1.5 rad/s, and the clamp is not the thing holding the arm back. The gains are.
+
+**The design of the measurement, so it can be built straight away:**
+
+- One joint at a time, starting with a **shoulder** (kp 80) and then a **wrist** (kp 10), because the answer will differ between them by a lot.
+- Command a slow triangle wave of a fixed amplitude, well inside the joint limits with the existing margin.
+- Step the speed up in small increments, holding each for a couple of seconds.
+- Record commanded position, measured position and the resulting lag, and stop the moment the lag exceeds a bound well under `SafeRobot`'s 0.25 rad.
+- ⛔ It sends setpoints, so it is Julien's to run under working contract rule 1, and it needs an abort on any key.
+- Output: a table of speed against lag, per joint. **That single table sets `MAX_PLANNED_JOINT_SPEED` honestly and tells us whether raising `kp` is worth trying.**
+
+⚠️ **Raising `kp` is a separate and more serious change** than raising a speed clamp. Stiffer joints hold position better and hit harder, and gravity compensation was already 39% short at the elbow once ([FINDINGS §11](FINDINGS.md)). It should follow the measurement, not precede it, and it should be one joint at a time.
+
+## ⭐ 7.6 The second SpaceMouse as a continuous speed dial — his idea, 2026-08-13
+
+> *"Could we add a mode where the second space mouse could be activated to control the speed of the robot movement in a continuous fashion?"*
+
+⭐ **This is a good idea and it is better than it first sounds, because a SpaceMouse is spring-centred.** Let go and it returns to zero. **So a puck used as a speed dial is a deadman by construction**: release it and the motion stops. On a rig with no emergency stop ([HANDOFF §4.5](HANDOFF.md)) that is a real safety property rather than a convenience.
+
+**Where it applies, most useful first:**
+
+1. ⭐⭐ **Scrubbing a recorded movement.** Push forward to advance through the recording, release to freeze, pull back to run it backwards. That is a video editor's scrub wheel, which is the mental model he already uses for this project (he compared the easing to Premiere Pro). It also makes the playback speed something felt rather than typed, which is the right way to find a speed that tracks.
+2. **Park and sequence runs.** The same dial on `p` runs, replacing `-`/`+`.
+3. **Teleop.** One puck drives, the other scales how fast. ⚠️ Less obviously useful, because the puck's own deflection is already a speed.
+
+⛔ **The conflict to decide first: the second puck is currently arm G's.** `pick_device_by_wiggle(exclude=…)` assigns one puck per arm. A speed dial therefore only makes sense while a single arm is being driven, or it needs a third device. **So this belongs after the two-arm work, not before it**, or it will fight the assignment logic that already exists.
+
+⚠️ **One design caution.** Mapping a spring-centred axis to speed means the neutral position is *stopped*, so a run needs continuous input to proceed. That is right for scrubbing and wrong for a long unattended playback. **Both behaviours are wanted, so the dial should be a mode you enter rather than a change to how playback always works.**
+
 ## 8. ⭐⭐ What is still missing for the whole system to work — 2026-08-12
 
 > Julien asked for this directly: *"everything for the whole setup needs a full list of what is still missing for the full system to work."* Built from a photograph of the desk he sent on 2026-08-12, plus `ioreg` run the same day. Written in plain language because he reads it.
@@ -621,7 +673,10 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | ⚠️ **A switched mains power strip within arm's reach** | There is no emergency stop and buying a real one may not be worth it. A switched strip is a few euros and gives one thing to hit. Not a substitute for a proper stop, and better than reaching for a plug | worth one decision |
 | Something holding the base plates down | The plates sit on the desk with the laptop. ⚠️ **Unknown from the photograph whether they are clamped.** Worth checking rather than assuming | check |
 
-### 8.2 Software still missing, in the order I would build it
+### 8.2 ⭐⭐ EVERY open piece of work, in the order I would build it
+
+> ⛔ **This table is the single complete list.** Julien asked on 2026-08-13 to *"deep check if everything was sensibly noted down"*, so anything discussed anywhere appears here with a pointer, whether it is his idea, mine, or a defect. If something is not in this table it is not tracked.
+
 
 | # | what | state |
 |---|---|---|
@@ -635,6 +690,13 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | 8 | **Good/bad labels while driving** | nothing exists. Keypress first, microphone second |
 | 9 | **Noise per waypoint** | nothing exists |
 | 10 | **Detecting whether a grab worked**, from the gripper position | nothing exists, and it is nearly free. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 11 | ⭐ **Measure how fast a joint can actually be commanded** | nothing exists. ⭐ **This one unblocks a question that affects teleop feel, playback fidelity and every speed limit in the file**, and the design is written out ready to build. [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
+| 12 | ⭐ **Mixed runs: planned legs and hand-taught legs in one sequence** | nothing exists. His idea, and it turns the noise rule into a data structure. Needs 3 first. [ROADMAP §6.6.1](#661-mixing-waypoints-and-recordings-in-one-run--his-idea-2026-08-13) |
+| 13 | **The second SpaceMouse as a continuous speed dial** | nothing exists. His idea. ⚠️ Needs 1 first, because the second puck currently belongs to arm G. [ROADMAP §7.6](#76-the-second-spacemouse-as-a-continuous-speed-dial--his-idea-2026-08-13) |
+| 14 | ⚠️ **Find out why the control loop runs at ~87 Hz** | the loop rate is now displayed when it drops, so the next session can see which mode is slow. [FINDINGS §31.1](FINDINGS.md) |
+| 15 | ⚠️ **Decide whether PARK should use measured time** | ⛔ **Deliberately NOT changed.** A park at "0.40 rad/s" actually moves at about 0.35, because the cursor advances in nominal time. It is slower than stated, which is the safe direction, and Julien has tuned his speed preferences against the current behaviour. Changing it would silently speed every park up by 15%, so it is his call. [FINDINGS §31.1](FINDINGS.md) |
+| 16 | ⭐ **Read the D405's 848x480 mode as 16-bit depth** | ⛔ **Do not touch until the pixel format is checked.** If 848x480 is the depth stream then depth is available with no SDK, which has been an open goal since [FINDINGS §8](FINDINGS.md). Forcing it into an 8-bit photograph would throw that away. [FINDINGS §31.2](FINDINGS.md) |
+| 17 | **Raise the wrist position gains** | ⚠️ Only after 11. The wrist joints run at `kp` 10 against the shoulder's 80, and a soft joint told to move faster lags rather than moving faster. A stiffer joint also hits harder, so one joint at a time. [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
 
 ### 8.3 Decisions still missing
 

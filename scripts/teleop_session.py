@@ -900,6 +900,20 @@ def main() -> int:  # noqa: PLR0915
             guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
 
         dt = 1.0 / CONTROL_HZ
+        # ⭐⭐ THE MEASURED LENGTH OF THE LAST CYCLE, next to the nominal one. Found on
+        # 2026-08-13 because Julien's playback summary did not add up: a 3.6 s recording
+        # reported "3.6 s of movement plus 0.4 s waiting" and finished in 4.6 s. The
+        # missing 0.6 s is the loop running below 100 Hz. `dt` is a constant, and the
+        # sleep at the bottom is `max(0, dt - elapsed)`, so a cycle that overruns is not
+        # compensated: nominal time falls behind the wall clock, roughly 87 Hz against 100.
+        #
+        # ⛔ Anything that has to match real time must use `real_dt`, not `dt`. A playback
+        # is exactly that: the whole point is reproducing the timing a hand taught.
+        # ⚠️ Clamped, so one long stall (a slow disk, a thermal read retry) cannot make the
+        # cursor jump forward and command a step the arm never asked for.
+        real_dt = dt
+        prev_t = 0.0
+        loop_hz = CONTROL_HZ
         t0 = time.perf_counter()
         next_report = 1.0
 
@@ -939,6 +953,10 @@ def main() -> int:  # noqa: PLR0915
             while True:
                 loop_start = time.perf_counter()
                 t = loop_start - t0
+                real_dt = min(0.1, max(1e-4, t - prev_t))
+                prev_t = t
+                # A slow exponential average, so the readout is a rate rather than noise.
+                loop_hz += 0.02 * (1.0 / real_dt - loop_hz)
 
                 if interrupted:
                     stop_reason = ("Ctrl-C — the loop is stopping, and the arm is NOT "
@@ -1794,7 +1812,7 @@ def main() -> int:  # noqa: PLR0915
                     # keeping up" check. The jaws legitimately sit far from their commanded
                     # value while closing on an object, and counting that as falling behind
                     # would stall every playback that grips anything.
-                    rs = replay_step(replay, replay_s, q, dt, speed=replay_speed,
+                    rs = replay_step(replay, replay_s, q, real_dt, speed=replay_speed,
                                      max_lag=MAX_CURSOR_LAG, n_compare=N_ARM)
                     replay_s = rs.cursor
                     full = q.copy()
@@ -1809,7 +1827,7 @@ def main() -> int:  # noqa: PLR0915
 
                     replay_worst_lag = max(replay_worst_lag, rs.lag)
                     if rs.held:
-                        replay_held_s += dt
+                        replay_held_s += real_dt
                     else:
                         replay_progress_t = t
                     if rs.finished:
@@ -1822,9 +1840,19 @@ def main() -> int:  # noqa: PLR0915
                         # show what can go wrong, not only what looks tidy — the same lesson
                         # as showing the jaw temperature separately (FINDINGS §11).
                         planned = replay.duration / replay_speed
-                        print(f"⭐ PLAYBACK finished in {t - replay_t0:.1f}s → HOLD")
+                        elapsed = t - replay_t0
+                        print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
                         print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
                               f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
+                        # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
+                        # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
+                        # was the loop running below 100 Hz while the cursor advanced in
+                        # nominal time. That is fixed, and this check stays so a future
+                        # version cannot reintroduce it silently.
+                        unaccounted = elapsed - planned - replay_held_s
+                        if abs(unaccounted) > 0.15 + 0.05 * elapsed:
+                            print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
+                                  f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
                         print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
                               f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
                         if replay_held_s > 0.15 * planned:
@@ -2024,6 +2052,11 @@ def main() -> int:  # noqa: PLR0915
                     # the operator finds out at training time. So it rides the one line
                     # that is always on screen.
                     rec = f"  ⏺ REC {t - take_t0:5.1f}s" if take is not None else ""
+                    # ⭐ THE LOOP RATE, because it was 87 Hz for a whole session and nothing
+                    # said so. It only became visible when a playback summary failed to add
+                    # up. Shown only when it drops, so a healthy loop costs no width.
+                    if loop_hz < 0.92 * CONTROL_HZ:
+                        rec += f"  ⚠️{loop_hz:3.0f}Hz"
                     print(f"\r[{'CONTROLS' if mode == 'map' else mode.upper():8}] t={t:6.1f}s  {therm}"
                           f"{rec}  q {np.round(q[:N_ARM], 2)}{extra}   ", end="", flush=True)
 

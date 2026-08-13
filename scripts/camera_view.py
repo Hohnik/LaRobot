@@ -866,6 +866,17 @@ class FrameGrabber:
         dt = time.perf_counter() - self._t0
         return self._captured / dt if dt > 0 else 0.0
 
+    def pixel_format(self) -> str:
+        """The four-letter format the camera is delivering, or "?" if it will not say.
+
+        ⭐ Added 2026-08-13 to settle whether the D405's 848x480 mode is a different format
+        from the modes that produce a clean photograph. See `fourcc_name`.
+        """
+        try:
+            return fourcc_name(int(self._cap.get(cv2.CAP_PROP_FOURCC)))
+        except Exception:  # noqa: BLE001
+            return "?"
+
     def stop(self) -> None:
         """⚠️ Always call this. A daemon thread holding the camera open keeps the
         device busy for the next process, and Julien asked specifically that every
@@ -1042,6 +1053,27 @@ def useful_image_width(cols: int, capture_width: int, cell: CellSize) -> int:
 # ⭐ How many consecutive over-budget frames it takes to shrink the image. Two, so a single
 # hiccup cannot ratchet the picture down for the rest of the session.
 SHRINK_AFTER = 2
+
+
+def fourcc_name(code: int) -> str:
+    """The four letters of a pixel format code, as the camera reports it.
+
+    ⭐⭐ WHY THIS IS ON SCREEN NOW. Julien's D405 produced a clean photograph at 640x480
+    and at 1280x720, and diagonal coloured bands at **848x480**, on 2026-08-13. Smooth
+    diagonal banding with cycling colour is the signature of **16-bit data being read as
+    8-bit BGR triplets**: 848 pixels of 16-bit is 1696 bytes a row, read as 848x3 it wants
+    2544, and the mismatch shears every row sideways while the byte pairs cycle through
+    blue, green and red.
+
+    ⭐ If that is right, then **848x480 is the D405's depth stream**, reachable over plain
+    UVC with no SDK at all, which is an open question in [FINDINGS §28.2](../docs/FINDINGS.md).
+    ⚠️ It is an inference from an image plus arithmetic, not a measurement. The pixel format
+    is the number that settles it, so it is now displayed: if 848x480 reports a different
+    format from the modes that work, the inference holds.
+    """
+    if code <= 0:
+        return "?"
+    return "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4)).strip() or "?"
 
 
 def tune_image_width(width: float, draw_ms: float, target_ms: float, over: int,
@@ -1542,7 +1574,7 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
                     else:
                         warn = ""
                     sys.stdout.write(
-                        f"\x1b[0m\n{label}capture {w}x{h} · {detail} · {mode} · "
+                        f"\x1b[0m\n{label}capture {w}x{h} {grab.pixel_format()} · {detail} · {mode} · "
                         f"{cols}x{rows} cells · {cell_note}\x1b[K\n"
                         f"{disp_fps:4.1f} shown / {grab.capture_fps():4.1f} captured fps · "
                         f"draw {draw_ms:4.1f} ms{warn}\x1b[K\n"

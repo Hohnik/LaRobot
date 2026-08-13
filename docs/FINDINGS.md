@@ -1336,3 +1336,57 @@ The chain: `e` cycles the ease profile in any mode, and its message ended `(ö/�
 - **`e` works outside a park prompt**, which was the other half of §27.4.
 - **Parking to a recording's start pose and handing over to playback works**, four times, including one interrupted by Ctrl-C with a clean park and disable.
 - ⚠️ Still never seen: the `⭐ MODE: HOLD` banner on its own (he never pressed `h` alone), the 55 °C warning, and the blind-thermal stop.
+
+---
+
+## 31. ⛔⭐ Three more things from the same day, and one of them may be free depth — 2026-08-13
+
+### 31.1 ⛔⭐ The control loop runs at about 87 Hz, and nothing said so for weeks
+
+⭐ **It was found because a playback summary did not add up.** Recording 6 is 3.6 s. The summary read *"3.6s of movement at 1.00x, plus 0.4s waiting for the arm to catch up"* and then *"PLAYBACK finished in 4.6s"*. **0.6 s is missing**, and 4.0 / 4.6 = 0.87.
+
+⛔ **The cause.** `dt = 1.0 / CONTROL_HZ` is a constant, and the bottom of the loop sleeps `max(0, dt - elapsed)`. A cycle that overruns is therefore **not compensated**: nominal time falls behind the wall clock and never catches up. Every quantity computed from `dt` is then in nominal seconds while the operator is watching real ones.
+
+**What that affected:**
+
+| thing | consequence |
+|---|---|
+| **playback duration** | a 3.6 s recording took 4.6 s. Julien read this as the feature being wrong, and roughly two thirds of the difference was this rather than the lag holds |
+| **park speed** | ⚠️ a park at "0.40 rad/s" actually moves at about 0.35. **Not changed**, on purpose: it is slower than stated, which is the safe direction, and he has tuned his speed preferences against the current behaviour. Changing it would silently speed every park up by 15% |
+| **the reported waiting time** | understated by the same 13% |
+
+⭐ **Fixed for the playback only**, which now advances on a measured `real_dt`, clamped to 0.1 s so one long stall cannot make the cursor jump. ⭐ **And two instruments were added so this cannot hide again:** the loop rate appears in the status line whenever it falls below 92% of `CONTROL_HZ`, and the playback summary now checks that its own numbers reconcile with the wall clock and says so when they do not.
+
+⛔ **The lesson is the one this file keeps paying for.** Nothing was broken enough to notice. The loop ran, the arm moved, every number on screen looked plausible. **It was caught by printing two quantities that had to agree and noticing that they did not** — the same method that caught the recording padding in [§30.1](FINDINGS.md) on the same day. ⭐ **Printing a redundant number is cheap and it is the only thing that has found this class of defect twice.**
+
+⚠️ **Why the loop is slow has not been measured.** Candidates: the per-cycle CAN read, the IK solve in TELEOP, the status line, or `robot.get_joint_pos()` costing more than assumed. The readout now makes it visible, so the next session can watch which mode is slow.
+
+### 31.2 ⭐⭐ The D405 at 848x480 is probably DEPTH, arriving over plain UVC with no SDK
+
+His screenshots on 2026-08-13, all from `--camera d405 --term`:
+
+| capture | what the picture looked like |
+|---|---|
+| 640x480 | ✅ a clean colour photograph of the room |
+| 1280x720 | ✅ a clean colour photograph |
+| **848x480** | ⛔ **smooth diagonal coloured bands**, twice, and nothing recognisable |
+
+⭐ **Smooth diagonal banding with cycling colour is the signature of 16-bit data read as 8-bit BGR triplets.** 848 pixels of 16-bit is 1696 bytes a row. Read as `848 x 3` it wants 2544. The mismatch shears every row sideways, and consecutive byte pairs cycle through blue, green and red, which is exactly the pattern in both images.
+
+⭐⭐ **If that is right, `848x480` is the D405's depth stream and it is reachable with no SDK at all.** That answers the open question left in [§28.2](FINDINGS.md), and it matters because `librealsense` only works as root on this Mac ([§28.4](FINDINGS.md)), which rules it out for the control loop. **848x480 is a native RealSense depth resolution and no colour webcam offers it**, which is also why `--list` uses a RealSense-only mode to identify the camera in the first place.
+
+⚠️ **This is an inference from two images plus arithmetic. It has not been measured.** ⭐ **The number that settles it is the pixel format, so the readout now shows it.** Run `--camera d405 --term`, press `5` for 848x480, and read the four letters after the capture size. If they differ from what 640x480 and 1280x720 report, the inference holds.
+
+⛔ **Do not "fix" 848x480 into a picture before this is settled.** If it is depth, the right change is to read it as 16 bits and colour-map it, which is a feature. Forcing it into an 8-bit photograph would throw away the depth this project has been trying to reach since [§8](FINDINGS.md).
+
+### 31.3 ✅ The image no longer shrinks over time
+
+His two 848x480 screenshots read `sent 699x396` and then `sent 710x402`. ⭐ **The width went UP between them**, which is the behaviour [§29](FINDINGS.md) was rewritten to restore. The old controller could only ever go down from a width whose cost landed in its dead band.
+
+### 31.4 The HOLD banner after a park or playback is deliberate
+
+Julien: *"this normal HOLD mode keeps on showing up, but when hold gets activated after the recording, it doesn't. Is that intended? If this is sensible and more UX UI friendly, then leave it as is."*
+
+✅ **It is intended, and it is left as is.** Pressing `h` prints `⭐ MODE: HOLD` because nothing else announces the change. A park or a playback ending already says where it went, in the same line that reports how it went: `⭐ PARK reached in 0.7s (0.023 rad off) → HOLD`. Printing a second banner underneath would be one event described twice.
+
+⚠️ **Checked rather than assumed:** every path that sets `mode = "hold"` prints something. The `h` key, both park outcomes, both playback outcomes, the thermal stop and the quit flow. **There is no route into HOLD that happens silently.**
