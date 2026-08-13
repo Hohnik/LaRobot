@@ -1390,3 +1390,106 @@ Julien: *"this normal HOLD mode keeps on showing up, but when hold gets activate
 ✅ **It is intended, and it is left as is.** Pressing `h` prints `⭐ MODE: HOLD` because nothing else announces the change. A park or a playback ending already says where it went, in the same line that reports how it went: `⭐ PARK reached in 0.7s (0.023 rad off) → HOLD`. Printing a second banner underneath would be one event described twice.
 
 ⚠️ **Checked rather than assumed:** every path that sets `mode = "hold"` prints something. The `h` key, both park outcomes, both playback outcomes, the thermal stop and the quit flow. **There is no route into HOLD that happens silently.**
+
+---
+
+## 32. ⛔⭐ Both CAN adapters were in DFU mode, and the error could not say so — 2026-08-13
+
+Julien's session died at startup:
+
+```
+⛔ RuntimeError: No candleLight CAN adapter found. Is the arm's CANable plugged in?
+```
+
+Both adapters were plugged in. ⭐ **`ioreg` shows why, and it is unambiguous:**
+
+```
+"USB Product Name" = "DFU in FS Mode"    "USB Serial Number" = "2081337C594E"
+"USB Product Name" = "DFU in FS Mode"    "USB Serial Number" = "20593383594E"
+```
+
+Those serials are the first 12 characters of the two known CANables (`2081337C594E5018` and `20593383594E5018`). **Both boards had entered DFU mode**, the chip's built-in firmware-update bootloader. Measured identifiers: **VID `0x0483`** (STMicroelectronics), **PID `0xDF11`**, `Device Speed = 1` (full speed), `bcdDevice = 512`. That is the standard STM32 DFU bootloader.
+
+### Why the message could not describe it
+
+`GsUsb.scan()` looks for candleLight devices and correctly found none, because a board in DFU mode presents the bootloader instead. ⚠️ **The old text was not wrong. It was unable to describe the situation**, so it sent him to check cables while the cause was a device state. That cost a round trip.
+
+⭐ **Two properties of DFU mode make this specifically hard to recognise:**
+
+1. **The product name changes completely**, from `CANable 2.5 Candlelight` to `DFU in FS Mode`, so nothing in a device listing looks like a CAN adapter.
+2. ⛔ **The serial is TRUNCATED to 12 characters.** So even a listing that showed it would not match `ARM_SERIALS`, and a human scanning for `2081337C594E5018` would miss `2081337C594E`.
+
+### ⭐ The fix in the code, and it pays for itself immediately
+
+`src/yam_can.py::adapters_in_dfu_note()` runs when the adapter scan comes back empty. It looks for `0x0483:0xDF11` over the same libusb that `GsUsb.scan()` uses, and if it finds any, says so, lists the truncated serials, warns that they will not match `ARM_SERIALS`, and gives the fix. ⚠️ **It never raises**: a diagnostic that fails must not replace the error it is explaining.
+
+### What to actually do
+
+⭐ **First try: unplug both CANables and plug them back in, without holding any button on the board.** A normal power-up runs the application firmware rather than the bootloader, so this usually clears it. Then confirm:
+
+```bash
+ioreg -p IOUSB -w0 -l | grep -i candlelight
+```
+
+⚠️ **If they come back in DFU again, the firmware needs re-flashing with `dfu-util`**, which is a much bigger job and has not been done on this rig.
+
+### ⛔ Why they entered DFU is UNKNOWN, and that matters if it recurs
+
+No cause was established. The candidates, none of them verified:
+
+- **The board's BOOT button**, pressed or knocked. Both boards sit on one small hub, so one knock could reach both.
+- **A power event on that shared hub.** If the chip resets and the application does not start, it stays in the bootloader. Both being affected together fits a shared power cause better than anything else.
+- **A USB DFU_DETACH request from software.** ⚠️ Nothing in this repo sends one, and the gs_usb protocol has no bootloader jump, so this is the least likely.
+
+⭐ **If it happens again, record these before touching anything:** whether it was one adapter or both · whether anything was re-plugged or knocked · whether a session had just exited cleanly · and whether the hub itself re-enumerated. **That is the data that would separate a power cause from a button.**
+
+### ⭐ The pattern this makes, and it is now three for three
+
+Every confusing failure in two days has been **a device that is present but not in the state the code assumes**:
+
+| | the device was | the code assumed |
+|---|---|---|
+| [§28.4](FINDINGS.md) | on the bus, claimed by macOS's own driver | librealsense could claim it |
+| [§28.5](FINDINGS.md) | reporting two different serial numbers | a device has one serial |
+| **§32** | on the bus, running its bootloader | present means ready |
+
+⛔ **So "is it plugged in?" is the wrong first question on this rig.** The useful one is *"what state is it in?"*, and every device-not-found message should be able to answer it. This one now can.
+
+### 32.1 ⚠️ The camera in the same session — NOT reproduced, and it looks healthy
+
+He also reported the D405 could not be found. **Everything measurable about it is fine**, checked while the CAN adapters were still in DFU mode:
+
+- It is on the bus, serial `255323071773`, **SuperSpeed** (`Device Speed = 3`), on a SuperSpeed hub.
+- `locationID` is `0x01210000`, **the same port as this morning**, so it has not moved.
+- All four USB interfaces are registered and matched, and `UVCAssistant` is attached to the `RGB` interface.
+
+⚠️ **The USB enumeration ORDER did change** between the two readings, which is exactly the hazard [§22](FINDINGS.md) exists for. ⭐ **But the camera code survives that by construction**: `config/camera_index_hint.json` keys on the stable macOS `unique_id` rather than on an index, and the code re-verifies by asking the camera at that index a question only it can answer, falling through to every other index if the answer is wrong.
+
+⛔ **So this is unexplained and needs his error text.** `ioreg` cannot show it, and the agent cannot open a camera ([§21.1](FINDINGS.md)). The command that would settle it:
+
+```bash
+uv run scripts/camera_view.py --list
+```
+
+⚠️ One candidate worth checking in that output: **Google Chrome holds a device user client on both cameras**, visible in the `IOService` plane. It also held them earlier while the camera worked, so it is not obviously the cause, and it is the cheapest thing to eliminate.
+
+### 32.2 ⚠️ Changing the controls did NOT break anything, but it changed BOTH arms
+
+He asked whether editing the controls could have caused this. ✅ **It could not.** The axis map is a JSON file of puck-to-motion assignments and it cannot affect whether a USB device enumerates.
+
+⭐ **It did do something he should know about, though.** `config/spacemouse_map.json` changed under the `"shared"` key, which means **the edit applies to arm B as well as G**. The world frame's rotation wiring moved:
+
+| | before | after |
+|---|---|---|
+| source | `[1, 0, 2, 5, 3, 4]` | `[1, 0, 2, 4, 3, 5]` |
+| sign | `[1, 1, -1, -1, 1, -1]` | `[1, 1, -1, 1, 1, -1]` |
+
+In the plan line that reads `ROLL←yaw− PITCH←roll+ YAW←pitch−` before and `ROLL←pitch+ PITCH←roll+ YAW←yaw−` after. ✅ **The previous version is safe in `config/spacemouse_map.prev.json`**, which the session writes before saving. `--fork-map` gives G its own map if the arms should differ.
+
+### 32.3 ⛔ A process finding: `git add -A` can sweep his measured calibration into my commits
+
+`config/spacemouse_map.json` was modified **after** my last commit, so it happened to escape. ⚠️ **It would not have if the timing had differed by ten minutes.** Every commit in this repo has used `git add -A`, so an axis map or a gripper calibration that Julien tuned between commits gets included in an unrelated change with a message that never mentions it.
+
+⛔ **That is the same class of defect as everything in [§0](FINDINGS.md): the record would look correct and be wrong.** A month later, `git log` on the map file would blame a commit about a camera bug for a change he made with his hands.
+
+⭐ **The rule from now on: check `git status config/` before committing, and give a config change its own commit with its own message.** `config/` holds *measured* values, not settings, so a change to it is evidence and deserves to be recorded as such.

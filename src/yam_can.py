@@ -206,7 +206,9 @@ def resolve_arm(arm: str = DEFAULT_ARM) -> tuple[int, str]:
     serial = ARM_SERIALS.get(arm, arm)  # allow passing a raw serial too
     devs = GsUsb.scan()
     if not devs:
-        raise RuntimeError("No candleLight CAN adapter found. Is the arm's CANable plugged in?")
+        raise RuntimeError(
+            "No candleLight CAN adapter found.\n" + adapters_in_dfu_note()
+        )
 
     serials = [d.serial_number for d in devs]
     if serial not in serials:
@@ -217,6 +219,61 @@ def resolve_arm(arm: str = DEFAULT_ARM) -> tuple[int, str]:
             f"  {len(devs)} adapter(s) present:\n{listing}"
         )
     return serials.index(serial), serial
+
+
+# ⭐⭐ The STM32 built-in firmware-update bootloader, measured on 2026-08-13 when BOTH
+# CANables were sitting in it: VID 0x0483 (STMicroelectronics), PID 0xDF11, product name
+# "DFU in FS Mode". ⚠️ In that state the adapter is on the USB bus and answers nothing about
+# CAN, and its serial is TRUNCATED to the first 12 characters — `2081337C594E` where the
+# working device reports `2081337C594E5018`. So neither the name nor the serial matches
+# anything this code looks for, and `GsUsb.scan()` correctly returns an empty list.
+DFU_VID, DFU_PID = 0x0483, 0xDF11
+
+
+def adapters_in_dfu_note() -> str:
+    """Explain an empty adapter scan, checking for the DFU case rather than guessing.
+
+    ⛔⭐ WHY THIS EXISTS. On 2026-08-13 Julien's session died with *"No candleLight CAN
+    adapter found. Is the arm's CANable plugged in?"* while both adapters were plugged in and
+    visible in `ioreg`. **The message sent him looking at cables, and the cause was that both
+    boards had entered their firmware-update bootloader.** The old text was not wrong, it was
+    unable to describe the situation, which cost a round trip.
+
+    ⚠️ This never raises. A diagnostic that fails must not replace the error it is explaining.
+    """
+    found: list[str] = []
+    try:
+        import usb.core  # noqa: PLC0415
+
+        for dev in usb.core.find(find_all=True, idVendor=DFU_VID, idProduct=DFU_PID) or []:
+            try:
+                found.append(dev.serial_number or "unknown serial")
+            except Exception:  # noqa: BLE001
+                found.append("unknown serial")
+    except Exception:  # noqa: BLE001
+        return ("  Is the arm's CANable plugged in?\n"
+                "  If it is, check whether it is in DFU mode:  "
+                "ioreg -p IOUSB -w0 -l | grep -i 'DFU in FS Mode'")
+
+    if not found:
+        return ("  Is the arm's CANable plugged in?\n"
+                "  Nothing is in DFU mode either, so the adapter is genuinely absent.\n"
+                "  List what IS attached:  ioreg -p IOUSB -w0 -l | grep -i 'USB Product Name'")
+
+    listing = "\n".join(f"    - {s}" for s in found)
+    return (
+        f"  ⛔ {len(found)} adapter(s) are in DFU MODE, which is the chip's firmware-update\n"
+        f"     bootloader. In that state they are on the USB bus and answer nothing about CAN:\n"
+        f"{listing}\n"
+        "     ⚠️ The serial is truncated in DFU mode, so it will not match the one in\n"
+        "        ARM_SERIALS even for the right adapter.\n"
+        "  ⭐ FIRST TRY: unplug both CANables and plug them back in, WITHOUT holding any\n"
+        "     button on the board. A normal power-up runs the firmware rather than the\n"
+        "     bootloader, so this usually fixes it on its own.\n"
+        "  Then check:  ioreg -p IOUSB -w0 -l | grep -i candlelight\n"
+        "  ⚠️ If they come back in DFU again, the firmware needs re-flashing with dfu-util,\n"
+        "     which is a bigger job. See docs/FINDINGS.md §32."
+    )
 
 
 def _verify_serial(iface: Any, expected: str, arm: str) -> None:
