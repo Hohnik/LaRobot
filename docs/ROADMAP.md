@@ -414,6 +414,30 @@ Instead of saving a handful of poses and letting the code interpolate between th
 - The movements come from the teaching pass and the pictures from the replay pass, so the replay has to follow the taught path closely enough that picture and movement still line up. Checkable: the park loop already reports how far the arm is running behind the command.
 - Hand-guiding smoothly is its own skill. A wobbly taught path replayed at speed could be jerky. Light smoothing, or replaying at the speed it was taught, both help.
 
+### ⭐⭐ 6.6.1 Mixing waypoints and recordings in one run — his idea, 2026-08-13
+
+> *"The smoothing and stuff to vary the runs would be great, or to connect the waypoint idea with the recording idea. So for example, when I saved positions one, two, three and four, I can choose a mode where one and two gets played back, and then from two to three I can move the robot arm in whatever way. And whenever it stops, and I stop recording that position, then from there it moves to position three, and then two to three is my recording plus the late movement, and then it continues to four. Or something else maybe that's even smarter than that, where we can then have intermediate recordings that we change up, and then we can change up the starting and the end parts through different noise things that we were thinking about or smoothing."*
+
+⭐⭐ **This is the best idea in this section, and the reason is that it puts the precision exactly where the task needs it and the variation exactly where the task tolerates it.** A run becomes a list of legs, and each leg is one of two kinds:
+
+| leg kind | what it is | tolerance | so what varies |
+|---|---|---|---|
+| **planned** | the existing blended move between two saved poses | centimetres, bounded by "do not hit anything" | ⭐ speed, corner radius, easing, and **noise on the waypoints** |
+| **taught** | a hand-guided recording played back | millimetres, set by the object | ⛔ nothing, or almost nothing. Re-taught when the object moves |
+
+⭐ **Compare that against the noise rule two sections above.** The rule says variation must live in the (observation, action) pair jointly, never in the action alone, and that the grab waypoint survives millimetres while the approach survives centimetres. **A composite run is that rule expressed as a data structure.** The approach legs are planned, so they take noise. The grab leg is taught, so it stays exact. Nothing has to remember which waypoint is special: the leg kind says so.
+
+⚠️ **And it answers a problem the recording feature has on its own.** A single hand-taught recording covers the whole task, so re-teaching after the object moves means re-teaching all of it. With a composite run, only the taught leg near the object needs re-teaching. **That is the difference between a minute per episode and ten seconds.**
+
+**What it needs, and none of it exists yet:**
+
+1. **A run is a list, and each entry names a kind.** Today `park_sequence` is a list of digits meaning saved poses. It would become a list of `("pose", "3")` and `("take", "1")` entries. The typing UI needs a way to say which, and the existing two-key idiom fits: digits stay poses, and something like `w` then a digit inside a sequence means a recording.
+2. **Joining a taught leg to a planned one.** ⛔ **The seam is the real work.** A planned leg ends at a saved pose. A taught leg starts wherever the hand started it. If those differ, the join is a jump, which is the same hazard `start_pose()` already guards for a lone playback. ⭐ **The clean answer: a taught leg's own first and last poses become waypoints in their own right**, so the planned legs either side aim at them rather than at whatever was saved by hand. Then no seam can be discontinuous by construction.
+3. **A pause at each waypoint**, already a prerequisite for grabbing anything at all (see above). A seam between two legs is exactly where a pause belongs.
+4. **Recording a leg in place, mid-run.** His description has the arm stop at pose 2, him hand-guide it, and the run continue from there. That means GUIDE has to be enterable *inside* a run and the run resumable, which the current mode machine cannot do: leaving PARK abandons the rest, deliberately. ⚠️ **That rule exists because an arm resuming a planned trajectory after someone pressed HOLD is doing something nobody asked for.** So resuming needs to be an explicit, visible act rather than a relaxation of that rule.
+
+⭐ **The order I would build it in:** the pause at each waypoint first, because grabbing needs it anyway. Then composite runs assembled from *already saved* poses and recordings, which needs no change to the mode machine. Teaching a leg in the middle of a run last, because it is the only part that touches the rule about abandoning a run.
+
 ### The three ways to collect demos, side by side
 
 | | how it works | good | bad |
@@ -514,6 +538,24 @@ He asked: *"I don't even know what's capable with them and how they should be us
 
 1. **Install `librealsense`** (`brew install librealsense`, a prebuilt package, no compiling) and select each camera by serial. ⭐ **This is the recommendation** — it also unlocks depth, intrinsics and exposure, so it pays for itself.
 2. **Identify by hand each session**: cover one lens, see which index goes dark, note it. ⚠️ Works, but it is a manual step before every session and it is exactly the kind of thing that gets skipped and then produces a dataset where the two arms' images are swapped.
+
+### ⭐ 7.1.1 What Julien has to run to check the cameras, 2026-08-13
+
+He asked: *"the camera is plugged in, and we don't need to plug in the g camera yet. We can use the b camera. I need to make sure that all of the camera setup stuff works. So let me know what I need to test for that or if you can test everything yourself."*
+
+⛔ **The agent cannot do any of it.** Opening a camera needs macOS camera permission, which is granted per application, and the agent's shell is not the application that has it ([FINDINGS §21.1](FINDINGS.md)). Enumerating over `ioreg` works and opening does not. So these are his to run, in this order, and each answers one question.
+
+| # | command | what it proves, and what a wrong answer looks like |
+|---|---|---|
+| 1 | `uv run scripts/camera_view.py --list` | ⭐ **The most useful one.** Every camera, its name, and whether it delivers colour. ⚠️ Expect the D405 to be listed under a name containing `Depth` and still report **colour**, which is correct and was once misread as a fault ([FINDINGS §8](FINDINGS.md)). ⛔ Also answers an open question: **does the D405 appear ONCE or more than once?** Its USB tree has four interfaces (`Depth`, `Depth`, `Y`, `RGB`), so if a second entry appears, some depth or infrared data may be reachable with no SDK at all ([FINDINGS §28.2](FINDINGS.md)) |
+| 2 | `uv run scripts/camera_view.py --camera d405 --big` | Selecting by name works, and the window shows a live picture. ⭐ **Use the window, not `--term`, whenever the point is to look at the picture.** The terminal path re-encodes every frame as a PNG and is permanently softer |
+| 3 | `uv run scripts/camera_view.py --camera d405 --term` | The terminal view. ⭐ **This is the one to check after 2026-08-13**: the picture used to shrink over time and never recover, and the controller was rewritten ([FINDINGS §29](FINDINGS.md)). Watch `sent WxH` in the status line for a minute or two. It should settle and stay, not creep downwards |
+| 4 | press `1` to `6` in either view | Capture size changes, and the picture visibly changes with it. These keys once appeared dead because the sent image was pinned ([FINDINGS §21.4](FINDINGS.md)) |
+| 5 | `sudo rs-enumerate-devices -s` | ⛔ **Needs sudo, and that is expected** ([FINDINGS §28.4](FINDINGS.md)). Reports firmware, and the serial. ⚠️ **It reports a DIFFERENT serial from the USB descriptor** (`260322274021` against `255323071773`), which is unexplained. Run it beside `ioreg` and settle it before any serial is written into a config file |
+
+⭐ **What cannot be answered without the second D405**, and therefore waits: whether two identical cameras can be told apart at all, and whether two of them fit on one USB controller. Both are in §7.2 below.
+
+⚠️ **One measurement worth taking while he is in there:** the D405's latency. The C920 is about 200 ms and that is the camera itself rather than software ([FINDINGS §21.3](FINDINGS.md)). A machine-vision camera may be far quicker, and the whole reason for wanting it is a wrist view you can drive from. **Do not assume the 200 ms carries over.**
 
 ### 7.2 What actually needs doing, in order
 

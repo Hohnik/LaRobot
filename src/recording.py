@@ -45,31 +45,34 @@ SAVE_PRECISION = 5
 MIN_STEP = 0.0
 
 
-def safe_time_scale(recorded_max_speed: float, cap: float) -> float:
-    """Fastest playback multiplier that keeps every joint under `cap` radians/second.
+def safe_time_scale(recorded_speed: float, cap: float) -> float:
+    """Playback multiplier at which no joint is commanded faster than `cap` rad/s.
 
-    ⛔ WHY A PLAYBACK NEEDS A CEILING AT ALL. A hand-taught path is known safe **at the
-    speed it was taught**, because a person was holding the arm while it happened.
-    Played back at twice that speed it is a different motion with twice the momentum,
-    and this rig has **no emergency stop** ([HANDOFF §4.5](../docs/HANDOFF.md)) so there
-    is no hardware backstop under a bad guess.
+    ⭐ It reports, it does not decide. `1.0` means the recording is exactly at the cap,
+    below `1.0` means the recording is faster than the cap and playing it at full speed
+    will ask the arm for more than the cap allows, above `1.0` means there is headroom to
+    speed the playback up. **The caller chooses what to do with that**, which is the same
+    split as the rest of this file: the module measures, the session decides.
 
-    ⭐ The ceiling is computed from a MEASUREMENT rather than picked. `Trajectory` reports
-    the fastest any single joint actually moved; this converts that into the largest
-    multiplier that still respects `cap`. So a slow, careful teaching run can be replayed
-    faster than a brisk one, which is the correct behaviour and not something a constant
-    could express.
+    ⛔ WHY IT NO LONGER FLOORS THE ANSWER AT 1.0, and this changed on 2026-08-13 after a
+    real run. The floor was there to express "replaying at the taught speed is always
+    allowed", which is a *policy* and belongs in the session. Hiding it here made the
+    session unable to see the one fact it most needed: **that the recording is faster than
+    the arm can follow.** Julien hit that immediately. Hand-guiding a weightless arm
+    reaches 2.4 to 2.9 rad/s at the 99th percentile, while this code permits 1.5 rad/s for
+    any planned motion, so every hand-taught recording came back with "max 1.00x" and then
+    played back slower than 1x anyway because the arm kept falling behind. The number was
+    right and it was reported in a form that could not explain what he was seeing.
 
-    Returns `1.0` when the recording is already at or above the cap, because **replaying
-    at the taught speed is always allowed**: the arm demonstrably survived it. ⚠️ That is
-    a deliberate choice, not an oversight. Refusing to replay a fast recording at 1x
-    would make the feature useless exactly when the demonstration was natural.
+    ⚠️ `cap` is the fastest any planned motion is allowed to command, not a measurement of
+    what the arm can physically track. Those are different, and the second one has never
+    been measured on this rig. See [ROADMAP.md](../docs/ROADMAP.md) §6.6.
     """
     if cap <= 0:
         raise ValueError(f"cap must be positive, got {cap}")
-    if recorded_max_speed <= 0:
-        return 1.0                      # nothing moved, so no speed can be unsafe
-    return max(1.0, cap / recorded_max_speed)
+    if recorded_speed <= 0:
+        return float("inf")             # nothing moved, so no speed can breach the cap
+    return cap / recorded_speed
 
 
 @dataclass(frozen=True)
@@ -179,6 +182,39 @@ class Trajectory:
         span = b.t - a.t
         f = 0.0 if span <= 0 else (want - a.t) / span
         return tuple(x + (y - x) * f for x, y in zip(a.q, b.q))
+
+    def joint_speed(self, percentile: float = 100.0) -> float:
+        """Joint speed at a percentile of the sampled steps, in radians per second.
+
+        ⭐⭐ WHY A PERCENTILE EXISTS ALONGSIDE THE PLAIN MAXIMUM, and it is a measurement
+        that forced the question. Julien's three recordings from 2026-08-13:
+
+            recording   max    p99    p95   median
+                1      0.78   0.68   0.59   0.29
+                3      2.87   2.67   1.99   0.04
+                4      3.31   2.36   2.00   0.49
+
+        ⚠️ Look at recording 4: the maximum is 3.31 and the 99th percentile is 2.36. **A
+        single sample is dragging the maximum up by 40%.** At 100 Hz one noisy reading of
+        0.033 rad is enough to do that, and a weightless arm being pushed by hand is
+        exactly where such a reading comes from. Sizing a playback speed off the maximum
+        therefore lets one bad sample veto the whole recording.
+
+        ⛔ So use `joint_speed(99)` to decide a speed and `max_joint_speed()` to report
+        what actually happened. Do not collapse them into one number: the maximum is the
+        honest answer to "how fast did this go", and the percentile is the useful answer to
+        "how fast is this, ignoring noise". Reporting only the percentile would hide a real
+        fast movement, which is the failure this repo is named after.
+        """
+        speeds = sorted(
+            max(abs(y - x) for x, y in zip(a.q, b.q)) / (b.t - a.t)
+            for a, b in zip(self.samples, self.samples[1:])
+            if b.t > a.t
+        )
+        if not speeds:
+            return 0.0
+        idx = min(len(speeds) - 1, max(0, round(percentile / 100.0 * len(speeds)) - 1))
+        return speeds[idx]
 
     def max_joint_speed(self) -> float:
         """Fastest any single joint moved, in radians per second.

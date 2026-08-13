@@ -255,12 +255,20 @@ PARK_FILE = REPO / "config" / "park_pose.json"
 # re-calibrating. Gitignored, and the dataset itself will live somewhere else again
 # (ROADMAP step 5).
 TAKES_DIR = REPO / "recordings"
-# ⛔ The hard ceiling on playback speed, in radians per second for any single joint.
-# 1.5 matches the park speed cap, which is the fastest planned motion Julien has driven
-# and judged acceptable. `safe_time_scale()` turns this plus the recording's OWN measured
-# top speed into the largest multiplier allowed — so the limit is derived from what was
-# actually taught rather than guessed. See src/recording.py.
-REPLAY_JOINT_SPEED_CAP = 1.5
+# ⭐⭐ ONE CEILING FOR EVERY PLANNED MOTION, in radians per second for a single joint.
+# Julien asked for this on 2026-08-13: *"max speed would just be limited by the actual
+# safety things we have or the motors. Maybe we need an extra system for max speeds in
+# general."* He is right, and the number already existed in the file twice over: TELEOP
+# clamps the commanded joint change to MAX_JOINT_STEP per cycle, which at CONTROL_HZ is
+# exactly this speed. Deriving it keeps the two from drifting apart, and it means a change
+# to the teleop clamp automatically applies to playback.
+#
+# ⚠️ WHAT THIS IS NOT: a measurement of how fast the arm can actually track a command.
+# Nobody has measured that on this rig. The evidence so far says it is LOWER — at 0.26x of
+# a 2.67 rad/s recording, so ~0.7 rad/s commanded, the arm was already 0.105 rad behind
+# against a 0.15 limit. So treat this as "the fastest we allow ourselves to ask for", and
+# see ROADMAP §6.6 for the measurement that would replace it.
+MAX_PLANNED_JOINT_SPEED = MAX_JOINT_STEP * CONTROL_HZ
 # ⚠️ How long one recording may run before it stops itself. ~16 minutes at 100 Hz, which
 # is well past the ~4.5 minutes of context a long-horizon policy wants (ROADMAP §9.3).
 # It exists because nothing else would ever stop a recording, and an unbounded list in a
@@ -273,14 +281,14 @@ HELP = """
             p then Enter          drive to the base pose
             p then 1 then Enter   drive to waypoint 1
             p then 1 2 3 Enter    ONE smooth motion through all three, Enter again to go
-            while choosing OR moving:  - / + speed   , / . corners
-                                       ö / ä  how long the ease lasts  (also [ / ])
+            while choosing OR moving:  - / + speed   , / . corners   ö / ä  ease length
   TAKES     w  record a movement (any mode; GUIDE is the point). w again stops, then 0-9 saves
             l then 0-9   play a recording back — shows the plan, Enter runs it
-  EASE      e  cycle none / in / out / both / s-curve — works in ANY mode
+  EASE      e  profile   ö / ä  how long   — shapes p runs and Ctrl-C, nothing else
+            (gripper step is --gripper-step now, not a live key)
   DIRECTION x y z  flip translation axis      1 2 3  flip rotation axis (roll/pitch/yaw)
   CONTROLS  m  set up the mouse — the arm MOVES, one isolated axis, half speed
-  SPEED     - / +  linear             , / .  rotation      ö / ä  gripper step ([ / ])
+  SPEED     - / +  linear             , / .  rotation
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
   OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
@@ -322,6 +330,20 @@ def load_json(path: Path, default):  # noqa: ANN001, ANN201
 def save_json(path: Path, data) -> None:  # noqa: ANN001
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n")
+
+
+def ease_note(profile: str, ramp: float) -> str:
+    """The one-line answer to *"what does easing even do here?"*
+
+    ⭐ It names where the effect lives, because that is the question Julien actually asked
+    on the arm: *"the easing outside of parking, I don't really know what that means. Does
+    it work for recording, or does it work for teleoperating?"* Neither. Easing shapes how
+    a **planned** move starts and stops, which means `p` runs and the Ctrl-C park, and
+    nothing else. Driving by hand has no plan to shape, and a playback follows the timing
+    it was taught rather than an eased ramp.
+    """
+    tail = "off" if ramp <= 0 else f"over {ramp:.2f} rad"
+    return f"ease {profile} {tail} · affects p runs and Ctrl-C only · ö/ä = how long"
 
 
 def git_commit() -> str:
@@ -492,6 +514,13 @@ def main() -> int:  # noqa: PLR0915
                          "gripper, for driving while watching a wrist camera; camera = the "
                          "MODELLED D405 mount, wrong for a hand-mounted webcam. Toggle live with v")
     ap.add_argument("--linear-scale", type=float, default=LINEAR_SCALE)
+    ap.add_argument("--gripper-step", type=float, default=GRIPPER_STEP,
+                    help="how far o/c move the jaws per press, 0-1 of their travel. "
+                         "⭐ A FLAG rather than a live key since 2026-08-13: it used to be "
+                         "ö/ä, which now always mean the ease ramp. Julien on the arm: "
+                         "changing the gripper step live is 'not necessary currently and "
+                         "all the time', and sharing the keys with the ease ramp meant a "
+                         "message told him to press keys that did something else")
     ap.add_argument("--box", type=float, default=WORKSPACE_BOX)
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
@@ -585,18 +614,22 @@ def main() -> int:  # noqa: PLR0915
     # into ArmSession when main() is restructured (HANDOFF task 0c), and the fewer locals
     # it owns the smaller that diff is.
     take: Trajectory | None = None      # being recorded right now, or None
+    take_to_save: Trajectory | None = None   # frozen, waiting for its slot digit
     take_t0 = 0.0
     replay: Trajectory | None = None    # being played back right now, or None
     replay_t0 = 0.0
     replay_s = 0.0                      # seconds into the recording, held back on lag
     replay_speed = 1.0
     replay_progress_t = 0.0             # last cycle in which the clock actually moved
+    replay_slot = "?"                   # which saved recording is being played
+    replay_held_s = 0.0                 # seconds spent waiting for the arm to catch up
+    replay_worst_lag = 0.0              # furthest behind the arm ever got, radians
     replay_pending: Trajectory | None = None   # parked to its start, waiting to run
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
     angular_scale = ANGULAR_SCALE
-    gripper_step = GRIPPER_STEP
+    gripper_step = args.gripper_step
     # CONTROLS mode remembers the last puck axis that actually moved, with no
     # timeout: f and 1-6 act on "the control you just used", and it must still be
     # remembered after the puck has sprung back to centre and his hand has left it.
@@ -796,6 +829,26 @@ def main() -> int:  # noqa: PLR0915
                     f"{radius:.2f} (,/.) · ease {EASINGS[ease_idx].name} over "
                     f"{park_ramp:.2f} (e, ö/ä) · Enter=go")
 
+        def replay_plan_line() -> str:
+            """What a playback will do, with the two numbers that decide whether it can.
+
+            ⭐ It shows the taught speed AND the ceiling on a planned move, because the
+            interesting case is when the first exceeds the second. Julien met that case on
+            his first try: a hand-guided recording moves faster than any planned motion here
+            is allowed to, so playing it at 1.00x makes the loop wait for the arm and the
+            playback comes out longer than the recording. Better said before he presses
+            Enter than discovered afterwards.
+            """
+            if replay_pending is None:
+                return ""
+            taught = replay_pending.joint_speed(99)
+            note = ""
+            if taught > MAX_PLANNED_JOINT_SPEED:
+                note = (f" ⚠️ taught {taught:.1f} rad/s exceeds the "
+                        f"{MAX_PLANNED_JOINT_SPEED:.1f} allowed, so 1.00x will lag")
+            return (f"PLAY {replay_slot} · {replay_pending.duration:.1f}s taught at "
+                    f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go")
+
         def begin_path(legs: list, what: str) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
 
@@ -985,7 +1038,8 @@ def main() -> int:  # noqa: PLR0915
 
                     if pending == "take_save":
                         pending = None
-                        if k.isdigit() and take is not None:
+                        take = None          # belt and braces: never resume by accident
+                        if k.isdigit() and take_to_save is not None:
                             TAKES_DIR.mkdir(exist_ok=True)
                             path = TAKES_DIR / f"{k}.json"
                             # ⭐ The commit goes in at SAVE time, not at load time. Julien
@@ -994,15 +1048,15 @@ def main() -> int:  # noqa: PLR0915
                             # the code produced a recording is cheap to write now and
                             # impossible to reconstruct later. Same argument as the whole
                             # metadata block in ROADMAP §6.6.
-                            take.meta["commit"] = git_commit()
-                            take.meta["recorded_at"] = dt_now()
-                            take.save(path)
-                            print(f"\n  ✓ recording {k} saved: {take.duration:.1f}s, "
-                                  f"{len(take)} samples → {path.name}")
+                            take_to_save.meta["commit"] = git_commit()
+                            take_to_save.meta["recorded_at"] = dt_now()
+                            take_to_save.save(path)
+                            print(f"\n  ✓ recording {k} saved: {take_to_save.duration:.1f}s, "
+                                  f"{len(take_to_save)} samples → {path.name}")
                             print(f"     (l then {k} plays it back)\n")
                         else:
                             print("\n  recording discarded.\n")
-                        take = None
+                        take_to_save = None
                         continue
 
                     if pending == "take_play":
@@ -1015,34 +1069,42 @@ def main() -> int:  # noqa: PLR0915
                             print(f"\n  ⚠️  nothing saved in recording {k} — "
                                   "press w to record one.\n")
                             continue
-                        loaded = Trajectory.load(path)
-                        allowed = safe_time_scale(loaded.max_joint_speed(),
-                                                  REPLAY_JOINT_SPEED_CAP)
-                        replay_speed = min(replay_speed, allowed)
-                        replay_pending = loaded
+                        replay_pending = Trajectory.load(path)
+                        replay_slot = k
+                        # ⭐⭐ 1.00x IS THE TAUGHT SPEED, AND THE DEFAULT IS WHATEVER THE ARM
+                        # CAN ACTUALLY FOLLOW. Reworked 2026-08-13, on Julien's suggestion:
+                        # *"maybe one x should just be the original speed, and then you could
+                        # go up and down. So max speed would just be limited by the actual
+                        # safety things we have or the motors."*
+                        #
+                        # ⛔ WHY THE OLD VERSION COULD NOT EXPLAIN ITSELF. Hand-guiding a
+                        # weightless arm reaches 2.4 to 2.9 rad/s (his own three recordings,
+                        # 99th percentile), while MAX_PLANNED_JOINT_SPEED is 1.5. So every
+                        # recording came back reading "max 1.00x", he played it at 1.00x, and
+                        # it took 2.3 s longer than the recording because the loop kept
+                        # holding the clock to let the arm catch up. Nothing on screen said
+                        # why. Now the plan states both numbers and starts at a speed that
+                        # will actually track.
+                        trackable = safe_time_scale(replay_pending.joint_speed(99),
+                                                    MAX_PLANNED_JOINT_SPEED)
+                        replay_speed = min(1.0, trackable)
                         pending = "take_go"
-                        # ⭐ The plan says what the arm will DO, including the number that
-                        # bounds it. `allowed` comes from the recording's own measured top
-                        # speed, so a careful teaching run shows more headroom than a brisk
-                        # one — see src/recording.py::safe_time_scale.
-                        hint(f"PLAY {k} · {loaded.duration:.1f}s · "
-                             f"{len(loaded)} samples · speed {replay_speed:.2f}x "
-                             f"(max {allowed:.2f}x) (-/+) · Enter=go")
+                        hint(replay_plan_line())
                         continue
 
                     if pending == "take_go":
                         if k in ("+", "="):
-                            loaded = replay_pending
-                            allowed = safe_time_scale(loaded.max_joint_speed(),
-                                                      REPLAY_JOINT_SPEED_CAP) if loaded else 1.0
-                            replay_speed = min(allowed, replay_speed * 1.25)
-                            hint(f"PLAY · speed {replay_speed:.2f}x (max {allowed:.2f}x) "
-                                 "(-/+) · Enter=go")
-                            continue
+                            # ⚠️ Upwards is capped at 1.00x whenever the recording is
+                            # already faster than a planned move may be. Going above the
+                            # taught speed there would ask for something the arm cannot do
+                            # and this rig has no emergency stop.
+                            ceiling = max(1.0, safe_time_scale(
+                                replay_pending.joint_speed(99), MAX_PLANNED_JOINT_SPEED))
+                            replay_speed = min(ceiling, replay_speed * 1.25)
+                            hint(replay_plan_line()); continue
                         if k == "-":
-                            replay_speed = max(0.1, replay_speed / 1.25)
-                            hint(f"PLAY · speed {replay_speed:.2f}x (-/+) · Enter=go")
-                            continue
+                            replay_speed = max(0.05, replay_speed / 1.25)
+                            hint(replay_plan_line()); continue
                         pending = None
                         if k in ("\r", "\n", " ") and replay_pending is not None:
                             # ⛔⭐ PARK TO THE START POSE FIRST, AND THIS IS THE SAFETY
@@ -1403,15 +1465,30 @@ def main() -> int:  # noqa: PLR0915
                             take_t0 = t
                             print(f"\n⏺  RECORDING — {mode.upper()} mode. Press w again to stop.\n")
                         else:
-                            n, secs = len(take), take.duration
+                            # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
+                            # ON 2026-08-13. `take` was left in place while the "which slot?"
+                            # prompt waited for a digit, and the per-cycle sampler keys off
+                            # `take is not None` — so the recording kept growing for as long
+                            # as Julien took to answer. Measured from his own three files:
+                            # 1.8 s, 4.4 s and 3.3 s of extra samples appended AFTER the stop
+                            # keypress, with 0.1 to 0.7 rad of movement in the tail. He
+                            # described it exactly: *"the recordings played for like two
+                            # seconds longer than I actually recorded, it was just standing
+                            # still for that time."*
+                            #
+                            # Moving it to a second name is the whole fix: the sampler stops
+                            # on this line, and the prompt then saves something frozen.
+                            take_to_save, take = take, None
+                            n, secs = len(take_to_save), take_to_save.duration
                             if n < 2:
-                                take = None
+                                take_to_save = None
                                 print("\n  nothing recorded (too short) — discarded.\n")
                             else:
                                 pending = "take_save"
-                                fastest = take.max_joint_speed()
                                 print(f"\n⏹  RECORDED {secs:.1f}s, {n} samples, "
-                                      f"fastest joint {fastest:.2f} rad/s.")
+                                      f"typical joint speed "
+                                      f"{take_to_save.joint_speed(99):.2f} rad/s "
+                                      f"(peak {take_to_save.max_joint_speed():.2f}).")
                                 print("     SAVE to which slot? 0-9, any other key discards.\n")
                     elif k == "l":
                         # ⛔ PLAY A RECORDING, AND IT ASKS TWICE ON PURPOSE. `l` sits next
@@ -1444,21 +1521,43 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "c" and mode == "teleop":
                         gripper_value = clamp_gripper(gripper_value - gripper_step)
                     elif k in KEY_STEP_UP:
-                        gripper_step = min(0.20, gripper_step * 1.5)
-                        hint(f"gripper step {gripper_step:.3f} per press")
+                        # ⭐⭐ ö AND ä MEAN THE EASE RAMP EVERYWHERE NOW. Changed
+                        # 2026-08-13, after Julien hit the confusion on the arm.
+                        #
+                        # ⛔ WHAT WENT WRONG. `e` cycles the ease profile in any mode, and
+                        # its own message read *"(ö/ä adjusts how long)"*. But outside a
+                        # park prompt those keys were bound to the GRIPPER STEP, so the
+                        # message told him to press keys that did something else. He
+                        # pressed them and pushed the gripper step to its 0.200 ceiling by
+                        # accident, which makes every later `o` or `c` move the jaws a
+                        # fifth of their travel. His words: *"the German characters ö and ä
+                        # don't quite work as I think they should… they change the gripper
+                        # step speed, which in itself might be cool, but not necessary
+                        # currently and all the time."*
+                        #
+                        # ⭐ The fix is one meaning per key, not a cleverer message. A
+                        # message that has to explain which of two things a key does today
+                        # is a design admitting it is wrong. The gripper step moves to
+                        # `--gripper-step`: it is a preference set once, and he said
+                        # outright that it does not need a live key.
+                        park_ramp = min(1.0, park_ramp * 1.4)
+                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
                     elif k in KEY_STEP_DOWN:
-                        gripper_step = max(0.002, gripper_step / 1.5)
-                        hint(f"gripper step {gripper_step:.3f} per press")
+                        park_ramp = max(0.0, park_ramp / 1.4 if park_ramp > 0.03 else 0.0)
+                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
                     elif k == "e":
-                        # ⭐ WORKS EVERYWHERE NOW, and it did not before. `e` was bound
-                        # only while a run was being typed, yet the run plan row stayed
-                        # on screen advertising it — so Julien cancelled a run, pressed
-                        # `e`, and got `(key 'e' does nothing)`. The profile describes
-                        # how the NEXT park will move, which is meaningful in any mode,
-                        # so there is no reason for it to be modal.
+                        # ⭐ WORKS EVERYWHERE, and the message now says WHAT IT AFFECTS.
+                        # Julien, on the arm: *"the easing outside of parking, I don't
+                        # really know what that means. Does it work for recording, or does
+                        # it work for teleoperating? … what's the point of that?"* A fair
+                        # question, and the answer is neither. Easing shapes only PLANNED
+                        # moves: `p` runs and the Ctrl-C park. It does nothing for driving
+                        # by hand or for a playback, which follows recorded timing instead.
+                        # Pressing `e` elsewhere sets up the next planned move. A knob whose
+                        # effect you cannot see has to say where its effect lives, every
+                        # time it is touched.
                         ease_idx = (ease_idx + 1) % len(EASINGS)
-                        hint(f"ease {EASINGS[ease_idx].name} over {park_ramp:.2f} rad"
-                             f"   (ö/ä adjusts how long)")
+                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
                     elif k == "r":
                         rotation = not rotation
                         hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
@@ -1573,9 +1672,11 @@ def main() -> int:  # noqa: PLR0915
                         # wants (ROADMAP §9.3). Stopping and saying so beats running out of
                         # memory in a process that is driving an arm.
                         if len(take) >= MAX_TAKE_SAMPLES:
+                            # Freeze it the same way `w` does, or the limit would not be one.
+                            take_to_save, take = take, None
                             pending = "take_save"
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
-                                  f"limit ({take.duration:.0f}s).")
+                                  f"limit ({take_to_save.duration:.0f}s).")
                             print("     SAVE to which slot? 0-9, any other key discards.\n")
 
                 # ---- 4. act on the mode -----------------------------------
@@ -1706,13 +1807,31 @@ def main() -> int:  # noqa: PLR0915
                         full[N_ARM] = clamp_gripper(float(rs.target[N_ARM]))
                     robot.command_joint_pos(full)
 
-                    if not rs.held:
+                    replay_worst_lag = max(replay_worst_lag, rs.lag)
+                    if rs.held:
+                        replay_held_s += dt
+                    else:
                         replay_progress_t = t
                     if rs.finished:
                         mode = "hold"; enter_hold(); hint("")
-                        print(f"⭐ PLAYBACK finished in {t - replay_t0:.1f}s "
-                              f"(recording is {replay.duration:.1f}s at "
-                              f"{replay_speed:.2f}x) → HOLD")
+                        # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
+                        # 2.3 s longer than the recording and the old message reported only
+                        # the total, so it read as a bug with no explanation. The whole
+                        # difference is the loop holding the clock while the arm catches up,
+                        # which is a decision this code makes on purpose. A readout has to
+                        # show what can go wrong, not only what looks tidy — the same lesson
+                        # as showing the jaw temperature separately (FINDINGS §11).
+                        planned = replay.duration / replay_speed
+                        print(f"⭐ PLAYBACK finished in {t - replay_t0:.1f}s → HOLD")
+                        print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
+                              f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
+                        print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
+                              f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
+                        if replay_held_s > 0.15 * planned:
+                            print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
+                                  f"of the run waiting. Try a lower speed for a faithful replay.\n")
+                        else:
+                            print()
                         replay = None
                     elif t - replay_progress_t > PARK_STALL_SECONDS:
                         # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
@@ -1809,6 +1928,7 @@ def main() -> int:  # noqa: PLR0915
                                 replay_pending = None
                                 replay_t0, replay_s = t, 0.0
                                 replay_progress_t = t
+                                replay_held_s, replay_worst_lag = 0.0, 0.0
                                 mode = "replay"
                                 print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
                                       f"movement at {replay_speed:.2f}x. "

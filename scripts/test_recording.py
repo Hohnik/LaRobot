@@ -317,22 +317,25 @@ def test_a_whole_playback_run_reaches_the_end_and_follows_the_path() -> None:
 # --------------------------------------------------- the playback speed cap ----
 
 
-def test_a_slow_recording_may_be_replayed_faster() -> None:
-    """⭐ The ceiling comes from a MEASUREMENT, not a constant. A careful teaching run
-    earns more headroom than a brisk one, which no fixed number could express."""
+def test_a_slow_recording_reports_headroom_above_1x() -> None:
+    """A recording taught at 0.5 rad/s against a 1.5 rad/s cap has 3x of headroom."""
     assert abs(safe_time_scale(0.5, 1.5) - 3.0) < 1e-9
 
 
-def test_a_recording_already_at_the_cap_is_allowed_at_1x() -> None:
-    """⚠️ Deliberate. Replaying at the taught speed is always permitted, because the arm
-    demonstrably survived it with a hand on it. Refusing would make the feature useless
-    exactly when the demonstration was natural."""
+def test_a_recording_FASTER_than_the_cap_reports_BELOW_1x() -> None:
+    """⛔ THE CHANGE OF 2026-08-13, and it came from a real run. This used to be floored at
+    1.0, which expressed the policy "1x is always allowed" inside a function whose job is
+    to measure. The floor hid the one fact the session needed: the recording is faster than
+    any planned motion here is permitted to be. Every hand-taught recording reported
+    "max 1.00x" and then played back slower than 1x anyway, and nothing on screen could
+    explain why."""
     assert safe_time_scale(1.5, 1.5) == 1.0
-    assert safe_time_scale(9.0, 1.5) == 1.0
+    assert abs(safe_time_scale(3.0, 1.5) - 0.5) < 1e-9
+    assert safe_time_scale(2.67, 1.5) < 1.0, "a hand-taught 2.67 rad/s cannot run at 1x"
 
 
-def test_a_recording_that_never_moved_cannot_be_unsafe() -> None:
-    assert safe_time_scale(0.0, 1.5) == 1.0
+def test_a_recording_that_never_moved_has_unlimited_headroom() -> None:
+    assert safe_time_scale(0.0, 1.5) == float("inf")
 
 
 def test_a_non_positive_cap_is_refused() -> None:
@@ -346,12 +349,38 @@ def test_a_non_positive_cap_is_refused() -> None:
 
 
 def test_the_cap_and_the_measurement_agree_end_to_end() -> None:
-    """The two halves used together: measure what was taught, derive what is allowed,
-    and confirm the scaled recording really does respect the cap."""
+    """The two halves used together: measure what was taught, derive the multiplier, and
+    confirm the scaled recording really does respect the cap."""
     traj = straight_line(n=11, hz=10.0)          # 1.0 rad/s taught
     allowed = safe_time_scale(traj.max_joint_speed(), 1.5)
     assert abs(allowed - 1.5) < 1e-9
     assert traj.time_scaled(allowed).max_joint_speed() <= 1.5 + 1e-9
+
+
+def test_a_PERCENTILE_ignores_a_single_noisy_sample_and_the_MAX_does_not() -> None:
+    """⭐ Measured from his own recordings on 2026-08-13: recording 4 has a maximum of
+    3.31 rad/s and a 99th percentile of 2.36, so one sample was dragging the maximum up by
+    40%. At 100 Hz a single noisy reading of 0.033 rad does that, and a weightless arm
+    being pushed by hand is exactly where such a reading comes from."""
+    traj = Trajectory()
+    for i in range(100):
+        traj.append(i / 100.0, (i * 0.005,))     # a steady 0.5 rad/s
+    traj.append(1.0, (traj.samples[-1].q[0] + 0.05,))   # one 5 rad/s spike
+    assert traj.max_joint_speed() > 4.0, "the maximum must still report the spike honestly"
+    assert traj.joint_speed(95) < 1.0, "the percentile must ignore it"
+    assert abs(traj.joint_speed(50) - 0.5) < 0.01
+
+
+def test_the_percentile_of_a_steady_recording_equals_its_speed() -> None:
+    traj = straight_line(n=11, hz=10.0)          # a constant 1.0 rad/s
+    for pct in (50, 95, 99, 100):
+        assert abs(traj.joint_speed(pct) - 1.0) < 1e-9, pct
+
+
+def test_the_percentile_of_an_empty_or_single_sample_recording_is_zero() -> None:
+    assert Trajectory().joint_speed(99) == 0.0
+    one = Trajectory([Sample(0.0, (0.0,))])
+    assert one.joint_speed(99) == 0.0
 
 
 # -------------------------------------------------------------------- files ----

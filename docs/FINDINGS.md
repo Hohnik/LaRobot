@@ -1262,3 +1262,77 @@ uv run scripts/camera_view.py --camera d405 --big
 3. **Reduce both step sizes** (say `× 0.93` down and `× 1.06` up) so the residual oscillation is too small to see.
 
 ⚠️ Also visible in his screenshots and already warned about on screen: capture is `1280x720` while only ~450 px is sent. Shrinking the *capture* would cut the resize cost and might on its own let the controller climb.
+
+---
+
+## 30. ⛔⭐ Four defects in the first hardware run of the recording feature — 2026-08-13
+
+Julien recorded and played back several movements on arm B, across four sessions. The feature worked: *"w and l work great. I was able to record. I was able to play it back. I was able to save the recordings, play back the recordings in different speeds."* Four things were wrong, and three of them were only visible because the console prints numbers at two different moments.
+
+### 30.1 ⛔⭐ Pressing `w` did not stop the recording. It stopped when the slot digit was pressed.
+
+His report: *"when I recorded, the recordings played for like two seconds longer than I actually recorded. It was just standing still for that time."*
+
+⭐ **The console had already printed the evidence, twice, and the two numbers disagreed.** The stop message reports the length at the `w` press; the save message reports it again after the digit:
+
+| slot | announced at the `w` press | what landed in the file | appended afterwards | joint travel in that tail |
+|---|---|---|---|---|
+| 1 | 7.9 s / 690 samples | 9.70 s / 850 samples | **1.80 s** | 0.37 rad |
+| 3 | 3.4 s / 294 samples | 7.78 s / 679 samples | **4.38 s** | 0.11 rad |
+| 4 | 2.7 s / 233 samples | 6.02 s / 522 samples | **3.32 s** | 0.70 rad |
+
+⛔ **The cause.** The per-cycle sampler runs when `take is not None`. Pressing `w` set `pending = "take_save"` and printed a summary, and left `take` in place. So the recording kept growing for exactly as long as he took to answer the prompt, and the arm was nearly still while he read it. Recording 3 is **56% padding**.
+
+⭐ **The fix is one line of intent: move the recording to a second name and set `take = None` immediately.** The sampler stops on that statement, and the prompt then saves something frozen. `take_to_save` holds it.
+
+⚠️ **The general lesson, and it is worth more than the fix.** A modal prompt that leaves the thing it is asking about still running is a defect shape, not a one-off. The same pattern existed in the park-sequence prompt and was harmless there only because typing a digit changes nothing physical. ⭐ **And note what caught it: printing the same quantity at two moments in the same flow.** Neither number looked wrong alone.
+
+### 30.2 ⛔ Every hand-taught recording is faster than any planned motion is allowed to be
+
+Measured from his three files, joint speeds in rad/s:
+
+| recording | max | p99 | p95 | median |
+|---|---|---|---|---|
+| 1 (teleop) | 0.78 | 0.68 | 0.59 | 0.29 |
+| 3 (guide) | 2.87 | 2.67 | 1.99 | 0.04 |
+| 4 (guide) | 3.31 | 2.36 | 2.00 | 0.49 |
+
+`MAX_JOINT_STEP * CONTROL_HZ` is **1.5 rad/s**, which is the fastest this code lets any planned motion command. So both hand-guided recordings exceed it by roughly 1.6x to 1.8x, and driving with the SpaceMouse does not.
+
+⭐ **So playback at 1.00x asks for more than the arm is allowed to do, the loop holds its clock to let the arm catch up, and the playback comes out longer than the recording.** His two runs took 10.1 s for a 7.8 s recording and 8.5 s for a 6.0 s one. Both effects were in play at once: this one, plus the padding from §30.1.
+
+⛔ **The old readout could not explain any of it.** `safe_time_scale()` floored its answer at 1.0, so every hand-taught recording reported "max 1.00x" and then ran slower than 1x anyway. **The number was correct and reported in a form that could not describe what he was watching.** The floor was a *policy* ("1x is always allowed") living inside a function whose job is to measure. It has been removed; the session applies the policy now.
+
+⭐ **Julien's own proposal, adopted:** *"maybe one x should just be the original speed, and then you could go up and down. So max speed would just be limited by the actual safety things we have or the motors. Maybe we need an extra system for max speeds in general."* There is now one named ceiling, `MAX_PLANNED_JOINT_SPEED`, **derived** from the teleop clamp rather than picked, so the two cannot drift apart. A playback starts at the fastest speed that will actually track, and the plan line states the taught speed, the ceiling and a warning when the first exceeds the second.
+
+### 30.3 ⚠️ The maximum joint speed is set by a single sample, and it distorts the decision
+
+Recording 4: maximum **3.31**, 99th percentile **2.36**. ⭐ **One sample is dragging the maximum up by 40%.** At 100 Hz a single noisy reading of 0.033 rad does exactly that, and a weightless arm being pushed by hand is where such a reading comes from.
+
+So sizing a playback speed off the maximum lets one bad sample veto a whole recording. `Trajectory.joint_speed(percentile)` now exists. ⛔ **Both numbers are kept and both are shown.** The percentile decides the speed; the maximum is still reported, because hiding a real fast movement behind an average is the failure this file is named after.
+
+### 30.4 ⛔ A message told him to press keys that did something else, and he changed a motion parameter by accident
+
+His report: *"the German characters ö and ä don't quite work as I think they should. When I press e outside of park and then the characters, then they change the gripper step speed, which in itself might be cool, but not necessary currently and all the time."*
+
+The chain: `e` cycles the ease profile in any mode, and its message ended `(ö/ä adjusts how long)`. Outside a park prompt, `ö`/`ä` were bound to the **gripper step**. His log shows the result, `gripper step 0.200 per press`, which is the ceiling. **Every later `o` or `c` would then move the jaws a fifth of their travel.**
+
+⛔ **This is [§27.4](FINDINGS.md) again, at a different keystroke.** That entry recorded a stale hint advertising a key that did nothing where it was shown. This is a live hint advertising a key that does *something else* where it is shown, which is worse: the first wastes a press, the second changes a setting silently.
+
+⭐ **The fix is one meaning per key, not a cleverer message.** `ö`/`ä` (and `[`/`]`) now adjust the ease ramp everywhere. The gripper step became `--gripper-step`, on his judgement that it does not need to be live. ⚠️ **A message that has to explain which of two things a key does today is a design admitting it is wrong.**
+
+### 30.5 ⭐ And his question deserved a real answer: what is easing for, outside a park?
+
+*"The easing outside of parking, I don't really know what that means. Does it work for recording, or does it work for teleoperating? Or does it not work outside of parking, really? What's the point of that?"*
+
+**Neither.** Easing shapes how a **planned** move starts and stops, which means `p` runs and the Ctrl-C park, and nothing else. Driving by hand has no plan to shape. A playback follows the timing it was taught, so easing does not apply there either. Pressing `e` elsewhere configures the next planned move.
+
+⭐ **So the message now says where the effect lives**, every time the key is touched: `ease s-curve over 0.20 rad · affects p runs and Ctrl-C only · ö/ä = how long`. A knob whose effect you cannot see has to name its own scope.
+
+### ⭐ What confirmed itself in the same run, at no cost
+
+- **The session-19 display fixes hold.** Not one message in four sessions of log has a fragment of the status line welded onto it. That was the defect behind *"hold sometimes gets overwritten"* ([§27](FINDINGS.md)).
+- **`ö`/`ä` arrive at all**, so the UTF-8 decoder works ([§27.7](FINDINGS.md)).
+- **`e` works outside a park prompt**, which was the other half of §27.4.
+- **Parking to a recording's start pose and handing over to playback works**, four times, including one interrupted by Ctrl-C with a clean park and disable.
+- ⚠️ Still never seen: the `⭐ MODE: HOLD` banner on its own (he never pressed `h` alone), the 55 °C warning, and the blind-thermal stop.

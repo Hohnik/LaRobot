@@ -140,6 +140,63 @@ def test_the_size_list_spans_small_to_large() -> None:
     assert C.SIZES == sorted(C.SIZES), "keys 1-6 should step upward in size"
 
 
+
+# ------------------------------------------ the adaptive image width controller ----
+
+
+def test_ONE_slow_frame_does_not_shrink_the_picture() -> None:
+    """⛔ THE RATCHET, as a test. Julien: the terminal view *"gets worse over time, which
+    is a bit weird."* One hiccup used to knock the width down a step permanently."""
+    w, over = C.tune_image_width(520.0, 30.0, 16.7, over=0, ceiling=720)
+    assert w == 520.0, "a single slow frame moved the width"
+    assert over == 1
+
+
+def test_two_slow_frames_in_a_row_DO_shrink_it() -> None:
+    w, over = C.tune_image_width(520.0, 30.0, 16.7, over=1, ceiling=720)
+    assert w < 520.0
+    assert over == 0, "the counter must reset after acting"
+
+
+def test_a_frame_inside_budget_CLEARS_the_counter() -> None:
+    """Otherwise two slow frames an hour apart would still count as consecutive."""
+    _, over = C.tune_image_width(520.0, 12.0, 16.7, over=1, ceiling=720)
+    assert over == 0
+
+
+def test_the_exact_width_from_his_screenshots_can_now_CLIMB_BACK() -> None:
+    """⭐ The measured case. 520 x 0.85 = 442 exactly, one old shrink step, and at 442 the
+    draw cost was 10.5 ms — inside the old dead band and above its 10 ms grow threshold, so
+    it was stuck for ever. 10.5 ms is below 0.85 x 16.7 = 14.2, so it climbs now."""
+    w, _ = C.tune_image_width(442.0, 10.5, 16.7, over=0, ceiling=720)
+    assert w > 442.0, "the width his session was stuck at still cannot recover"
+
+
+def test_it_never_climbs_past_the_ceiling() -> None:
+    w, _ = C.tune_image_width(719.0, 1.0, 16.7, over=0, ceiling=720)
+    assert w <= 720.0
+
+
+def test_it_never_shrinks_below_the_floor() -> None:
+    w, _ = C.tune_image_width(240.0, 99.0, 16.7, over=1, ceiling=720)
+    assert w == 240.0
+
+
+def test_the_controller_settles_instead_of_oscillating_widely() -> None:
+    """⭐ The dead band existed to stop oscillation, and narrowing it could have brought the
+    oscillation back. Simulate a cost that grows with area and check the width converges
+    into a narrow band rather than swinging."""
+    w, over = 300.0, 0
+    seen = []
+    for _ in range(400):
+        draw = 16.7 * (w / 500.0) ** 2          # cost rises with pixel count
+        w, over = C.tune_image_width(w, draw, 16.7, over, ceiling=720)
+        seen.append(w)
+    tail = seen[-50:]
+    assert max(tail) - min(tail) < 0.10 * max(tail), f"still swinging: {min(tail):.0f}-{max(tail):.0f}"
+    assert 430 < sum(tail) / len(tail) < 560, f"settled in the wrong place: {sum(tail)/len(tail):.0f}"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []

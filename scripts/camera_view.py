@@ -1039,6 +1039,56 @@ def useful_image_width(cols: int, capture_width: int, cell: CellSize) -> int:
     return max(64, min(int(cols * cell.width), capture_width))
 
 
+# ⭐ How many consecutive over-budget frames it takes to shrink the image. Two, so a single
+# hiccup cannot ratchet the picture down for the rest of the session.
+SHRINK_AFTER = 2
+
+
+def tune_image_width(width: float, draw_ms: float, target_ms: float, over: int,
+                     ceiling: int, floor: float = 240.0) -> tuple[float, int]:
+    """Pick the next image width from the measured draw cost. Returns `(width, over)`.
+
+    ⛔⭐ THE BUG THIS FIXES WAS A ONE-WAY RATCHET, and Julien's two screenshots contain the
+    proof. He reported the terminal view *"gets worse over time, which is a bit weird…
+    it has the highest quality when I use it for FaceTime."*
+
+    The old rule was: shrink by 0.85 above the target, grow by 1.15 below 0.6 of the target,
+    do nothing in between. His screenshots read `sent 520x292` at `draw 13.3 ms`, and later
+    `sent 442x249` at `draw 10.5 ms`, with a target of 16.7 ms.
+
+        520 x 0.85 = 442.0     exactly one shrink step
+
+    And at 442 the cost is 10.5 ms, which sits **inside the dead band and above the 10 ms
+    grow threshold**. So it could never climb back. Every width whose cost landed between
+    10 and 16.7 ms was a fixed point, so one transient hiccup knocked the picture down a
+    step and it stayed there. The dead band was added to stop oscillation, and it removed
+    every path back up.
+
+    ⭐ Three changes, and the first is the one that matters:
+
+    1. **Shrink only after `SHRINK_AFTER` consecutive over-budget frames**, so a single
+       hiccup cannot move it at all. This is what removes the ratchet.
+    2. **Grow below 0.85 of the target** rather than 0.6, so the dead band is narrow and
+       recovery actually happens.
+    3. **Smaller steps** (0.93 down, 1.06 up) so the residual hunting either side of the
+       target is too small to see.
+
+    ⚠️ The camera was never the problem, and nothing here improves it. FaceTime looks better
+    because it puts pixels on the screen, while this path encodes every frame as a PNG and
+    writes it into a terminal. Ghostty implements only the kitty protocol, which has no JPEG
+    at all (§21.4), and PNG of a photograph costs roughly 25x the encode time. **For a good
+    look at the picture, drop `--term` and use the window.**
+    """
+    if draw_ms > target_ms:
+        over += 1
+        if over >= SHRINK_AFTER:
+            return max(floor, width * 0.93), 0
+        return width, over
+    if draw_ms < 0.85 * target_ms and width < ceiling:
+        return min(float(ceiling), width * 1.06), 0
+    return width, 0
+
+
 def terminal_grid(frame_aspect: float, scale: float = 1.0, margin_rows: int = 4,
                   cell_aspect: float | None = None) -> tuple[int, int]:
     """Character columns and rows to use, **preserving the picture's aspect ratio**.
@@ -1393,6 +1443,9 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
     # see useful_image_width() for why a constant could not do this job.
     auto_w = float(IMAGE_WIDTH_CAP.get(mode, 720))
     next_tune = 0.0
+    # How many consecutive over-budget frames have been seen. Reset by any frame inside
+    # budget, so one hiccup cannot shrink the picture. See tune_image_width().
+    over_budget = 0
     # ⭐ Set whenever a keypress changes what should be on screen, so the frame is
     # redrawn immediately instead of at the next capture.
     dirty = True
@@ -1517,10 +1570,8 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
                     if manual_width is None and now >= next_tune:
                         next_tune = now + 0.4
                         target = 0.5 * (1000.0 / max(1.0, grab.capture_fps()))
-                        if draw_ms > target:
-                            auto_w = max(240.0, auto_w * 0.85)
-                        elif draw_ms < 0.6 * target and auto_w < ceiling:
-                            auto_w = min(float(ceiling), auto_w * 1.15)
+                        auto_w, over_budget = tune_image_width(
+                            auto_w, draw_ms, target, over_budget, ceiling)
 
                 for k in keys.drain():
                     if k in ("q", "\x1b"):
