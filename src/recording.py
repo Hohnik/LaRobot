@@ -188,18 +188,32 @@ class Trajectory:
         """Joint speed at a percentile of the sampled steps, in radians per second.
 
         ⭐⭐ WHY A PERCENTILE EXISTS ALONGSIDE THE PLAIN MAXIMUM, and it is a measurement
-        that forced the question. Julien's three recordings from 2026-08-13:
+        that forced the question. Julien's recordings from 2026-08-13, **re-measured at
+        15:22 the same day and carrying the provenance of the file each row describes**:
 
-            recording   max    p99    p95   median
-                1      0.78   0.68   0.59   0.29
-                3      2.87   2.67   1.99   0.04
-                4      3.31   2.36   2.00   0.49
+            slot  commit   recorded   max    p99    p95   median
+              1   0e268ed    12:55    0.49   0.43   0.38   0.20
+              3   e89b745    09:34    2.87   2.67   1.99   0.04
+              4   e89b745    09:35    3.31   2.40   2.02   0.47
+              5   0e268ed    12:36    2.11   2.08   1.86   1.09
+              6   0e268ed    12:41    2.32   1.96   1.74   0.35
 
-        ⚠️ Look at recording 4: the maximum is 3.31 and the 99th percentile is 2.36. **A
-        single sample is dragging the maximum up by 40%.** At 100 Hz one noisy reading of
-        0.033 rad is enough to do that, and a weightless arm being pushed by hand is
-        exactly where such a reading comes from. Sizing a playback speed off the maximum
-        therefore lets one bad sample veto the whole recording.
+        ⚠️ Look at slot 4: the maximum is 3.31 and the 99th percentile is 2.40. **A single
+        sample is dragging the maximum up by 38%.** At 100 Hz one noisy reading of 0.033
+        rad is enough to do that, and a weightless arm being pushed by hand is exactly
+        where such a reading comes from. Sizing a playback speed off the maximum therefore
+        lets one bad sample veto the whole recording.
+
+        ⛔⭐ AND THE PROVENANCE COLUMNS ARE THERE BECAUSE THIS TABLE WENT STALE IN THREE
+        HOURS. Its first version was written at 10:01 and gave slot 1 as `max 0.78, p99
+        0.68, p95 0.59, median 0.29`. Julien then recorded over slot 1 at 12:55, and
+        because `recordings/` is gitignored the file those numbers describe **no longer
+        exists anywhere**. Slots 3 and 4 still reproduce to the digit; slot 1 was simply a
+        different movement. ⛔ **Saving by slot digit overwrites silently**, so any number
+        written down about "recording N" expires the moment N is reused. Quote `commit` and
+        `recorded_at` beside every measurement, which is the only reason the mismatch was
+        detectable at all — and re-derive with `uv run scripts/check_recordings.py` rather
+        than trusting this table.
 
         ⛔ So use `joint_speed(99)` to decide a speed and `max_joint_speed()` to report
         what actually happened. Do not collapse them into one number: the maximum is the
@@ -237,6 +251,50 @@ class Trajectory:
                 continue
             fastest = max(fastest, max(abs(y - x) for x, y in zip(a.q, b.q)) / dt)
         return fastest
+
+    def trailing_still_seconds(self, still: float = 0.05) -> float:
+        """Seconds of near-motionless time at the END of the recording.
+
+        ⭐⭐ WHY THIS IS A FUNCTION AND NOT A SENTENCE IN A DOCUMENT. The padding defect
+        of [FINDINGS §30.1](../docs/FINDINGS.md) — `w` stopped the recording at the slot
+        digit rather than at the keypress, so every file carried the time the save prompt
+        spent waiting — was recorded in prose as *"slots 1, 3, 4, 5, 6 are all padded,
+        discard them"*. ⛔ **That sentence was already wrong when it was written**, and
+        nothing could see it: three of the five were recorded *after* the fix. Measuring
+        it takes 20 lines, so it is measured.
+
+        ⭐ The measured separation is wide, which is why one threshold works. Julien's five
+        recordings on 2026-08-13, `still=0.05`:
+
+            slot  commit    padding   share    verdict
+              3   e89b745    4.46 s   57.3 %   before the fix
+              4   e89b745    2.64 s   43.9 %   before the fix
+              1   0e268ed    0.03 s    0.5 %   after the fix
+              5   0e268ed    0.00 s    0.0 %   after the fix
+              6   0e268ed    0.25 s    7.0 %   after the fix
+
+        ⚠️ A padded tail is NOT motionless, which is the trap that makes a naive
+        zero-speed test find nothing. A weightless arm held by a hand, or resting against
+        its own gravity compensation, wobbles at a steady 0.032 to 0.038 rad/s — the two
+        padded tails above sit on that floor for seconds at a time, dead flat. A threshold
+        of 0.01 reports zero padding on all five files and hides the defect completely.
+
+        ⚠️ It measures the *tail*, so it cannot see a pause in the middle, and a
+        deliberate pause at the end of a demonstration reads the same as padding. Slot 6's
+        0.25 s is that case: a quarter of a second is nowhere near the 1.8 to 4.4 s the
+        defect produced, and pressing `w` shortly after the arm comes to rest looks exactly
+        like this. ⛔ So read it as evidence about seconds, never about tenths.
+        """
+        if len(self.samples) < 2:
+            return 0.0
+        i = len(self.samples) - 1
+        while i > 0:
+            a, b = self.samples[i - 1], self.samples[i]
+            dt = b.t - a.t
+            if dt > 0 and max(abs(y - x) for x, y in zip(a.q, b.q)) / dt > still:
+                break
+            i -= 1
+        return self.samples[-1].t - self.samples[i].t
 
     # ------------------------------------------------------------- reshaping ----
 

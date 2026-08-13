@@ -142,6 +142,59 @@ def test_a_single_fast_step_dominates_the_speed_report() -> None:
     assert abs(traj.max_joint_speed() - 9.0) < 1e-6
 
 
+# ------------------------------------------------- padding at the end (§30.1) ----
+
+
+def wobbling_tail(move_s: float, pad_s: float, wobble: float = 0.035,
+                  hz: float = 100.0) -> Trajectory:
+    """A real movement, then a stretch of the wobble a held arm actually produces.
+
+    ⭐ The wobble alternates sign so the arm goes nowhere overall, which is what the
+    padded tails in Julien's recordings look like: a flat non-zero speed floor and no net
+    displacement.
+
+    ⚠️ The offset is `wobble / hz` on alternate samples, so the step between two samples
+    is `wobble / hz` and the resulting speed is exactly `wobble`. Offsetting by ±that
+    instead doubles the step and doubles the speed, which is how the first version of this
+    fixture reported no padding at all.
+    """
+    traj = Trajectory(meta={"arm": "B", "method": "live:guide"})
+    n_move, n_pad = int(move_s * hz), int(pad_s * hz)
+    for i in range(n_move):                       # 1.0 rad/s on joint 0
+        traj.append(i / hz, (i / hz, 0.0))
+    rest = (n_move - 1) / hz if n_move else 0.0
+    for i in range(n_pad):
+        traj.append((n_move + i) / hz, (rest + (wobble / hz if i % 2 else 0.0), 0.0))
+    return traj
+
+
+def test_a_padded_tail_is_measured_even_though_it_is_not_motionless() -> None:
+    """⛔ The defect this exists for. A held arm wobbles at ~0.035 rad/s, so the padding
+    is never still and a zero-speed test finds none of it."""
+    traj = wobbling_tail(move_s=3.0, pad_s=4.0)
+    assert traj.trailing_still_seconds() > 3.9, "4 s of padding must be seen"
+    assert traj.trailing_still_seconds(still=0.01) < 0.05, (
+        "and a threshold under the wobble floor is how it stayed invisible"
+    )
+
+
+def test_a_clean_recording_reports_no_padding() -> None:
+    traj = straight_line(n=101, hz=100.0)
+    assert traj.trailing_still_seconds() < 0.02
+
+
+def test_a_recording_that_never_moves_is_padding_end_to_end() -> None:
+    traj = wobbling_tail(move_s=0.0, pad_s=2.0)
+    assert abs(traj.trailing_still_seconds() - traj.duration) < 1e-9
+
+
+def test_padding_needs_two_samples_to_exist() -> None:
+    traj = Trajectory()
+    assert traj.trailing_still_seconds() == 0.0
+    traj.append(0.0, (0.0,))
+    assert traj.trailing_still_seconds() == 0.0
+
+
 # ---------------------------------------------------------------- reshaping ----
 
 

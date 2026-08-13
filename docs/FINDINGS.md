@@ -1516,3 +1516,80 @@ In the plan line that reads `ROLL←yaw− PITCH←roll+ YAW←pitch−` before 
 ⛔ **That is the same class of defect as everything in [§0](FINDINGS.md): the record would look correct and be wrong.** A month later, `git log` on the map file would blame a commit about a camera bug for a change he made with his hands.
 
 ⭐ **The rule from now on: check `git status config/` before committing, and give a config change its own commit with its own message.** `config/` holds *measured* values, not settings, so a change to it is evidence and deserves to be recorded as such.
+
+---
+
+## 33. ⛔⭐ THE RIG IS BACK UP, and three written claims about it had already gone stale — 2026-08-13, 15:22
+
+⭐ **All three findings in this section come from re-deriving what the documents assert, rather than from new hardware work.** Nothing was energised and nothing moved. That is the point: [§0](FINDINGS.md)'s rule is about values, and a document is a value too.
+
+### 33.0 ✅ Both CAN adapters are out of DFU mode, and the recovery ladder was never needed
+
+⛔ **[§32](FINDINGS.md) and the handoff both opened with "THE RIG IS DOWN".** That is no longer true. Measured at 15:22:
+
+```
+"USB Product Name" = "CANable 2.5 Candlelight"   "USB Serial Number" = "2081337C594E5018"   (arm B)
+"USB Product Name" = "CANable 2.5 Candlelight"   "USB Serial Number" = "20593383594E5018"   (arm G)
+```
+
+**Three things separate this from the DFU state, and all three flipped back:**
+
+| | in DFU (§32) | now |
+|---|---|---|
+| product name | `DFU in FS Mode` | `CANable 2.5 Candlelight` |
+| serial | truncated to 12 chars | full 16 chars, matching `ARM_SERIALS` |
+| `idVendor` | `0x0483` (STMicroelectronics bootloader) | `7504` = `0x1D50` (candleLight application firmware) |
+
+⭐ **And it was confirmed through the real code path, not only through `ioreg`.** `uv run scripts/probe_can.py --seconds 3` opened the adapter, computed the 1 Mbit/s bitrate from a 160 MHz clock, and reported **`✓ listen-only granted`**. That proves libusb can claim the board and the gs_usb protocol answers, which a device listing cannot. Zero frames in 3 s is the expected reading for a healthy idle arm, for the reason written at the top of that script.
+
+⛔⭐ **WHY THEY RECOVERED IS UNKNOWN, and that is now the second unknown on the same fault.** §32 already recorded that the *cause* was never established. The *recovery* is equally unexplained: no agent touched the boards, and the recovery ladder in [§32.0](FINDINGS.md) was never run. **Julien did something between 14:55 and 15:22 and it is not written down.** ⚠️ The ladder's step 1 hypothesis — a BOOT jumper left in the boot position — predicts that only moving a jumper clears it, so if he simply replugged again, that hypothesis is **wrong** and the real cause is still live. **This question is in [HANDOFF §5.5](HANDOFF.md) task 0 and it is worth 30 seconds of his time**, because the difference decides whether this recurs mid-session.
+
+### 33.1 ✅⭐ The `w` freeze fix IS confirmed on hardware — by recordings that were already on disk
+
+⛔ **The handoff said: "the saved recordings in `recordings/` (slots 1, 3, 4, 5, 6) are all PADDED and should be discarded rather than used."** ⭐ **Two of the five are padded. Three are clean, and they are the evidence that the fix works.**
+
+Measured with `Trajectory.trailing_still_seconds()`, new this session:
+
+| slot | commit | recorded | duration | padding | share | verdict |
+|---|---|---|---|---|---|---|
+| 3 | `e89b745` | 09:34 | 7.78 s | **4.46 s** | **57.3 %** | ⛔ before the fix |
+| 4 | `e89b745` | 09:35 | 6.02 s | **2.64 s** | **43.9 %** | ⛔ before the fix |
+| 1 | `0e268ed` | 12:55 | 7.72 s | 0.03 s | 0.5 % | ✅ after the fix |
+| 5 | `0e268ed` | 12:36 | 1.63 s | 0.00 s | 0.0 % | ✅ after the fix |
+| 6 | `0e268ed` | 12:41 | 3.55 s | 0.25 s | 7.0 % | ✅ after the fix |
+
+⭐ **The commit column is what settles it.** The `w` freeze landed in `0e268ed` at 10:01 (`take_to_save`, frozen and waiting for its slot digit). Slots 3 and 4 were saved at 09:34 and 09:35 under `e89b745` and carry 4.46 s and 2.64 s — which independently reproduces [§30.1](FINDINGS.md)'s figures of *"1.8 to 4.4 seconds"* and *"recording 3 was 56% padding"* (57.3 % here). Slots 1, 5 and 6 were saved nearly three hours later under `0e268ed` and carry none.
+
+⭐ **All five are hardware recordings.** `method` reads `live:guide`, which is written in exactly one place, `teleop_session.py`, and that script has no simulation, fake or mock mode — `build_robot()` resolves a real adapter by serial and refuses otherwise. So these are the real arm, in GUIDE, with a hand on it.
+
+⛔ **So [HANDOFF §5.5](HANDOFF.md) task 0 drops from three unverified changes to two.** Item (1), *"`w` now freezes the recording immediately"*, is confirmed. ⚠️ **What is confirmed is that the multi-second padding is gone from the saved file**, which is the harm. Whether the sample count in the on-screen stop message matches the saved count is still unobserved, and it is free to check during the next recording.
+
+⚠️ **Slot 6's 0.25 s is not residual padding.** The defect produced 1.8 to 4.4 s; a quarter of a second is the arm coming to rest before the key was pressed. The measured gap between the two cases is more than an order of magnitude, which is why one threshold separates them cleanly.
+
+⛔⭐ **A padded tail is NOT motionless, and this is the trap that made the check look impossible.** A weightless arm held by a hand wobbles at a **flat 0.032 to 0.038 rad/s** for as long as it is held — the two padded tails sit dead level on that floor for seconds. A first attempt using 0.02 rad/s as "still" reported **zero padding on all five files** and would have confirmed the wrong answer. The threshold is 0.05 rad/s and it sits above the wobble floor by measurement, not by taste.
+
+⭐ **It is now a script rather than a sentence: `uv run scripts/check_recordings.py`.** No hardware, reads only, and it prints the table above from whatever is actually on disk. Four tests cover the function, including the one that fails if the threshold is put back below the wobble floor.
+
+### 33.2 ⛔⭐ The speed table in `joint_speed`'s docstring went stale in under three hours, and nothing could see it
+
+**The docstring in `src/recording.py` gave slot 1 as `max 0.78, p99 0.68, p95 0.59, median 0.29`.** Re-measured now, slot 1 is `max 0.49, p99 0.43, p95 0.38, median 0.20`. ⭐ **Slots 3 and 4 still reproduce to the digit**, so the code is right and the file changed.
+
+⭐ **What happened:** the table was written into commit `0e268ed` at **10:01**. Julien recorded over slot **1** at **12:55**. ⛔ **`recordings/` is gitignored**, so the file those four numbers describe no longer exists anywhere and cannot be recovered.
+
+⛔ **The general defect, and it applies to every number this repo writes about a recording: saving by slot digit overwrites silently.** Any measurement of "recording N" expires the moment N is reused, and the document keeps asserting it. **The fix is cheap and already half in place** — quote `commit` and `recorded_at` beside every measurement. Those two fields are the only reason the mismatch was detectable at all, and they exist because Julien asked for provenance on 2026-08-12 ([ROADMAP §6.6](ROADMAP.md)).
+
+⭐⭐ **Provenance has now paid for itself twice in one day, before any dataset exists.** Once to prove which recordings postdate the `w` fix (§33.1), once to explain a stale table (§33.2). That is a stronger argument for [ROADMAP §6.6](ROADMAP.md)'s provenance requirement than the requirement's own rationale.
+
+### 33.3 ⭐ The pattern, and it is [§0](FINDINGS.md) pointed at the documents
+
+Three claims, all written carefully, all wrong within a day of being written:
+
+| the claim | why it went wrong |
+|---|---|
+| "THE RIG IS DOWN" | a hardware state changed and no one re-checked it |
+| "slots 1, 3, 4, 5, 6 are all padded" | written from *when the defect existed*, not from the files |
+| slot 1 is `max 0.78, p99 0.68` | the file was overwritten three hours later |
+
+⛔ **None of them was careless, and that is the finding.** Each was true when written. [HANDOFF §4](HANDOFF.md) rule 7 already says this about guards — *ask of every guard what path reaches the hazard without passing through you* — and [§32.3](FINDINGS.md) said it about commits. **The same rule applies to any sentence containing a measurement: it is a cached value with no invalidation.**
+
+⭐ **The practical defence, and it is the one this repo already uses everywhere else: make it a script.** `check_recordings.py` cannot go stale, because it reads the files. `check_links.py` cannot go stale, because it resolves the links. ⛔ **A measurement written in prose and never re-derived should be treated as an assertion about the past, and dated.** Where a number matters, either date it with its provenance or replace it with the command that recomputes it.
