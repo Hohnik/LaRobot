@@ -1895,3 +1895,90 @@ Slot 3 is now the 5.53 s recording from 17:21. It has been overwritten at 16:34 
 ⭐⭐ **The difference this time: the measurement survived.** `recordings/tracking/3_2026-08-13T17-21-58+02-00.json` still holds every number measured from the file that was replaced, at full precision, with the commit and both timestamps. **That is [§34.4](FINDINGS.md) working as intended on its first real test.** The measurements from 16:34 and 16:35 have no such file, because the saving did not exist yet, which is exactly why [§34.1](FINDINGS.md)'s table had to be dated instead.
 
 ⭐ **The remaining exposure is the recordings themselves, and it is his to decide.** A slot digit is a convenient way to save and a lossy way to keep. **Options, none taken:** refuse to overwrite without a confirmation keypress; copy the old file aside before writing; or name files by timestamp and let the digits be shortcuts to the most recent. ⚠️ **The first is the smallest change and the most annoying; the third is the most correct and changes how `l` lists things.** Worth one minute of his opinion rather than an agent's choice.
+
+---
+
+## 36. ✅⭐ THE RED BLINKING LIGHTS ARE NOT A FAULT, and step 0 of the restructure is done — 2026-08-13, 18:00
+
+### 36.0 ✅⭐⭐ Both arms are healthy, measured, and identical — so the lights are not reporting a motor error
+
+Julien reconnected arm G and reported **red lights blinking**. ⛔ **Nothing in this repo documents what any LED on this rig means**, so the lights were treated as an unknown and the motors were asked directly instead.
+
+**Two checks, cheapest and safest first.**
+
+⭐ **Check 1, `identify_arm.py --arm G --yes` — register reads only, and it cannot energise anything.** It uses arbitration ID `0x7FF` sub-command `0x33`, which asks a motor's firmware for a stored value and cannot command motion under any circumstances. All seven motors answered:
+
+- Gear ratios **40/40/40/10/10/10/10**, matching [§1](FINDINGS.md).
+- ⭐ **Joint 1's `inertia` reads `1.6964389942586422e-05`**, which is arm **G**'s own per-unit calibration value from [§1](FINDINGS.md) (B's is `1.7169109e-05`). **So the serial-based selection addressed the arm it claimed to.** That is the measurement [§0](FINDINGS.md) rule 5 asks for: one that would have *differed* if the claim were wrong.
+- **Safety timeout `8000` on every motor, enabled.** A motor with no command for 400 ms enters damping mode by itself.
+
+⭐ **Check 2, `ping_motors.py --arm G --yes` — enables each motor for one frame, reads its reply, disables it.** It sends **no setpoint**, which puts it on the agent's side of [§4](HANDOFF.md) rule 1. The reply carries the error code and both temperatures, and there is no other way to read them.
+
+| | arm G | arm B |
+|---|---|---|
+| motors online | 7/7 | 7/7 |
+| **error codes** | **all `0x1 (normal)`** | **all `0x1 (normal)`** |
+| temperatures | 31-35 °C | 31-35 °C |
+| velocities | ≤ 0.022, so nothing moving | ≤ 0.022 |
+| torques | ≤ 0.035 Nm | ≤ 0.035 Nm |
+
+⭐⭐ **CONCLUSION: no motor is reporting a fault, on either arm, and the two arms are indistinguishable in health.** The warn threshold is 55 °C and the stop is 65 °C, so the temperatures are cool.
+
+⚠️ **What the lights ARE remains undocumented, and the most likely explanation is the safety timeout.** Every motor is set to enter damping mode after 400 ms with no command. An arm that is powered but not being commanded sits in exactly that state permanently. **A blinking LED on a powered, uncommanded motor is the expected indication rather than a warning.** ⛔ **That is a hypothesis and it is not verified** — no datasheet is vendored here and nothing in the repo describes the LEDs. **The cheap test is a glance: if arm B's lights look the same while both arms sit idle, the state is normal.**
+
+⭐ **The gripper positions look alarming and are fine, for the reason [§2](FINDINGS.md) warns about.** Arm G's motor 7 reads `-3.3343` rad against saved limits `[0.1417, -5.0864]`, which contains it. Arm B's motor 7 reads `0.0158` against saved limits `[6.4811, 1.2308]`, which does **not** contain it — until the ±2π wrap correction is applied, giving `[0.198, -5.052]`, which does. ⛔ **Cached raw motor positions are frame-dependent**, `ping_motors` reads the raw frame, and this is the trap that once cost a motor.
+
+⭐ **Worth adding to `check_rig.py` later:** it reports device state and cannot report motor state, because it never transmits. The two-command sequence above is the motor-level answer, and [§5.5](HANDOFF.md) task 0 now carries it.
+
+### 36.1 ⚠️ The USB addresses shuffled again, and the two arms have now swapped positions
+
+| when | arm B | arm G |
+|---|---|---|
+| 16:52 | bus 0 addr **4** | bus 0 addr **6** |
+| 17:40 | bus 0 addr **5** | absent |
+| 18:00 | bus 0 addr **5** | bus 0 addr **4** |
+
+⛔ **Arm G now sits at the address arm B held an hour ago.** Anything selecting by index would now be driving the wrong robot, which is [§1](FINDINGS.md)'s warning happening for the fourth observed time. Everything here resolves by serial, so nothing noticed.
+
+### 36.2 ✅⭐ STEP 0 OF THE RESTRUCTURE IS DONE: `ArmSession` now models the park the script actually has
+
+⛔ **The gap, from [ROADMAP §6.1](ROADMAP.md):** the class was committed at 14:16 on 2026-08-12 with a queue of legs and a per-leg speed ramp, which stops dead at every waypoint. `teleop_session.py` replaced that at **15:15 the same day** with a single blended `JointPath`, and that commit's message opens *"the smoothing I built before was the wrong thing"*.
+
+⭐ **What the class has now:** one blended path with an arc-length cursor, waypoint marks that are *reported* rather than stopped at, the cursor waiting when the arm falls behind, arrival gated on the cursor reaching the end rather than on the error, and the two separate park clocks. `step_path()` returns a `ParkStep` carrying every number the script prints, and prints nothing.
+
+⭐ **Tests: 17 → 21, and three of the originals asserted the superseded behaviour.** The one worth naming is `test_each_leg_gets_its_own_ease_in`, which asserted the arm re-eases at every waypoint. **That is the opposite of what blending is for**, so its replacement asserts the cursor does *not* stop at an intermediate waypoint.
+
+⚠️⚠️ **THE LESSON IS BIGGER THAN THE CLASS: THIS FILE WENT STALE IN ONE HOUR AND NOBODY NOTICED FOR A DAY, WITH ALL 17 TESTS PASSING THE WHOLE TIME.** The tests passed because they asserted the old design. ⛔ **An unwired class is a copy of a design, and a copy drifts** — nothing enforces that a change to the script lands in it too. **This is the same defect as [§33.3](FINDINGS.md)'s stale measurements, in code rather than in prose**, and the same remedy does not apply: a script cannot re-derive a design. **The only real fix is to finish the wiring, after which there is one copy.**
+
+⚠️ **Two of the new tests were wrong before they were right, and both mistakes are easy to repeat:**
+
+1. One assumed the **gripper column does not count toward the park error.** It does, like any other joint. A run meant to start at its own final target actually started 0.5 away and tested nothing.
+2. One sampled a **fixed `t=4.5` for a blocked verdict.** The stall timer starts when the *cursor* stops advancing, not when the park starts, so a fixed time is a guess about the easing profile and the path length. It read `moving`, which was the stall timer working correctly.
+
+Both now carry a comment saying so.
+
+### 36.3 ⭐⭐ THE SCALE OF STEP 1, MEASURED RATHER THAN ESTIMATED
+
+The documents have said *"~1000 lines of `main()`"* since 2026-08-12. **Measured:**
+
+- **`main()` spans lines 500-2305 of `teleop_session.py`: 1806 lines.**
+- **338 references** to the 20 state names that have to become `arm.<field>`.
+
+| name | refs | | name | refs |
+|---|---|---|---|---|
+| `mode` | 93 | | `park_ramp` | 17 |
+| `robot` | 43 | | `park_speed` | 15 |
+| `teleop` | 37 | | `park_path` | 14 |
+| `gripper_value` | 13 | | `park_s` | 12 |
+| `ease_idx` | 10 | | `prev_q` | 9 |
+| `park_leg_t` | 9 | | `park_marks` | 9 |
+| `park_cmd` | 8 | | `park_best_err` | 8 |
+| `park_progress_t` | 8 | | `blend_idx` | 8 |
+| `guide_ref` | 7 | | `home_ee` | 6 |
+| `park_target` | 6 | | `park_start_t` | 6 |
+
+⛔ **`mode` alone is 93 sites, and every one of them is in code that commands 4.3 kg on a rig with no emergency stop.** ⭐ **This measurement is the argument for doing step 1 as its own session and nothing else** — the repo already said so on instinct, and now there is a number behind it. It is also the argument for step 1 landing as **one mechanical change with no behaviour change at all**, so that `--arms B` at N=1 tests exactly one thing: whether 338 substitutions were made correctly.
+
+### 36.4 ⚠️ `park_speed_factor()` is now used by nothing but its own tests
+
+`easing_factor()` superseded it in the script on 2026-08-12, and [§36.2](FINDINGS.md) removed the class's last use. It still has 9 tests in `scripts/test_park_target.py`. ⭐ **Left in place deliberately**, under Julien's standing rule to change nothing that does not have to change. **Recorded so it is a decision rather than an oversight**, and so that whoever eventually removes it knows the tests go with it.
