@@ -414,6 +414,37 @@ Instead of saving a handful of poses and letting the code interpolate between th
 - The movements come from the teaching pass and the pictures from the replay pass, so the replay has to follow the taught path closely enough that picture and movement still line up. Checkable: the park loop already reports how far the arm is running behind the command.
 - Hand-guiding smoothly is its own skill. A wobbly taught path replayed at speed could be jerky. Light smoothing, or replaying at the speed it was taught, both help.
 
+### 6.6.2 A pause where the jaws move — built as a decision, 2026-08-13
+
+⛔ **The problem blocks every grab.** Blending means the arm curves *through* a waypoint without stopping, which is the smooth motion Julien asked for and confirmed on the arm. The gripper is simply another number in the joint vector, so a blended corner between "above the object, jaws open" and "at the object, jaws closed" **closes the jaws during the descent.** The object is grabbed early or shoved away.
+
+⭐⭐ **The obvious fix was a dwell time saved against each waypoint, and it turned out to be the wrong shape.** A dwell needs a storage change, a way to type it, and a number the operator has to guess. None of that is necessary, because **a leg where the gripper command changes and the arm does not IS the pause**, and how long it should last is not a preference. It is however long the jaws take, which can be measured while it happens.
+
+⭐ **So a run saved the natural way needs no thought at all:**
+
+```
+w0  where the arm is now
+w1  above the object, jaws open
+w2  at the object, jaws open
+w3  at the object, jaws closed     <- only the gripper changed
+w4  lifted, jaws closed
+```
+
+`plan_gripper_stops()` returns `segments = [[0,1,2], [3,4]]` and `gripper_legs = [(2,3)]`. The run then blends through `w0 w1 w2`, stops, commands the jaws, waits for them, and blends through `w3 w4`. ⭐ **The arm arrives at the object exactly, because the corner it would otherwise have rounded is now the end of a segment.**
+
+⚠️ **A leg that moves the arm and the gripper at once is reported rather than split.** Both readings are defensible, closing while approaching or stopping and closing, and only the operator knows which he meant. Guessing wrong on 4.3 kg is worse than saying so, so today's behaviour is kept and a warning names the leg.
+
+**What is built:** ✅ `src/motion.py::plan_gripper_stops` and `RunPlan`, with **9 tests**. They pin the grab case, the no-gripper case, two grabs in one run, a noise-sized gripper difference not counting, a `--no-gripper` 6-value pose, and the invariant that every waypoint appears in exactly one segment.
+
+**What is missing, and it is the part that touches confirmed-working code:**
+
+1. `begin_path()` builds **one** `JointPath`. It has to build one per segment and keep a queue.
+2. On reaching the end of a segment, command the jaws and wait. ⭐ **Waiting is measured, not timed**: proceed when the jaws stop moving, which also covers a jaw that stalls on the object. ⚠️ It needs its own timeout, or a jammed gripper stops the run for ever.
+3. ⛔ **The gripper must be commanded through `clamp_gripper`**, as everywhere else. A pose saved with the jaws on a mechanical stop would otherwise hold them there, which cooked motor 7 three times ([FINDINGS §4](FINDINGS.md)).
+4. The run plan line should say how many stops there are, so a grab is visible before Enter.
+
+⚠️ **Deliberately left for its own session.** The park is confirmed-working code that `q p d` and Ctrl-C both depend on, and segmenting it is a real change to its shape. The decision is proven; the wiring is not.
+
 ### ⭐⭐ 6.6.1 Mixing waypoints and recordings in one run — his idea, 2026-08-13
 
 > *"The smoothing and stuff to vary the runs would be great, or to connect the waypoint idea with the recording idea. So for example, when I saved positions one, two, three and four, I can choose a mode where one and two gets played back, and then from two to three I can move the robot arm in whatever way. And whenever it stops, and I stop recording that position, then from there it moves to position three, and then two to three is my recording plus the late movement, and then it continues to four. Or something else maybe that's even smarter than that, where we can then have intermediate recordings that we change up, and then we can change up the starting and the end parts through different noise things that we were thinking about or smoothing."*
@@ -696,7 +727,7 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 |---|---|---|
 | 1 | **Both arms from one script** | class + 17 tests exist (`src/arm_session.py`), nothing uses it. [ROADMAP step 6](#step-6--two-arms-two-spacemice--what-julien-asked-for-next-2026-08-10) |
 | 2 | ⭐ **Record a movement in GUIDE, then replay it** | ✅ **built 2026-08-13** (`src/recording.py` + 37 tests, wired into the session as `w` and `l`). ⛔ Unconfirmed on the arm. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
-| 3 | ⛔ **A pause at each waypoint** | nothing exists, and **no grab can be replayed without it**. [ROADMAP §6.6](#66-where-the-training-data-comes-from) |
+| 3 | ⏳ **A pause where the jaws move** | **half built 2026-08-13, and the design turned out better than a dwell time.** ✅ `src/motion.py::plan_gripper_stops` decides where a run must split, with 9 tests. ⬜ The park machinery has to run the segments and wait for the jaws. ⭐ **No configuration is needed**, which is why this is now smaller than it looked. [ROADMAP §6.6.2](#662-a-pause-where-the-jaws-move--built-as-a-decision-2026-08-13) |
 | 4 | **Mirroring** | logic + 14 tests exist (`src/mirror.py`), the two-arm script does not. Needs 1 |
 | 5 | **Telling two identical D405s apart** | nothing exists. Use the wiggle approach, [FINDINGS §28.5](FINDINGS.md) |
 | 6 | **Capturing several cameras with timestamps** | nothing exists. Images must line up with joint data or the dataset is unusable |

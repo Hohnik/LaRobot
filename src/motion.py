@@ -230,3 +230,97 @@ class JointPath:
             best_i = min(range(len(self.points)), key=lambda i: _dist(self.points[i], w))
             marks.append(self._cum[best_i])
         return marks
+
+
+# ⚠️ How much the gripper command must change before a leg counts as "the jaws move".
+# In RAW motor radians, because that is what a saved pose holds. On this rig the jaws'
+# full stroke is about 5.25 rad (limits [0.198, -5.052]), so 0.1 rad is roughly 2% of it:
+# large enough to ignore sensor noise and a re-saved pose, small enough to catch a
+# deliberate open or close.
+GRIPPER_MOVE_THRESHOLD = 0.1
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    """How a waypoint run has to be broken up so the gripper can actually work.
+
+    ⛔⭐ THE PROBLEM THIS SOLVES, and it blocks every grab. Blending means the arm curves
+    *through* a waypoint without stopping, which is the smooth motion Julien asked for and
+    confirmed on the arm. But the gripper is simply another number in the joint vector, so a
+    blended corner between "above the object, jaws open" and "at the object, jaws closed"
+    **closes the jaws during the descent.** The object is either grabbed early or shoved
+    away. A grab needs the arm to stop, the jaws to travel, and time to pass.
+
+    ⭐⭐ AND THE PAUSE NEEDS NO CONFIGURATION, WHICH IS THE POINT. The obvious design is a
+    dwell time saved against each waypoint, which needs a storage change and a new way to
+    type it. It is not needed: **a leg where the gripper command changes and the arm does
+    not IS the pause**, and how long it should last is not a preference, it is however long
+    the jaws take. That can be measured while it happens rather than guessed in advance.
+
+    - `segments` groups waypoint indices. Each group becomes one blended `JointPath`.
+    - `gripper_legs` are the `(from, to)` pairs between groups. The arm holds still, the
+      jaws are commanded, and the run waits for them.
+    - `warnings` name legs that move the arm **and** the gripper together. Those cannot be
+      fixed automatically, because only the operator knows which he meant, so they keep
+      today's behaviour and say so.
+    """
+
+    segments: list[list[int]]
+    gripper_legs: list[tuple[int, int]]
+    warnings: list[str]
+
+
+def plan_gripper_stops(poses, gripper_index: int,
+                       threshold: float = GRIPPER_MOVE_THRESHOLD,
+                       arm_tolerance: float = 0.02) -> RunPlan:  # noqa: ANN001
+    """Split a waypoint run wherever the jaws have to move on their own.
+
+    `poses[0]` is where the arm is now; the rest are the saved waypoints in order.
+
+    ⭐ A run saved the natural way needs no thought from the operator:
+
+        w0 now · w1 above the object, open · w2 at the object, open
+        w3 at the object, closed · w4 lifted, closed
+
+    The only leg that changes the gripper is `w2 → w3`, and it leaves the arm where it is.
+    So the plan is: blend through `w0 w1 w2`, stop, close the jaws, wait, blend through
+    `w3 w4`. **The arm arrives at the object exactly, because the corner it would otherwise
+    have rounded is now the end of a segment.**
+
+    ⚠️ A leg that moves the arm and the gripper at once is reported rather than split. Both
+    readings are defensible (close while approaching, or stop and close), and guessing wrong
+    on 4.3 kg is worse than saying so.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    pts = [np.asarray(p, dtype=float) for p in poses]
+    if len(pts) < 2:
+        return RunPlan(segments=[list(range(len(pts)))], gripper_legs=[], warnings=[])
+
+    segments: list[list[int]] = []
+    gripper_legs: list[tuple[int, int]] = []
+    warnings: list[str] = []
+    current = [0]
+
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        has_gripper = len(a) > gripper_index and len(b) > gripper_index
+        jaws_move = has_gripper and abs(b[gripper_index] - a[gripper_index]) > threshold
+        arm_moves = bool(np.any(np.abs(b[:gripper_index] - a[:gripper_index]) > arm_tolerance))
+
+        if jaws_move and not arm_moves:
+            segments.append(current)
+            gripper_legs.append((i, i + 1))
+            current = [i + 1]
+        elif jaws_move and arm_moves:
+            warnings.append(
+                f"leg {i}→{i + 1} moves the arm AND the gripper together, so the jaws "
+                "travel while the arm does. Save a waypoint where only the jaws change "
+                "if you meant to grip something."
+            )
+            current.append(i + 1)
+        else:
+            current.append(i + 1)
+
+    segments.append(current)
+    return RunPlan(segments=segments, gripper_legs=gripper_legs, warnings=warnings)

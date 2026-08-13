@@ -24,7 +24,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from motion import JointPath, _dist  # noqa: E402
+from motion import JointPath, _dist, plan_gripper_stops  # noqa: E402
 
 
 def corner_path(blend: float) -> JointPath:
@@ -158,6 +158,101 @@ def test_waypoint_arrival_marks_are_in_order() -> None:
     assert marks == sorted(marks), marks
     assert marks[0] == 0.0
     assert abs(marks[-1] - path.length) < 1e-9
+
+
+# --------------------------------- where a run must stop so the jaws can move ----
+#
+# ⛔ Blending means the arm curves THROUGH a waypoint without stopping, which is the smooth
+# motion Julien confirmed on the arm. The gripper is another number in the same vector, so a
+# blended corner between "jaws open" and "jaws closed" closes them mid-move. Every grab
+# depends on getting this split right.
+
+OPEN, SHUT = 0.2, -4.8          # raw motor radians, roughly this rig's real jaw limits
+
+
+def grab_run():  # noqa: ANN201
+    """The natural way to save a pick: approach, arrive, close, lift."""
+    return [
+        [0.0, 0.0, 0, 0, 0, 0, OPEN],       # 0 where the arm is now
+        [0.5, 0.5, 0, 0, 0, 0, OPEN],       # 1 above the object
+        [0.5, 0.8, 0, 0, 0, 0, OPEN],       # 2 at the object
+        [0.5, 0.8, 0, 0, 0, 0, SHUT],       # 3 jaws closed, arm still
+        [0.5, 0.3, 0, 0, 0, 0, SHUT],       # 4 lifted
+    ]
+
+
+def test_a_grab_splits_exactly_where_the_jaws_close() -> None:
+    """⭐ The whole point. The arm blends through the approach, stops at the object, closes,
+    then blends away. It arrives at the object EXACTLY, because the corner it would have
+    rounded is now the end of a segment."""
+    plan = plan_gripper_stops(grab_run(), gripper_index=6)
+    assert plan.segments == [[0, 1, 2], [3, 4]], plan.segments
+    assert plan.gripper_legs == [(2, 3)], plan.gripper_legs
+    assert plan.warnings == []
+
+
+def test_a_run_that_never_touches_the_gripper_stays_ONE_blended_path() -> None:
+    """⛔ Otherwise this change would quietly undo the smooth motion he confirmed."""
+    poses = [[0, 0, 0, 0, 0, 0, OPEN], [0.5, 0, 0, 0, 0, 0, OPEN], [1.0, 0.4, 0, 0, 0, 0, OPEN]]
+    plan = plan_gripper_stops(poses, gripper_index=6)
+    assert plan.segments == [[0, 1, 2]]
+    assert plan.gripper_legs == []
+
+
+def test_moving_the_arm_and_the_jaws_together_WARNS_instead_of_guessing() -> None:
+    """⚠️ Both readings are defensible: close while approaching, or stop and close. Guessing
+    wrong on 4.3 kg is worse than saying so, so today's behaviour is kept and reported."""
+    poses = [[0, 0, 0, 0, 0, 0, OPEN], [0.5, 0.8, 0, 0, 0, 0, SHUT]]
+    plan = plan_gripper_stops(poses, gripper_index=6)
+    assert plan.gripper_legs == [], "it must not split a leg that also moves the arm"
+    assert len(plan.warnings) == 1
+    assert "arm AND the gripper" in plan.warnings[0]
+
+
+def test_a_tiny_gripper_difference_is_not_a_jaw_movement() -> None:
+    """A pose re-saved in the same place differs by sensor noise. Splitting on that would
+    stop the arm at every waypoint, which is the behaviour this replaced."""
+    poses = [[0, 0, 0, 0, 0, 0, OPEN], [0.5, 0, 0, 0, 0, 0, OPEN + 0.01]]
+    assert plan_gripper_stops(poses, gripper_index=6).gripper_legs == []
+
+
+def test_two_grabs_in_one_run_both_split() -> None:
+    """Pick something up, put it down: two gripper legs, three segments."""
+    poses = [
+        [0.0, 0.0, 0, 0, 0, 0, OPEN],
+        [0.5, 0.8, 0, 0, 0, 0, OPEN],
+        [0.5, 0.8, 0, 0, 0, 0, SHUT],       # close
+        [1.0, 0.8, 0, 0, 0, 0, SHUT],
+        [1.0, 0.8, 0, 0, 0, 0, OPEN],       # open again
+        [1.0, 0.3, 0, 0, 0, 0, OPEN],
+    ]
+    plan = plan_gripper_stops(poses, gripper_index=6)
+    assert plan.segments == [[0, 1], [2, 3], [4, 5]], plan.segments
+    assert plan.gripper_legs == [(1, 2), (3, 4)]
+
+
+def test_a_six_joint_robot_with_no_gripper_is_handled() -> None:
+    """⛔ --no-gripper produces 6-value poses. A length assumption here is the same class of
+    bug that once raised inside the control loop and dropped a raised arm."""
+    poses = [[0.0] * 6, [0.5] * 6]
+    plan = plan_gripper_stops(poses, gripper_index=6)
+    assert plan.segments == [[0, 1]]
+    assert plan.gripper_legs == []
+    assert plan.warnings == []
+
+
+def test_a_single_pose_run_is_not_split() -> None:
+    assert plan_gripper_stops([[0.0] * 7], gripper_index=6).segments == [[0]]
+    assert plan_gripper_stops([], gripper_index=6).segments == [[]]
+
+
+def test_every_waypoint_appears_exactly_once_across_the_segments() -> None:
+    """⭐ The invariant that stops a waypoint being skipped or run twice. A skipped waypoint
+    is an arm going somewhere nobody asked for."""
+    plan = plan_gripper_stops(grab_run(), gripper_index=6)
+    seen = [i for seg in plan.segments for i in seg]
+    assert sorted(seen) == list(range(5)), seen
+    assert len(seen) == len(set(seen)), "a waypoint appears twice"
 
 
 def main() -> int:
