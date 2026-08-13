@@ -172,7 +172,25 @@ These are not preferences, they were arrived at by things going wrong.
 
 ⚠️ **B's jaws sit at 0.034**, so there is very little closing travel before the clamp stops it. Harmless, but do not read "the gripper won't close further" as a fault.
 
-## 5. The three traps that will bite you first
+## 5. The traps that will catch you first
+
+⭐⭐ **Trap 0, and it is the one that has cost the most time in the last two days: a device can be PRESENT and not in the state the code assumes.** Three separate failures, all of which read as "it is not plugged in":
+
+| what happened | the device was | the code assumed |
+|---|---|---|
+| librealsense could not open the camera | on the bus, claimed by macOS's own driver | it could claim it. `sudo` works ([FINDINGS §28.4](FINDINGS.md)) |
+| the camera reported two serial numbers | answering `260322274021` to librealsense and `255323071773` to `ioreg` | a device has one serial ([FINDINGS §28.5](FINDINGS.md)) |
+| "No candleLight CAN adapter found" | on the bus, running its **DFU bootloader**, with a **truncated** serial | present means ready ([FINDINGS §32](FINDINGS.md)) |
+
+⛔ **So "is it plugged in?" is the wrong first question on this rig.** Ask what state it is in. The one-line check that answers it for everything at once:
+
+```bash
+ioreg -p IOUSB -w0 -l | grep -iE "USB Product Name|USB Serial Number"
+```
+
+⭐ Expect `CANable 2.5 Candlelight` twice, two `SpaceMouse Compact`, the `C920`, and the D405. **`DFU in FS Mode` means an adapter is in its bootloader**, and the fix is to unplug and replug it without holding any button.
+
+## 5. The three original traps that will bite you first
 
 1. **Never select hardware by index.** Adapter enumeration order changed *twice* in one session. Everything resolves by **serial** and re-verifies after opening. The two SpaceMice have **empty serials**, so they are assigned by asking the operator to move the one they want.
 2. **Coordinate frames.** `get_yam_robot()` applies a ±2π wrap correction at every construction based on where a motor happens to be; `DMChainCanInterface` used directly does not. **Cached raw motor positions are therefore frame-dependent.** This cost a motor. See `reconcile_gripper_limits()`.
@@ -361,3 +379,5 @@ The `camera` control frame (correct for the D405's modelled 25° flange cant), b
 | 25 | 2026-08-13, ~13:00-14:xx | ⭐⭐ **The pause that every grab needs, built as a decision, and the design came out better than planned.** The plan had been a dwell time saved against each waypoint, needing a storage change, a way to type it and a number to guess. ⭐ **None of that is necessary: a leg where the gripper command changes and the arm does not IS the pause, and its length is however long the jaws take.** `src/motion.py::plan_gripper_stops` splits a run there, with **9 tests**. A pick saved the natural way (above, at, close, lift) needs no configuration at all, and the arm arrives at the object exactly because the corner it would have rounded becomes the end of a segment. ⚠️ A leg that moves the arm and the jaws together is **reported rather than split**, since both readings are defensible and only the operator knows which he meant. ⬜ **The wiring is deliberately left for its own session** ([ROADMAP.md](ROADMAP.md) §6.6.2 lists the four remaining pieces): the park is confirmed-working code that `q p d` and Ctrl-C depend on, and segmenting it changes its shape. 338 → 346 headless tests. |
 
 | 26 | 2026-08-13, ~13:45-14:xx | ⭐ **Built the grab detector, and caught a units error on the way that would have broken the pause feature.** ⛔ **The gripper column of a saved pose is NORMALISED, 0 closed to 1 open, not raw motor radians.** The SDK normalises joint 7 against the calibrated limits, so `get_joint_pos()[6]` is already a fraction of the stroke. I had written `plan_gripper_stops` assuming raw radians with a stroke of 5.25, and its tests used raw values. Verified against the real files: every recording reads **0.036**, the same number the startup message prints. Both the threshold and the tests are corrected. ⭐ **And the same fact makes the grab detector free.** Calibration closes the jaws onto *themselves*, so a normalised 0 means empty and anything above it is the object's width. `src/yam_robot.py::check_grasp`, 7 tests. ⛔ It refuses to answer unless the jaws were commanded closed **and** have stopped moving, because mid-close looks identical to holding a wide object, and a false success is the one outcome that poisons a dataset. ⚠️ It reports that *something* is between the jaws. It cannot tell a good grab from an awkward one, and a jam reads the same. ⭐ Two plans need it: throwing failed episodes out of a dataset, and ENPIRE's reset-run-verify-improve loop, where automatic verification is a module rather than a nicety. 346 → 353 headless tests. |
+
+| 27 | 2026-08-13, ~14:15-15:xx | ⛔⭐ **Diagnosed a session failure that had nothing to do with any code change: both CAN adapters were sitting in their DFU bootloader** ([FINDINGS §32](FINDINGS.md)). `ioreg` shows `DFU in FS Mode` with **truncated** serials (`2081337C594E`), VID `0x0483` PID `0xDF11`, so `GsUsb.scan()` correctly finds nothing and the old message could only ask about cables. ⭐ `src/yam_can.py::adapters_in_dfu_note()` now detects it and gives the fix, and it never raises. ⚠️ **Why they entered DFU is unknown**, and §32 lists what to record if it recurs. ⭐⭐ **The pattern is now three for three and it is written into §5 as trap 0**: every confusing failure in two days has been a device present but not in the assumed state, so *"is it plugged in?"* is the wrong first question here. ⚠️ **The camera he also reported missing is NOT reproduced** and everything measurable is healthy (on the bus, SuperSpeed, same port, all four interfaces matched, `UVCAssistant` attached), so it needs his `--list` output. ✅ Confirmed that editing the controls could not have caused any of it, and ⭐ **flagged that his edit was under the `"shared"` key, so it changed arm B too.** ⛔ **Process fix: `git add -A` nearly swept his hand-tuned axis map into an unrelated commit.** It escaped by ten minutes. His map is now committed on its own, and [FINDINGS §32.3](FINDINGS.md) makes it a rule to check `git status config/` first, because `config/` holds measured evidence rather than settings. |
