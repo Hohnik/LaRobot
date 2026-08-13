@@ -886,3 +886,62 @@ def shutdown_robot(robot: Any) -> list[int]:
     except Exception:  # noqa: BLE001, S110
         pass
     return disabled
+
+
+@dataclass(frozen=True)
+class GraspCheck:
+    """Whether the jaws are holding something, judged from where they stopped closing."""
+
+    holding: bool
+    gap: float                  # how far from the commanded position they stopped, 0-1 of stroke
+    confident: bool             # False when the question cannot be answered from this input
+    why: str
+
+
+def check_grasp(commanded: float, measured: float, settled: bool,
+                closed_enough: float = 0.25, hold_threshold: float = 0.03) -> GraspCheck:
+    """Did the gripper close on an object, or on itself?
+
+    ⭐⭐ WHY THIS IS WORTH HAVING, AND WHY IT IS FREE. Two separate plans need the robot to
+    know whether it succeeded, without a person watching:
+
+    1. **Throwing failed episodes out of a dataset.** A failed grab is worse than a wasted
+       minute: it is a bad demonstration labelled as a good one, and it trains the model on
+       nothing ([ROADMAP.md](../docs/ROADMAP.md) §6.6).
+    2. ⭐ **ENPIRE's whole method is a loop of reset, run, VERIFY, improve**
+       ([ROADMAP.md](../docs/ROADMAP.md) §9.3). Automatic verification is a module of it, not
+       a nicety, and this is the cheapest verification this rig can produce.
+
+    ⭐ **And it needs no new hardware or per-object calibration.** The jaws are position
+    controlled, and `get_joint_pos()[6]` is already a **normalised** opening, 0 closed to 1
+    open, measured against the limits found by calibration. Calibration closes the jaws onto
+    *themselves*, so 0 means empty. Command them shut and they stop at the object's width.
+    **"Did it grab something" is therefore a number we already read every cycle.**
+
+    ⚠️ WHAT IT CANNOT TELL YOU, and each of these is why `confident` exists:
+
+    - **It cannot tell a good grab from an awkward one.** It reports that something is
+      between the jaws, nothing more.
+    - **A jammed or obstructed gripper reads exactly like a held object.** Same signal.
+    - **It says nothing unless the jaws were told to close.** Commanding 0.5 and measuring
+      0.5 carries no information, which is what `closed_enough` guards.
+    - ⛔ **It is meaningless before the jaws stop moving.** Mid-close looks identical to
+      holding a wide object, so the caller must pass `settled=True` and it is the caller's
+      job to know. See `plan_gripper_stops` in `src/motion.py`, which is where a run waits.
+
+    `hold_threshold` is 0.03 of a 96 mm stroke, so roughly 3 mm. Below that the gap is
+    sensor noise and the controller's own steady-state error rather than an object.
+    """
+    if not settled:
+        return GraspCheck(False, 0.0, False, "the jaws had not finished moving")
+    if commanded > closed_enough:
+        return GraspCheck(False, 0.0, False,
+                          f"the jaws were commanded to {commanded:.2f}, not closed, "
+                          "so their position says nothing about an object")
+    gap = measured - commanded
+    if gap > hold_threshold:
+        return GraspCheck(True, gap, True,
+                          f"the jaws stopped {gap:.3f} of the stroke short of closed, "
+                          "so something is between them")
+    return GraspCheck(False, max(0.0, gap), True,
+                      "the jaws closed onto themselves, so they are empty")

@@ -25,6 +25,7 @@ sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
 from yam_robot import (  # noqa: E402
     advance_park_command,
+    check_grasp,
     park_slots,
     park_speed_factor,
     park_target_from,
@@ -374,6 +375,65 @@ def test_junk_in_the_file_is_ignored_rather_than_crashing_the_session() -> None:
     take down a session that is holding a raised arm."""
     data = {"B": {"1": [1.0, 2.0], "2": "not a pose", "3": [], "4": None}}
     assert park_slots(data, "B") == {"1": [1.0, 2.0]}
+
+
+# ------------------------------------------- did the gripper grab something? ----
+#
+# ⭐ Two plans need the robot to know whether it succeeded with nobody watching: throwing
+# failed episodes out of a dataset, and ENPIRE's reset-run-verify-improve loop. The jaws are
+# position controlled and their reading is already normalised 0 closed to 1 open, and
+# calibration closes them onto themselves, so 0 means empty. That makes this free.
+
+
+def test_jaws_stopping_short_of_closed_means_something_is_in_them() -> None:
+    """A 3 cm object in a 96 mm stroke leaves the jaws about a third open."""
+    got = check_grasp(commanded=0.0, measured=0.31, settled=True)
+    assert got.holding
+    assert got.confident
+    assert abs(got.gap - 0.31) < 1e-9
+
+
+def test_jaws_closing_all_the_way_means_they_are_empty() -> None:
+    got = check_grasp(commanded=0.0, measured=0.01, settled=True)
+    assert not got.holding
+    assert got.confident
+    assert "empty" in got.why
+
+
+def test_it_refuses_to_answer_before_the_jaws_have_STOPPED_moving() -> None:
+    """⛔ Mid-close looks identical to holding a wide object. Answering then would label a
+    failed grab as a success, which is the one outcome that poisons a dataset."""
+    got = check_grasp(commanded=0.0, measured=0.40, settled=False)
+    assert not got.confident
+    assert not got.holding
+
+
+def test_it_refuses_to_answer_when_the_jaws_were_never_told_to_close() -> None:
+    """Commanding 0.5 and measuring 0.5 carries no information about an object."""
+    got = check_grasp(commanded=0.5, measured=0.5, settled=True)
+    assert not got.confident
+    assert "not closed" in got.why
+
+
+def test_a_few_millimetres_of_gap_is_noise_rather_than_an_object() -> None:
+    """The controller never lands exactly on its target, and 0.03 of a 96 mm stroke is
+    about 3 mm. Below that the gap is steady-state error."""
+    assert not check_grasp(commanded=0.0, measured=0.02, settled=True).holding
+    assert check_grasp(commanded=0.0, measured=0.05, settled=True).holding
+
+
+def test_a_negative_gap_is_reported_as_zero_rather_than_as_a_negative_object() -> None:
+    """The jaws can read slightly past their commanded position. A negative width is not a
+    thing, and letting it through would make any later averaging nonsense."""
+    got = check_grasp(commanded=0.05, measured=0.01, settled=True)
+    assert not got.holding
+    assert got.gap == 0.0
+
+
+def test_every_answer_explains_itself() -> None:
+    """⭐ The verdict goes into episode metadata, and a bare False months later is unreadable."""
+    for args in ((0.0, 0.31, True), (0.0, 0.01, True), (0.0, 0.4, False), (0.5, 0.5, True)):
+        assert check_grasp(*args).why, args
 
 
 def main() -> int:

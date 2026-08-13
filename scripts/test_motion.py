@@ -167,7 +167,10 @@ def test_waypoint_arrival_marks_are_in_order() -> None:
 # blended corner between "jaws open" and "jaws closed" closes them mid-move. Every grab
 # depends on getting this split right.
 
-OPEN, SHUT = 0.2, -4.8          # raw motor radians, roughly this rig's real jaw limits
+# ⛔ NORMALISED, 0 closed to 1 open. Not raw motor radians: the SDK normalises joint 7
+# against the calibrated limits, so a saved pose holds a fraction of the stroke. Every real
+# recording on this rig reads 0.036 for the nearly-closed jaws, which is how it was checked.
+OPEN, SHUT = 0.90, 0.04
 
 
 def grab_run():  # noqa: ANN201
@@ -212,7 +215,7 @@ def test_moving_the_arm_and_the_jaws_together_WARNS_instead_of_guessing() -> Non
 def test_a_tiny_gripper_difference_is_not_a_jaw_movement() -> None:
     """A pose re-saved in the same place differs by sensor noise. Splitting on that would
     stop the arm at every waypoint, which is the behaviour this replaced."""
-    poses = [[0, 0, 0, 0, 0, 0, OPEN], [0.5, 0, 0, 0, 0, 0, OPEN + 0.01]]
+    poses = [[0, 0, 0, 0, 0, 0, OPEN], [0.5, 0, 0, 0, 0, 0, OPEN - 0.01]]
     assert plan_gripper_stops(poses, gripper_index=6).gripper_legs == []
 
 

@@ -233,11 +233,17 @@ class JointPath:
 
 
 # ⚠️ How much the gripper command must change before a leg counts as "the jaws move".
-# In RAW motor radians, because that is what a saved pose holds. On this rig the jaws'
-# full stroke is about 5.25 rad (limits [0.198, -5.052]), so 0.1 rad is roughly 2% of it:
-# large enough to ignore sensor noise and a re-saved pose, small enough to catch a
-# deliberate open or close.
-GRIPPER_MOVE_THRESHOLD = 0.1
+#
+# ⛔ IN NORMALISED UNITS, 0 CLOSED TO 1 OPEN, and getting this wrong once is why it says so
+# loudly. A saved pose does NOT hold raw motor radians for the gripper: the SDK normalises
+# joint 7 against the calibrated limits, so `get_joint_pos()[6]` is already a fraction of
+# the stroke. Verified against the real files on 2026-08-13 — every recording reads 0.036,
+# which is the same number the startup message prints as *"jaws normalise to 0.036"*.
+#
+# The jaws' full stroke is 96 mm (`gripper_stroke: 0.096` in linear_4310.yml), so 0.05 is
+# about 5 mm: large enough to ignore sensor noise and a re-saved pose, far below any
+# deliberate open or close, which moves most of the range.
+GRIPPER_MOVE_THRESHOLD = 0.05
 
 
 @dataclass(frozen=True)
@@ -290,6 +296,9 @@ def plan_gripper_stops(poses, gripper_index: int,
     ⚠️ A leg that moves the arm and the gripper at once is reported rather than split. Both
     readings are defensible (close while approaching, or stop and close), and guessing wrong
     on 4.3 kg is worse than saying so.
+
+    ⚠️ `poses[i][gripper_index]` is a NORMALISED jaw opening, 0 closed to 1 open, because
+    that is what `get_joint_pos()` returns. See `GRIPPER_MOVE_THRESHOLD`.
     """
     import numpy as np  # noqa: PLC0415
 
