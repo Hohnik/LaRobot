@@ -2005,3 +2005,136 @@ The documents have said *"~1000 lines of `main()`"* since 2026-08-12. **Measured
 ⭐⭐ **AND ONE REAL DESIGN DECISION IS NOW OPEN, with a recommendation.** The two clamps that limit what may be commanded — `MAX_JOINT_STEP` per cycle and the joint-limit margin — currently live **only in the teleop branch**. ⛔ **Working-contract rule 7 asks of every guard: what path reaches the hazard without passing through you?** PARK already went around the gripper clamp once for precisely this reason ([§9](FINDINGS.md)). **Recommendation: move both into `ArmSession`'s single command path**, so every mode is clamped by construction rather than by remembering. ⚠️ **Not done here**, because it changes what actually gets commanded to the arm and that deserves its own reviewable step with Julien's word on it.
 
 ⭐ **The lesson, and it is the third form of the same one this repo keeps meeting.** [§33.3](FINDINGS.md) found stale *measurements* in prose. [§36.2](FINDINGS.md) found a stale *design* in code, with its tests passing. **This is a stale *inventory*: a list of what a component covers, which nobody re-derived against the thing it describes.** All three were true when written. ⛔ **The defence that worked was the same each time: count something, do not recall it.** A ten-line search settled in seconds what two careful readings had missed.
+
+---
+
+## 37. ⛔⭐⭐ THERE IS A 1.0 rad/s CEILING ON EVERY COMMAND AND NOBODY HAD MENTIONED IT — 2026-08-13, evening
+
+> Julien: *"I still don't understand if we can increase the max speed, and if the motors allow for much higher speeds than what we currently have. Because it still sounded like all of the recordings I did were speed limited for some reason."*
+
+⭐ **He was right, and the limit is lower than anything this repo has been calling "the limit".**
+
+### 37.0 ⛔⭐⭐ `SafeRobot(max_speed=1.0)` clamps every command from every mode
+
+`src/yam_robot.py` builds the robot as `SafeRobot(get_yam_robot(...))` at **two** call sites, neither passing `max_speed`. The default is **1.0 rad/s per joint**, and the clamp sits **below all control logic**:
+
+```python
+def __init__(self, robot, max_speed: float = 1.0, max_lag: float = 0.25):
+...
+budget  = self.max_speed * dt
+limited = self._last_cmd + np.clip(q - self._last_cmd, -budget, budget)
+limited = np.clip(limited, measured - self.max_lag, measured + self.max_lag)
+```
+
+⛔ **So the numbers this repo has been quoting are not the binding ones:**
+
+| the number | where | is it what binds? |
+|---|---|---|
+| `MAX_PLANNED_JOINT_SPEED` = **1.5** rad/s | teleop branch of `teleop_session.py` | **no** — 1.0 bites first |
+| `park_speed`, adjustable up to **1.5** rad/s | park | **no** — 1.0 bites first |
+| playback speed multiplier, any value | replay | **no** — 1.0 bites first |
+| **`SafeRobot.max_speed` = 1.0 rad/s** | below everything | ⭐ **YES** |
+
+⭐ **This answers his question directly: every recording he played back was capped at 1.0 rad/s per joint, whatever speed the plan announced.** Nothing on screen says so, which is why it felt like an unexplained limit.
+
+### 37.1 ⛔⭐⭐ AND IT CORRECTS THE SPEED ANALYSIS PUBLISHED EARLIER TODAY — [§34.1](FINDINGS.md) and [§35.2](FINDINGS.md)
+
+`TrackingLog` measures `speed` from the **target** the replay computed and `lag` as `|target − measured|`. **The target is computed before `SafeRobot` clamps it.** So every "commanded speed" in those tables is a *requested* speed, and any request above 1.0 rad/s was never actually sent.
+
+⛔ **The claim "the arm tracks up to about 1.9 rad/s" is therefore wrong, and so is the conclusion built on it.** The arm has **never been commanded above 1.0 rad/s** in any measurement this repo holds.
+
+⭐⭐ **Re-reading run C's table against the 1.0 line splits it cleanly, which the earlier model could not do:**
+
+| joint | requested | lag | vs the 1.0 ceiling |
+|---|---|---|---|
+| base_yaw | 0.38 | 0.028 | below |
+| elbow_pitch | 0.32 | 0.054 | below |
+| wrist_roll | 0.98 | 0.084 | below |
+| shoulder_pitch | 1.03 | 0.059 | at it |
+| **forearm_pitch** | **1.26** | **0.149** | **above** |
+| **gripper_twist** | **2.04** | **0.156** | **above** |
+
+**Every joint asked for less than 1.0 rad/s tracked within 0.09 rad. Both joints asked for more sat at the 0.15 rad threshold where the playback holds its clock.** Run B, whose fastest request was 1.03, showed a worst lag of 0.090. That is the same split.
+
+⭐ **So the honest reading of all three runs is simpler than the delay model:** below 1.0 rad/s the arm follows with under 0.09 rad of error; above it, the request runs away from a command that cannot exceed 1.0, and the gap grows until the cursor waits.
+
+⚠️ **And it explains the scatter the earlier fit could not.** The gap grows for as long as the request exceeds the ceiling, so it depends on **how long** the excess lasts, not on the instantaneous speed. `elbow_pitch` in run A was asked for 1.99 rad/s and lagged only 0.081, because that request was brief. `base_yaw` showed lag **falling** as speed rose. Both are natural under a duration model and awkward under a per-joint delay.
+
+⛔ **The "0.033 s delay, identical on every joint" is now most likely the shared rate limiter rather than a transport delay.** A single constant shared by all six joints is exactly what one clamp below all of them produces. ⚠️ **That is the leading explanation and it is not proven** — separating a rate clamp from a transport delay needs a run with `max_speed` raised, which has never happened.
+
+⭐ **What the data still supports, and it is worth keeping:** the arm's real tracking error at or below 1.0 rad/s is **0.03 to 0.09 rad**, and the gains do not shape it much. That part stands because it comes from requests the clamp never touched.
+
+### 37.2 ⭐⭐ CAN WE GO FASTER? Yes. Here is the order, and what to watch
+
+⭐ **The motors are nowhere near their limit, and his own recordings prove it.** Hand-guiding reached **2.4 to 3.7 rad/s** at the 99th percentile, with a person pushing the arm. **The hardware moves at those speeds; only our software refuses to command them.**
+
+**Raise them in this order, one at a time, testing each:**
+
+| # | change | from → to | why this order |
+|---|---|---|---|
+| 1 | `SafeRobot(max_speed=…)` in `src/yam_robot.py` | 1.0 → **1.5** | It is the only one that binds today. Nothing else changes until it moves |
+| 2 | `MAX_PLANNED_JOINT_SPEED` | 1.5 → 2.0 | Only meaningful once (1) is above it |
+| 3 | `MAX_CURSOR_LAG` (the playback hold) | 0.15 → leave | Raise last, and only if playbacks still wait when they should not |
+
+⚠️ **What to watch, in order of how likely it is to bite:**
+
+1. **Following error.** `SafeRobot.max_lag` is 0.25 rad and the worst lag ever measured is 0.181. Faster motion means more lag, so this becomes the next thing to hit. ⭐ It is a *torque* limit as well, because the position gain multiplies it, so raising it raises the force the arm can apply.
+2. **The inverse-kinematics loop.** Faster teleop means a larger step per cycle, and a joint hitting its limit is what made the arm move incoherently ([§18](FINDINGS.md), `_limit_lead`).
+3. ⚠️ **Heat is probably NOT the constraint at these speeds.** The hottest reading across a 337-second session with three parks, a recording and a playback was **43 °C**, against a warning at 55 and a stop at 65. **Motion is not what cooks these motors; holding still against a stop is** ([§4](FINDINGS.md), motor 7 three times). Faster motion may even run cooler, because a moving motor is not stalled.
+
+⛔ **All three numbers are safety limits and they are Julien's to raise, not an agent's.** Each is one line. Each needs a hardware run afterwards.
+
+### 37.3 ⛔ RETRACTED: my own recommendation to move the clamps into one place was WRONG, and checking took ten minutes
+
+**What I proposed earlier today** ([§36.5](FINDINGS.md)): move `MAX_JOINT_STEP` and `JOINT_LIMIT_MARGIN` out of the teleop branch into `ArmSession`'s single command path, on the grounds of working-contract rule 7 — *what path reaches the hazard without passing through you?*
+
+⛔ **Both halves are wrong, for different reasons.**
+
+1. ⭐ **The universal clamp already exists, one layer lower.** `SafeRobot` wraps the robot and rate-limits **every** command from **every** mode, plus a following-error limit anchored to the measured position. Its own docstring says it sits *"BELOW all control logic"* so *"the buggy code cannot reach around"*. **Rule 7's question already has a good answer.** `MAX_JOINT_STEP` in the teleop branch is an *additional, tighter* limit for the one path that can produce a jump.
+2. ⛔ **Applying `JOINT_LIMIT_MARGIN` to PARK would be actively wrong.** The margin exists to keep the **IK** away from joint limits, because a joint pinned at its limit is what makes the QP move the tool point in directions nobody asked for ([§18](FINDINGS.md)). Park targets come from `s <digit>`, which saves a **measured** pose — a pose the arm physically held. Clamping park to *limit minus margin* would **refuse to return to a pose the arm has already been in.**
+
+⭐ **The correct statement is narrower and it is worth keeping:** the gripper clamp is the one that genuinely must be universal, and it already is, applied inside `park_target_from` *"so no caller can forget it"* after PARK bypassed it once.
+
+⚠️ **The lesson: rule 7 is a question, not a verdict.** I pattern-matched "a guard lives in one branch" to "a guard is being bypassed", and recommended changing a safety path without first checking whether a lower layer already covered it. **The check was one search.**
+
+### 37.4 ⚠️ `check_rig.py` called an unplugged dock "a fault"
+
+With everything unplugged it printed *"the USB bus reports nothing at all, which is itself a fault"*. `usb.core` lists external devices, so **zero is the correct reading when the dock is unplugged**, which is what Julien's desk looks like after he goes home. ⭐ Corrected to say nothing is attached and that this is expected. ⛔ **I wrote that line without ever seeing the case it describes**, which is the same defect as any other untested message.
+
+### 37.5 ⭐⭐ WHY THE ARM STOPS BEFORE IT LOOKS FULLY EXTENDED — three separate limits, and only one of them is the answer
+
+> Julien: *"when I control something in teleoperate, it stops moving in the direction I want it to move even though the arm hasn't even close to fully extended."*
+
+**Three different things could produce that, and they are not the same:**
+
+| limit | value | anchored to | does it match his description? |
+|---|---|---|---|
+| ⭐ **workspace box** | **±0.30 m** cube | ⛔ **wherever the arm was when TELEOP was entered** | ✅ **yes — this is almost certainly it** |
+| joint limits minus margin | `JOINT_LIMIT_MARGIN` = 0.08 rad | each joint's own URDF limit | partly, at extremes only |
+| `SafeRobot` rate + lag limits | 1.0 rad/s, 0.25 rad | the measured pose | no, these slow motion rather than stopping it |
+
+⛔⭐ **The box re-centres every time TELEOP is entered** (`home_ee = teleop.ee_position()` on entry). **So the wall is 30 cm from wherever he happened to press `t`, and it moves every session.** That fits "not even close to fully extended" exactly: the YAM reaches far more than 30 cm, and if teleop was entered near the middle of a reach, the wall arrives early.
+
+⚠️ **And nothing on screen shows where the wall is.** The status line reports temperature, loop rate and joint angles. It does not report how much box is left, so hitting the wall reads as the arm refusing to move.
+
+⭐ **Three fixes, cheapest first, none of them done:**
+
+1. **Show it.** Put "0.28 / 0.30 m from centre" on the status line. The wall stops being invisible. **~5 lines, no behaviour change, and it makes the other two decisions informed rather than guessed.**
+2. **Anchor it to the base**, or to the park pose, instead of to wherever teleop started. Then the wall is in a fixed, learnable place.
+3. **Make it adjustable live**, like `park_speed` and the ease ramp already are.
+
+⭐⭐ **His own idea, and it is a good one for later:** *"maybe the clamp limit should be recordable… where I can once go through all of the motions that are necessary to build, like, a bounding box or bounding space."* **Assessment: right instinct, and worth doing after 1-3.** A recorded workspace matches the task instead of an arbitrary cube. ⚠️ **Two cautions.** A hull is only as safe as the recording, so a region he forgets to visit becomes unreachable later, which is annoying rather than dangerous. And a *convex* hull of a recorded path can include poses the arm cannot actually reach, so it must be checked against the joint limits rather than trusted. ⭐ **The cheap version of his idea: record the corners he cares about as saved poses, and take the box as their bounding volume plus a margin.** That reuses `s <digit>`, which already exists.
+
+### 37.6 ⭐ THE RED LIGHTS — the full timeline, which changes the reading of [§36.0](FINDINGS.md)
+
+**Julien's account, 2026-08-13 evening.** The blinking started **after he lent arm G to a colleague**, who *"did some code execution stuff"* and *"tried to connect them as well, and he got them to connect"*. The lights then began blinking red while still plugged in, stayed blinking after the colleague unplugged it, stayed blinking when Julien plugged it back in, and **later stopped**. He is reporting from memory and the rig is now unplugged, so none of this can be re-checked tonight.
+
+⭐⭐ **The important part: the blinking survived being unplugged from USB.** The CAN adapter loses power when USB is unplugged. **The motors do not** — they run from the wall ([§4.5](HANDOFF.md): power is wall sockets only, there is no e-stop). **So the lights were showing motor state, not adapter state**, and whatever the motors were in persisted while they stayed powered.
+
+⚠️ **A hypothesis that was not considered in [§36.0](FINDINGS.md), and it is now the leading one:** `ping_motors.py --yes` sends an **enable** frame to each motor and reads the reply. **Running it may itself have cleared a latched state.** The ping at 18:00 reported `err=0x1 (normal)` everywhere, which is consistent both with "already fine" and with "cleared by the enable frame, and the reply read after". ⛔ **Nothing distinguishes those two from the data collected**, and the honest position is that the check may have changed what it measured.
+
+⛔ **The new risk this exposes: a third party ran unknown code against these motors.** That is not a criticism, it is a fact that changes what to check. **DM motors have writable registers** — `0x55` writes one and `0xAA` saves it to flash, so a change can survive a power cycle. Nothing in this repo ever writes a register, but another tool might.
+
+⭐ **What was checked, and it is reassuring as far as it goes.** `identify_arm.py` read seven registers on arm G at 18:00 and all match the recorded baseline: gear ratios 40/40/40/10/10/10/10, `timeout` 8000 on every motor, and joint 1's `inertia` equal to arm G's own recorded value. ⚠️ **Seven registers is not all of them.** Control mode, and the `PMAX`/`VMAX`/`TMAX` scaling limits, were **not** read, and a wrong `VMAX` would silently mis-scale every velocity reading rather than raising anything.
+
+⭐⭐ **What to do tomorrow, and it is cheap:** run `identify_arm.py --yes` on **both** arms and diff them against each other. The two arms should agree on every register except the per-unit `inertia` values. **A difference is the signal.** [HANDOFF §5.5](HANDOFF.md) task 0 carries this.

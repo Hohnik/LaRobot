@@ -77,7 +77,14 @@ def main() -> int:
             "product": field(dev, "product"),
         })
     if not devices:
-        print("⛔ the USB bus reports nothing at all, which is itself a fault.")
+        # ⚠️ An earlier version called this "a fault", which is wrong and was written
+        # without ever seeing the case. `usb.core` lists external devices; on a laptop
+        # with its dock unplugged the correct answer is zero, and that is what Julien's
+        # desk looks like when he goes home. Saying "fault" would send the next reader
+        # hunting for a problem that is a disconnected cable. FINDINGS §37.4.
+        print("⭕ Nothing is attached to USB at all.")
+        print("   That is the expected reading with the dock or hub unplugged, and it is")
+        print("   NOT by itself a fault. Plug the rig in and run this again.")
         return 1
 
     def pick(*, vid=None, pid=None):

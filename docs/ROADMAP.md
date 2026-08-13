@@ -686,7 +686,9 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 
 ### ⭐⭐ 7.5.1 ANSWERED 2026-08-13, 16:35 — the arm follows a path with a fixed DELAY, not a gain-shaped error
 
-> ⭐ **Refit 2026-08-13 17:21 with a third run.** The third run was held out of the model first, which measured how good the model actually is, and then folded in. **The answer below is the three-run version.** Working, raw tables and every caveat: [FINDINGS §35.2](FINDINGS.md), with the two-run original at [FINDINGS §34.1](FINDINGS.md).
+> ⛔⭐⭐ **STOP — READ [FINDINGS §37.0](FINDINGS.md) BEFORE ANY NUMBER BELOW.** Everything in this section measures a *requested* speed. **`SafeRobot` rate-limits every command from every mode to 1.0 rad/s per joint**, below all control logic, and no analysis here accounted for it. **The arm has never been commanded above 1.0 rad/s in any measurement this repo holds**, so "the arm tracks up to about 1.9 rad/s" is wrong and the model built on it describes a clamp rather than the arm. ⭐ **What survives:** below 1.0 rad/s the arm follows with under 0.09 rad of error, and the gains barely shape that. **What to do about going faster is [FINDINGS §37.2](FINDINGS.md).**
+>
+> ⭐ **Refit 2026-08-13 17:21 with a third run.** The third run was held out of the model first, which measured how good the model actually is, and then folded in. Working, raw tables and every caveat: [FINDINGS §35.2](FINDINGS.md), with the two-run original at [FINDINGS §34.1](FINDINGS.md).
 
 ⭐ **The answer, in one line: the commanded position runs ahead of the real one by roughly `0.04 to 0.10 rad + 0.033 s × speed`, and the 0.033 s is the same on every joint.** Three playbacks on arm B produced 33 speed-and-lag pairs.
 
@@ -714,7 +716,7 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 
 ⛔ **But the scatter is what a person experiences, and it is large.** The held-out test measured this model as **±25% wrong on any single point**, and run C recorded `forearm_pitch` at **0.156 rad of lag at only 1.16 rad/s** where the fit says 0.131. At these slopes ±0.020 rad of fit error is worth about **±0.7 rad/s** of crossing speed. **So individual moments cross 0.15 rad anywhere between roughly 1.2 and 2.5 rad/s, depending on the pose.**
 
-⭐ **The 1.5 rad/s clamp therefore sits inside the scatter band, which is the right place for it.** Most motion at the clamp tracks. Some waiting at the top end is normal. **Raising the clamp would put it above the band and make waiting the rule.** ✅ **Decision: the clamp stays at 1.5, and this question is closed.**
+⛔⭐ **~~Decision: the clamp stays at 1.5, and this question is closed.~~ REOPENED the same evening.** The 1.5 rad/s clamp was never what bound anything: `SafeRobot` caps every command at **1.0 rad/s**, one layer below ([FINDINGS §37.0](FINDINGS.md)). ⭐ **The question is open again and it now has a concrete answer:** raise `SafeRobot(max_speed=…)` first, because nothing else changes until it moves, then `MAX_PLANNED_JOINT_SPEED`, and watch `SafeRobot.max_lag` (0.25 rad) rather than heat. The ordered plan is [FINDINGS §37.2](FINDINGS.md). ⚠️ **All three are safety limits and each is Julien's to raise.**
 
 ⚠️⚠️ **ONE CONSEQUENCE FOR THE RECORDER THAT IS NOT YET RESOLVED — see [FINDINGS §35.2](FINDINGS.md).** When a playback waits, the replay is **slower than the demonstration was**, unevenly, concentrated wherever the fast joints moved. Run C was 6.1% stretched. §6.6 already requires recording the pose actually commanded rather than the nominal plan, which fixes positions. **It says nothing about timing**, so a dataset built from replays carries human paths at slightly non-human timing. **Open question for step 5.**
 
