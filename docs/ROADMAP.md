@@ -191,16 +191,41 @@ Without that, the first bimanual run tests a ~400-line restructure *and* two-arm
 | Puck assignment | ✅ **built** — `pick_device_by_wiggle(exclude=…)` | Without it the same puck can be assigned to both arms silently: two arms following one hand, which reads as a control bug |
 | A fault on one arm | **stops both**, then the existing consent flow for each | A chain death on B must not leave G uncommanded and sagging |
 
-### Order of work
+### ⛔⭐⭐ 6.1 AUDIT BEFORE STARTING, 2026-08-13 — `ArmSession` has fallen a day behind, and the plan below was not executable as written
 
-1. ⏳ Extract `ArmSession` with **no behaviour change**; run `--arms B` and confirm it feels identical.
-   - ✅ **The class exists and is tested** — `src/arm_session.py`, 17 tests against a fake robot (2026-08-12). State, mode transitions, park stepping with the ramp, the queue, and the thermal guard per arm. **The class decides, the script narrates:** no method prints, so every decision is testable without hardware.
-   - ⬜ **Wiring it into `teleop_session.py` — the remaining half, and the risky one.** ~1000 lines of `main()` currently hold that state as locals. Deliberately left for a session of its own: mixing "write the class" and "restructure the loop" produces a diff nobody can review and that only Julien can test. Session 4 is the standing warning.
-   - ⚠️ **Not in the class on purpose:** building the robot (it energises motors — stays visible in the script), reading the SpaceMouse, key handling (which arm a key applies to is a *session* question), and IK stepping (`CartesianTeleop` owns it).
-2. Add the `a` selector and per-arm status lines. Still one arm.
-3. `--arms B,G`, starting in HOLD, gripper enabled, desk clear.
-4. Only then GUIDE and CONTROLS on two arms.
-5. Mirror mode on top — `src/mirror.py` and its 14 tests already exist; it needs the two-arm process from step 3 and nothing else.
+**Read this before touching the restructure.** Two things were checked rather than assumed, and both change the order of work.
+
+⛔⭐ **FINDING 1: `ArmSession` implements a park model that was explicitly REPLACED the day it was written.** The class was committed at `0f965bc`, **2026-08-12 14:16**. Commit `b120300` landed at **15:15 the same day**, and its own message opens *"Blend THROUGH waypoints — the smoothing I built before was the wrong thing."* That commit replaced a per-leg trapezoidal speed ramp, which stops dead at every waypoint, with a single blended `JointPath` through all of them. **Julien's words are the specification it was written to:** *"instead of moving and then jittering ninety degrees to the next side, in a smooth curve it would go to the next point."*
+
+**What the class actually contains today, checked by search:** `park_speed`, `park_start`, `park_speed_factor`, a queue with `next_leg()` and `abandon_queue()`. ⛔ **It contains no `JointPath`, no `park_s` cursor, no `park_marks`, no blend radius and no easing profile.** So the handoff's instruction to *"replace `park_path`, `park_s` … with a list of `ArmSession`"* **cannot be carried out**: the class has nowhere to put them.
+
+⛔ **`teleop_session.py` has had TEN commits since the class was written**, and they include the entire recorder (`e89b745`), its four hardware fixes (`0e268ed`), the live status rows and adjustable ramp (`690afd9`), independent easing profiles (`e712e2f`), and everything from 2026-08-13. **The class knows about none of it.** Its 17 tests still pass, so it is correct about the design it models; that design is a day out of date.
+
+⛔⭐⭐ **FINDING 2: THE RECORDER MUST NOT MOVE INTO `ArmSession`, and a comment in the code currently says it should.** `teleop_session.py` carries the note *"this whole block moves into ArmSession when main() is restructured"* above the recording state. **That is wrong, and §9.2 is the reason:** ABC's `states_actions.bin` is **14 states and 14 actions per timestep, two arms in ONE timeline**. A recorder that belongs to an arm produces one file per arm and **cannot** produce that format. **The recorder is session-level and spans both arms.** *(The comment has been corrected.)*
+
+### ⭐ The corrected migration map — what goes where
+
+| state in `main()` today | destination | why |
+|---|---|---|
+| `robot` · `teleop` · `mode` · `gripper_value` · `prev_q` · `home_ee` · `guide_ref` · `park_cmd` · `park_target` | **into `ArmSession`** | one arm's own state, already the class's job |
+| `park_path` · `park_s` · `park_marks` · `park_leg_t` · `park_start_t` · `blend_idx` · `ease_idx` · `park_ramp` | **into `ArmSession`, but the class must LEARN them first** | each arm follows its own blended path at its own speed; the class currently models the superseded park |
+| `take` · `take_to_save` · `take_t0` · `take_modes` | ⛔ **session-level, spanning BOTH arms** | ABC needs both arms in one timeline (§9.2). One recorder samples every arm each cycle |
+| `replay` · `replay_s` · `replay_speed` · `replay_held_s` · `replay_worst_lag` · `replay_prev_target` · `tracking` · `replay_pending` · `replay_slot` | ⛔ **session-level** | a playback of a two-arm recording drives both arms from one cursor. Splitting the cursor per arm would let the arms drift apart in time, which is the one thing a bimanual demonstration must not do |
+| `pending` · `park_sequence` · `slots` · key handling | **stays in the script** | which arm a key applies to is a session question, and the `a` selector is the answer |
+| building the robot · reading the SpaceMouse · IK stepping | **stays in the script** | building energises motors and must stay visible; `CartesianTeleop` owns IK |
+
+### Order of work — REVISED 2026-08-13
+
+⛔ **Step 0 is new, and skipping it is how the restructure produces a diff nobody can review.**
+
+0. ⬜ **Bring `ArmSession` up to the current single-arm behaviour, with no `main()` changes at all.** Replace its queue-and-ramp park with the blended `JointPath` model, add the easing profile and ramp, and add the two park clocks. **Update its 17 tests to match**, since several of them assert the superseded behaviour. ⭐ **This is entirely headless** — the class takes a fake robot and no method prints — so it is provable with no arm and no hardware time. ⚠️ **Do not add recording or playback to the class**; see Finding 2.
+1. ⬜ `--arms B` runs the N-arm code with **N=1**. Julien confirms it **feels identical**. The restructure is then verified against a feel he already knows, separately from any two-arm risk.
+   - ⚠️ **Not in the class on purpose:** building the robot, reading the SpaceMouse, key handling, and IK stepping.
+2. ⬜ Add the `a` selector (B → G → BOTH) and per-arm status rows. Still one arm connected.
+3. ⬜ `--arms B,G`, starting in **HOLD**, gripper enabled, desk clear. ⚠️ **This is the first step that needs arm G**, which is shared with a colleague and usually unplugged ([FINDINGS §35.6](FINDINGS.md)). **Ask for it here, not at step 0.**
+4. ⬜ Only then GUIDE and CONTROLS on two arms. GUIDE last, because that is where a dynamics-model error becomes a *falling* arm and `g` on two arms is 8.6 kg at once.
+5. ⬜ Mirror mode on top — `src/mirror.py` and its 14 tests already exist; it needs the two-arm process from step 3 and nothing else.
+6. ⬜ **Then, and only then, the two-arm recorder** in ABC's format. It is step 5 of §8.2 and it is still blocked on §6.6 as well.
 
 ## Step 6.5 — ⭐ Saved positions, sequences, and smooth motion between them
 

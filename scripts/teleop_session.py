@@ -622,9 +622,16 @@ def main() -> int:  # noqa: PLR0915
     # saved waypoints is docs/ROADMAP.md §6.6; the movement itself lives in
     # src/recording.py so every decision about it is testable without an arm.
     #
-    # ⚠️ Only these few names are held here. That is on purpose: this whole block moves
-    # into ArmSession when main() is restructured (HANDOFF task 0c), and the fewer locals
-    # it owns the smaller that diff is.
+    # ⛔⭐ THIS BLOCK DOES **NOT** MOVE INTO `ArmSession`, and an earlier note here said it
+    # did. Corrected 2026-08-13 after checking it against the target data format.
+    # `amazon-far/abc` wants `states_actions.bin` with **14 states and 14 actions per
+    # timestep — two arms in ONE timeline** ([ROADMAP.md](../docs/ROADMAP.md) §9.2). A
+    # recorder owned by an arm produces one file per arm and **cannot** produce that.
+    # ⭐ So recording and playback are **session-level and span every arm**: one recorder
+    # samples all arms each cycle, and one playback cursor drives them all. Splitting the
+    # cursor per arm would let the two arms drift apart in time, which is the one thing a
+    # bimanual demonstration must not do. Migration map: [ROADMAP.md](../docs/ROADMAP.md)
+    # §6.1.
     take: Trajectory | None = None      # being recorded right now, or None
     take_to_save: Trajectory | None = None   # frozen, waiting for its slot digit
     take_t0 = 0.0

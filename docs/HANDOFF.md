@@ -68,16 +68,21 @@
 >
 > ⛔ **There is no bimanual command yet. `--arms` does not exist.** `teleop_session.py` is single-arm from top to bottom; asking for two arms today would just error. Julien asked for the command on 2026-08-12 and the honest answer was that it does not exist.
 >
-> **What IS done:** `src/arm_session.py` — one arm's state and mode machine, **17 tests against a fake robot**, written so N of them run in one loop. State, mode transitions, park stepping with the ramp, the queue, per-arm thermal guard. Its rule is *the class decides, the script narrates* — no method prints — which is why it can be proven without hardware.
+> ⛔⭐⭐ **AUDITED 2026-08-13, AND THE PLAN THAT USED TO BE HERE WAS NOT EXECUTABLE. Read [ROADMAP §6.1](ROADMAP.md) before starting.** Two things were checked rather than assumed:
 >
-> **What is left, concretely:** `main()` is ~1000 lines holding ONE arm's state as locals — `robot`, `teleop`, `mode`, `gripper_value`, `prev_q`, `home_ee`, `park_target`, `park_path`, `park_s`, `guide_ref`, `park_cmd`. Replace those with a list of `ArmSession`, and iterate.
+> 1. ⛔ **`ArmSession` is a day and TEN commits behind, and its park model was explicitly replaced an hour after it was written.** The class landed at 14:16 on 2026-08-12; commit `b120300` at 15:15 that day opens *"the smoothing I built before was the wrong thing"* and replaced the per-leg speed ramp with a single blended `JointPath`. **The class still has the old model** — `park_speed`, `park_start`, a leg queue — and **no `JointPath`, no `park_s` cursor, no blend radius, no easing.** So the old instruction to *"replace `park_path`, `park_s` … with a list of `ArmSession`"* had nowhere to put them. It also knows nothing of the recorder, which did not exist yet.
+> 2. ⛔ **The recorder must NOT move into `ArmSession`**, and a comment in `teleop_session.py` said it should. ABC's file is **14 states and 14 actions in one timeline** ([ROADMAP §9.2](ROADMAP.md)), so a recorder owned by an arm cannot produce it. **Recording and playback are session-level and span every arm.** The comment is corrected.
 >
-> ⭐ **Do it in this order — it is the whole de-risking plan and it is not optional:**
+> **What IS done:** `src/arm_session.py` — one arm's state and mode machine, **17 tests against a fake robot**. State, mode transitions, park stepping, per-arm thermal guard. Its rule is *the class decides, the script narrates* — no method prints — which is why it can be proven without hardware. ⚠️ **The tests pass and the design they test is out of date**, so several of them assert behaviour the script no longer has.
+>
+> ⭐ **Do it in this order. Step 0 is new and skipping it is how this produces a diff nobody can review:**
+> 0. **Bring `ArmSession` up to today's single-arm behaviour, changing no `main()` code at all.** Swap its queue-and-ramp park for the blended `JointPath`, add the easing profile and ramp and the two park clocks, and update the tests that assert the old model. ⭐ **Entirely headless, no arm needed.** ⚠️ Do not add recording or playback to the class.
 > 1. `--arms B` runs the N-arm code with **N=1**. Julien confirms it *feels identical*. The restructure is then verified against a feel he already knows, separately from any two-arm risk.
 > 2. Add the `a` selector (B → G → BOTH) and per-arm status rows. Still one arm connected.
-> 3. `--arms B,G`, starting in **HOLD**, gripper enabled, desk clear.
+> 3. `--arms B,G`, starting in **HOLD**, gripper enabled, desk clear. ⚠️ **This is the first step that needs arm G**, which a colleague borrows and which is usually unplugged. **Ask for it here, not before step 0.**
 > 4. Only then GUIDE and CONTROLS on two arms — GUIDE last, because that is the mode where a dynamics-model error becomes a *falling* arm, and `g` on two arms is 8.6 kg at once.
 > 5. Mirror mode on top: `src/mirror.py` + its 14 tests already exist and need only the two-arm process.
+> 6. **Then** the two-arm recorder in ABC's format, which is still blocked on [ROADMAP §6.6](ROADMAP.md) as well.
 >
 > ⚠️ **The decisions are already made** — [ROADMAP step 6](ROADMAP.md) has the table: mode keys apply to the *selected* arm, driving always applies to *all* arms, start in HOLD and refuse `--start-mode guide` when N>1, and **a fault on one arm stops both** (a chain death on B must not leave G sagging). Prerequisites that are already built: per-arm and per-frame axis maps, and `pick_device_by_wiggle(exclude=…)` so one puck cannot be assigned to both arms.
 >
