@@ -2127,6 +2127,21 @@ def main() -> int:  # noqa: PLR0915
                     extra = ""
                     if mode == "teleop" and teleop is not None:
                         extra = f"  EE {np.round(teleop.ee_position(), 3)}"
+                        # ⭐⭐ SHOW THE WORKSPACE WALL, because it is invisible and it
+                        # moves. Julien, 2026-08-13: *"it stops moving in the direction I
+                        # want it to move even though the arm hasn't even close to fully
+                        # extended."* The box is ±0.30 m and it re-centres on whatever
+                        # pose TELEOP was entered from, so the wall sits in a different
+                        # place every session and nothing on screen said where. Hitting
+                        # it reads as the arm refusing to move.
+                        # ⚠️ This only reports. It changes no limit and no behaviour —
+                        # deliberately, because seeing where the wall is has to come
+                        # before deciding whether to move it. FINDINGS §37.5.
+                        if home_ee is not None:
+                            off = float(np.max(np.abs(teleop.ee_position() - home_ee)))
+                            extra += f"  box {off:.2f}/{args.box:.2f}m"
+                            if off > 0.9 * args.box:
+                                extra += " ⚠️ AT THE EDGE"
                         # ⭐ How far the goal is running ahead of the pose actually
                         # achieved. Pinned at the limit = the arm cannot follow (joint
                         # limit, singularity, something in the way), which used to

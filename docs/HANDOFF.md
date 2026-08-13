@@ -62,7 +62,10 @@
 > | any park, `p` then Enter | the arrival line shows a **real total**, and on a multi-waypoint run the leg times plus the settling add up to it | [FINDINGS §34.3](FINDINGS.md), the two-clock fix |
 > | press `w` in **HOLD**, then `g`, guide the arm, `w` again, save | the file's `method` reads **`live:hold+guide`**, not `live:hold` | [FINDINGS §35.4](FINDINGS.md), the provenance fix |
 > | play it back | one extra line naming the saved tracking file | [FINDINGS §34.4](FINDINGS.md) |
+> | press `t` for TELEOP and drive until it stops | the status line shows **`box 0.28/0.30m`**, then **`⚠️ AT THE EDGE`** | [FINDINGS §37.5](FINDINGS.md) — almost certainly what stops him early, and it was invisible until now |
 > | nothing | ⭐ **`ArmSession` is NOT wired in, so none of the 08-13 evening class work can show up on the arm.** If something feels different, it is not that | [ROADMAP §6.1](ROADMAP.md) |
+>
+> ⭐ **What the box readout settles.** If it reads **`0.30/0.30m`** at the moment the arm stops, the workspace box is the answer, and the next decision is which of the three fixes in [FINDINGS §37.5](FINDINGS.md) to take. If it reads something like **`0.12/0.30m`** and the arm still refuses to move, the cause is a joint limit or the IK instead, and the `⚠️ STUCK lead` warning on the same line says which.
 >
 > **5. Only if he wants to go faster that day:** raise `SafeRobot(max_speed=)` from 1.0 to 1.5 in `src/yam_robot.py`, alone, and re-run one playback. ⛔ **His call, it is a safety limit, and change nothing else in the same run.** [FINDINGS §37.2](FINDINGS.md).
 >
