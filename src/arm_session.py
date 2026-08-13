@@ -38,41 +38,95 @@ can still prove the mode machine behaves.
   all arms; mode changes apply to the selected one).
 - **IK stepping.** `CartesianTeleop` already owns that; this holds one and calls it.
 
-⚠️ **STATUS, 2026-08-12: built and unit-tested, NOT yet wired into
-`teleop_session.py`.** That wiring is a separate, reviewable step, deliberately not
+⚠️ **STATUS, 2026-08-13: built, unit-tested, brought up to date, and STILL NOT wired
+into `teleop_session.py`.** That wiring is a separate, reviewable step, deliberately not
 done in the same session as writing this. Session 4 is the standing warning — three
 changes that passed 34 tests, three dry runs and a simulated IK loop produced three
 failures on first hardware contact, one of which dropped 4.3 kg. When it is wired,
-ROADMAP step 6 says how: `--arms B` runs the N-arm code with **N=1** first, so the
+ROADMAP §6.1 says how: `--arms B` runs the N-arm code with **N=1** first, so the
 restructure is verified against a feel Julien already knows, separately from the
 two-arm risk.
+
+⛔⭐⭐ **AND A WARNING WORTH MORE THAN THE CLASS ITSELF: THIS FILE WENT STALE IN ONE
+HOUR.** It was committed 2026-08-12 at 14:16 with a park built from a queue of legs and
+a per-leg speed ramp. At **15:15 the same day** `teleop_session.py` replaced exactly that
+with a single blended `JointPath`, and the commit message says the earlier version *"was
+the wrong thing"*. This class then sat for a day modelling a design the script no longer
+had, **with all 17 of its tests passing the whole time**, because the tests asserted the
+superseded behaviour. It was found by auditing before the restructure rather than by
+anything failing.
+
+⚠️ **So: an unwired class is a copy of a design, and a copy drifts.** Whenever
+`teleop_session.py` changes how an arm behaves, this file is the second place that change
+has to land, and nothing enforces it. **The fix is to finish the wiring** — after that
+there is one copy. Until then, diff this against the script's park before trusting it.
+
+⛔ **What this deliberately does NOT own, decided 2026-08-13: recording and playback.**
+They look like per-arm state and they are not. `amazon-far/abc` wants 14 states and 14
+actions per timestep, **two arms in ONE timeline** (ROADMAP §9.2), so a recorder owned by
+an arm cannot produce the target format at all. One session-level recorder samples every
+arm each cycle, and one playback cursor drives them all — splitting the cursor per arm
+would let the arms drift apart in time, which is the one thing a bimanual demonstration
+must not do. Migration map: ROADMAP §6.1.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from motion import EASINGS, Easing, JointPath, easing_factor
 from yam_robot import (
     ThermalGuard,
-    advance_park_command,
     motor_temperatures,
-    park_speed_factor,
     park_target_from,
     park_verdict,
 )
 
 N_ARM = 6
 
+#: Defaults copied from `teleop_session.py` rather than imported from it. ⛔ A library
+#: must not import the script that uses it, and these are the values the script has been
+#: tuned against on hardware. They are constructor arguments so a caller can override
+#: them, and the script passes its own live knobs in.
+PARK_SPEED = 0.40           # rad/s along the path
+PARK_RAMP = 0.20            # how much of the move is eased
+PARK_BLEND = 0.15           # corner radius, "smooth"
+PARK_TOLERANCE = 0.02       # rad — "arrived"
+PARK_SETTLED = 0.06         # rad — "as close as it holds itself under load"
+PARK_SETTLE_SECONDS = 0.5
+PARK_STALL_SECONDS = 4.0
+PARK_PROGRESS_EPS = 0.003   # rad of improvement that still counts as progress
+MAX_CURSOR_LAG = 0.15       # rad — past this the cursor waits for the arm
+
 
 @dataclass
 class ParkLeg:
-    """One waypoint in a queued run: its slot name and the pose to reach."""
+    """One waypoint in a run: its slot name and the pose to reach."""
 
     name: str
     pose: list
+
+
+@dataclass(frozen=True)
+class ParkStep:
+    """Everything the caller needs to narrate one cycle of a park. Nothing is printed.
+
+    ⭐ Every field exists because `teleop_session.py` prints it today. Returning them
+    instead of printing is the whole reason this class can be proven without an arm.
+    """
+
+    verdict: str                 # moving · arrived · settled · blocked
+    err: float                   # distance from the FINAL target, MEASURED
+    lag: float                   # how far the arm trails the commanded point
+    remaining: float             # rad of path still ahead of the cursor
+    leg_passed: str | None       # a waypoint the cursor reached on THIS cycle
+    next_leg: str | None         # the waypoint after it, for "→ next 3"
+    leg_seconds: float           # since the previous waypoint was passed
+    total_seconds: float         # since the whole park began
+    settling_seconds: float      # since the cursor finished the path
 
 
 class ArmSession:
@@ -100,14 +154,33 @@ class ArmSession:
         self.prev_q = np.zeros(N_ARM)
         self.guide_ref: np.ndarray | None = None
 
-        self.park_target: np.ndarray | None = None
+        # ⛔⭐ THE PARK IS ONE BLENDED PATH WITH A CURSOR ALONG IT, and this replaced a
+        # queue of separate legs on 2026-08-13. The earlier model drove to each waypoint
+        # and stopped dead, which is the thing Julien explicitly did not ask for:
+        # *"instead of moving and then jittering ninety degrees to the next side, in a
+        # smooth curve it would go to the next point."* `teleop_session.py` changed to
+        # `JointPath` on 2026-08-12 at 15:15, one hour after this class was written, and
+        # the class was left behind for a day. Audit: ROADMAP §6.1.
+        self.park_path: JointPath | None = None
+        self.park_s = 0.0                       # arc-length cursor along the path
+        self.park_marks: list[tuple[str, float]] = []   # waypoint name → arc length
+        self.park_target: np.ndarray | None = None      # the FINAL pose of the run
         self.park_cmd: np.ndarray | None = None
-        self.park_start: np.ndarray | None = None
         self.park_best_err = float("inf")
         self.park_progress_t = 0.0
-        self.park_queue: list[ParkLeg] = field(default_factory=list)  # type: ignore[assignment]
-        self.park_queue = []
-        self.park_speed = 0.40
+        # ⛔ TWO CLOCKS. `park_leg_t` resets at every waypoint so each leg reports its own
+        # duration; `park_start_t` never resets so the arrival line can report the whole
+        # park. Sharing one variable printed "PARK reached in 0.0s" after a 4.4 s park,
+        # because the last waypoint is passed at the very end. FINDINGS §34.3.
+        self.park_leg_t = 0.0
+        self.park_start_t = 0.0
+
+        # Live knobs. The script owns the keys that change them; this owns the motion.
+        self.park_speed = PARK_SPEED
+        self.park_ramp = PARK_RAMP
+        self.blend = PARK_BLEND
+        self.easing: Easing = EASINGS[3]        # "both", the script's default
+        self._smooth = True                     # the caller's --no-smooth, per run
 
         self.thermal = ThermalGuard(warn_at=warn_at, stop_at=stop_at)
 
@@ -206,61 +279,120 @@ class ArmSession:
 
     # -------------------------------------------------------------- park ----
 
-    def begin_park(self, pose, t: float) -> str | None:  # noqa: ANN001
-        """Start a leg toward `pose`. Returns a warning from the target builder."""
-        target, warn = park_target_from(self.robot.get_joint_pos(), pose,
-                                        gripper_index=N_ARM, clamp=self.clamp_gripper)
-        self.park_target = target
+    def begin_path(self, legs: list[ParkLeg], t: float, smooth: bool = True) -> list[str]:
+        """Start ONE continuous motion through every leg. Returns any target warnings.
+
+        ⛔ Every waypoint goes through `park_target_from`, so the gripper clamp and the
+        6-versus-7-joint reconciliation apply to all of them. A length mismatch on one
+        leg once raised mid-park and dropped the arm (FINDINGS §11), and that path
+        reaches every leg here, not only the first.
+
+        ⚠️ `smooth=False` is the caller's `--no-smooth`: the path is still blended, and
+        only the easing ramp is switched off. Blending is the *shape*; easing is the
+        *speed along it*. They are independent axes and Julien wants both adjustable.
+        """
+        warnings: list[str] = []
+        targets = []
+        for leg in legs:
+            target, warn = park_target_from(self.robot.get_joint_pos(), leg.pose,
+                                            gripper_index=N_ARM, clamp=self.clamp_gripper)
+            if warn:
+                warnings.append(warn)
+            targets.append(target)
+        start = np.asarray(self.robot.get_joint_pos(), dtype=float)
+        self.park_path = JointPath([start, *targets], blend=self.blend)
+        self.park_marks = list(zip([leg.name for leg in legs],
+                                   self.park_path.arrival_lengths()[1:]))
+        self.park_s = 0.0
+        self.park_target = targets[-1]
+        self.park_cmd = start.copy()
         self.enter_hold()
         self.mode = "park"
-        self.park_cmd = np.asarray(self.robot.get_joint_pos(), dtype=float)
-        self.park_start = self.park_cmd.copy()
-        self.park_best_err = float(np.max(np.abs(target - self.park_cmd)))
+        self._smooth = smooth
+        self.park_best_err = float(np.max(np.abs(self.park_target - start)))
         self.park_progress_t = t
-        return warn
+        self.park_leg_t = t
+        self.park_start_t = t
+        return warnings
 
-    def step_park(self, t: float, dt: float, tolerance: float = 0.02,
-                  settled: float = 0.06, stall_seconds: float = 4.0,
-                  ramp: float = 0.20) -> tuple[str, float]:
-        """Advance the park by one control cycle. Returns `(verdict, error)`.
+    def step_path(self, t: float, dt: float,
+                  tolerance: float = PARK_TOLERANCE,
+                  settled: float = PARK_SETTLED,
+                  stall_seconds: float = PARK_STALL_SECONDS,
+                  settle_seconds: float = PARK_SETTLE_SECONDS,
+                  progress_eps: float = PARK_PROGRESS_EPS,
+                  max_cursor_lag: float = MAX_CURSOR_LAG) -> ParkStep:
+        """Advance the park by one control cycle and report what happened.
 
-        Verdicts are `park_verdict`'s: `moving` · `arrived` · `settled` · `blocked`.
-        The caller decides what to do — pop the next leg, hold, or ask a human.
+        ⛔ Completion is judged from the **measured** pose, never from the command. The
+        command always arrives first, so testing it would declare success while the arm
+        was still travelling. That was a real bug and it hid for two sessions.
 
-        ⛔ Completion is judged from the **measured** pose, never the command. The
-        command always arrives first, so testing it would declare success while the
-        arm was still travelling. That was a real bug and it hid for two sessions.
+        ⛔⭐ ARRIVAL IS GATED ON THE CURSOR REACHING THE END OF THE PATH, not on the
+        error alone. A run like `p 1 2 1` finishes where it started, so the distance to
+        the final target is small at t=0 as well — judging on that would declare the
+        whole sequence complete before the arm had moved at all.
+
+        ⭐ The cursor waits when the arm falls behind. The trajectory is a *shape*, and a
+        command racing ahead while the arm cuts its own corner is not the shape anyone
+        chose. Progress means "the cursor moved OR the arm closed the gap": without the
+        first half a legitimately slow leg looks stalled, and without the second an arm
+        pinned against something never does.
         """
-        if self.park_target is None or self.park_cmd is None:
-            return "blocked", float("inf")
+        blocked = ParkStep("blocked", float("inf"), 0.0, 0.0, None, None,
+                           t - self.park_leg_t, t - self.park_start_t,
+                           t - self.park_leg_t)
+        if self.park_path is None or self.park_target is None or self.park_cmd is None:
+            return blocked
+
         q = np.asarray(self.robot.get_joint_pos(), dtype=float)
         err = float(np.max(np.abs(self.park_target - q)))
+        lag = float(np.max(np.abs(self.park_cmd - q)))
+        length = self.park_path.length
+
+        def result(verdict: str, leg_passed: str | None = None,
+                   next_leg: str | None = None) -> ParkStep:
+            return ParkStep(verdict, err, lag, max(0.0, length - self.park_s),
+                            leg_passed, next_leg, t - self.park_leg_t,
+                            t - self.park_start_t, t - self.park_leg_t)
+
+        if self.park_s < length:
+            advanced = False
+            if lag < max_cursor_lag:
+                ramp = easing_factor(self.easing, self.park_s, length - self.park_s,
+                                     self.park_ramp if self._smooth else 0.0)
+                self.park_s = min(length, self.park_s + self.park_speed * ramp * dt)
+                advanced = True
+            self.park_cmd = self.park_path.point_at(self.park_s)
+            self.robot.command_joint_pos(self.park_cmd)
+
+            if advanced or err < self.park_best_err - progress_eps:
+                self.park_best_err = min(self.park_best_err, err)
+                self.park_progress_t = t
+            if t - self.park_progress_t > stall_seconds:
+                return result("blocked")
+            if self.park_marks and self.park_s >= self.park_marks[0][1]:
+                name, _ = self.park_marks.pop(0)
+                step = result("moving", leg_passed=name,
+                              next_leg=self.park_marks[0][0] if self.park_marks else None)
+                self.park_leg_t = t
+                return step
+            return result("moving")
+
         verdict = park_verdict(err, t - self.park_progress_t > stall_seconds,
-                               tolerance, settled)
-        if verdict != "moving":
-            return verdict, err
-        factor = park_speed_factor(
-            float(np.max(np.abs(self.park_cmd - self.park_start))),
-            float(np.max(np.abs(self.park_target - self.park_cmd))), ramp)
-        self.park_cmd = advance_park_command(self.park_cmd, self.park_target,
-                                             self.park_speed * factor * dt)
-        self.robot.command_joint_pos(self.park_cmd)
-        if err < self.park_best_err - 0.003:
-            self.park_best_err, self.park_progress_t = err, t
-        return "moving", err
+                               tolerance, settled,
+                               stopped_briefly=t - self.park_progress_t > settle_seconds)
+        return result(verdict)
 
-    def next_leg(self, t: float) -> ParkLeg | None:
-        """Pop and start the next queued waypoint, or None when the run is done."""
-        if not self.park_queue:
-            return None
-        leg = self.park_queue.pop(0)
-        self.begin_park(leg.pose, t)
-        return leg
+    def abandon_path(self) -> float:
+        """⛔ Leaving PARK abandons the rest of the run, and returns the rad dropped.
 
-    def abandon_queue(self) -> int:
-        """⛔ Leaving PARK abandons the rest of a sequence. An arm that resumes a
-        queued trajectory after the operator pressed HOLD is doing something nobody
-        asked for. Returns how many were dropped, so the caller can say so."""
-        dropped = len(self.park_queue)
-        self.park_queue = []
-        return dropped
+        An arm that resumes a queued trajectory after the operator pressed HOLD is doing
+        something nobody asked for. Returning the distance rather than a waypoint count
+        is deliberate: with one blended path there are no separate legs left to count,
+        and "1.8 rad of path abandoned" is what an operator can actually picture.
+        """
+        left = 0.0 if self.park_path is None else max(0.0, self.park_path.length - self.park_s)
+        self.park_path, self.park_marks = None, []
+        self.park_s = 0.0
+        return left

@@ -78,13 +78,18 @@ class FakeRobot:
 
 def run_park(arm, robot, seconds=30.0, dt=0.01):  # noqa: ANN001, ANN201
     """Drive the park loop until it reaches a verdict. Returns (verdict, error, t)."""
-    t = 0.0
+    t, step = 0.0, None
     while t < seconds:
-        verdict, err = arm.step_park(t, dt)
-        if verdict != "moving":
-            return verdict, err, t
+        step = arm.step_path(t, dt)
+        if step.verdict != "moving":
+            return step.verdict, step.err, t
         t += dt
-    return "timeout", err, t
+    return "timeout", (step.err if step else float("inf")), t
+
+
+def to(pose, name="0"):  # noqa: ANN001, ANN201
+    """One leg, since most tests drive a single waypoint."""
+    return [ParkLeg(name, pose)]
 
 
 # ------------------------------------------------------------- liveness ----
@@ -179,7 +184,7 @@ def test_a_missing_zero_gravity_api_is_reported_not_assumed() -> None:
 def test_a_park_reaches_its_target() -> None:
     robot = FakeRobot(q=[1.0] * 6 + [0.5])
     arm = ArmSession(robot, name="B")
-    arm.begin_park([0.0] * 6 + [0.5], t=0.0)
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
     verdict, err, _ = run_park(arm, robot)
     assert verdict in ("arrived", "settled"), verdict
     assert err < 0.06
@@ -190,7 +195,7 @@ def test_a_stuck_arm_is_BLOCKED_not_quietly_finished() -> None:
     in the way might be a hand."""
     robot = FakeRobot(q=[1.0] * 6 + [0.5], follow=False)
     arm = ArmSession(robot, name="B")
-    arm.begin_park([0.0] * 6 + [0.5], t=0.0)
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
     verdict, err, _ = run_park(arm, robot, seconds=10.0)
     assert verdict == "blocked", verdict
     assert err > 0.5, "it never moved, so the error should still be the whole distance"
@@ -201,73 +206,170 @@ def test_completion_is_judged_from_the_MEASUREMENT_not_the_command() -> None:
     is still travelling — a real bug that hid for two sessions."""
     robot = FakeRobot(q=[1.0] * 6 + [0.5], follow=False)
     arm = ArmSession(robot, name="B")
-    arm.begin_park([0.0] * 6 + [0.5], t=0.0)
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
     for i in range(400):
-        arm.step_park(i * 0.01, 0.01)
-    assert float(np.max(np.abs(arm.park_cmd[:N_ARM]))) < 0.5, "the command should have advanced"
-    verdict, err = arm.step_park(4.5, 0.01)
-    assert verdict == "blocked", "the arm never moved, so this is not arrival"
+        arm.step_path(i * 0.01, 0.01)
+    assert arm.park_s > 0.0, "the cursor should have advanced before the arm fell behind"
+    assert float(np.max(np.abs(arm.park_cmd - robot.q))) > 0.1, (
+        "the command has run well ahead of the arm, which is the whole trap")
+    # ⚠️ Run to a real verdict rather than sampling one instant. The stall timer starts
+    # when the cursor stops advancing, not when the park starts, so a fixed t is a
+    # guess about easing and path length. An earlier version of this test guessed 4.5 s
+    # and read "moving", which is the stall timer working correctly.
+    verdict, _, _ = run_park(arm, robot, seconds=20.0)
+    assert verdict == "blocked", f"the arm never moved, so this is not arrival: {verdict}"
 
 
 def test_the_park_eases_in_rather_than_starting_at_full_speed() -> None:
-    """The first step of a leg must be slower than a mid-move step, or every waypoint
-    in a sequence is a jerk."""
+    """The move must not start at full speed, or every run begins with a jerk."""
     robot = FakeRobot(q=[1.0] * 6 + [0.5])
     arm = ArmSession(robot, name="B")
-    arm.begin_park([0.0] * 6 + [0.5], t=0.0)
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
     before = arm.park_cmd.copy()
-    arm.step_park(0.0, 0.01)
+    arm.step_path(0.0, 0.01)
     first = float(np.max(np.abs(arm.park_cmd - before)))
     for i in range(1, 80):                 # travel past the ramp
-        arm.step_park(i * 0.01, 0.01)
+        arm.step_path(i * 0.01, 0.01)
     mid_before = arm.park_cmd.copy()
-    arm.step_park(0.8, 0.01)
+    arm.step_path(0.8, 0.01)
     mid = float(np.max(np.abs(arm.park_cmd - mid_before)))
     assert first < mid, f"first step {first:.5f} was not slower than mid-move {mid:.5f}"
 
 
+def test_switching_off_smoothing_removes_the_ramp_not_the_blending() -> None:
+    """⚠️ `--no-smooth` is about the speed profile only. Blending is the shape the arm
+    follows and easing is the speed along it; they are independent axes."""
+    robot = FakeRobot(q=[1.0] * 6 + [0.5])
+    arm = ArmSession(robot, name="B")
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0, smooth=False)
+    before = arm.park_cmd.copy()
+    arm.step_path(0.0, 0.01)
+    first = float(np.max(np.abs(arm.park_cmd - before)))
+    for i in range(1, 80):
+        arm.step_path(i * 0.01, 0.01)
+    mid_before = arm.park_cmd.copy()
+    arm.step_path(0.8, 0.01)
+    mid = float(np.max(np.abs(arm.park_cmd - mid_before)))
+    assert abs(first - mid) < 1e-9, "with no easing the rate should be constant"
+
+
 def test_park_with_no_target_refuses_rather_than_crashing() -> None:
     arm = ArmSession(FakeRobot(), name="B")
-    verdict, _ = arm.step_park(0.0, 0.01)
-    assert verdict == "blocked"
+    assert arm.step_path(0.0, 0.01).verdict == "blocked"
 
 
-# ------------------------------------------------------------ sequences ----
+# ---------------------------------------------- one blended path, N waypoints ----
 
 
-def test_legs_run_in_order_and_then_stop() -> None:
+def test_the_path_does_NOT_stop_at_an_intermediate_waypoint() -> None:
+    """⛔⭐ THE WHOLE POINT OF BLENDING, and the behaviour that replaced a queue of
+    separate legs on 2026-08-12. Julien: *"instead of moving and then jittering ninety
+    degrees to the next side, in a smooth curve it would go to the next point."* The
+    earlier model drove to each waypoint and stopped dead. **A test that asserted a
+    fresh ease-in at every leg used to live here; it asserted the wrong thing.**"""
     robot = FakeRobot(q=[0.0] * 7)
     arm = ArmSession(robot, name="B")
-    arm.park_queue = [ParkLeg("1", [0.2] * 6 + [0.5]), ParkLeg("2", [0.4] * 6 + [0.5])]
-    first = arm.next_leg(t=0.0)
-    assert first.name == "1"
-    second = arm.next_leg(t=1.0)
-    assert second.name == "2"
-    assert arm.next_leg(t=2.0) is None, "the run should end, not loop"
+    arm.begin_path([ParkLeg("1", [1.0] * 6 + [0.5]),
+                    ParkLeg("2", [1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 0.5])], t=0.0)
+    passed_at = None
+    slowest_after = None
+    for i in range(4000):
+        t = i * 0.01
+        before = arm.park_s
+        step = arm.step_path(t, 0.01)
+        if step.leg_passed == "1":
+            passed_at = t
+        if passed_at is not None and t - passed_at < 0.10:
+            moved = arm.park_s - before
+            slowest_after = moved if slowest_after is None else min(slowest_after, moved)
+        if step.verdict != "moving":
+            break
+    assert passed_at is not None, "waypoint 1 was never reported"
+    assert slowest_after is not None and slowest_after > 0.0, (
+        "the cursor stopped at the intermediate waypoint — that is the old behaviour")
 
 
-def test_each_leg_gets_its_own_ease_in() -> None:
-    """Not just the first — otherwise every waypoint after the first starts abruptly."""
+def test_waypoints_are_reported_in_order_with_the_one_coming_next() -> None:
     robot = FakeRobot(q=[0.0] * 7)
     arm = ArmSession(robot, name="B")
-    arm.park_queue = [ParkLeg("1", [1.0] * 6 + [0.5])]
-    arm.next_leg(t=0.0)
-    for i in range(80):
-        arm.step_park(i * 0.01, 0.01)
-    arm.park_queue = [ParkLeg("2", [2.0] * 6 + [0.5])]
-    arm.next_leg(t=1.0)
-    assert np.allclose(arm.park_start, arm.park_cmd), (
-        "park_start must be re-taken per leg, or the ramp thinks it is mid-move")
+    arm.begin_path([ParkLeg("1", [0.4] * 6 + [0.5]),
+                    ParkLeg("2", [0.8] * 6 + [0.5]),
+                    ParkLeg("3", [1.2] * 6 + [0.5])], t=0.0)
+    seen = []
+    for i in range(6000):
+        step = arm.step_path(i * 0.01, 0.01)
+        if step.leg_passed:
+            seen.append((step.leg_passed, step.next_leg))
+        if step.verdict != "moving":
+            break
+    assert seen == [("1", "2"), ("2", "3"), ("3", None)], seen
 
 
-def test_abandoning_the_queue_reports_how_many_were_dropped() -> None:
-    """⛔ An arm that resumes a queued trajectory after the operator pressed HOLD is
-    doing something nobody asked for — and it must say so, not just stop."""
-    arm = ArmSession(FakeRobot(), name="B")
-    arm.park_queue = [ParkLeg("1", [0.0] * 7), ParkLeg("2", [0.0] * 7)]
-    assert arm.abandon_queue() == 2
-    assert arm.park_queue == []
-    assert arm.abandon_queue() == 0
+def test_arrival_is_gated_on_the_CURSOR_not_on_the_error() -> None:
+    """⛔ A run like `p 1 2 1` ends where it began, so the distance to the final target
+    is near zero at t=0. Judging arrival on the error alone would declare the whole
+    sequence finished before the arm had moved at all."""
+    # ⚠️ The gripper column counts toward the error like any other joint, so the start
+    # pose has to match the final leg there too or the run does not actually begin at
+    # its own target. An earlier version of this test used a gripper of 0.0 against a
+    # target of 0.5 and measured an error of 0.5, which tested nothing.
+    robot = FakeRobot(q=[0.0] * 6 + [0.5])
+    arm = ArmSession(robot, name="B")
+    arm.begin_path([ParkLeg("1", [1.0] * 6 + [0.5]),
+                    ParkLeg("2", [0.0] * 6 + [0.5])], t=0.0)
+    first = arm.step_path(0.0, 0.01)
+    assert first.err < 0.02, f"this run must start at its own final target, got {first.err:.3f}"
+    assert first.verdict == "moving", "it must not report arrival before moving"
+    assert first.remaining > 1.0, "there is a whole out-and-back path still ahead"
+
+
+def test_the_two_park_clocks_are_kept_apart() -> None:
+    """⛔ FINDINGS §34.3. Sharing one clock reported a 4.4 s park as "reached in 0.0s",
+    because the last waypoint is passed at the very end of the path."""
+    robot = FakeRobot(q=[0.0] * 7)
+    arm = ArmSession(robot, name="B")
+    arm.begin_path([ParkLeg("1", [0.5] * 6 + [0.5]),
+                    ParkLeg("2", [1.0] * 6 + [0.5])], t=0.0)
+    after_first = None
+    for i in range(4000):
+        t = i * 0.01
+        step = arm.step_path(t, 0.01)
+        if step.leg_passed == "1":
+            after_first = t
+        if step.verdict != "moving":
+            assert step.total_seconds > 0.5, "the total must cover the whole run"
+            assert after_first is not None
+            assert step.leg_seconds < step.total_seconds, (
+                "the leg clock must have been reset at the waypoint")
+            assert abs(step.settling_seconds - step.leg_seconds) < 1e-9
+            return
+    raise AssertionError("the park never finished")
+
+
+def test_the_cursor_WAITS_when_the_arm_falls_behind() -> None:
+    """⭐ The trajectory is a shape. A command racing ahead while the arm cuts its own
+    corner is not the shape anyone chose."""
+    robot = FakeRobot(q=[0.0] * 7, follow=False)
+    arm = ArmSession(robot, name="B")
+    arm.begin_path(to([2.0] * 6 + [0.5]), t=0.0)
+    for i in range(200):
+        arm.step_path(i * 0.01, 0.01)
+    stalled_at = arm.park_s
+    for i in range(200, 300):
+        arm.step_path(i * 0.01, 0.01)
+    assert arm.park_s == stalled_at, "the cursor kept going while the arm was stuck"
+    assert stalled_at < arm.park_path.length, "it should not have reached the end"
+
+
+def test_abandoning_a_run_reports_how_much_path_was_dropped() -> None:
+    """⛔ An arm that resumes a trajectory after the operator pressed HOLD is doing
+    something nobody asked for — and it must say so, not just stop."""
+    arm = ArmSession(FakeRobot(q=[0.0] * 7), name="B")
+    arm.begin_path(to([1.0] * 6 + [0.5]), t=0.0)
+    dropped = arm.abandon_path()
+    assert dropped > 0.9, f"most of the path was still ahead, got {dropped:.3f}"
+    assert arm.park_path is None and arm.park_s == 0.0
+    assert arm.abandon_path() == 0.0, "abandoning twice must be harmless"
 
 
 # ------------------------------------------------------- two arms at once ----
@@ -281,11 +383,13 @@ def test_two_sessions_share_no_state() -> None:
     b = ArmSession(FakeRobot(q=[1.0] * 7), name="G")
     a.enter_teleop()
     a.gripper_value = 0.9
-    a.park_queue = [ParkLeg("1", [0.0] * 7)]
+    a.begin_path(to([0.5] * 6 + [0.5]), t=0.0)
+    a.park_speed = 0.9
     b.enter_hold()
-    assert b.mode == "hold" and a.mode == "teleop"
+    assert b.mode == "hold" and a.mode == "park"
     assert b.gripper_value != 0.9
-    assert b.park_queue == []
+    assert b.park_path is None, "one arm's path must not become the other's"
+    assert b.park_speed != 0.9, "the live knobs are per arm too"
     assert b.thermal is not a.thermal, "a shared thermal guard would hide one arm"
     assert not np.shares_memory(a.prev_q, b.prev_q)
 
