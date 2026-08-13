@@ -1982,3 +1982,26 @@ The documents have said *"~1000 lines of `main()`"* since 2026-08-12. **Measured
 ### 36.4 ⚠️ `park_speed_factor()` is now used by nothing but its own tests
 
 `easing_factor()` superseded it in the script on 2026-08-12, and [§36.2](FINDINGS.md) removed the class's last use. It still has 9 tests in `scripts/test_park_target.py`. ⭐ **Left in place deliberately**, under Julien's standing rule to change nothing that does not have to change. **Recorded so it is a decision rather than an oversight**, and so that whoever eventually removes it knows the tests go with it.
+
+### 36.5 ⛔⭐⭐ A SYSTEMATIC DIFF OF `ArmSession` AGAINST THE SCRIPT — the park was only the first gap, and [§36.2](FINDINGS.md)'s "step 0 is done" was premature
+
+⛔ **[ROADMAP §6.1](ROADMAP.md)'s audit found the park gap by searching for one word, `JointPath`. It did not diff the class against the script.** Doing that properly, by counting how often each per-arm behaviour appears in each file:
+
+| behaviour | in the class | in the script | verdict |
+|---|---|---|---|
+| gripper stall guard (`GRIPPER_STALL*`) | **0** | 6 | ⛔ **missing, and it is a SAFETY guard** |
+| teleop per-cycle clamp (`MAX_JOINT_STEP`) | **0** | 4 | ⛔ missing, decision needed |
+| joint-limit clamp (`JOINT_LIMIT_MARGIN`) | **0** | 3 | ⛔ missing, decision needed |
+| workspace box (`args.box`) | **0** | 3 | ✅ stays in the script, it is a cartesian idea |
+| CONTROLS wizard (`"map"`, `last_active_axis`) | **0** | 8, 9 | ✅ stays in the script, it is interactive |
+| `stall_since` | 2 | 8 | ⛔ **the variable was there with nothing writing to it** |
+
+⛔⭐ **THE WORST ONE: the gripper stall guard was absent, and the class carried a dead `stall_since` variable that made it look present.** The script releases the jaws to their measured position when they push above 1.0 Nm while moving under 0.05 rad/s for 0.4 s. **That guard exists because motor 7 was cooked three times.** Pushing at full current without moving is the worst thermal case there is: full current, no motion, no cooling.
+
+⭐ **Now built, as `gripper_stall_release(t)`, with six tests.** It returns the jaw value to back off to rather than applying one, because *the class decides and the script narrates*. It reports nothing when the chain read failed, which is the same **"cannot see it, cannot judge it"** rule the thermal guard uses after [§24.1](FINDINGS.md). It is silent on a six-motor `--no-gripper` arm, because indexing a seventh motor inside the control loop is the exact shape of bug that once dropped 4.3 kg.
+
+⚠️ **A smaller untruth, also found and fixed: the class docstring claimed "the same five modes… `guide`, `teleop`, `hold`, `park`, `map`".** It has four and never sets `map`. CONTROLS is an interactive wizard and belongs in the script. ⛔ **A docstring that overstates what a file does is how the next reader mis-plans a restructure**, which is what happened here.
+
+⭐⭐ **AND ONE REAL DESIGN DECISION IS NOW OPEN, with a recommendation.** The two clamps that limit what may be commanded — `MAX_JOINT_STEP` per cycle and the joint-limit margin — currently live **only in the teleop branch**. ⛔ **Working-contract rule 7 asks of every guard: what path reaches the hazard without passing through you?** PARK already went around the gripper clamp once for precisely this reason ([§9](FINDINGS.md)). **Recommendation: move both into `ArmSession`'s single command path**, so every mode is clamped by construction rather than by remembering. ⚠️ **Not done here**, because it changes what actually gets commanded to the arm and that deserves its own reviewable step with Julien's word on it.
+
+⭐ **The lesson, and it is the third form of the same one this repo keeps meeting.** [§33.3](FINDINGS.md) found stale *measurements* in prose. [§36.2](FINDINGS.md) found a stale *design* in code, with its tests passing. **This is a stale *inventory*: a list of what a component covers, which nobody re-derived against the thing it describes.** All three were true when written. ⛔ **The defence that worked was the same each time: count something, do not recall it.** A ten-line search settled in seconds what two careful readings had missed.

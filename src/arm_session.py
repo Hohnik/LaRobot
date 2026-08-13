@@ -101,6 +101,13 @@ PARK_STALL_SECONDS = 4.0
 PARK_PROGRESS_EPS = 0.003   # rad of improvement that still counts as progress
 MAX_CURSOR_LAG = 0.15       # rad — past this the cursor waits for the arm
 
+#: ⛔ Pushing hard while not moving is the definition of a stall, and stall is the worst
+#: thermal case there is: full current, no motion, no cooling. Motor 7 was cooked three
+#: times before this guard existed. Values copied from `teleop_session.py`.
+GRIPPER_STALL_TORQUE = 1.0    # Nm
+GRIPPER_STALL_VEL = 0.05      # rad/s
+GRIPPER_STALL_SECONDS = 0.4
+
 
 @dataclass
 class ParkLeg:
@@ -132,9 +139,30 @@ class ParkStep:
 class ArmSession:
     """Everything that is true of **one** arm during a session.
 
-    Modes are the same five the script has always had — `guide`, `teleop`, `hold`,
-    `park`, `map` — because they are Julien's mental model and renaming them would
-    make every note in FINDINGS harder to follow.
+    Modes keep the script's own names — `guide`, `teleop`, `hold`, `park` — because they
+    are Julien's mental model and renaming them would make every note in FINDINGS harder
+    to follow.
+
+    ⚠️ **`map` is deliberately absent, and this docstring used to claim it was here.**
+    CONTROLS (`m`) is an interactive wizard: it asks the operator to move one axis at a
+    time and waits for answers. That is a *session* activity, like key handling, so it
+    stays in the script along with `last_active_axis`. **The old wording said "the same
+    five modes" and the class only ever had four**, which is the kind of small untruth
+    that makes a reader trust the rest of the file less. Found by the diff in
+    [FINDINGS §36.5](../docs/FINDINGS.md).
+
+    ⛔ **Still NOT here, and each is a decision rather than an oversight** — see
+    [ROADMAP §6.1](../docs/ROADMAP.md):
+
+    - **The teleop per-cycle clamp and the joint-limit clamp.** They belong here and are
+      not here yet, and the argument is working-contract rule 7: *what path reaches the
+      hazard without passing through the guard?* Today they live only in the teleop
+      branch, and PARK already went around the gripper clamp once for exactly that reason
+      (FINDINGS §9). Moving them into this class's single command path would close that
+      whole class of defect. **Not done here**, because it changes what gets commanded
+      and that deserves its own reviewable step.
+    - **The workspace box.** A cartesian idea, so it stays with `CartesianTeleop`.
+    - **Recording and playback.** They span both arms; see the module docstring.
     """
 
     def __init__(self, robot: Any, name: str, frame: str = "world",
@@ -148,6 +176,7 @@ class ArmSession:
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0
         self.stall_since: float | None = None
+        self._states: Any = None        # this cycle's chain read, for the stall guard
 
         self.teleop: Any = None
         self.home_ee: Any = None
@@ -208,11 +237,55 @@ class ArmSession:
         except Exception:  # noqa: BLE001
             states = None
         if states is None:
-            self.stall_since = None
+            self.stall_since = None      # a stall cannot be judged if it cannot be seen
+            self._states = None
             return self.thermal.update(None), None, None
+        self._states = states
         temps, hottest, jaw = motor_temperatures(states, N_ARM)
         motor = temps.index(hottest) if hottest is not None else None
         return self.thermal.update(hottest, jaw, motor=motor), hottest, jaw
+
+    def gripper_stall_release(self, t: float) -> float | None:
+        """Is the gripper pushing hard without moving? Returns a jaw value to back off to.
+
+        ⛔⭐ WHY THIS EXISTS: motor 7 was cooked three times. Pushing at full current
+        while not moving is the worst thermal case there is — full current, no motion, no
+        cooling — and the jaws reach it whenever they are commanded past whatever they are
+        holding. The release is to the **measured** jaw position, so the command stops
+        fighting the object and the motor stops heating.
+
+        ⭐ It returns a value instead of applying one, because *the class decides and the
+        script narrates*: the caller sets `gripper_value` and prints the warning. Returning
+        `None` means there is nothing to do.
+
+        ⚠️ It needs `read_thermal()` to have run this cycle, because the torque and
+        velocity come from the same chain read. Calling it without one is not an error; it
+        simply reports nothing, which is the same "cannot see it, cannot judge it" rule the
+        thermal guard uses.
+
+        ⛔ **This was missing from this class for a day**, while `teleop_session.py` had it
+        the whole time and this file even carried the `stall_since` variable with nothing
+        writing to it. Found by a systematic diff rather than by anything failing.
+        FINDINGS §36.5.
+        """
+        states = getattr(self, "_states", None)
+        if states is None or len(states) <= N_ARM:
+            self.stall_since = None
+            return None
+        jaw = states[N_ARM]
+        pushing = abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
+        still = abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL
+        if not (pushing and still):
+            self.stall_since = None
+            return None
+        if self.stall_since is None:
+            self.stall_since = t
+            return None
+        if t - self.stall_since <= GRIPPER_STALL_SECONDS:
+            return None
+        self.stall_since = None
+        q = np.asarray(self.robot.get_joint_pos(), dtype=float)
+        return float(q[N_ARM])
 
     # ------------------------------------------------------------- modes ----
 

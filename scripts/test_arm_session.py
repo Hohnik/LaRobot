@@ -42,8 +42,9 @@ class FakeChain:
 
 
 class FakeState:
-    def __init__(self, temp_mos=30.0, temp_rotor=30.0):  # noqa: ANN001
+    def __init__(self, temp_mos=30.0, temp_rotor=30.0, eff=0.0, vel=0.0):  # noqa: ANN001
         self.temp_mos, self.temp_rotor = temp_mos, temp_rotor
+        self.eff, self.vel = eff, vel        # torque and velocity, for the stall guard
 
 
 class FakeRobot:
@@ -125,6 +126,77 @@ def test_temperatures_are_read_per_arm() -> None:
     arm = ArmSession(robot, name="B")
     _, hottest, jaw = arm.read_thermal()
     assert hottest == 40.0 and jaw == 33.0
+
+
+# ------------------------------------------------- the gripper stall guard ----
+
+
+def stalling_arm(eff=2.0, vel=0.0, jaw_pos=0.31):  # noqa: ANN001, ANN201
+    """An arm whose jaws are pushing hard and not moving."""
+    robot = FakeRobot(q=[0.0] * 6 + [jaw_pos])
+    robot.motor_chain = FakeChain(
+        states=[FakeState()] * 6 + [FakeState(eff=eff, vel=vel)])
+    arm = ArmSession(robot, name="B")
+    return robot, arm
+
+
+def test_a_stalled_gripper_is_released_to_where_the_jaws_actually_ARE() -> None:
+    """⛔ Motor 7 was cooked three times. Pushing at full current without moving is the
+    worst thermal case there is: full current, no motion, no cooling."""
+    robot, arm = stalling_arm(jaw_pos=0.31)
+    arm.read_thermal()
+    assert arm.gripper_stall_release(0.0) is None, "one cycle is not a stall yet"
+    arm.read_thermal()
+    assert arm.gripper_stall_release(0.2) is None, "0.4s has not passed"
+    arm.read_thermal()
+    released = arm.gripper_stall_release(0.5)
+    assert released is not None and abs(released - 0.31) < 1e-9, (
+        "it must release to the MEASURED jaw position, so the command stops pushing")
+    assert arm.stall_since is None, "the timer must reset after a release"
+
+
+def test_a_gripper_that_is_MOVING_is_not_stalled() -> None:
+    """Closing hard on something while still travelling is normal, not a stall."""
+    _, arm = stalling_arm(eff=2.0, vel=0.5)
+    for i in range(200):
+        arm.read_thermal()
+        assert arm.gripper_stall_release(i * 0.01) is None
+    assert arm.stall_since is None
+
+
+def test_a_gentle_gripper_is_not_stalled_however_long_it_holds() -> None:
+    _, arm = stalling_arm(eff=0.2, vel=0.0)
+    for i in range(200):
+        arm.read_thermal()
+        assert arm.gripper_stall_release(i * 0.01) is None
+
+
+def test_the_stall_guard_reports_NOTHING_when_it_cannot_see() -> None:
+    """⛔ Same rule as the thermal guard: a failed read is not a reading. FINDINGS §24.1
+    is the case where a thrown read silently became 0 °C and disarmed the stop."""
+    robot, arm = stalling_arm()
+    arm.read_thermal()
+    arm.gripper_stall_release(0.0)
+    assert arm.stall_since is not None, "it was stalling a moment ago"
+    robot.motor_chain = FakeChain(raises=True)
+    arm.read_thermal()
+    assert arm.gripper_stall_release(1.0) is None
+    assert arm.stall_since is None, "a stall cannot be judged if it cannot be seen"
+
+
+def test_the_stall_guard_is_silent_on_a_six_motor_arm() -> None:
+    """⚠️ `--no-gripper` leaves six motors, so indexing the seventh would raise inside
+    the control loop. That exact shape of bug once dropped 4.3 kg."""
+    robot = FakeRobot(q=[0.0] * 6, dofs=6)
+    robot.motor_chain = FakeChain(states=[FakeState()] * 6)
+    arm = ArmSession(robot, name="B")
+    arm.read_thermal()
+    assert arm.gripper_stall_release(5.0) is None
+
+
+def test_the_stall_guard_says_nothing_before_any_thermal_read() -> None:
+    _, arm = stalling_arm()
+    assert arm.gripper_stall_release(9.0) is None
 
 
 # ---------------------------------------------------------------- modes ----
