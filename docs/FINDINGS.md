@@ -1548,7 +1548,9 @@ In the plan line that reads `ROLL←yaw− PITCH←roll+ YAW←pitch−` before 
 
 ⛔ **The handoff said: "the saved recordings in `recordings/` (slots 1, 3, 4, 5, 6) are all PADDED and should be discarded rather than used."** ⭐ **Two of the five are padded. Three are clean, and they are the evidence that the fix works.**
 
-Measured with `Trajectory.trailing_still_seconds()`, new this session:
+⛔⭐ **READ THIS BEFORE THE TABLE — it is a dated record, not the current state.** Julien recorded over slots **3 and 4** at 16:34 and 16:35, about an hour after this was written, so the two padded files below **no longer exist** and every recording now on disk is clean. That is the third time in one day that a written measurement outlived the file it described ([§34.7](FINDINGS.md)). ⭐ **The table stays exactly as measured**, because it is the *evidence* that the `w` freeze fix works, and a decision's evidence does not expire. For the current state run **`uv run scripts/check_recordings.py`**.
+
+Measured with `Trajectory.trailing_still_seconds()` at 15:22, before those two re-recordings:
 
 | slot | commit | recorded | duration | padding | share | verdict |
 |---|---|---|---|---|---|---|
@@ -1593,3 +1595,159 @@ Three claims, all written carefully, all wrong within a day of being written:
 ⛔ **None of them was careless, and that is the finding.** Each was true when written. [HANDOFF §4](HANDOFF.md) rule 7 already says this about guards — *ask of every guard what path reaches the hazard without passing through you* — and [§32.3](FINDINGS.md) said it about commits. **The same rule applies to any sentence containing a measurement: it is a cached value with no invalidation.**
 
 ⭐ **The practical defence, and it is the one this repo already uses everywhere else: make it a script.** `check_recordings.py` cannot go stale, because it reads the files. `check_links.py` cannot go stale, because it resolves the links. ⛔ **A measurement written in prose and never re-derived should be treated as an assertion about the past, and dated.** Where a number matters, either date it with its provenance or replace it with the command that recomputes it.
+
+---
+
+## 34. ⭐⭐ TWO HARDWARE RUNS SETTLED THE STACK, AND ANSWERED "HOW FAST CAN THE ARMS MOVE" — 2026-08-13, 16:34-16:35
+
+⭐ Julien recorded and played back two movements on arm B and pasted both terminal logs. **All three of the stacked unverified changes are now confirmed**, one real defect came out of the logs, and the per-joint table gives the **first measurement on this rig of what the arm can physically follow**. Nothing here needed a new script run on the arm.
+
+### 34.0 ✅✅ All three changes are confirmed, and each has its own evidence
+
+| # | the change | how it was confirmed | verdict |
+|---|---|---|---|
+| 1 | `w` freezes the recording immediately | The stop message and the save message report the **same** sample count and duration, twice: `3.7s, 326 samples` → `3.7s, 326 samples → 3.json`, and `5.4s, 471 samples` → `5.4s, 471 samples → 4.json`. Both files measure **0.00 s** of trailing still time. | ✅ |
+| 2 | Playback runs in measured time | Run B: a **5.39 s** recording played at 1.00x **finished in 5.4 s** with **0.0 s** of waiting. The old defect ran about 15% long. | ✅ |
+| 3 | A per-joint table prints after each playback | It printed in both runs, with six rows each. | ✅ |
+
+⭐⭐ **And the code's own reconciliation check passed, which is the part worth noticing.** [§31.1](FINDINGS.md) added a guard that recomputes `elapsed − planned − waiting` and complains if it does not come out near zero. Run A: `7.2 − 3.7 − 3.5 = 0.0`. Run B: `5.4 − 5.4 − 0.0 = 0.0`. **No warning fired in either run, and the warning is real code that would have fired.** That is a redundant number agreeing with itself, which is the only class of evidence that has ever caught this defect ([§31.1](FINDINGS.md)'s own closing line).
+
+⚠️ **Run A looks like a failure and is not.** It played a **3.7 s** recording in **7.2 s** and spent **48%** of the run waiting. The recording was taught at **3.20 rad/s** (99th percentile) while any planned motion here is allowed **1.5 rad/s**, so 1.00x asks for more than the arm may be commanded to do and the loop holds its clock. ⭐ **`replay_plan_line()` warns about exactly this before Enter is pressed** — *"taught 3.2 rad/s exceeds the 1.5 allowed, so 1.00x will lag"* — and the session had auto-selected **0.47x** for that recording. Playing at 1.00x took four presses of `+`. **The warned-about thing happened, which is the system working.**
+
+### 34.1 ⭐⭐ HOW FAST CAN THE ARMS MOVE — answered, and the prediction in the task list was WRONG
+
+⛔ **The prediction on record was:** *"Expect the three wrist joints to look far worse than the shoulder and elbow, since their position gain is 10 against 80. If they do, the gains are the limit rather than the 1.5 rad/s clamp."* ⭐ **The gains are real and the prediction is refuted.**
+
+**The gains, read out of the vendor config** (`third_party/i2rt/i2rt/robots/config/yam_v1.yml`, and our code passes `arm_type=ArmType.YAM` explicitly at two call sites in `src/yam_robot.py`):
+
+```
+kp: [80.0, 80.0, 80.0, 10.0, 10.0, 10.0]
+kd: [ 5.0,  5.0,  5.0,  1.5,  1.5,  1.5]
+```
+
+**The raw measurements, both runs, exactly as printed:**
+
+| joint | kp | run A worst lag @ speed | run A top speed / lag | run B worst lag @ speed | run B top speed / lag |
+|---|---|---|---|---|---|
+| base_yaw | 80 | 0.117 @ 1.30 | 2.43 / 0.101 | 0.040 @ 0.44 | 0.54 / 0.040 |
+| shoulder_pitch | 80 | 0.181 @ 3.75 | 3.75 / 0.181 | 0.076 @ 0.82 | 0.97 / 0.073 |
+| elbow_pitch | 80 | 0.107 @ 1.76 | 1.99 / 0.081 | 0.056 @ 0.32 | 0.40 / 0.045 |
+| forearm_pitch | 10 | 0.170 @ 2.38 | 2.93 / 0.169 | 0.116 @ 0.69 | 1.03 / 0.090 |
+| wrist_roll | 10 | 0.175 @ 3.22 | 3.22 / 0.175 | 0.100 @ 0.54 | 0.84 / 0.073 |
+| gripper_twist | 10 | 0.172 @ 2.12 | 2.95 / 0.169 | 0.082 @ 0.68 | 0.68 / 0.082 |
+
+**Least squares on all four points per joint, fitting `lag = offset + delay × speed`:**
+
+| joint | kp | kd/kp (s) | offset (rad) | delay (s) | R² | speed at the 0.15 rad hold |
+|---|---|---|---|---|---|---|
+| base_yaw | 80 | 0.0625 | 0.035 | 0.0339 | 0.59 | 3.41 rad/s |
+| shoulder_pitch | 80 | 0.0625 | 0.041 | 0.0372 | 1.00 | 2.92 rad/s |
+| elbow_pitch | 80 | 0.0625 | 0.042 | 0.0269 | 0.73 | 4.01 rad/s |
+| forearm_pitch | 10 | 0.1500 | 0.078 | 0.0334 | 0.81 | 2.17 rad/s |
+| wrist_roll | 10 | 0.1500 | 0.064 | 0.0341 | 0.91 | 2.52 rad/s |
+| gripper_twist | 10 | 0.1500 | 0.057 | 0.0430 | 0.89 | **2.16 rad/s** |
+
+⭐⭐ **THE RESULT, AND IT IS A DIFFERENT SHAPE OF ANSWER THAN EXPECTED.** The lag splits cleanly into two parts, and **only one of them follows the gains**:
+
+- **The speed-dependent part is a DELAY of about 0.033 s, and it is nearly the same on every joint.** Mean 0.0327 s on the kp=80 joints against 0.0369 s on the kp=10 joints. **A ratio of 1.13.** The prediction from kp alone was **8.00**. Even the more careful prediction from `kd/kp` was **2.40**. Both overshoot badly.
+- **The standing offset DOES follow the gains.** 0.039 rad mean on the kp=80 joints against 0.066 rad on the kp=10 joints, a ratio of **1.7**. This is the same quantity PARK reports as *"as close as the arm holds itself under load"* (0.020 and 0.027 rad in these two runs), and a fixed torque requirement divided by a smaller gain is exactly where it should show up.
+
+⭐ **Why `kp` alone was the wrong model, and it is worth understanding rather than memorising.** Following error while moving is not set by `kp` on its own. With position commands only, the damping term acts as a brake proportional to speed, so the error scales as **`kd/kp`** — and `kd` drops alongside `kp` (5 → 1.5), so the ratio that matters is 0.15/0.0625 = **2.4**, not 8. ⚠️ **And even 2.4 overpredicts by a factor of two**, which says the delay is dominated by something shared by all six joints rather than by any per-joint gain. The candidates, none of them measured: the loop period itself (12 ms at the 83 Hz these runs ran at, so 0.033 s is about 2.7 cycles), the CAN request/response round trip, and the SDK's command pipeline.
+
+⭐ **THE PRACTICAL ANSWER: the arm tracks a commanded path up to roughly 2.2 rad/s.** The first joint to exceed the 0.15 rad threshold at which the playback holds its clock is **`gripper_twist`, at 2.16 rad/s**. Above that, a playback still completes — it just takes longer than the recording, and says so.
+
+⚠️ **FOUR REASONS TO READ THAT NUMBER AS A FIRST ESTIMATE AND NOT A SPECIFICATION:**
+
+1. **It is two recordings, in two different parts of the workspace.** Gravity load changes with pose, and load changes the lag at the same speed.
+2. **`base_yaw`'s fit is poor (R² 0.59) and its run-A points go the wrong way** — 0.117 rad of lag at 1.30 rad/s but only 0.101 at 2.43 rad/s. **Lag is therefore not a function of instantaneous speed alone.** Acceleration and pose both matter, and this is the visible proof.
+3. **The coverage is uneven by construction.** The playback holds its clock once the arm falls behind, so the fast samples are not an even sweep.
+4. **The four points per joint come from two summary rows each, not from every cycle.** A saved tracking file ([§34.4](FINDINGS.md)) is the fix, and from now on every playback writes one.
+
+⭐⭐ **A FALSIFIABLE TEST THAT COSTS ONE PLAYBACK AND NO NEW CODE.** Play slot 3 (taught 3.20 rad/s) at each speed the `-`/`+` keys can actually reach, and compare the waiting time against the model:
+
+| speed | commanded p99 | predicted worst lag | prediction |
+|---|---|---|---|
+| 0.47x (the auto-selected default) | 1.50 rad/s | 0.128 rad | tracks, ~0 s waiting |
+| 0.59x | 1.88 rad/s | 0.140 rad | tracks, ~0 s waiting |
+| 0.73x | 2.34 rad/s | 0.158 rad | **the marginal case — a little waiting** |
+| 0.92x | 2.93 rad/s | 0.183 rad | waits |
+| 1.00x | 3.20 rad/s | 0.195 rad | waits — **measured 0.181, so the model is 8% conservative** |
+
+⛔ **The sharp one is 0.73x.** If it waits a little, the model holds. If it tracks cleanly, the model is pessimistic and the real ceiling is higher. ⭐ **Playing below 1.00x is slower than the movement was taught by hand**, so it asks the arm for nothing it has not already physically done with a person holding it.
+
+### 34.2 ⚠️⭐ The 1.5 rad/s ceiling is computed from a loop rate this rig does not reach
+
+`MAX_PLANNED_JOINT_SPEED = MAX_JOINT_STEP * CONTROL_HZ` = `0.015 × 100` = **1.5 rad/s**. The teleop clamp it comes from is **per cycle**: `q_target = prev_q + clip(step, ±MAX_JOINT_STEP)`.
+
+⛔ **The loop does not run at 100 Hz.** These two runs reported **83 Hz** and **84 Hz** on the status line, and the `⚠️ nnHz` warning fired correctly in both (its threshold is 92 Hz). **So the real ceiling on a teleop-driven joint is `0.015 × 83` ≈ 1.25 rad/s, not 1.5.**
+
+⭐ **Nothing unsafe follows from this, and the direction matters.** Both 1.25 and 1.5 sit below the ~2.2 rad/s the arm can actually track ([§34.1](FINDINGS.md)), so the constant is conservative and the error makes it more so. ⚠️ **But it is a number that means something other than what it says**, which is [§0](FINDINGS.md)'s whole subject, and `safe_time_scale` divides by it to choose a playback speed.
+
+⚠️ **A SECOND, SEPARATE INSTANCE OF THE SAME NOMINAL-VERSUS-REAL CONFUSION, and it is still live.** `q_target = teleop.step(twist, dt)` integrates the SpaceMouse twist using the **nominal** `dt` of 0.01 s while the loop takes 0.012 s. A twist is a velocity, so **hand-driven motion runs at about 83% of the speed the display claims.** The file's own comment says *"anything that has to match real time must use `real_dt`, not `dt`"*. ⛔ **Not changed here, on purpose:** it would alter a feel Julien has already tuned, and at high speed settings the per-cycle clamp probably dominates anyway so the change might do nothing. **His call, and it needs a hardware run to judge.**
+
+⚠️ **Also unexplained: the loop rate fell from ~87 Hz to 83-84 Hz.** [§31.1](FINDINGS.md) measured ~87 Hz on 2026-08-13. Candidates, none tested: the **second D405 that appeared on the bus** ([§34.5](FINDINGS.md)), general machine load, or the per-cycle tracking log. ⭐ The tracking file now records `loop_hz`, so the next run measures this instead of noticing it.
+
+### 34.3 ⛔ DEFECT FOUND IN THE LOGS: "PARK reached in 0.0s" was reporting the wrong clock
+
+**Run A printed this, and both lines are from the same park:**
+
+```
+  ⭐ slot recording start in 4.4s
+⭐ PARK reached in 0.0s (0.020 rad off) → HOLD
+```
+
+⛔ **A park that had just taken 4.4 seconds reported 0.0 seconds.** The cause is two clocks sharing one variable. `park_leg_t` is reset every time the cursor passes a waypoint, because Julien asked for each leg to report its own duration. **The last leg's mark is passed at the very end of the path**, so on a single-leg park — which is every playback, since it parks to the recording's start pose — the reset lands moments before arrival, and the arrival message then measured from the reset.
+
+⭐ **Fixed.** `park_start_t` is set once in `begin_path` and never reset. The arrival line now reports the total, and adds the settling time when it is a distinguishable part of it. Run A would now read `PARK reached in 4.4s`; run B, which took 2.2 s of path plus 0.5 s of settling, would read `PARK reached in 2.7s, 0.5s of that settling`.
+
+⚠️ **THE ARM WAS NEVER IN DANGER, AND CHECKING THAT WAS THE FIRST THING WORTH DOING.** "Reached in 0.0s" could mean the park declared success without moving, which would leave playback to command the recording's opening pose as a jump — the exact hazard the park-first design exists to prevent. **It did not happen, and the tracking table proves it:** the worst lag in run A was 0.181 rad, and had the arm still been 1.23 rad from the start pose the first lag reading would have been about 1.23. ⭐ **A display defect and a safety defect look identical in a log until a second, independent number is checked.**
+
+### 34.4 ⭐ The tracking table is now a file, because a paste is not a record
+
+Every playback now writes `recordings/tracking/<slot>_<timestamp>.json`: the per-joint rows plus the arm, slot, commit, playback speed, taught speed, elapsed and waiting time, worst lag, measured `loop_hz`, and the recording's own metadata.
+
+⛔ **Why: the measurement in [§34.1](FINDINGS.md) existed only inside a chat window.** Every number in it was hand-copied out of a terminal. The analysis that produced the delay model could not have been repeated a week later, and this project has now watched three separate written measurements outlive their source inside one day ([§33.3](FINDINGS.md)).
+
+⭐ **Named by timestamp, not by slot.** The recordings themselves are saved by slot digit and overwrite silently, which is what destroyed the files behind two earlier tables ([§33.2](FINDINGS.md), [§34.7](FINDINGS.md)). A tracking file cannot collide with another. ⚠️ The write is wrapped so a failure prints a warning and never ends a session: the arm is in HOLD at that moment and a missing diagnostic is not worth a traceback.
+
+### 34.5 ⛔⭐ A SECOND D405 IS ON THE BUS AND THE C920 IS GONE — nothing announced either
+
+**Measured at 16:52, by two independent methods (`pyusb` enumeration and `ioreg`), which agree:**
+
+| | serial | bus / addr |
+|---|---|---|
+| RealSense D405 | `255323071773` | 1 / 3 |
+| RealSense D405 | `260323072846` | 1 / 8 |
+
+At 15:22 the bus held **one** D405 (`255323071773`) and an **HD Pro Webcam C920**. Now it holds **two** D405s and no C920. ⛔ **Two documents are therefore wrong as written:** [HANDOFF §5.5](HANDOFF.md) item 6 says the second D405 *"is with arm G and still unplugged — only one serial is on the bus"*, and item 5b tells the reader to **read [ROADMAP §7.1](ROADMAP.md) before plugging in the second D405.** That step was skipped, presumably because it happened at the bench rather than in a session.
+
+⭐⭐ **AND ONE THING THE DOCUMENTS FEARED TURNS OUT TO BE FINE.** [ROADMAP §7.1](ROADMAP.md) worried that two identical D405s cannot be told apart, because the identification trick in [§22](FINDINGS.md) asks each camera for a picture size only one model supports and two D405s support the same sizes. **They report distinct USB serial numbers, and `pyusb` reads them with no root at all** — which is a genuine improvement on the position recorded in item 5b, that *"the plain-webcam path cannot read a serial"*. ⛔ **What is still unsolved is the mapping**, and it is the harder half: macOS's USB enumeration order is not OpenCV's device-index order ([§22](FINDINGS.md)), so knowing that serial `2603…` exists does not say which OpenCV index opens it. The wiggle method ([§28.6](FINDINGS.md)) remains the answer for which-camera-is-on-which-arm.
+
+⭐ **This is also the finding that justifies `scripts/check_rig.py`.** The bench changed under an agent that was mid-session, and every document describing the cameras became wrong, silently. One command now prints the state of both adapters, both pucks, every camera and the whole USB topology. **Run it at the start of a session.**
+
+⚠️ **The serial confusion in item 5b is now half-explained and half-open.** It recorded `260322274021` from librealsense against `255323071773` from the USB descriptor, *"same evening, one camera on the bus"*, and treated it as one camera reporting two serials. **The second camera's USB serial is `260323072846`, which shares the `2603` prefix and not the digits.** ⛔ So it is still not settled, and the honest reading is that nobody knows which number belongs to which camera. Settle it with both cameras attached: run `sudo rs-enumerate-devices -s` and compare against `uv run scripts/check_rig.py`.
+
+### 34.6 ⚠️⭐ The DFU cause, after his answer — the jumper theory is probably dead and the fault is unexplained
+
+**Julien, asked what he did between 14:55 and 15:22:** *"I think I only replugged them, but I'm not a hundred percent sure. I don't remember what happened, but I also thought it was quite weird."*
+
+⭐ **That is enough to weaken the leading hypothesis a great deal.** [§32.0](FINDINGS.md) argued that a BOOT jumper left in the boot position forces the bootloader on **every** power-up, so **no amount of replugging can ever clear it**. The boards cleared. **If he only replugged, the jumper explanation is wrong.**
+
+⚠️ **His uncertainty is not a dead end, because one candidate already on record explains everything with no mystery left.** [§32.0](FINDINGS.md) also flagged that **unplugging the hub from the Mac does not necessarily cut power to the hub's downstream ports.** DFU only clears on a genuine reset, which needs power actually removed. So: an earlier attempt that moved the *hub* would not have reset the boards, and a later attempt that moved the *CANables themselves* would. **That fits the whole sequence — a failed replug and then a successful one — and requires nothing unusual.**
+
+⛔ **The remaining candidate is worse and cannot be ruled out: an intermittent entry into DFU at power-up.** A floating or marginally-driven BOOT0 pin, or a slow supply rail on the shared hub, lets noise decide at reset. That would recur at random, and it would recur mid-session.
+
+⭐ **The one question that separates them, and it is worth 30 seconds:** **when it cleared, did you unplug the CANables from the hub itself, or the hub from the Mac?** Cables from the hub, and this is closed as a power-cycle that did not happen. Anything else, and it is unexplained and expected to recur.
+
+⭐ **The mechanical defence is now in place either way:** `uv run scripts/check_rig.py --raw` prints which adapters are in DFU, which are absent, and the full bus topology, which is exactly the data [§32](FINDINGS.md) asks to capture before touching anything.
+
+### 34.7 ⛔ Slots 3 and 4 were overwritten, which is the third instance in one day
+
+The two recordings behind [§33.1](FINDINGS.md)'s padding table were **replaced at 16:34 and 16:35** by these very runs. `recordings/` is gitignored, so both files are gone permanently.
+
+| slot | was | is now |
+|---|---|---|
+| 3 | 7.78 s, 4.46 s padded, p99 2.67 | 3.73 s, 0.00 s padded, p99 3.20 |
+| 4 | 6.02 s, 2.64 s padded, p99 2.40 | 5.39 s, 0.00 s padded, p99 0.79 |
+
+⭐ **Written measurements about recordings have now gone stale three times in one day**, twice in text this session wrote itself. [§33.3](FINDINGS.md) predicted this and prescribed the remedy: date a number with its provenance, or replace it with the command that recomputes it. **Both stale tables have been handled the second way** — the `joint_speed` docstring no longer carries a live table at all, and [§33.1](FINDINGS.md)'s table is now explicitly labelled as dated evidence. ⛔ **The lesson is stronger than "be careful": a table of live data inside a document is a cache with no invalidation, and writing it more carefully does not help.**

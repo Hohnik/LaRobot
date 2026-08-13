@@ -188,32 +188,40 @@ class Trajectory:
         """Joint speed at a percentile of the sampled steps, in radians per second.
 
         ⭐⭐ WHY A PERCENTILE EXISTS ALONGSIDE THE PLAIN MAXIMUM, and it is a measurement
-        that forced the question. Julien's recordings from 2026-08-13, **re-measured at
-        15:22 the same day and carrying the provenance of the file each row describes**:
+        that forced the question. **The measurement that decided it, 2026-08-13 at 09:35,
+        slot 4 under commit `e89b745`:** `max 3.31 · p99 2.40 · p95 2.02 · median 0.47`.
 
-            slot  commit   recorded   max    p99    p95   median
-              1   0e268ed    12:55    0.49   0.43   0.38   0.20
-              3   e89b745    09:34    2.87   2.67   1.99   0.04
-              4   e89b745    09:35    3.31   2.40   2.02   0.47
-              5   0e268ed    12:36    2.11   2.08   1.86   1.09
-              6   0e268ed    12:41    2.32   1.96   1.74   0.35
+        ⚠️ The maximum is 3.31 and the 99th percentile is 2.40. **A single sample is
+        dragging the maximum up by 38%.** At 100 Hz one noisy reading of 0.033 rad is
+        enough to do that, and a weightless arm being pushed by hand is exactly where such
+        a reading comes from. Sizing a playback speed off the maximum therefore lets one
+        bad sample veto the whole recording.
 
-        ⚠️ Look at slot 4: the maximum is 3.31 and the 99th percentile is 2.40. **A single
-        sample is dragging the maximum up by 38%.** At 100 Hz one noisy reading of 0.033
-        rad is enough to do that, and a weightless arm being pushed by hand is exactly
-        where such a reading comes from. Sizing a playback speed off the maximum therefore
-        lets one bad sample veto the whole recording.
+        ⚠️ The figures above are a re-measurement of that file made at 15:22 with this
+        method. The original note here, and [FINDINGS §30](../docs/FINDINGS.md), recorded
+        `p99 2.36` and *"40%"* for the same file. The 0.04 difference was never explained
+        and the file was overwritten at 16:35, so it can no longer be settled. It changes
+        nothing about the decision, and it is left visible rather than harmonised.
 
-        ⛔⭐ AND THE PROVENANCE COLUMNS ARE THERE BECAUSE THIS TABLE WENT STALE IN THREE
-        HOURS. Its first version was written at 10:01 and gave slot 1 as `max 0.78, p99
-        0.68, p95 0.59, median 0.29`. Julien then recorded over slot 1 at 12:55, and
-        because `recordings/` is gitignored the file those numbers describe **no longer
-        exists anywhere**. Slots 3 and 4 still reproduce to the digit; slot 1 was simply a
-        different movement. ⛔ **Saving by slot digit overwrites silently**, so any number
-        written down about "recording N" expires the moment N is reused. Quote `commit` and
-        `recorded_at` beside every measurement, which is the only reason the mismatch was
-        detectable at all — and re-derive with `uv run scripts/check_recordings.py` rather
-        than trusting this table.
+        ⛔ So use `joint_speed(99)` to decide a speed and `max_joint_speed()` to report what
+        actually happened. Do not collapse them into one number: the maximum is the honest
+        answer to "how fast did this go", and the percentile is the useful answer to "how
+        fast is this, ignoring noise". Reporting only the percentile would hide a real fast
+        movement, which is the failure this repo is named after.
+
+        ⛔⭐⭐ THAT MEASUREMENT IS DATED BECAUSE THE FILE IT CAME FROM NO LONGER EXISTS, AND
+        A LIVE TABLE HERE WENT STALE TWICE IN ONE DAY. This docstring used to carry a table
+        of all five recordings. Version one was written at 10:01; Julien recorded over slot
+        1 at 12:55 and over slots 3 and 4 at 16:34 and 16:35. **Recordings are saved by slot
+        digit and `recordings/` is gitignored, so each overwrite destroys the file a written
+        number described, permanently.** The same defect bit the same paragraph twice inside
+        six hours ([FINDINGS §33.2](../docs/FINDINGS.md), [§34.7](../docs/FINDINGS.md)).
+
+        ⭐ **The fix is not a fresher table, it is no table.** One dated measurement stays,
+        because it is the evidence for a design decision and a decision's evidence does not
+        expire. For current numbers run **`uv run scripts/check_recordings.py`**, which
+        reads the files and therefore cannot lie. Every recording carries `commit` and
+        `recorded_at`, which is the only reason either staleness was ever detectable.
 
         ⛔ So use `joint_speed(99)` to decide a speed and `max_joint_speed()` to report
         what actually happened. Do not collapse them into one number: the maximum is the
@@ -516,3 +524,39 @@ class TrackingLog:
              self._top_speed[i], self._lag_at_top_speed[i])
             for i in range(self.n_joints)
         ]
+
+    def to_dict(self, joint_names: Sequence[str] | None = None) -> dict[str, Any]:
+        """The table as data, so a playback's measurement outlives the terminal it printed in.
+
+        ⭐⭐ WHY THIS EXISTS, and it is a defect in how this project records measurements
+        rather than a defect in code. On 2026-08-13 this table was printed to Julien's
+        terminal, pasted into a chat, and analysed there. **That is the only copy.** Three
+        separate documented numbers went stale inside a day for exactly that reason
+        ([FINDINGS §33.3](../docs/FINDINGS.md)), and the arm-speed answer is worth more than
+        a paste: it is the first measurement of what this hardware can physically follow.
+
+        ⭐ Written per playback and stamped with a time, so nothing overwrites anything. That
+        is deliberately unlike the recordings themselves, which are saved by slot digit and
+        silently replace each other — the defect of [FINDINGS §33.2](../docs/FINDINGS.md),
+        and it bit the very files this table was measured from, twice in one afternoon.
+
+        ⚠️ Read the caveats on this class before drawing a conclusion from a saved file. The
+        speeds are whatever a recording happened to contain, the coverage is uneven because
+        the playback holds its clock when the arm falls behind, and load depends on the pose.
+        """
+        return {
+            "cycles": self.cycles,
+            "n_joints": self.n_joints,
+            "joints": [
+                {
+                    "index": i,
+                    "name": (joint_names[i] if joint_names and i < len(joint_names)
+                             else f"joint{i + 1}"),
+                    "worst_lag_rad": round(worst, 5),
+                    "speed_at_worst_lag": round(at_speed, 5),
+                    "top_speed": round(top, 5),
+                    "lag_at_top_speed": round(lag_top, 5),
+                }
+                for i, worst, at_speed, top, lag_top in self.rows()
+            ],
+        }

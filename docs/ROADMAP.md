@@ -621,7 +621,9 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 
 ---
 
-## ⭐⭐ 7.5 How fast can the arms actually move? — asked 2026-08-13, answered as far as reading allows
+## ⭐⭐ 7.5 How fast can the arms actually move? — asked 2026-08-13, and MEASURED the same day
+
+> ⭐ **Read §7.5.1 first.** It carries the measured answer. Everything before it is the reading that came first, and **two of its conclusions were refuted by that measurement** — they are struck through and left in place rather than deleted, because a prediction recorded in advance and then tested is the most useful thing this file can hold.
 
 > Julien: *"why is there a 1.5 rad/s max speed? Is that based on the arms or our code? Could this be increased? Seems to be the same issue when we control the arms in teleop, and it lags behind, or moves longer than the mouse controls, right? Can we build our code in a way where the arms can move faster? What is the fastest theoretical movement for the arms?"*
 
@@ -631,18 +633,20 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 2. ⭐ **Yes, it is the same limit that makes teleop feel laggy.** The clamp is applied to the joint targets the IK produces, so a quick push on the puck is trimmed and the arm falls behind the goal. `CartesianTeleop.lead()` already measures that gap and the status line warns `⚠️ STUCK lead` when it pins.
 3. ⛔ **The model files do not state a real limit.** `yam.urdf` carries `velocity="1"` and `effort="1"` on every joint. Those are placeholders: 1 Nm cannot hold a 4.3 kg arm up, so the file was never filled in. **Nothing in the vendored SDK gives a joint speed limit for the arm.** (`flow_base_client.py` has velocity caps, and those belong to a mobile base, not to this.)
 4. ⚠️ **The motors are very unlikely to be the limit at 1.5 rad/s.** Joints 1-3 are DM4340, joints 4-7 are DM4310, with gear ratios read off the bus as 40/40/40/10/10/10/10. A geared quasi-direct-drive motor of this class runs far above 1.5 rad/s at the output. ⛔ **Marked unverified**: no datasheet is vendored here, so this is not a measurement.
-5. ⭐⭐ **What actually limits tracking is the position gain, and this is the useful finding.** From `third_party/i2rt/i2rt/robots/config/yam_v1.yml`:
+5. ⛔ **~~What actually limits tracking is the position gain~~ — REFUTED BY MEASUREMENT, 2026-08-13 16:35.** The gains are real, and they are not what sets the tracking error. Full account: [FINDINGS §34.1](FINDINGS.md), and the corrected answer is §7.5.1 below. From `third_party/i2rt/i2rt/robots/config/yam_v1.yml`:
 
    ```
    kp: [80.0, 80.0, 80.0, 10.0, 10.0, 10.0]
    kd: [ 5.0,  5.0,  5.0,  1.5,  1.5,  1.5]
    ```
 
-   **The three wrist joints have a position gain of 10, eight times softer than the shoulder and elbow.** A soft joint that is told to move faster does not move faster, it lags further behind. ⚠️ So raising `MAX_JOINT_STEP` on its own would buy very little on the wrist and would mostly increase the tracking error.
+   **The three wrist joints do have a position gain of 10, eight times softer than the shoulder and elbow.** ⛔ **But the measured difference in tracking error is 1.13x, not 8x.** Two things were wrong with the reasoning: `kd` drops alongside `kp` (5 → 1.5), so the quantity that governs following error is `kd/kp` and its ratio is only 2.4; and even 2.4 overpredicts, because the error is dominated by a **delay of about 0.033 s that is nearly identical on all six joints**. ⭐ Where the gains *do* show up is the standing position error while holding still: 0.039 rad on the stiff joints against 0.066 rad on the soft ones.
 
 ### ⭐⭐ BUILT 2026-08-13: the cheap half of the measurement, with no new motion
 
 ⭐ **Every playback now reports how well each joint kept up.** `src/recording.py::TrackingLog` records, per joint, the worst lag and the commanded speed at that moment, plus the top commanded speed and the lag at that moment. The table prints at the end of any playback longer than 20 cycles.
+
+⭐⭐ **AND IT IS SAVED, since 2026-08-13 16:52.** Each playback writes `recordings/tracking/<slot>_<timestamp>.json` with the rows plus the arm, slot, commit, playback speed, taught speed, elapsed and waiting time, worst lag and the measured `loop_hz`. ⛔ **Added because the measurement behind §7.5.1 existed only as a paste into a chat window**, hand-copied out of a terminal, and could not have been repeated a week later. Timestamped rather than slot-named, so nothing overwrites anything — unlike the recordings themselves ([FINDINGS §34.7](FINDINGS.md)).
 
 ⛔ **WHY THIS RATHER THAN A SPEED SWEEP, and the reasoning is the point.** The obvious tool is a script that drives one joint faster and faster until it cannot keep up. That script would deliberately command the arm faster than any existing code allows, and **the agent cannot test it.** Session 4 is the standing warning: three changes passed their tests and produced three failures on first hardware contact, one of which dropped 4.3 kg ([FINDINGS §11](FINDINGS.md)). ⭐ A playback already commands a hand-taught path and already measures the lag, so **the same question can be answered with hardware time Julien is already spending and no new risk at all.**
 
@@ -652,13 +656,38 @@ He asked: *"the camera is plugged in, and we don't need to plug in the g camera 
 - **Load depends on the arm's pose.** The same joint at the same speed lags differently with the arm extended and folded.
 - It only reports speeds a recording happened to contain. His reach 2.9 rad/s at the 99th percentile, which covers the range in question.
 
-⭐ **What to look for.** A joint whose worst lag reaches 0.15 rad at a low commanded speed is soft and needs a stiffer gain rather than a higher limit. A joint that reaches 2 rad/s with 0.05 rad of lag has room, and the clamp is what is holding it back. **Expect the three wrist joints to look much worse than the shoulder and elbow**, because their gain is 10 against 80. If they do, that confirms the gains are the limit and not the clamp.
+⭐ **What to look for.** A joint whose worst lag reaches 0.15 rad at a low commanded speed is soft and needs a stiffer gain rather than a higher limit. A joint that reaches 2 rad/s with 0.05 rad of lag has room, and the clamp is what is holding it back. ⛔ **~~Expect the three wrist joints to look much worse than the shoulder and elbow~~ — this prediction was written here, tested on 2026-08-13, and REFUTED.** They look about 13% worse, not eight times worse. The reasoning error and the corrected model are in §7.5.1 below and [FINDINGS §34.1](FINDINGS.md). *The prediction is left visible rather than deleted, because a refuted prediction that was recorded in advance is the most useful kind of entry in this file.*
 
-### ⭐ The active sweep, if the table above turns out ambiguous
+### ⭐⭐ 7.5.1 ANSWERED 2026-08-13, 16:35 — the arm follows a path with a fixed DELAY, not a gain-shaped error
 
-Everything above is reading. The number nobody has is **how fast a joint can be commanded before the arm falls further behind than we accept**, which is currently 0.15 rad for a playback and 0.25 rad inside `SafeRobot`.
+⭐ **The answer, in one line: the commanded position runs ahead of the real one by roughly `0.04 rad + 0.033 s × speed`, and the 0.033 s is nearly the same on every joint.** Two playbacks on arm B produced 24 speed-and-lag pairs; the raw tables, the least-squares fit per joint and every caveat are in [FINDINGS §34.1](FINDINGS.md).
 
-⭐ **Evidence already collected, from Julien's playbacks:** at roughly 1.5 to 2 rad/s commanded, the worst lag was **0.156, 0.162 and 0.163 rad**, three runs in a row. ⛔ **That is already at the 0.15 limit.** So the usable speed today is *at or slightly below* 1.5 rad/s, and the clamp is not the thing holding the arm back. The gains are.
+| what the model says | number |
+|---|---|
+| delay, mean over the three **kp 80** joints | 0.0327 s |
+| delay, mean over the three **kp 10** joints | 0.0369 s |
+| measured ratio between them | **1.13x** |
+| ratio predicted from `kp` alone (the old answer) | 8.00x |
+| ratio predicted from `kd/kp` (a better model, still wrong) | 2.40x |
+| standing offset, **kp 80** joints | 0.039 rad |
+| standing offset, **kp 10** joints | 0.066 rad |
+
+⭐ **Why this changes what to do.** A gain-shaped error would mean *stiffen the wrist joints to go faster*, which is the more dangerous change and the one §7.5's closing paragraph rightly wanted evidence for. A shared delay of ~0.033 s means the limit is somewhere in the **command pipeline** instead: the loop period is 12 ms at the 83 Hz these runs measured, so 0.033 s is about 2.7 cycles, and the CAN request/response round trip and the SDK's own queueing are the other candidates. ⛔ **None of those three has been separated from the others**, and that is the next measurement worth designing.
+
+⚠️ **Two estimates of the usable speed now exist and they disagree, so the honest answer is a range.**
+
+| estimate | says | from |
+|---|---|---|
+| earlier playbacks | worst lag **0.156, 0.162, 0.163 rad** at *roughly* 1.5-2 rad/s ⇒ usable speed ≈ **1.5 rad/s** | three runs, speeds paired loosely |
+| the fit above | the worst joint (`gripper_twist`) crosses 0.15 rad at **2.16 rad/s** | 24 per-joint pairs, two runs |
+
+⛔ **Do not average them.** The earlier runs show *more* lag at the same speed than the fit predicts, and the most likely reason is pose: the standing offset alone varies from 0.035 to 0.078 rad across joints, and `base_yaw` shows lag **falling** as speed rises within one run (0.117 rad at 1.30 rad/s, 0.101 at 2.43), which is only possible if load is changing more than speed is. ⭐ **So: the 0.15 rad threshold is crossed somewhere between about 1.5 and 2.2 rad/s, depending where the arm is.** In both cases the current 1.5 rad/s clamp is at or below the real limit, so **it is conservative, and raising it is not urgent.**
+
+⭐ **The cheapest way to narrow it is one playback and no new code:** play slot 3 at **0.73x**. The model predicts 2.34 rad/s commanded and 0.158 rad of lag, right on the threshold, so a little waiting confirms the model and none refutes it. The full prediction table is [FINDINGS §34.1](FINDINGS.md).
+
+### ⭐ The active sweep, if the range above is still too wide
+
+Everything in §7.5 above the answer is reading. The number nobody has is **how fast a joint can be commanded before the arm falls further behind than we accept**, which is currently 0.15 rad for a playback and 0.25 rad inside `SafeRobot`. §7.5.1 narrows it to a range from hardware time already spent; a sweep would pin it.
 
 **The design of the measurement, so it can be built straight away:**
 
@@ -735,13 +764,13 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | 8 | **Good/bad labels while driving** | nothing exists. Keypress first, microphone second |
 | 9 | **Noise per waypoint** | nothing exists |
 | 10 | ✅ **Detecting whether a grab worked**, from the gripper position | **built 2026-08-13.** `src/yam_robot.py::check_grasp`, 7 tests. ⭐ It needs no new hardware and no per-object calibration: calibration closes the jaws onto themselves, so a normalised 0 means empty and anything above it is an object's width. ⛔ It refuses to answer unless the jaws were told to close AND have stopped moving, because mid-close looks identical to holding a wide object. ⬜ Nothing calls it yet; it needs the pause in item 3 first, since that is where a run waits for the jaws |
-| 11 | ⭐ **Measure how fast a joint can actually be commanded** | ⏳ **half built 2026-08-13.** ✅ The passive half is done and needs no new motion: every playback now prints a per-joint table of worst lag against commanded speed (`src/recording.py::TrackingLog`, 4 tests). ⬜ The active sweep is designed and deliberately unbuilt, because it would command the arm faster than any existing code allows and cannot be tested from the bench. ⛔ **Run a playback and read the table before building the sweep.** [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
+| 11 | ✅ **Measure how fast a joint can actually be commanded** | ✅ **ANSWERED 2026-08-13 16:35, from two playbacks and no new motion.** Lag ≈ `0.04 rad + 0.033 s × speed`, and the 0.033 s is nearly the same on all six joints, so the limit is a shared delay rather than the per-joint gains. **Usable speed 1.5 to 2.2 rad/s depending on pose**, against a 1.5 clamp — so the clamp is conservative and raising it is not urgent. ⭐ Playbacks now also **save** the table to `recordings/tracking/`. ⬜ **The active sweep stays designed and unbuilt**, and is now only worth it to narrow the range or to separate the delay's three candidate causes (loop period, CAN round trip, SDK queueing). ⭐ **Cheaper first: play slot 3 at 0.73x**, which the model puts exactly on the threshold. [ROADMAP §7.5.1](#751-answered-2026-08-13-1635--the-arm-follows-a-path-with-a-fixed-delay-not-a-gain-shaped-error) |
 | 12 | ⭐ **Mixed runs: planned legs and hand-taught legs in one sequence** | nothing exists. His idea, and it turns the noise rule into a data structure. Needs 3 first. [ROADMAP §6.6.1](#661-mixing-waypoints-and-recordings-in-one-run--his-idea-2026-08-13) |
 | 13 | **The second SpaceMouse as a continuous speed dial** | nothing exists. His idea. ⚠️ Needs 1 first, because the second puck currently belongs to arm G. [ROADMAP §7.6](#76-the-second-spacemouse-as-a-continuous-speed-dial--his-idea-2026-08-13) |
-| 14 | ⚠️ **Find out why the control loop runs at ~87 Hz** | the loop rate is now displayed when it drops, so the next session can see which mode is slow. [FINDINGS §31.1](FINDINGS.md) |
+| 14 | ⚠️ **Find out why the control loop runs below 100 Hz — and it got SLOWER** | ⛔ **83 and 84 Hz in the two runs of 2026-08-13 16:34, against ~87 Hz measured earlier the same day.** The warning fires correctly (its threshold is 92 Hz). Unexplained candidates: the **second D405 that appeared on the bus** ([FINDINGS §34.5](FINDINGS.md)), general machine load, the per-cycle tracking log. ⭐ **Every playback now writes `loop_hz` into its saved tracking file**, so this becomes a trend rather than an anecdote. ⚠️ **It also makes a constant wrong:** `MAX_PLANNED_JOINT_SPEED` is `0.015 × 100`, so the real teleop ceiling is ~1.25 rad/s not 1.5 ([FINDINGS §34.2](FINDINGS.md)). [FINDINGS §31.1](FINDINGS.md) |
 | 15 | ⚠️ **Decide whether PARK should use measured time** | ⛔ **Deliberately NOT changed.** A park at "0.40 rad/s" actually moves at about 0.35, because the cursor advances in nominal time. It is slower than stated, which is the safe direction, and Julien has tuned his speed preferences against the current behaviour. Changing it would silently speed every park up by 15%, so it is his call. [FINDINGS §31.1](FINDINGS.md) |
 | 16 | ⭐ **Read the D405's 848x480 mode as 16-bit depth** | ⛔ **Do not touch until the pixel format is checked.** If 848x480 is the depth stream then depth is available with no SDK, which has been an open goal since [FINDINGS §8](FINDINGS.md). Forcing it into an 8-bit photograph would throw that away. [FINDINGS §31.2](FINDINGS.md) |
-| 17 | **Raise the wrist position gains** | ⚠️ Only after 11. The wrist joints run at `kp` 10 against the shoulder's 80, and a soft joint told to move faster lags rather than moving faster. A stiffer joint also hits harder, so one joint at a time. [ROADMAP §7.5](#75-how-fast-can-the-arms-actually-move--asked-2026-08-13-answered-as-far-as-reading-allows) |
+| 17 | ⬇️ **Raise the wrist position gains — DEMOTED 2026-08-13, the reason for it was refuted** | ⛔ **The case for this rested on the wrist joints tracking much worse than the shoulder because `kp` is 10 against 80. Measured, they track 1.13x worse, not 8x** ([ROADMAP §7.5.1](#751-answered-2026-08-13-1635--the-arm-follows-a-path-with-a-fixed-delay-not-a-gain-shaped-error)). So stiffening them would buy very little of what this item was for, while a stiffer joint still hits harder and gravity compensation was already 39% short at the elbow once ([FINDINGS §11](FINDINGS.md)). ⭐ **Where the soft gains DO cost something is the standing error while holding still**, 0.066 rad against 0.039 — so if this is ever done, do it for holding accuracy and not for speed, and one joint at a time. |
 
 ### 8.3 Decisions still missing
 

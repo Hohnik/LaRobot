@@ -255,6 +255,10 @@ PARK_FILE = REPO / "config" / "park_pose.json"
 # re-calibrating. Gitignored, and the dataset itself will live somewhere else again
 # (ROADMAP step 5).
 TAKES_DIR = REPO / "recordings"
+# ⭐ One file per playback, named with a timestamp so nothing is ever overwritten. The
+# recordings themselves are saved by slot digit and DO overwrite, which lost the two files
+# an earlier measurement was taken from ([FINDINGS §33.2](../docs/FINDINGS.md)).
+TRACKING_DIR = TAKES_DIR / "tracking"
 # ⭐⭐ ONE CEILING FOR EVERY PLANNED MOTION, in radians per second for a single joint.
 # Julien asked for this on 2026-08-13: *"max speed would just be limited by the actual
 # safety things we have or the motors. Maybe we need an extra system for max speeds in
@@ -602,7 +606,15 @@ def main() -> int:  # noqa: PLR0915
     park_marks: list[tuple[str, float]] = []
     blend_idx = 1                       # "smooth" — the sensible default
     ease_idx = 3                        # "both" — see motion.EASINGS
-    park_leg_t = 0.0                    # when the current run started
+    # ⛔⭐ TWO CLOCKS, AND CONFLATING THEM PRINTED A WRONG NUMBER FOR A DAY.
+    # `park_leg_t` is reset every time the cursor passes a waypoint, because Julien asked
+    # for each leg's own duration. `park_start_t` is set once and never reset, because the
+    # arrival message wants the whole park. Using `park_leg_t` for both reported
+    # **"PARK reached in 0.0s"** on a park that had just taken 4.4 seconds: the last leg's
+    # mark is passed at the end of the path, so the reset happened moments before arrival.
+    # See [FINDINGS §34.3](../docs/FINDINGS.md).
+    park_leg_t = 0.0                    # when the CURRENT LEG started
+    park_start_t = 0.0                  # when the whole park started — never reset
     park_ramp = PARK_RAMP               # how much of the move is eased
     # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"one good idea is definitely
     # recording everything in the guide mode and then replaying it. That's a smart idea,
@@ -865,7 +877,7 @@ def main() -> int:  # noqa: PLR0915
             to each of them, not just the first.
             """
             nonlocal mode, park_target, park_cmd, park_path, park_s, park_marks
-            nonlocal park_best_err, park_progress_t, park_leg_t
+            nonlocal park_best_err, park_progress_t, park_leg_t, park_start_t
             targets = []
             for _, pose in legs:
                 tgt, warn = park_target_from(robot.get_joint_pos(), pose,
@@ -884,6 +896,7 @@ def main() -> int:  # noqa: PLR0915
             park_best_err = float(np.max(np.abs(park_target - start)))
             park_progress_t = t
             park_leg_t = t
+            park_start_t = t
             # The plan has become the thing happening; the progress readout replaces it.
             hint("")
             print(f"\n⭐ MODE: PARK → {what}, {park_path.length:.2f} rad of travel at "
@@ -1884,6 +1897,42 @@ def main() -> int:  # noqa: PLR0915
                                 print(f"       {name:<14} worst lag {worst:.3f} rad at "
                                       f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
                                       f"with {lag_top:.3f} rad of lag")
+                            # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
+                            # of what the arm can physically follow, and on 2026-08-13 the
+                            # only copy of it was a paste into a chat window. Saved per
+                            # playback under a timestamp, so nothing overwrites anything.
+                            # ⚠️ Never lets a failed write end a session: the arm is in HOLD
+                            # at this point and a missing diagnostic file is not worth a
+                            # traceback. FINDINGS §34.4.
+                            try:
+                                names = [YAM_JOINTS.get(i + 1, ("joint",))[0]
+                                         for i in range(tracking.n_joints)]
+                                rec = tracking.to_dict(names)
+                                rec["meta"] = {
+                                    "arm": args.arm,
+                                    "slot": replay_slot,
+                                    "played_at": dt_now(),
+                                    "commit": git_commit(),
+                                    "speed": round(replay_speed, 3),
+                                    "taught_speed_p99": round(replay.joint_speed(99), 4),
+                                    "recording_duration_s": round(replay.duration, 3),
+                                    "recording_meta": dict(replay.meta),
+                                    "elapsed_s": round(elapsed, 3),
+                                    "held_s": round(replay_held_s, 3),
+                                    "worst_lag_rad": round(replay_worst_lag, 5),
+                                    "loop_hz": round(loop_hz, 1),
+                                    "max_cursor_lag": MAX_CURSOR_LAG,
+                                    "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
+                                }
+                                TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+                                stamp = dt_now().replace(":", "-")
+                                out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
+                                out.write_text(json.dumps(rec, indent=1) + "\n")
+                                print(f"     ⭐ saved this table → "
+                                      f"{out.relative_to(REPO)}")
+                            except Exception as exc:  # noqa: BLE001
+                                print(f"     ⚠️  could not save the tracking table: "
+                                      f"{type(exc).__name__}: {exc}")
                         replay = None
                     elif t - replay_progress_t > PARK_STALL_SECONDS:
                         # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
@@ -1969,7 +2018,20 @@ def main() -> int:  # noqa: PLR0915
                                      " — as close as the arm holds itself under load")
                             mode = "hold"; enter_hold()
                             hint("")        # the progress readout has nothing left to say
-                            print(f"⭐ PARK reached in {t - park_leg_t:.1f}s "
+                            # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
+                            # passed at the end of the path, which resets the leg clock
+                            # moments before arrival — so this line used to report a 4.4 s
+                            # park as "reached in 0.0s". FINDINGS §34.3.
+                            # ⭐ Both numbers are shown because they answer different
+                            # questions: the total is what changes when speed, corner
+                            # radius or the ease ramp is tuned, and the settling time is
+                            # how long the arm took to close the last of the gap after the
+                            # commanded path had already run out.
+                            total = t - park_start_t
+                            settling = t - park_leg_t
+                            tail = (f", {settling:.1f}s of that settling"
+                                    if 0.05 < settling < total - 0.05 else "")
+                            print(f"⭐ PARK reached in {total:.1f}s{tail} "
                                   f"({err:.3f} rad off{extra}) → HOLD")
                             # ⭐ The handover from "drive to the start pose" to "play the
                             # recording". It lives HERE, in the arrival branch, so a park

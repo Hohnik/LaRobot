@@ -536,6 +536,50 @@ def test_tracking_ignores_a_zero_or_negative_timestep() -> None:
     assert log.rows()[0][3] == 0.0
 
 
+def test_the_tracking_table_survives_as_data_and_keeps_its_joint_names() -> None:
+    """⭐ The measurement has to outlive the terminal. On 2026-08-13 the only copy of this
+    table was a paste into a chat window."""
+    log = TrackingLog(3)
+    log.observe((0.10, 0.20, 0.30), (0.0, 0.0, 0.0), (0.05, 0.20, 0.30), 0.01)
+    d = log.to_dict(["base_yaw", "shoulder_pitch", "elbow_pitch"])
+    assert d["cycles"] == 1
+    assert d["n_joints"] == 3
+    assert [j["name"] for j in d["joints"]] == [
+        "base_yaw", "shoulder_pitch", "elbow_pitch"]
+    assert abs(d["joints"][0]["worst_lag_rad"] - 0.05) < 1e-6
+    assert abs(d["joints"][0]["top_speed"] - 10.0) < 1e-6, "0.10 rad in 0.01 s"
+    # ⛔ It has to survive a real JSON round trip, not merely be a dict.
+    assert json.loads(json.dumps(d)) == d
+
+
+def test_the_tracking_table_serialises_when_fed_a_NUMPY_measurement() -> None:
+    """⛔ The session passes `np.asarray(robot.get_joint_pos(), dtype=float)`, so every lag
+    in the table is a `np.float64` rather than a Python float.
+
+    ⭐ It serialises today only because `np.float64` subclasses `float`. That is a real
+    dependency and it was nearly assumed to be a bug instead of checked. ⚠️ A `float32`
+    array would NOT subclass `float` and `json.dumps` would raise — so if the session ever
+    stops forcing `dtype=float`, this test is what catches it before the arm does.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    log = TrackingLog(3)
+    log.observe((0.10, 0.20, 0.30), (0.0, 0.0, 0.0),
+                np.asarray([0.05, 0.20, 0.30], dtype=float), 0.01)
+    d = log.to_dict(["a", "b", "c"])
+    assert json.loads(json.dumps(d))["joints"][0]["worst_lag_rad"] == \
+        d["joints"][0]["worst_lag_rad"]
+
+
+def test_the_tracking_table_names_joints_it_was_given_no_name_for() -> None:
+    """⚠️ A missing name must never be the reason a measurement is lost."""
+    log = TrackingLog(2)
+    log.observe((0.1, 0.1), (0.0, 0.0), (0.1, 0.1), 0.01)
+    assert [j["name"] for j in log.to_dict().get("joints", [])] == ["joint1", "joint2"]
+    assert [j["name"] for j in log.to_dict(["only_one"])["joints"]] == [
+        "only_one", "joint2"]
+
+
 def test_tracking_handles_a_shorter_measurement_than_the_target() -> None:
     """A 6-joint robot playing a 7-joint recording must not raise inside the loop."""
     log = TrackingLog(7)
