@@ -1433,7 +1433,30 @@ ioreg -p IOUSB -w0 -l | grep -i candlelight
 
 ⚠️ **If they come back in DFU again, the firmware needs re-flashing with `dfu-util`**, which is a much bigger job and has not been done on this rig.
 
-### ⛔ Why they entered DFU is UNKNOWN, and that matters if it recurs
+### ⛔⭐ 32.0 UPDATE, same day: replugging did NOT clear it, and the likely reason is a BOOT jumper
+
+Julien replugged and `ioreg` still shows both boards as `DFU in FS Mode`. ⭐ **That narrows the cause a great deal, because DFU mode is entered at reset and persists until the next reset.** If a plain power-up still lands in the bootloader, then something is asking for the bootloader *every single time*.
+
+⭐⭐ **The CANable has a BOOT jumper or button on the board, and its whole purpose is exactly this.** The vendor firmware instructions say to *"move the boot jumper into the boot position as labelled on the PCB and then plug it into your computer"*, and afterwards *"return the boot jumper to its original position"*. **A jumper left in the boot position forces DFU on every power-up, and no amount of replugging will ever clear it.**
+
+⛔ **So look at the two boards before considering anything else.** Both being affected at once fits a physical cause far better than a software one: they sit together on one small hub, so one knock or one bag can reach both.
+
+⚠️ **And a second thing to check, which would explain a failed replug even with the jumpers correct.** DFU mode only clears on a **reset**, which needs power actually removed. ⛔ **Unplugging the hub from the Mac does not necessarily cut power to the hub's downstream ports.** If the hub stayed powered, the boards never lost power and never reset. **Unplug each CANable from the hub itself**, wait a few seconds, and plug it back.
+
+### ⭐ The recovery ladder, cheapest first
+
+1. ⭐ **Look at the BOOT jumper or button on each board.** If either is in the boot position, move it back. This is free and it is the most likely answer.
+2. **Unplug each CANable from the hub directly**, not the hub from the Mac, so the board genuinely loses power. Wait a few seconds.
+3. **Try a different port, and try one board on its own**, to rule out the hub.
+4. ⚠️ **Only if all of that fails does the firmware need re-flashing.** `brew install dfu-util`, then something of the shape:
+
+   ```bash
+   dfu-util -d 0483:df11 -a 0 -s 0x08000000:leave -D <candlelight-for-canable-2.5>.bin
+   ```
+
+   ⛔ **DO NOT run that without the right firmware file for a CANable 2.5.** The wrong image bricks the adapter, and this has never been done on this rig. Sources: the `candle-usb/candleLight_fw` project and `canable.io`. ⚠️ With two boards attached, select one with `-S <serial>` or the command may flash the wrong one.
+
+### ⛔ Why they entered DFU is still UNKNOWN, and that matters if it recurs
 
 No cause was established. The candidates, none of them verified:
 
