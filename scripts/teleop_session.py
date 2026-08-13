@@ -628,6 +628,7 @@ def main() -> int:  # noqa: PLR0915
     take: Trajectory | None = None      # being recorded right now, or None
     take_to_save: Trajectory | None = None   # frozen, waiting for its slot digit
     take_t0 = 0.0
+    take_modes: list[str] = []          # every mode the current recording passed through
     replay: Trajectory | None = None    # being played back right now, or None
     replay_t0 = 0.0
     replay_s = 0.0                      # seconds into the recording, held back on lag
@@ -1496,6 +1497,7 @@ def main() -> int:  # noqa: PLR0915
                                 "frame": control_frame,
                             })
                             take_t0 = t
+                            take_modes = [mode]
                             print(f"\n⏺  RECORDING — {mode.upper()} mode. Press w again to stop.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
@@ -1512,6 +1514,15 @@ def main() -> int:  # noqa: PLR0915
                             # Moving it to a second name is the whole fix: the sampler stops
                             # on this line, and the prompt then saves something frozen.
                             take_to_save, take = take, None
+                            # ⭐ Stamp what the recording actually WAS, now that it is over.
+                            # `method` was written at the keypress and can only name the mode
+                            # it started in; a hand-guided movement begun from HOLD came out
+                            # labelled `live:hold`. Both fields are kept: `method` stays for
+                            # anything already reading it, and `modes` is the truth.
+                            take_to_save.meta["modes"] = list(take_modes)
+                            if len(take_modes) > 1:
+                                take_to_save.meta["method"] = \
+                                    "live:" + "+".join(take_modes)
                             n, secs = len(take_to_save), take_to_save.duration
                             if n < 2:
                                 take_to_save = None
@@ -1694,6 +1705,16 @@ def main() -> int:  # noqa: PLR0915
                     # release the arm.
                     try:
                         take.append(t - take_t0, robot.get_joint_pos())
+                        # ⛔⭐ RECORD EVERY MODE THE RECORDING PASSED THROUGH, not only the
+                        # one it started in. Julien's recording of 2026-08-13 17:21 was
+                        # stamped `method: live:hold` because he pressed `w` while in HOLD
+                        # and then switched to GUIDE to hand-guide it. **The stamp described
+                        # the keypress rather than the demonstration**, and provenance is the
+                        # thing ROADMAP §6.6 says matters most about a recording. A dataset
+                        # that mislabels how a demonstration was produced is worse than one
+                        # that omits it. FINDINGS §35.4.
+                        if mode not in take_modes:
+                            take_modes.append(mode)
                     except Exception as exc:  # noqa: BLE001
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")

@@ -1625,6 +1625,8 @@ kp: [80.0, 80.0, 80.0, 10.0, 10.0, 10.0]
 kd: [ 5.0,  5.0,  5.0,  1.5,  1.5,  1.5]
 ```
 
+⛔⭐ **SUPERSEDED IN PART — read [§35.2](FINDINGS.md) before using any number below this line.** A third run at 17:21 served as held-out data, and refitting with all three moved two of this section's headline figures: the delay ratio between the soft and stiff joints went **1.13x → 0.97x**, the offset ratio went **1.7x → 2.16x**, and the first joint to reach the 0.15 rad threshold went **`gripper_twist` at 2.16 rad/s → `forearm_pitch` at 1.89 rad/s**. ⭐ **The conclusion of this section is unchanged and got sharper**, so the fit below stays as the record of what two runs supported. ⚠️ **The held-out test also measured this model's real precision: ±25% on any single point.** The prediction table at the end of this section was tested and came out optimistic.
+
 **The raw measurements, both runs, exactly as printed:**
 
 | joint | kp | run A worst lag @ speed | run A top speed / lag | run B worst lag @ speed | run B top speed / lag |
@@ -1751,3 +1753,145 @@ The two recordings behind [§33.1](FINDINGS.md)'s padding table were **replaced 
 | 4 | 6.02 s, 2.64 s padded, p99 2.40 | 5.39 s, 0.00 s padded, p99 0.79 |
 
 ⭐ **Written measurements about recordings have now gone stale three times in one day**, twice in text this session wrote itself. [§33.3](FINDINGS.md) predicted this and prescribed the remedy: date a number with its provenance, or replace it with the command that recomputes it. **Both stale tables have been handled the second way** — the `joint_speed` docstring no longer carries a live table at all, and [§33.1](FINDINGS.md)'s table is now explicitly labelled as dated evidence. ⛔ **The lesson is stronger than "be careful": a table of live data inside a document is a cache with no invalidation, and writing it more carefully does not help.**
+
+---
+
+## 35. ⭐⭐ A THIRD RUN TESTED THE SPEED MODEL AS HELD-OUT DATA, AND TWO PUBLISHED NUMBERS NEEDED CORRECTING — 2026-08-13, 17:21
+
+⭐ Julien ran a long session on arm B: three parks including a three-waypoint sequence, a recording, and a playback at **0.607x**. **Everything built in [§34](FINDINGS.md) is confirmed**, the playback happened to be an accidental version of the sharp test [§34.1](FINDINGS.md) asked for, and **fitting the model again with three runs moved two of its headline numbers.**
+
+### 35.0 ✅ The PARK timer fix is confirmed, on three parks, and the arithmetic reconciles
+
+⭐ **This is a redundant-number check, which is the only kind that has ever caught anything here.** The per-leg times and the total are printed independently, so they have to add up:
+
+| park | legs printed | total printed | do they reconcile? |
+|---|---|---|---|
+| 3-waypoint sequence 2→3→1 | 3.0 + 3.6 + 4.2 = **10.8 s** | **11.3 s**, 0.5 s of that settling | ✅ 10.8 + 0.5 = 11.3 |
+| single waypoint, slot 1 | 2.3 s | **3.0 s**, 0.7 s of that settling | ✅ 2.3 + 0.7 = 3.0 |
+| single, to a recording's start | 2.6 s | **2.6 s**, no settling shown | ✅ settling was under the 0.05 s floor |
+
+⛔ **Before the fix all three would have read `PARK reached in 0.5s`, `0.7s` and `0.0s`.** The third case also confirms the suppression rule works: the tail is omitted rather than printing a distracting `0.0s of that settling`.
+
+### 35.1 ✅⭐ The saved tracking file is better than the table it replaces, and it earned its keep immediately
+
+`recordings/tracking/3_2026-08-13T17-21-58+02-00.json` exists and holds everything. **Two things it has that the terminal does not:**
+
+1. **Full precision.** `0.15787` rather than `0.158`, which matters when the threshold being tested is `0.15`.
+2. ⭐ **A seventh row, `gripper_jaws`.** The terminal skips any joint whose top speed is under 0.01 rad/s, so the jaws never appear on screen. The file records them: worst lag `0.00015` rad at a top speed of `0.00536` rad/s. ⚠️ **That is a useful negative:** the jaws were commanded almost nothing during this playback, which confirms the gripper column of the recording was near-constant and that `n_compare=N_ARM` (leaving the jaws out of the keeping-up check) changed nothing here.
+
+⭐ It also carries `loop_hz: 87.0`, `max_cursor_lag: 0.15`, `max_planned_joint_speed: 1.5`, the playback speed `0.607`, the taught speed `2.4701`, and the recording's own metadata. **Every number needed to re-derive the analysis is in one file.** ⛔ **And reading it found a defect nothing else would have** — [§35.4](FINDINGS.md).
+
+### 35.2 ⭐⭐ THE SPEED MODEL, TESTED ON HELD-OUT DATA AND THEN REFIT — and the corrected answer
+
+**Run C: recording 3 re-recorded (5.53 s, 482 samples, taught 2.47 rad/s at the 99th percentile), played at 0.607x, loop at 87 Hz, motors at 42-43 °C.** Result: finished in **9.694 s** against 9.1 s of movement, so **0.587 s of waiting, 6.1% of the run**, worst lag **0.15787 rad**.
+
+⭐⭐ **THIS WAS EFFECTIVELY THE SHARP TEST, and it did not need arranging.** [§34.1](FINDINGS.md) asked for a playback that would land the worst joint right on the 0.15 rad threshold, to see whether the model held. **The measured worst lag was 0.158 rad, which is exactly on it.** ⛔ **But it happened at a lower commanded speed than the model predicted**, which is the informative part and is why no further speed test is needed.
+
+**STEP 1 — the held-out test. Runs A and B produced the model; run C had no say in it.**
+
+| joint | commanded | measured lag | predicted | error |
+|---|---|---|---|---|
+| base_yaw | 0.38 | 0.028 | 0.048 | **+72%** |
+| shoulder_pitch | 1.03 | 0.059 | 0.079 | +35% |
+| elbow_pitch | 0.32 | 0.054 | 0.051 | −7% |
+| forearm_pitch | 1.16 | **0.156** | 0.116 | **−26%** |
+| wrist_roll | 0.98 | 0.084 | 0.097 | +16% |
+| gripper_twist | 1.42 | **0.158** | 0.121 | **−24%** |
+
+⭐ **Mean signed error +4.8%, mean absolute error 24.6%.** So the model is unbiased on average and **wrong by about a quarter on any single point.** ⛔ **Read that as the real precision of this whole measurement.** It predicts the trend and it must not be used to justify a specific speed to within better than ±25%.
+
+**STEP 2 — refit with all three runs, 33 speed-and-lag pairs:**
+
+| joint | kp | offset (rad) | delay (s) | fit rms | reaches 0.15 rad at |
+|---|---|---|---|---|---|
+| base_yaw | 80 | 0.024 | 0.0395 | 0.020 | 3.20 rad/s |
+| shoulder_pitch | 80 | 0.042 | 0.0359 | 0.012 | 3.00 rad/s |
+| elbow_pitch | 80 | 0.046 | 0.0250 | 0.010 | 4.18 rad/s |
+| forearm_pitch | 10 | 0.100 | 0.0267 | 0.020 | **1.89 rad/s** |
+| wrist_roll | 10 | 0.061 | 0.0343 | 0.013 | 2.59 rad/s |
+| gripper_twist | 10 | 0.081 | 0.0363 | 0.019 | **1.91 rad/s** |
+
+⛔⭐ **TWO NUMBERS PUBLISHED IN [§34.1](FINDINGS.md) MOVE, AND BOTH MOVE IN THE SAME DIRECTION — the split between the soft and stiff joints is CLEANER than two runs suggested, not messier:**
+
+| | published from 2 runs | refit from 3 runs |
+|---|---|---|
+| delay ratio, soft ÷ stiff | 1.13x | **0.97x** |
+| offset ratio, soft ÷ stiff | 1.7x | **2.16x** |
+| mean delay, stiff / soft | 0.0327 / 0.0369 s | **0.0335 / 0.0324 s** |
+| mean offset, stiff / soft | 0.039 / 0.066 rad | **0.037 / 0.080 rad** |
+
+⭐⭐ **The conclusion of [§34.1](FINDINGS.md) survives and gets sharper.** The speed-dependent part is a **delay of 0.033 s that is now indistinguishable between the two gain groups** (ratio 0.97, so if anything the soft joints are marginally *faster*). The gains show up **only** in the constant part, and that gap widened to a factor of **2.16**.
+
+⚠️ **Do NOT read the 2.16 as confirming the `kd/kp` prediction of 2.40, even though the numbers are close.** `kd/kp` is the coefficient of the *speed* term in that theory, and the speed term is the one that shows **no** gain dependence at all. Matching it against the *constant* term would be reading a coincidence as a mechanism. ⭐ **What the constant plausibly is:** a torque requirement divided by `kp`. Same torque would give 8x; the wrist joints carry far less mass than the shoulder, so their torque requirement is smaller and partly cancels their smaller gain. **That story is consistent and it is untested.**
+
+**STEP 3 — is speed doing any work at all, or is it all a constant?** A straight line beats a flat line for **every one of the six joints** (fit rms 0.010-0.020 against 0.021-0.045). ⭐ So the speed term is real, and a pure-friction model is not enough.
+
+⭐⭐ **STEP 4 — THE CORRECTED PRACTICAL ANSWER, and it endorses the 1.5 rad/s clamp rather than changing it.**
+
+| commanded speed | joints the fit puts past 0.15 rad |
+|---|---|
+| 1.0 rad/s | none |
+| 1.2 rad/s | none |
+| **1.5 rad/s (the clamp)** | **none** |
+| 2.0 rad/s | forearm_pitch, gripper_twist |
+| 2.5 rad/s | forearm_pitch, gripper_twist |
+
+⛔ **But the scatter is what a person actually experiences, and run C proves it: `forearm_pitch` measured 0.156 rad of lag at only 1.16 rad/s commanded.** The fit puts that at 0.131. With a fit rms of 0.020 rad and a slope of 0.027 s, ±0.020 rad is worth roughly ±0.7 rad/s of crossing speed. **So individual moments cross 0.15 anywhere between about 1.2 and 2.5 rad/s, depending on the pose.**
+
+⭐ **Which is the right answer to Julien's original question, and it is a comfortable one:** *the 1.5 rad/s clamp sits inside the scatter band.* Most motion at the clamp tracks; some waiting at the top end is normal and expected. **Raising the clamp would move it above the band and make waiting the rule rather than the exception, so it should stay at 1.5.** ⛔ **No further speed test is needed for this decision.** The active sweep in [ROADMAP §7.5](ROADMAP.md) is now only worth building to separate the delay's three candidate causes, which is a different question.
+
+⚠️⚠️ **A CONSEQUENCE FOR THE DATASET WORK THAT NOBODY HAS WRITTEN DOWN YET.** When a playback waits, **the replay is slower than the demonstration was.** Run C spent 6.1% of its time waiting, so its timing is 6% stretched and unevenly so, concentrated wherever the fast joints were moving. ⛔ **[ROADMAP §6.6](ROADMAP.md) already requires recording the pose that was actually commanded rather than the nominal plan, which handles positions. It says nothing about timing.** A dataset built from replays therefore carries **human paths at slightly non-human timing**, and how much that matters depends on the model. **Flagged as an open question for the recorder, not resolved here.**
+
+### 35.3 ✅⭐ `check_rig.py` proved itself twice within twenty minutes of existing
+
+1. ⭐ **It caught arm G missing and refused.** `G 20593383594E5018 ⛔ ABSENT from the bus`, and `⛔ VERDICT: not ready — adapter G is not attached`, exit code 1. Julien had unplugged it for a colleague. **The old failure mode was a session dying at startup with a message about cables.**
+2. ⛔⭐ **Arm B's USB address changed from `bus 0 addr 4` to `bus 0 addr 5`** between two runs twenty minutes apart, with no cable touched on B. **This is [§1](FINDINGS.md)'s "never select hardware by index" rule caught in the act** — the address moved, the serial did not, and everything in this repo resolves by serial so nothing noticed. *An enumeration order that changes twice in one session was measured on 2026-08-10; it is still changing.*
+
+### 35.4 ⛔ A PROVENANCE DEFECT, found by reading the saved file rather than the screen
+
+The tracking file records the recording's own metadata, and it says:
+
+```
+"method": "live:hold"
+```
+
+⛔ **The movement was hand-guided in GUIDE.** Julien pressed `w` while in HOLD, then pressed `g` to go weightless, then guided the arm. `method` is written at the keypress, so it names **the mode the recording started in and nothing else.**
+
+⚠️ **This is worse than a cosmetic error, because provenance is the field [ROADMAP §6.6](ROADMAP.md) says matters most.** *"Being able to reproduce everything"* was his own requirement. **A dataset that mislabels how a demonstration was produced is worse than one that omits it**, since a wrong label is trusted and a missing one is investigated.
+
+⭐ **Fixed.** Every mode the recording passes through is now collected, and at stop time the recording gains a `modes` list. When more than one mode occurred, `method` becomes `live:hold+guide`. **Both fields are kept** so anything already reading `method` keeps working. ⚠️ **Not yet seen on the arm**, and it rides along with any recording.
+
+### 35.5 ⚠️⭐ THE DFU CAUSE: both hypotheses are now damaged, and the entry cause is unexplained
+
+**Julien's answer:** *"I also unplugged the hub from the Mac, not the CANable cables from the hub."*
+
+⛔ **That kills BOTH candidate explanations, which is not the outcome [§34.6](FINDINGS.md) expected:**
+
+| hypothesis | what it predicted | what happened |
+|---|---|---|
+| a BOOT jumper left in the boot position | **no** replug can ever clear it | a replug cleared it ⇒ **dead** |
+| the hub kept its downstream ports powered, so the boards never reset | unplugging the *hub* would NOT clear it; only unplugging the *cables* would | he unplugged the hub and it cleared ⇒ **dead as stated** |
+
+⭐ **What is left, and it is the least satisfying option: entry into DFU is intermittent.** Something at power-up occasionally lands the chip in its bootloader instead of its firmware, and a later power cycle happens not to. A floating or weakly-driven BOOT0 pin and a slow-rising supply rail on the shared hub both do this. ⛔ **It will recur, at random, possibly mid-session.**
+
+⚠️ **One weaker variant is worth keeping, because it changes what to do.** [§32.0](FINDINGS.md) noted that DFU only clears on a genuine reset, which needs power actually gone. **A replug that is too quick may not discharge the board.** So the earlier failed attempt and the later successful one may differ only in how long the plug was out. ⛔ **Practical rule from now on: unplug, WAIT ABOUT TEN SECONDS, then plug back in.** It costs nothing and it removes one variable.
+
+⭐ **And the data to capture if it recurs is now one command.** Run `uv run scripts/check_rig.py --raw` **before touching anything**: it answers whether it is one adapter or both, whether they are absent or in DFU, and whether the hub re-enumerated. Then note whether the session had just exited cleanly and whether anything was knocked.
+
+### 35.6 ⚠️⭐ ARM G IS SHARED WITH A COLLEAGUE — an operational fact with a real planning consequence
+
+**Julien, 2026-08-13:** *"I briefly unplugged the arm G from USB so my colleague can use it. Whenever we need both, just let me know, I can instantly get it back."*
+
+⭐ **Arm G is not reliably available**, and that lands squarely on the biggest remaining job. [HANDOFF §5.5](HANDOFF.md) item 0c is the `ArmSession` restructure, whose whole point is driving both arms from one process.
+
+⭐⭐ **Good news, and it is why this changes nothing about the plan's order.** The de-risking sequence in [ROADMAP step 6](ROADMAP.md) starts with **`--arms B` running the N-arm code with N=1**, and that needs only arm B. **So the restructure can be built and its first milestone confirmed with arm G in someone else's hands.** Only steps 3 to 5 need both. ⛔ **Ask for arm G before starting step 3, not before starting the work.**
+
+⚠️ **The camera on arm G stays plugged in even while its CAN adapter is out.** Both D405 serials are still on the bus with arm G absent, so a camera count does not tell you whether an arm is available. `check_rig.py` reports the two independently.
+
+### 35.7 ⛔ Slot 3 was overwritten a FOURTH time, and this one finally did not cost anything
+
+Slot 3 is now the 5.53 s recording from 17:21. It has been overwritten at 16:34 and again at 17:21, and slot 1 at 12:55, and slot 4 at 16:35.
+
+⭐⭐ **The difference this time: the measurement survived.** `recordings/tracking/3_2026-08-13T17-21-58+02-00.json` still holds every number measured from the file that was replaced, at full precision, with the commit and both timestamps. **That is [§34.4](FINDINGS.md) working as intended on its first real test.** The measurements from 16:34 and 16:35 have no such file, because the saving did not exist yet, which is exactly why [§34.1](FINDINGS.md)'s table had to be dated instead.
+
+⭐ **The remaining exposure is the recordings themselves, and it is his to decide.** A slot digit is a convenient way to save and a lossy way to keep. **Options, none taken:** refuse to overwrite without a confirmation keypress; copy the old file aside before writing; or name files by timestamp and let the digits be shortcuts to the most recent. ⚠️ **The first is the smallest change and the most annoying; the third is the most correct and changes how `l` lists things.** Worth one minute of his opinion rather than an agent's choice.
