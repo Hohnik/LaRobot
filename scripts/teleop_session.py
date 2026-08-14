@@ -459,83 +459,131 @@ def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
     threading.__excepthook__(args)
 
 
-def park_and_wait(robot, keys, base_pose, clamp_gripper, ramp: float = PARK_RAMP,
-                  speed: float = PARK_SPEED, easing=EASINGS[2]) -> str:  # noqa: ANN001
-    """Drive to the base pose, **blocking**, and say how it ended.
+def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN001
+              stall_seconds: float = PARK_STALL_SECONDS) -> str:
+    """Drive EVERY arm to its own base pose, **blocking**, and say how it ended.
 
-    ⚠️ The parameter was called `park` until 2026-08-14. It is the arm's BASE pose, the
-    one Ctrl-C returns to, and calling it `park` invited confusion with the eleven
-    `park_*` fields that describe a park in progress. Same rename as
-    `ArmSession.base_pose`.
+    Returns the worst outcome across the arms: `"dead"` · `"stalled"` · `"stopped"`
+    (a key was pressed) · `"arrived"`. Per-arm detail is printed as it happens.
 
-    Returns `"arrived"` · `"stalled"` · `"stopped"` (a key was pressed) · `"dead"`.
+    ⭐⭐ EVERY ARM ADVANCES ON EVERY CYCLE rather than one arm after another, and the
+    reason is not speed. Sequential parking would make *"any key stops it"* stop only
+    the arm currently moving, and it would leave the other arm holding a pose for the
+    whole of the first arm's park with nobody watching it. One loop, N commands.
 
-    ⛔ THE DUPLICATION THIS REMOVES. The quit path used to carry its own copy of this
-    loop, and the code's own comment admitted the risk: *"This is a SECOND park loop,
-    and duplication is what has bitten this repo four times."* It was bounded
-    carefully — same tested `advance_park_command`, same SafeRobot limits — but it
-    was still a second place for a fix to miss. Now both callers share this one.
+    ⚠️ A DEAD ARM IS SKIPPED, NOT FATAL. If one chain has died that arm cannot be
+    commanded at all — it is already sagging — while the live arm can still be parked,
+    which is better than leaving it holding and far better than disabling it. The dead
+    one is named, loudly, because someone may need to catch it.
 
-    ⚠️ The *interleaved* park (mode == "park") is deliberately NOT folded in here.
-    That one advances a single step per control cycle so the operator can still press
-    keys and the temperature guard still runs; this one blocks because the session is
-    already ending. Same trajectory maths, different scheduling — collapsing them
-    would mean a blocking call inside the 100 Hz loop.
+    ⛔ THE DUPLICATION THIS REMOVES, kept from the single-arm version because it is still
+    the reason this function exists: the quit path used to carry its own copy of this
+    loop, and the code's own comment admitted the risk — *"This is a SECOND park loop,
+    and duplication is what has bitten this repo four times."*
+
+    ⚠️ The *interleaved* park (mode == "park") is deliberately NOT folded in here. That
+    one advances a single step per control cycle so the operator can still press keys and
+    the temperature guard still runs; this one blocks because the session is already
+    ending. Same trajectory maths, different scheduling — collapsing them would mean a
+    blocking call inside the 100 Hz loop.
+
+    ⚠️ `stall_seconds` is a parameter only so the tests can ask for a 0.2 s patience
+    instead of waiting the real 4 s. Nothing in the session passes it.
     """
-    tgt, warn = park_target_from(robot.get_joint_pos(), base_pose,
-                                 gripper_index=N_ARM, clamp=clamp_gripper)
-    if warn:
-        print(f"\n  ⚠️  {warn}.")
-    cmd = np.asarray(robot.get_joint_pos(), dtype=float)
-    start = cmd.copy()
-    best = float(np.max(np.abs(tgt - cmd)))
-    last_progress = time.perf_counter()
-    # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean
-    # a key pressed *at* the moving arm, not one left over from teleop or from the
-    # menu that led here. Julien saw a park announce itself and stop in the same
-    # breath — the stale keystroke that cancelled it had been typed seconds earlier,
-    # and with the KeyReader buffering bug it could have been typed long before that.
+    #: One entry per arm that can still be commanded: where it is going, what it was last
+    #: told, and when it last made progress.
+    runs = []
+    for one in arms:
+        if not one.alive():
+            print(f"\n⚠️  arm {one.name}: the chain is dead, so it cannot be parked. "
+                  "It is sagging under gravity — support it if it is raised.")
+            continue
+        if one.base_pose is None:
+            print(f"\n⚠️  arm {one.name}: no base pose saved, so there is nothing to park to.")
+            continue
+        tgt, warn = park_target_from(one.robot.get_joint_pos(), one.base_pose,
+                                     gripper_index=N_ARM, clamp=clamp_gripper)
+        if warn:
+            print(f"\n  ⚠️  arm {one.name}: {warn}.")
+        cmd = np.asarray(one.robot.get_joint_pos(), dtype=float)
+        runs.append({
+            "arm": one, "tgt": tgt, "cmd": cmd, "start": cmd.copy(),
+            "best": float(np.max(np.abs(tgt - cmd))),
+            "last_progress": time.perf_counter(), "outcome": None,
+        })
+    if not runs:
+        return "dead"
+
+    # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean a
+    # key pressed *at* the moving arm, not one left over from teleop or from the menu that
+    # led here. Julien saw a park announce itself and stop in the same breath — the stale
+    # keystroke that cancelled it had been typed seconds earlier.
     keys.drain()
-    print(f"\n⭐ PARKING to {np.round(np.asarray(tgt)[:N_ARM], 2)} — any key stops it.\n")
-    while True:
+    for run in runs:
+        print(f"\n⭐ PARKING arm {run['arm'].name} to "
+              f"{np.round(np.asarray(run['tgt'])[:N_ARM], 2)} — any key stops it.")
+    print()
+
+    while any(run["outcome"] is None for run in runs):
         now = time.perf_counter()
-        if not chain_alive(robot):
-            print("\n⚠️  the chain died while parking.")
-            return "dead"
-        meas = np.asarray(robot.get_joint_pos(), dtype=float)
-        err = float(np.max(np.abs(tgt - meas)))
-        verdict = park_verdict(err, now - last_progress > PARK_STALL_SECONDS,
-                               PARK_TOLERANCE, PARK_SETTLED,
-                               stopped_briefly=now - last_progress > PARK_SETTLE_SECONDS)
-        if verdict == "arrived":
-            print(f"\n⭐ PARKED ({err:.3f} rad off).")
-            return "arrived"
-        if verdict == "settled":
-            print(f"\n⭐ PARKED ({err:.3f} rad off — as close as the arm holds itself; "
-                  f"the last fraction of a degree is the controller settling under load).")
-            return "arrived"
-        if verdict == "blocked":
-            print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no progress for "
-                  f"{PARK_STALL_SECONDS:.0f}s. Something is in the way, or the pose "
-                  "is unreachable.")
-            return "stalled"
+        # ⛔ A key stops EVERY arm, checked once per cycle rather than per arm. "Any key
+        # stops it" has to mean the whole motion, or the operator presses a key, watches
+        # one arm halt, and has to guess about the other.
         if keys.get() is not None:
+            for run in runs:
+                if run["outcome"] is None:
+                    run["outcome"] = "stopped"
             print("\n  park stopped.")
-            return "stopped"
-        if err < best - PARK_PROGRESS_EPS:
-            best, last_progress = err, now
-        # Same ease-in/ease-out as the interleaved park — Ctrl-C should not shut down
-        # with a jerk at both ends when a mid-session park glides.
-        # ⭐ EASINGS[2] is "out": full speed from the first step, soft landing.
-        # Julien on Ctrl-C: *"I don't want to have to wait until the movement has been
-        # smoothed out — I want it to move into its parking position quickly and
-        # swiftly, without the excessive starting and pausing."* A shutdown move should
-        # leave at once; only the arrival needs to be gentle.
-        factor = easing_factor(easing, float(np.max(np.abs(cmd - start))),
-                               float(np.max(np.abs(tgt - cmd))), ramp)
-        cmd = advance_park_command(cmd, tgt, speed * factor / CONTROL_HZ)
-        robot.command_joint_pos(cmd)
+            break
+        for run in runs:
+            if run["outcome"] is not None:
+                continue
+            one = run["arm"]
+            if not one.alive():
+                print(f"\n⚠️  arm {one.name}: the chain died while parking.")
+                run["outcome"] = "dead"
+                continue
+            meas = np.asarray(one.robot.get_joint_pos(), dtype=float)
+            err = float(np.max(np.abs(run["tgt"] - meas)))
+            since = now - run["last_progress"]
+            verdict = park_verdict(err, since > stall_seconds,
+                                   PARK_TOLERANCE, PARK_SETTLED,
+                                   stopped_briefly=since > PARK_SETTLE_SECONDS)
+            if verdict in ("arrived", "settled"):
+                extra = ("" if verdict == "arrived" else
+                         " — as close as the arm holds itself; the last fraction of a "
+                         "degree is the controller settling under load")
+                print(f"\n⭐ arm {one.name} PARKED ({err:.3f} rad off{extra}).")
+                run["outcome"] = "arrived"
+                continue
+            if verdict == "blocked":
+                print(f"\n⛔ arm {one.name} PARK BLOCKED — {err:.3f} rad still to go and no "
+                      f"progress for {stall_seconds:.0f}s. Something is in the way, or the "
+                      "pose is unreachable.")
+                run["outcome"] = "stalled"
+                continue
+            if err < run["best"] - PARK_PROGRESS_EPS:
+                run["best"], run["last_progress"] = err, now
+            # Same ease-in/ease-out as the interleaved park — Ctrl-C should not shut down
+            # with a jerk at both ends when a mid-session park glides.
+            # ⭐ EASINGS[2] is "out": full speed from the first step, soft landing. Julien on
+            # Ctrl-C: *"I want it to move into its parking position quickly and swiftly,
+            # without the excessive starting and pausing."* A shutdown move should leave at
+            # once; only the arrival needs to be gentle.
+            factor = easing_factor(easing,
+                                   float(np.max(np.abs(run["cmd"] - run["start"]))),
+                                   float(np.max(np.abs(run["tgt"] - run["cmd"]))),
+                                   one.park_ramp)
+            run["cmd"] = advance_park_command(run["cmd"], run["tgt"],
+                                              one.park_speed * factor / CONTROL_HZ)
+            one.robot.command_joint_pos(run["cmd"])
         time.sleep(1.0 / CONTROL_HZ)
+
+    # ⭐ The WORST outcome, because the caller uses it to decide whether the arms may be
+    # released. One arm that stalled is a reason to keep every arm holding and ask a human.
+    order = ["dead", "stalled", "stopped", "arrived"]
+    outcomes = [run["outcome"] or "stopped" for run in runs]
+    return next(o for o in order if o in outcomes)
 
 
 def status_row(one: ArmSession, lead: str, reach: float, floor: float) -> str:
@@ -2766,26 +2814,33 @@ def main() -> int:  # noqa: PLR0915
             planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
             unplanned = not planned_quit
             auto_parked = False
-            if chain_alive(robot) and (interrupted or unplanned) and arm.base_pose is not None:
-                enter_hold(arm)
+            # ⚠️ `any(...)` rather than `all(...)`: if one chain has died the other arm can
+            # still be parked, and parking it is better than leaving it holding. `park_arms`
+            # skips the dead one and names it.
+            live = [one for one in arms if one.alive()]
+            if live and (interrupted or unplanned) and any(
+                    one.base_pose is not None for one in live):
+                for one in live:
+                    enter_hold(one)
                 if interrupted:
                     print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
                 else:
                     print(f"\n⭐ SAFE STOP after {stop_reason!r} — the chain is still alive, so")
-                    print("   the arm is being parked to the pose this session started in, then")
+                    print("   the arms are being parked to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
-                outcome = park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
-                                        ramp=arm.park_ramp, speed=arm.park_speed)
+                outcome = park_arms(live, keys, clamp_gripper)
                 if outcome == "arrived":
                     auto_parked = True
                     print("\n   Disabling the motors now.\n")
                 else:
-                    print(f"\n⚠️  the automatic park ended as {outcome!r}, so the arm is "
-                          "NOT being released. Choose below.")
+                    print(f"\n⚠️  the automatic park ended as {outcome!r}, so nothing is "
+                          "being released. Choose below.")
 
-            if chain_alive(robot) and not auto_parked:
-                enter_hold(arm)
-                print("\nThe arm is HOLDING its pose. It will not be released until you choose.")
+            if any(one.alive() for one in arms) and not auto_parked:
+                for one in arms:
+                    if one.alive():
+                        enter_hold(one)
+                print("\nEvery arm is HOLDING its pose. Nothing is released until you choose.")
                 print("   q = PARK then DISABLE — the whole shutdown in one key")
                 print("   p = PARK — drive back to the park pose, then it holds there")
                 print("   g = go weightless so you can park it by hand")
@@ -2812,13 +2867,15 @@ def main() -> int:  # noqa: PLR0915
                         # pose"* is exactly when a human should decide rather than a default.
                         # A stalled or interrupted park leaves the arm holding and the menu
                         # open.
-                        outcome = park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
-                                                ramp=arm.park_ramp, speed=arm.park_speed)
+                        outcome = park_arms([one for one in arms if one.alive()],
+                                            keys, clamp_gripper)
                         if outcome == "arrived":
                             print("\n   Parked. Disabling the motors now.\n")
                             break
-                        enter_hold(arm)
-                        print(f"\n⚠️  the park ended as {outcome!r}, so the arm is NOT being "
+                        for one in arms:
+                            if one.alive():
+                                enter_hold(one)
+                        print(f"\n⚠️  the park ended as {outcome!r}, so nothing is being "
                               "released.")
                         print("   q = try again    p = park    g = weightless    d = disable")
                     elif k == "p":
@@ -2828,25 +2885,32 @@ def main() -> int:  # noqa: PLR0915
                         # pose defaulting to wherever the arm started, `q p d` is a
                         # complete hands-free shutdown — and Ctrl-C now does the same
                         # thing in one keystroke.
-                        park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
-                                      ramp=arm.park_ramp, speed=arm.park_speed)
-                        enter_hold(arm)
+                        park_arms([one for one in arms if one.alive()], keys, clamp_gripper)
+                        for one in arms:
+                            if one.alive():
+                                enter_hold(one)
                         print("   q = park+disable    p = park again    g = weightless    d = disable")
                     elif k == "g":
-                        enter_guide(arm)
-                        print("\n⭐ weightless — park the arm, then press d to disable.")
+                        # ⛔ EVERY arm, and with two that is 8.6 kg going weightless at once.
+                        # The operator asked for it at the quit menu, where the alternative is
+                        # disabling, so it is the safer of the two. The banner says how much.
+                        for one in arms:
+                            if one.alive():
+                                enter_guide(one)
+                        print(f"\n⭐ weightless: {'+'.join(one.name for one in arms if one.alive())}"
+                              " — park them by hand, then press d to disable.")
                     elif k == "d":
                         break
                     time.sleep(0.05)
-                    if not chain_alive(robot):
-                        print("\n⚠️  the chain died while waiting — disabling now.")
+                    if not any(one.alive() for one in arms):
+                        print("\n⚠️  every chain died while waiting — disabling now.")
                         break
-            elif not chain_alive(robot):
+            elif not any(one.alive() for one in arms):
                 # ⚠️ `elif not chain_alive(...)`, not a bare `else`. With the Ctrl-C
                 # auto-park above, a plain `else` would fire on the SUCCESS path and
                 # announce a dead chain to someone whose arm had just parked fine.
-                print("⚠️  the chain is already dead, so the arm is NOT being commanded.")
-                print("   It will be sagging under gravity. Support it now if it is raised.")
+                print("⚠️  every chain is already dead, so no arm is being commanded.")
+                print("   They will be sagging under gravity. Support them now if raised.")
 
     except KeyboardInterrupt:
         print("\ninterrupted.")
