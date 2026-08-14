@@ -3779,6 +3779,21 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 7. ⬜ **The cameras.** Both D405s are attached and the identification problem is unsolved: two identical cameras support the same picture sizes, so the trick used elsewhere cannot tell them apart, and macOS's USB order is not OpenCV's index order ([§22](FINDINGS.md), [§34.5](FINDINGS.md)). ⭐ **The wiggle method is the answer** ([§28.6](FINDINGS.md)) and it needs no arm: open each index, ask a human which window moved, remember the serial. ⚠️ `librealsense` works only with `sudo` on macOS, so keep streaming on the OpenCV path ([§28](FINDINGS.md)).
 8. ⬜ **The MCAP export in ABC's schema** is still deferred by Julien pending his friend's spec ([ROADMAP §8.2](ROADMAP.md) item 7). ⭐ **Our own recordings are already the right SHAPE** — every arm's joints in one timeline — so that work becomes a serialisation rather than a re-collection ([§56.3](FINDINGS.md)).
 
+### 58.45 ✅⭐⭐ THE INCIDENT RECORDER IS VERIFIED — five files exist and one has now been READ
+
+⛔ **[HANDOFF](HANDOFF.md)'s entry block has said since 2026-08-14 that the incident recorder *"can only prove itself during a failure, so it is not confirmed and cannot be"*. That is now half wrong and the half matters.**
+
+✅ **It has fired five times** — `recordings/incidents/` holds files from 17:07, 18:03, 18:06, 18:14 and 18:22 on 2026-08-14, 3.7 to 4.8 KB each, written on Ctrl-C stops and thermal warnings. ⭐ **Nobody had opened one until now.** `2026-08-14T18-14-16` contains, for **both** arms:
+
+- `mode`, `measured_joints` (7 each), `last_torques_nm`, `last_temperatures_c` per joint, `ee`
+- the session's `reach_limit`, `floor_limit`, `loop_hz`, the git `commit`, and the whole `usb` bus
+
+⭐⭐ **So the field whose absence cost the most on 2026-08-14 is there**: arm B's joint 3 was carrying **5.9 Nm** and arm G's **7.7 Nm** at the moment that session stopped. Recovering those on the day of the fall took a simulation of joint angles the arm had measured and discarded ([§45](FINDINGS.md)).
+
+⛔⭐ **AND ONE FIELD IS USELESS AS WRITTEN: `chain_alive` is ALWAYS `false`.** The incident block runs *after* `shutdown_robot()`, deliberately, so the motors are off before anything is attempted — which means the chain has already been stopped by the time the field is read. **A field that reports the same value in every file is not a measurement**, and this one would be read as "the chain was dead when it stopped", which is exactly the distinction that mattered on 2026-08-14 ([§46.0](FINDINGS.md): a dead CAN link means no park is possible).
+
+⬜ **The fix is two lines and it is [ROADMAP §8.2](ROADMAP.md) item 31:** capture the liveness of each arm into a local **before** `shutdown_robot()` and record that instead. ⚠️ Not done here because it was found with almost no context left, and a rushed edit to the teardown path is the wrong trade.
+
 ### 58.5 ⚠️ THE STANDING RULES A FRESH AGENT WILL BREAK FIRST
 
 1. ⛔ **The agent never runs anything that sends a setpoint.** Scripts that enable motors and send nothing are yours (`check_rig.py`, `ping_motors.py`, `identify_arm.py`, `check_arms_match.py`). Anything that commands a position is Julien's. [HANDOFF §4](HANDOFF.md) rule 1.
