@@ -2344,3 +2344,85 @@ if int(motor_info.error_code, 16) != MotorErrorCode.normal:
 - ⚠️ **The LED observation was not recorded.** Julien ran the ping before reporting on the lights, so the chance to see them in their pre-ping state is gone for this occasion. **It cost nothing this time, because the ping proves there was no fault to see.** The manual's table ([§39.0](FINDINGS.md)) is still unconfirmed against this actual hardware, which is a one-glance job whenever the arms are idle and powered.
 
 **396 → 410 headless tests.**
+
+---
+
+## 41. ✅⭐⭐ BOTH BENCH TESTS PASSED, AND THE BOX ANSWER CAME WITH A DIAGNOSTIC MESSAGE THAT NAMES THE WRONG CAUSE — 2026-08-14, 11:00
+
+> Julien ran both tests from [HANDOFF](HANDOFF.md)'s bench plan. Both passed. The second one printed more than expected, and analysing it in simulation turned up a message asserting something the data does not support.
+
+### 41.0 ✅ TEST A — the provenance label works on hardware
+
+`2.json`, recorded 2026-08-14T10:59 under commit `3238a93`: **`method` reads `live:hold+guide`.** He pressed `w` in HOLD, switched to GUIDE, guided the arm by hand for 15.7 s, and the label names both modes. **[§35.4](FINDINGS.md)'s fix is confirmed.**
+
+⭐ **The `w` freeze fix is confirmed for a fourth time, and by the strongest evidence available:** the stop message and the save message both read **15.7 s, 1365 samples**. Identical. That is the redundant-number check that has caught every defect in this class.
+
+⭐ **A free measurement fell out of it:** 1365 samples over 15.70 s is **86.9 Hz**, which is an independent reading of the control loop rate from the recording itself. The status line said 84 Hz in the same session. Both sit in the 83-88 band this rig has been running at, so [ROADMAP §8.2](ROADMAP.md) item 14 gains a data point and no new mystery.
+
+⚠️ **One number worth watching: `2.json` carries 0.92 s of trailing still time, 5.8%.** That is below the 1.0 s threshold so it was not flagged, and it is not the [§30.1](FINDINGS.md) defect — the freeze fix is proven by the identical sample counts. It is Julien holding the arm still for about a second before pressing `w`. ⛔ **But `check_recordings.py`'s docstring claims "the gap between the two cases is wide in the measured data", and 0.92 against a 1.0 threshold is not wide.** The defect produced 1.8-4.4 s; a human pause before a keypress can reach 1 s. **The threshold is now known to be closer to the boundary than the comment says.** Not changed, because the right fix is not obvious and a false positive here costs only a re-record.
+
+### 41.1 ✅⭐⭐ TEST B — THE WORKSPACE BOX IS CONFIRMED AS THE THING THAT STOPS HIM
+
+```
+[TELEOP  ] t=24.0s  hottest 35°C  jaw 34°C  ⚠️ 88Hz  q [0.2 1.45 2.04 -1.54 0.42 0.14]
+           EE [0.219 0.029 0.475]  box 0.30/0.30m ⚠️ AT THE EDGE  ⚠️ SLOWED to 19% (near the reach limit)
+```
+
+✅ **`box 0.30/0.30m` is unambiguous: the box was fully used up at the moment the arm stopped.** [§37.5](FINDINGS.md)'s leading hypothesis is **confirmed**.
+
+✅ **And the alternative is ruled out, by an absence:** no `⚠️ STUCK lead` warning appeared. That fires when the goal runs more than 80% of `max_lead_m` (0.04 m of 0.05) ahead of the achieved pose, which is what a joint limit or a stuck IK looks like. **So the IK was following fine. The box stopped him, nothing else.**
+
+⭐⭐ **His complaint is now quantified, and he was right.** Julien, 2026-08-13: *"it stops moving in the direction I want it to move even though the arm hasn't even close to fully extended."* Measured in simulation from his own joint angles:
+
+| | value |
+|---|---|
+| his tip position | `[0.219, 0.029, 0.475]`, **0.524 m** from the base |
+| furthest tip position found (coarse grid over joints 1-4) | **0.736 m** |
+| so he was stopped at | ⭐ **71% of the arm's reach**, with about 21 cm left |
+
+⭐ **The simulation reproduces his tip position exactly** — the model gives `[0.219, 0.030, 0.475]` for his joint angles against his reported `[0.219, 0.029, 0.475]`. **So the kinematic model matches the real arm**, which is worth knowing independently: his sessions can be analysed offline from the joint angles on the status line. ⚠️ The 0.736 m pose is a mostly *upward* reach, so reach in a given direction is less than that; treat 0.736 as an upper bound rather than as the reach in every direction.
+
+⚠️⭐ **A property of the box that matters for the fix: it is a CUBE, and the readout is a per-axis distance.** `off` is `max(abs(ee - home_ee))`, so `0.30/0.30` means one axis is at its wall. **The cube's corner is 0.30 × √3 = 0.52 m from the centre.** So the reachable region is three times deeper diagonally than along an axis, which is a strange shape to be constrained by and no help to a human trying to predict where the wall is.
+
+### 41.2 ⛔⭐⭐ THE THROTTLE MESSAGE NAMES A CAUSE THE DATA DOES NOT SUPPORT
+
+The same status line said **`⚠️ SLOWED to 19% (near the reach limit)`**. ⛔ **At his pose the arm was not near any reach limit.**
+
+`CartesianTeleop._apply_speed_scale`'s own docstring records what "near the reach limit" looks like, measured in simulation, as the smallest singular value of the tip Jacobian (`sigma_min`, how much tip motion one radian of joint motion buys in the worst direction):
+
+| sigma_min | what it means, per that docstring |
+|---|---|
+| 0.170 | middle of the workspace, comfortable |
+| 0.121 | 0.25 m out |
+| 0.048 | near full reach, joints already racing |
+| 0.005 | stalled |
+
+⭐⭐ **Measured at his exact joint angles: `sigma_min = 0.1713`.** A mid-workspace reference pose gives 0.1945. **His pose was as well-conditioned as the middle of the workspace.** So the throttle was firing, and the reason it printed is not the reason it fired.
+
+⭐ **What the 19% actually implies:** the solver wanted about `1 / 0.19 = 5.3x` more joint speed than the 0.9 rad/s threshold, so roughly 4.7 rad/s. ⛔ **And a default-speed twist from his pose does not ask for that.** Simulated from his joint angles at the default 0.12 m/s, one axis at a time, the throttle settles at 100% on four of six directions and never below 60% on the other two. Driving further does eventually collapse it, because the arm moves into a worse configuration, and that took about 2.4 s of simulated driving.
+
+⭐⭐ **The leading explanation, and it is not verifiable from the output: he had turned the linear speed up.** `-` and `+` change it by 1.25x per press from a default of 0.12 m/s. Simulated at his pose: 4x default gives 47%, 6x gives 33%, 8x gives 26%. **So somewhere around 8-10 presses reproduces 19%**, and pressing `+` repeatedly is the natural thing to do when the arm feels like it is refusing to move.
+
+⛔⛔ **THE REAL DEFECT IS THAT NOBODY CAN TELL WHICH IT WAS. The status line shows the throttle percentage and not the speed setting it is throttling.** So `SLOWED to 19%` is unreadable: it means "the arm is struggling" and "you asked for eight times the default" equally well, and the parenthesis picks one of those and states it as fact.
+
+⭐ **The fix is small and it belongs in the restructure**, which rewrites this part of `main()` anyway: show the linear speed setting and the effective speed, so the line reads something like `linear 0.96→0.18 m/s (19%)`. **And the parenthesis should say what was measured, not what it assumes.** Naming a cause that has not been measured is [§0](FINDINGS.md)'s defect class, in a message written to explain a symptom.
+
+### 41.3 ⭐ SO WHAT SHOULD THE BOX BECOME — the three options, now with numbers
+
+[§37.5](FINDINGS.md) listed three fixes. Option 1, showing the wall, is done and is what produced this section. The remaining choice, **and it is Julien's, because the box is a safety limit:**
+
+| option | what it gives | what it costs |
+|---|---|---|
+| ⭐ **anchor the box to the base**, as a radius rather than a cube | The wall stops moving between sessions, so it becomes learnable. A radius also matches the shape of the real constraint, since the arm's reach is roughly a distance from the base. At 0.524 m he had 21 cm of reach left | Needs a radius chosen. **0.60 m would have let him continue and still stops well short of the 0.736 m limit** |
+| keep the cube, make it live-adjustable | Cheapest, and he can widen it when a task needs it | The wall still moves every session, so it stays unpredictable |
+| leave it and rely on the throttle | No work | ⛔ The throttle is a speed limit and not a position limit. It slows motion near bad configurations; it never stops the arm leaving the safe region |
+
+⚠️ **Do not simply raise the cube.** A cube of ±0.30 already permits 0.52 m of diagonal travel while stopping axis travel at 0.30, so raising it widens an already-lopsided region. **A radius is the better shape and roughly the same amount of work.**
+
+### 41.4 ✅ EVERYTHING ELSE IN THAT SESSION WAS HEALTHY
+
+- **Temperatures**: hottest motor 38 °C, gripper 34 °C, against a 55 °C warning and a 65 °C stop. Yesterday's worst over a 337 s session was 43 °C.
+- **The gripper frame check printed and worked on the real session start**: *"jaw limits [0.198, -5.052] verified against the jaws (shifted by -6.283 rad to match this session's frame); jaws normalise to 0.035"*. **That is the [§40.0](FINDINGS.md) mechanism reported at startup**, and 0.035 matches the 3.5% the ping reported.
+- **The full shutdown worked**: `q` → `p` parked to `[-0.04 0. 0.01 0.02 -0.05 0.03]`, arrived **0.020 rad off**, then disabled all 7 motors and confirmed it.
+- ✅ **Julien answered the LED question: "The lights are fine."** So both arms sat with normal indications while idle and powered, which is consistent with the vendor table in [§39.0](FINDINGS.md): steady red means disabled, and that is what a powered uncommanded arm shows. **The blinking red seen on 2026-08-13 was therefore a genuine fault and not a normal idle state.**
+- **The axis map was not written**: *"unchanged — nothing was written"*, which is the guard from [§32.3](FINDINGS.md) doing its job.

@@ -73,7 +73,16 @@
 > uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
 > ```
 >
-> ⬜⬜ **4. ONE SESSION ON ARM B — THE EXACT PROCEDURE, KEY BY KEY.** Julien asked on 2026-08-14 for this written so that nothing is unclear. **Two things are being tested and nothing else.** Desk clear, one hand near the mains plug (there is no e-stop, [§4.5](HANDOFF.md)).
+> ✅✅⭐⭐ **4. BOTH TESTS RAN AND BOTH PASSED — 2026-08-14, 11:00. [FINDINGS §41](FINDINGS.md).**
+>
+> - ✅ **Test A passed.** `2.json` reads **`live:hold+guide`**, so [FINDINGS §35.4](FINDINGS.md)'s provenance fix works on hardware. The stop and save messages both read **15.7 s, 1365 samples**, identical, which confirms the `w` freeze fix a fourth time. ⭐ Free extra: 1365 samples over 15.70 s is **86.9 Hz**, an independent reading of the loop rate.
+> - ✅⭐⭐ **Test B passed and answered the question. The workspace box is what stops him.** The status line read **`box 0.30/0.30m ⚠️ AT THE EDGE`**, and **no `STUCK lead` warning appeared**, which rules out a joint limit or a stuck solver. ⭐ **Quantified: he was stopped at 0.524 m from the base, which is 71% of the arm's 0.736 m reach**, so his *"hasn't even close to fully extended"* was right with about 21 cm to spare.
+> - ⛔⭐⭐ **And the same line carried a message that names the wrong cause.** It said `⚠️ SLOWED to 19% (near the reach limit)`. **At his exact joint angles the manipulability is `sigma_min = 0.1713`, which that throttle's own docstring calls "middle of the workspace, comfortable".** The arm was nowhere near a reach limit. The likely cause is that he had turned the linear speed up, and ⛔ **the status line shows the throttle percentage but not the speed setting it is throttling**, so the number cannot be read either way. [FINDINGS §41.2](FINDINGS.md). **The fix belongs in the restructure, which rewrites this code anyway.**
+> - ✅ **Julien answered the LED question: "The lights are fine."** Consistent with the vendor table ([FINDINGS §39.0](FINDINGS.md)): steady red is a disabled motor, which is what a powered idle arm shows. **So the blinking red of 2026-08-13 was a genuine fault.**
+>
+> ❓ **ONE DECISION IS NOW HIS, and it is the only thing gating the box fix.** [FINDINGS §41.3](FINDINGS.md) has the table. **Agent recommendation: anchor the box to the base as a RADIUS rather than a cube, at 0.60 m.** That would have let him continue, still stops 13 cm short of the 0.736 m limit, and puts the wall in the same place every session. ⚠️ The current cube already allows 0.52 m of diagonal travel while stopping axis travel at 0.30, so raising the cube widens a lopsided region. **It is a safety limit, so he chooses.**
+>
+> <details><summary>The procedure that was run, kept for repeatability</summary>
 >
 > **Start it. Note `--start-mode hold`, which is NOT the default:**
 >
@@ -119,7 +128,9 @@
 >
 > ✅ **Already confirmed on 2026-08-13 and NOT worth re-testing:** any park's arrival line and its per-leg arithmetic ([§35.0](FINDINGS.md)), and a playback naming its saved tracking file ([§35.1](FINDINGS.md)). Both will simply happen during the session above; no need to check them deliberately.
 >
-> **5. Only if he wants to go faster that day:** raise `SafeRobot(max_speed=)` from 1.0 to 1.5 in `src/yam_robot.py`, alone, and re-run one playback. ⛔ **His call, it is a safety limit, and change nothing else in the same run.** [FINDINGS §37.2](FINDINGS.md).
+> </details>
+>
+> **5. Only if he wants to go faster:** raise `SafeRobot(max_speed=)` from 1.0 to 1.5 in `src/yam_robot.py`, alone, and re-run one playback. ⛔ **His call, it is a safety limit, and change nothing else in the same run.** [FINDINGS §37.2](FINDINGS.md). ⚠️ **Still open and unchanged**, and note it is a *different* limit from the box: `max_speed` bounds how fast a joint may be commanded, the box bounds where the tip may go.
 >
 > ## ⭐ If you are a fresh agent, the four things that matter most
 >
