@@ -62,7 +62,21 @@ def label_verdict(method: str, modes: list[str] | None, peak_speed: float) -> tu
     text = method
     if modes and len(modes) > 1 and "+" not in method:
         return f"{text}  ⛔ but modes={modes}", "mismatch"
-    if method == "live:hold" and peak_speed > HOLD_SPEED_S:
+    # ⛔⭐⭐ PARSED, NOT COMPARED, and this is a regression fixed the same day it appeared.
+    #
+    # This rule was `method == "live:hold"`, an exact match on a label format. On 2026-08-14
+    # the recorder became able to hold several arms, so the label gained an arm prefix:
+    # `live:B:hold` for one arm, `live:B:guide+G:mirror` for two. **The exact match stopped
+    # matching, so the check that caught `3.json` would never have fired again** — a format
+    # change silently disarming a guard, which is the [FINDINGS §0](../docs/FINDINGS.md)
+    # defect class arriving through a rename rather than through a bug.
+    #
+    # ⭐ So: strip `live:`, split on `+`, drop any `ARM:` prefix, and ask whether ANY arm was
+    # in a mode that moves. It reads both formats, and a new one only has to keep the mode
+    # word last.
+    words = {part.rsplit(":", 1)[-1]
+             for part in method.removeprefix("live:").split("+") if part}
+    if words and words <= {"hold"} and peak_speed > HOLD_SPEED_S:
         return f"{text}  ⛔ implausible", "implausible"
     return text, None
 

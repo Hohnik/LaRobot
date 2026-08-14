@@ -125,6 +125,7 @@ from mirror import (  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import (  # noqa: E402
     Layout,
+    describe_slot,
     TrackingLog,
     Trajectory,
     replay_step,
@@ -1653,9 +1654,35 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
                         continue
 
-                    if pending == "take_save":
+                    if pending in ("take_save", "take_replace"):
+                        # ⛔⭐⭐ AN OCCUPIED SLOT ASKS ONCE MORE, and this is the fifth time
+                        # the repo has paid for it not doing so. Twice an overwrite destroyed
+                        # the only copy of a measurement ([FINDINGS §33.2](../docs/FINDINGS.md),
+                        # §34.7), once again three hours later, and on 2026-08-14 Julien's
+                        # first two-arm recording landed on `1.json` and replaced a
+                        # hand-guided take from the day before. **Every time, the prompt said
+                        # nothing about what was already there.**
+                        #
+                        # ⭐ Same shape as `l` and `p`: it names what is in the slot and the
+                        # SAME digit confirms. Anything else discards, which is the contract
+                        # the first prompt already states.
+                        was_replacing = pending == "take_replace"
                         pending = None
                         take = None          # belt and braces: never resume by accident
+                        if (k.isdigit() and take_to_save is not None and not was_replacing
+                                and describe_slot(TAKES_DIR / f"{k}.json") is not None):
+                            replace_slot = k
+                            pending = "take_replace"
+                            print(f"\n  ⚠️  recording {k} already holds "
+                                  f"{describe_slot(TAKES_DIR / f'{k}.json')}.")
+                            print(f"     Press {k} again to REPLACE it. Any other key "
+                                  "discards the new recording and keeps the old one.\n")
+                            continue
+                        if was_replacing and k != replace_slot:
+                            take_to_save = None
+                            print(f"\n  kept recording {replace_slot}; the new one is "
+                                  "discarded.\n")
+                            continue
                         if k.isdigit() and take_to_save is not None:
                             TAKES_DIR.mkdir(exist_ok=True)
                             path = TAKES_DIR / f"{k}.json"
@@ -2999,8 +3026,17 @@ def main() -> int:  # noqa: PLR0915
                     # motion Julien is already running rather than from a speed sweep that
                     # would command the arm faster than any existing code allows. Reasoning
                     # in src/recording.py::TrackingLog and ROADMAP §7.5.
+                    # ⛔⭐⭐ `measured`, NOT `q`. When this block moved out of the per-arm
+                    # loop it kept reading `q`, which had been that arm's measured pose. `q` is
+                    # still a bound local of `main()` from OTHER branches — the park, the save
+                    # handler — so it did not raise. It silently fed the tracking log a stale
+                    # 7-element snapshot from the end of the park, against 14-element targets,
+                    # and `TrackingLog.observe` quietly compared only the first seven joints.
+                    # ⚠️ Worse than a crash: that table is the only measurement anyone has of
+                    # what the arm can follow, and it would have been wrong with no sign.
+                    # FINDINGS §57.2.
                     if tracking is not None and replay_prev_target is not None:
-                        tracking.observe(rs.target, replay_prev_target, q, real_dt)
+                        tracking.observe(rs.target, replay_prev_target, measured, real_dt)
                     replay_prev_target = list(rs.target)
                     if rs.held:
                         replay_held_s += real_dt

@@ -473,6 +473,32 @@ class ReplayStep:
     held: bool                       # the clock did NOT advance, because of lag
 
 
+def describe_slot(path: Path) -> str | None:
+    """One line about the recording already in `path`, or `None` if there is none.
+
+    ⛔⭐⭐ WHY THIS EXISTS: A SLOT HAS NOW BEEN OVERWRITTEN FIVE TIMES. Twice it destroyed the
+    only copy of a measurement ([FINDINGS §33.2](../docs/FINDINGS.md), [§34.7](../docs/FINDINGS.md)),
+    once more three hours later, and on 2026-08-14 Julien's first two-arm recording landed on
+    `1.json` and replaced a hand-guided one-arm take from the day before. **Every time, the
+    save prompt said nothing about what was already there.**
+
+    ⭐ It reads the file rather than guessing from the name, and it never raises: a slot whose
+    file is corrupt reports that, because "I cannot read what is in here" is exactly as
+    important to the person about to overwrite it.
+    """
+    if not path.is_file():
+        return None
+    try:
+        traj = Trajectory.load(path)
+    except Exception as exc:  # noqa: BLE001
+        return f"an unreadable file ({type(exc).__name__})"
+    arms = traj.meta.get("arms") or ([traj.meta.get("arm")] if traj.meta.get("arm") else [])
+    who = ",".join(str(a) for a in arms) or "?"
+    when = str(traj.meta.get("recorded_at", "?"))[:16]
+    return (f"{traj.duration:.1f}s on {who}, {traj.meta.get('method', '?')}, "
+            f"recorded {when}")
+
+
 def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
                 speed: float = 1.0, max_lag: float = 0.15,
                 compare: Sequence[int] | None = None) -> ReplayStep:

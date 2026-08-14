@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from recording import (  # noqa: E402
     Layout,
+    describe_slot,
     Sample, Trajectory, TrackingLog, replay_step, safe_time_scale,
 )
 
@@ -706,6 +707,68 @@ def test_a_two_arm_recording_survives_save_and_load_with_its_layout() -> None:
     last = back.samples[-1].q
     assert list(last[layout.slice_for("B")]) == [4.0] * 7
     assert list(last[layout.slice_for("G")]) == [104.0] * 7
+
+
+# --------------------------------------------- the provenance label, both formats ----
+
+
+def test_the_HOLD_label_check_reads_BOTH_label_formats() -> None:
+    """⛔⭐⭐ A REGRESSION CAUGHT THE SAME DAY IT APPEARED, and it is worth more than the rule.
+
+    `label_verdict` decides whether a recording's label describes what the recording did. Its
+    HOLD rule was `method == "live:hold"`, an exact match on a label FORMAT. On 2026-08-14 the
+    recorder learned to hold several arms, so the label gained an arm prefix — `live:B:hold`,
+    or `live:B:guide+G:mirror`. **The exact match stopped matching, so the check that caught
+    `3.json` would never have fired again.**
+
+    ⚠️ Nothing failed. A format change silently disarmed a guard, which is FINDINGS §0's
+    defect class arriving through a rename. The rule now parses the label instead.
+    """
+    sys.path.insert(0, str(REPO / "scripts"))
+    from check_recordings import label_verdict
+
+    fast, still = 2.4, 0.1
+    # Held and yet moving at hand-guiding speed: the label cannot be right.
+    for label in ("live:hold", "live:B:hold", "live:B:hold+G:hold"):
+        _, fault = label_verdict(label, None, fast)
+        assert fault == "implausible", f"{label} at {fast} rad/s should be implausible"
+    # A real demonstration, and a genuinely still hold: both fine.
+    for label in ("live:guide", "live:B:guide+G:mirror", "live:B:hold+B:guide"):
+        _, fault = label_verdict(label, None, fast)
+        assert fault is None, f"{label} should be accepted, got {fault}"
+    assert label_verdict("live:hold", None, still)[1] is None
+
+
+def test_an_occupied_slot_is_DESCRIBED_before_it_can_be_overwritten() -> None:
+    """⛔⭐⭐ A SLOT HAS BEEN OVERWRITTEN FIVE TIMES IN THIS REPO'S HISTORY. Twice it destroyed
+    the only copy of a measurement (FINDINGS §33.2, §34.7), once more three hours later, and on
+    2026-08-14 Julien's first two-arm recording landed on `1.json` and replaced a hand-guided
+    one-arm take from the day before. **Every time, the save prompt said nothing about what was
+    already there.**
+
+    ⭐ `describe_slot` is what the prompt reads. It reads the FILE rather than guessing from the
+    name, and it never raises: a corrupt slot reports that it cannot be read, because that is
+    exactly as important to someone about to replace it.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d)
+        assert describe_slot(folder / "9.json") is None, "an empty slot must read as empty"
+
+        traj = Trajectory(meta={"arms": ["B", "G"], "joints_per_arm": 7,
+                                "method": "live:B:guide+G:mirror",
+                                "recorded_at": "2026-08-14T18:15:00+02:00"})
+        for i in range(4):
+            traj.append(i * 0.5, [float(i)] * 14)
+        traj.save(folder / "9.json")
+        text = describe_slot(folder / "9.json")
+        assert text and "B,G" in text and "live:B:guide+G:mirror" in text
+        assert "1.5s" in text, f"the duration should be in the line: {text}"
+
+        (folder / "8.json").write_text("{not json at all")
+        broken = describe_slot(folder / "8.json")
+        assert broken and "unreadable" in broken
 
 
 def main() -> int:
