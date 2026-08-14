@@ -1428,7 +1428,7 @@ def main() -> int:  # noqa: PLR0915
                     if pending == "save":
                         pending = None
                         if k.isdigit():
-                            q = np.asarray(robot.get_joint_pos(), dtype=float)
+                            q = np.asarray(one.robot.get_joint_pos(), dtype=float)
                             name = BASE_SLOT if k == "0" else k
                             data = with_park_slot(load_json(PARK_FILE, {}), arm.name,
                                                   name, q.tolist())
@@ -2117,7 +2117,7 @@ def main() -> int:  # noqa: PLR0915
                     # recording is a convenience feature: it has no business being able to
                     # release the arm.
                     try:
-                        take.append(t - take_t0, robot.get_joint_pos())
+                        take.append(t - take_t0, one.robot.get_joint_pos())
                         # ⛔⭐ RECORD EVERY MODE THE RECORDING PASSED THROUGH, not only the
                         # one it started in. Julien's recording of 2026-08-13 17:21 was
                         # stamped `method: live:hold` because he pressed `w` while in HOLD
@@ -2184,337 +2184,349 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
                               f"you are in {arm.mode.upper()}\n")
 
-                if arm.learn_button is None and robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
+                if arm.learn_button is None and one.robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
                     action = arm.axis_map.button_action(buttons)
                     if action == "open":
                         arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
                     elif action == "close":
                         arm.gripper_value = clamp_gripper(arm.gripper_value - GRIPPER_BUTTON_RATE * dt)
 
-                if arm.mode in ("teleop", "map") and arm.teleop is not None:
+                # ⭐⭐ EVERY ARM ACTS ON ITS OWN MODE, in `--arms` order. ROADMAP §6.1.
+                #
+                # ⛔ Driving is NOT aimed by the selector: each arm follows its own puck
+                # every cycle, which is the whole point of two arms. Only mode changes and
+                # edits are aimed (`a`, and `ArmSelector`).
+                #
+                # ⚠️ The replay branch reads SESSION state — one cursor, one recording —
+                # because ABC wants both arms in one timeline (ROADMAP §9.2). With two arms
+                # in replay it would drive them from the same slice, which is wrong; that is
+                # why `l` refuses when more than one arm is connected until the two-arm
+                # recorder exists.
+                for one in arms:
+                    if one.mode in ("teleop", "map") and one.teleop is not None:
 
-                    if arm.mode == "map":
-                        # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
-                        # direction is applied, so the arm performs exactly one motion and
-                        # it is obvious which gesture caused it. Half speed, because this
-                        # is the mode you experiment in.
-                        #
-                        # ⛔ Note what is NOT here: any call that edits the map. Deflection
-                        # observes; keys edit. The mode this replaced bound on deflection
-                        # and destroyed the hand-dialled map (FINDINGS §11).
-                        keep, value = isolate(raw_axes, arm.last_active_axis)
-                        if keep is not None:
-                            arm.last_active_axis, arm.last_active_value = keep, value
-                            arm.last_input_kind = "axis"
-                        drive_axes = isolated_axes(raw_axes, keep)
-                        scale_l = args.linear_scale * CONTROLS_SCALE
-                        scale_a = angular_scale * CONTROLS_SCALE
-                    else:
-                        drive_axes = raw_axes
-                        scale_l, scale_a = args.linear_scale, angular_scale
-
-                    axes = arm.axis_map.apply(drive_axes)
-                    twist = np.array([
-                        axes[0] * scale_l, axes[1] * scale_l, axes[2] * scale_l,
-                        axes[3] * scale_a if rotation else 0.0,
-                        axes[4] * scale_a if rotation else 0.0,
-                        axes[5] * scale_a if rotation else 0.0,
-                    ])
-                    q_target = arm.teleop.step(twist, dt)
-
-                    # ⭐⭐ THE WORKSPACE LIMIT, changed on 2026-08-14 by Julien's decision.
-                    #
-                    # It used to be a ±0.30 m cube centred on wherever TELEOP was entered.
-                    # Measured on the arm, that stopped him at 0.524 m from the base while
-                    # the arm reaches 0.738, and the wall sat somewhere different every
-                    # session. It is now a fixed 0.60 m sphere around the base plus a floor.
-                    # Why a floor: the cube had been providing one for free, and this arm
-                    # can put its tip below its own base. See teleop.clamp_to_workspace and
-                    # FINDINGS §43.
-                    #
-                    # ⚠️ Clamped against the ACHIEVED position so the limit ratchets inward
-                    # and never yanks an arm that starts outside it. The old cube could not
-                    # be entered from outside; a fixed one can.
-                    ee = arm.teleop.ee_position()
-                    lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
-                    allowed = clamp_to_workspace(ee, lim_r, lim_f)
-                    if not np.allclose(allowed, ee):
-                        import mink  # noqa: PLC0415
-                        arm.teleop.target = mink.SE3.from_rotation_and_translation(
-                            rotation=arm.teleop.target.rotation(),
-                            translation=allowed,
-                        )
-
-                    step = q_target - arm.prev_q
-                    q_target = arm.prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
-
-                    lo = np.array([YAM_JOINTS[i][1] for i in range(1, N_ARM + 1)]) + JOINT_LIMIT_MARGIN
-                    hi = np.array([YAM_JOINTS[i][2] for i in range(1, N_ARM + 1)]) - JOINT_LIMIT_MARGIN
-                    q_target = np.clip(q_target, lo, hi)
-
-                    full = np.zeros(robot.num_dofs())
-                    full[:N_ARM] = q_target
-                    if robot.num_dofs() > N_ARM:
-                        full[N_ARM] = clamp_gripper(arm.gripper_value)
-                    robot.command_joint_pos(full)
-                    arm.prev_q = q_target.copy()
-
-                elif arm.mode == "replay" and replay is not None:
-                    # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
-                    # whole reason the feature exists rather than reusing the waypoint
-                    # runner: a park traverses a *shape* at a constant joint speed, which
-                    # throws away exactly the thing hand-guiding provides. Human timing and
-                    # hesitation are the signal (docs/ROADMAP.md §6.6), so the cursor here
-                    # is a clock.
-                    q = np.asarray(robot.get_joint_pos(), dtype=float)
-                    # ⭐ The decision is made by `replay_step` in src/recording.py, which
-                    # has its own tests. This branch only carries it out and narrates it —
-                    # same split as ArmSession, and the reason is that this code path
-                    # commands the arm and could not otherwise be exercised without one.
-                    #
-                    # ⛔ `n_compare=N_ARM` leaves the gripper out of the "is the arm
-                    # keeping up" check. The jaws legitimately sit far from their commanded
-                    # value while closing on an object, and counting that as falling behind
-                    # would stall every playback that grips anything.
-                    rs = replay_step(replay, replay_s, q, real_dt, speed=replay_speed,
-                                     max_lag=MAX_CURSOR_LAG, n_compare=N_ARM)
-                    replay_s = rs.cursor
-                    full = q.copy()
-                    full[:N_ARM] = rs.target[:N_ARM]
-                    if robot.num_dofs() > N_ARM and len(rs.target) > N_ARM:
-                        # ⛔ Through the clamp, never straight from the file. A recording
-                        # made while the jaws rested on a stop would otherwise drive them
-                        # back onto it and HOLD there. That is stall torque, and it is how
-                        # motor 7 was cooked three times (FINDINGS §4).
-                        full[N_ARM] = clamp_gripper(float(rs.target[N_ARM]))
-                    robot.command_joint_pos(full)
-
-                    replay_worst_lag = max(replay_worst_lag, rs.lag)
-                    # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
-                    # motion Julien is already running rather than from a speed sweep that
-                    # would command the arm faster than any existing code allows. Reasoning
-                    # in src/recording.py::TrackingLog and ROADMAP §7.5.
-                    if tracking is not None and replay_prev_target is not None:
-                        tracking.observe(rs.target, replay_prev_target, q, real_dt)
-                    replay_prev_target = list(rs.target)
-                    if rs.held:
-                        replay_held_s += real_dt
-                    else:
-                        replay_progress_t = t
-                    if rs.finished:
-                        arm.mode = "hold"; enter_hold(arm); hint("")
-                        # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
-                        # 2.3 s longer than the recording and the old message reported only
-                        # the total, so it read as a bug with no explanation. The whole
-                        # difference is the loop holding the clock while the arm catches up,
-                        # which is a decision this code makes on purpose. A readout has to
-                        # show what can go wrong, not only what looks tidy — the same lesson
-                        # as showing the jaw temperature separately (FINDINGS §11).
-                        planned = replay.duration / replay_speed
-                        elapsed = t - replay_t0
-                        print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
-                        print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
-                              f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
-                        # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
-                        # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
-                        # was the loop running below 100 Hz while the cursor advanced in
-                        # nominal time. That is fixed, and this check stays so a future
-                        # version cannot reintroduce it silently.
-                        unaccounted = elapsed - planned - replay_held_s
-                        if abs(unaccounted) > 0.15 + 0.05 * elapsed:
-                            print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
-                                  f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
-                        print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
-                              f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
-                        if replay_held_s > 0.15 * planned:
-                            print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
-                                  f"of the run waiting. Try a lower speed for a faithful replay.\n")
+                        if one.mode == "map":
+                            # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
+                            # direction is applied, so the arm performs exactly one motion and
+                            # it is obvious which gesture caused it. Half speed, because this
+                            # is the mode you experiment in.
+                            #
+                            # ⛔ Note what is NOT here: any call that edits the map. Deflection
+                            # observes; keys edit. The mode this replaced bound on deflection
+                            # and destroyed the hand-dialled map (FINDINGS §11).
+                            keep, value = isolate(raw_axes, one.last_active_axis)
+                            if keep is not None:
+                                one.last_active_axis, one.last_active_value = keep, value
+                                one.last_input_kind = "axis"
+                            drive_axes = isolated_axes(raw_axes, keep)
+                            scale_l = args.linear_scale * CONTROLS_SCALE
+                            scale_a = angular_scale * CONTROLS_SCALE
                         else:
-                            print()
-                        if tracking is not None and tracking.cycles > 20:
-                            # ⚠️ MEASURED, so read it as such. The playback holds its clock
-                            # once the arm falls behind, so the speeds here are not an even
-                            # sweep, and load changes with the arm's pose. It is the cheap
-                            # first answer; ROADMAP §7.5 has the active sweep if this is
-                            # ambiguous.
-                            print("     how well each joint kept up "
-                                  f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
-                            for i, worst, at_speed, top, lag_top in tracking.rows():
-                                if top < 0.01:
-                                    continue
-                                name = YAM_JOINTS.get(i + 1, ("joint",))[0]
-                                print(f"       {name:<14} worst lag {worst:.3f} rad at "
-                                      f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
-                                      f"with {lag_top:.3f} rad of lag")
-                            # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
-                            # of what the arm can physically follow, and on 2026-08-13 the
-                            # only copy of it was a paste into a chat window. Saved per
-                            # playback under a timestamp, so nothing overwrites anything.
-                            # ⚠️ Never lets a failed write end a session: the arm is in HOLD
-                            # at this point and a missing diagnostic file is not worth a
-                            # traceback. FINDINGS §34.4.
-                            try:
-                                names = [YAM_JOINTS.get(i + 1, ("joint",))[0]
-                                         for i in range(tracking.n_joints)]
-                                rec = tracking.to_dict(names)
-                                rec["meta"] = {
-                                    "arm": arm.name,
-                                    "slot": replay_slot,
-                                    "played_at": dt_now(),
-                                    "commit": git_commit(),
-                                    "speed": round(replay_speed, 3),
-                                    "taught_speed_p99": round(replay.joint_speed(99), 4),
-                                    "recording_duration_s": round(replay.duration, 3),
-                                    "recording_meta": dict(replay.meta),
-                                    "elapsed_s": round(elapsed, 3),
-                                    "held_s": round(replay_held_s, 3),
-                                    "worst_lag_rad": round(replay_worst_lag, 5),
-                                    "loop_hz": round(loop_hz, 1),
-                                    "max_cursor_lag": MAX_CURSOR_LAG,
-                                    "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
-                                }
-                                TRACKING_DIR.mkdir(parents=True, exist_ok=True)
-                                stamp = dt_now().replace(":", "-")
-                                out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
-                                out.write_text(json.dumps(rec, indent=1) + "\n")
-                                print(f"     ⭐ saved this table → "
-                                      f"{out.relative_to(REPO)}")
-                            except Exception as exc:  # noqa: BLE001
-                                print(f"     ⚠️  could not save the tracking table: "
-                                      f"{type(exc).__name__}: {exc}")
-                        replay = None
-                    elif t - replay_progress_t > PARK_STALL_SECONDS:
-                        # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
-                        # and wrong for ever: an arm that cannot catch up is blocked, and a
-                        # playback that sits silently holding its clock is the treadmill
-                        # bug again (FINDINGS §24). Same patience the park uses.
-                        arm.mode = "hold"; enter_hold(arm); hint("")
-                        print(f"\n⛔ PLAYBACK BLOCKED — the arm stopped following "
-                              f"{rs.lag:.3f} rad behind the recording, no progress for "
-                              f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                        replay = None
-                    elif t >= next_park_report:
-                        next_park_report = t + 1.0
-                        hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
-                             f"{rs.lag:.3f} rad behind")
+                            drive_axes = raw_axes
+                            scale_l, scale_a = args.linear_scale, angular_scale
 
-                elif arm.mode == "park" and arm.park_path is not None and arm.park_target is not None:
-                    q = np.asarray(robot.get_joint_pos(), dtype=float)
-                    # ⭐ Completion is judged from the MEASURED pose, never from the
-                    # command — the command always arrives first, so testing it would
-                    # declare success while the arm was still travelling.
-                    err = float(np.max(np.abs(arm.park_target - q)))
-                    lag = float(np.max(np.abs(arm.park_cmd - q))) if arm.park_cmd is not None else 0.0
-                    at_end = arm.park_s >= arm.park_path.length
+                        axes = one.axis_map.apply(drive_axes)
+                        twist = np.array([
+                            axes[0] * scale_l, axes[1] * scale_l, axes[2] * scale_l,
+                            axes[3] * scale_a if rotation else 0.0,
+                            axes[4] * scale_a if rotation else 0.0,
+                            axes[5] * scale_a if rotation else 0.0,
+                        ])
+                        q_target = one.teleop.step(twist, dt)
 
-                    # ⛔ ARRIVAL IS GATED ON THE CURSOR REACHING THE END, not on the
-                    # error alone. A run like `p 1 2 1` finishes where it started, so
-                    # the error to the FINAL target is small at t=0 too — judging on it
-                    # would declare the whole sequence complete before moving.
-                    if not at_end:
-                        # Hold the cursor if the arm has fallen behind. The trajectory
-                        # is a SHAPE now; a command racing ahead while the arm cuts its
-                        # own corner is not the shape anyone chose.
-                        advanced = False
-                        if lag < MAX_CURSOR_LAG:
-                            ramp = easing_factor(
-                                EASINGS[ease_idx], arm.park_s, arm.park_path.length - arm.park_s,
-                                0.0 if args.no_smooth else arm.park_ramp)
-                            arm.park_s = min(arm.park_path.length,
-                                         arm.park_s + arm.park_speed * ramp * dt)
-                            advanced = True
-                        arm.park_cmd = arm.park_path.point_at(arm.park_s)
-                        robot.command_joint_pos(arm.park_cmd)
+                        # ⭐⭐ THE WORKSPACE LIMIT, changed on 2026-08-14 by Julien's decision.
+                        #
+                        # It used to be a ±0.30 m cube centred on wherever TELEOP was entered.
+                        # Measured on the arm, that stopped him at 0.524 m from the base while
+                        # the arm reaches 0.738, and the wall sat somewhere different every
+                        # session. It is now a fixed 0.60 m sphere around the base plus a floor.
+                        # Why a floor: the cube had been providing one for free, and this arm
+                        # can put its tip below its own base. See teleop.clamp_to_workspace and
+                        # FINDINGS §43.
+                        #
+                        # ⚠️ Clamped against the ACHIEVED position so the limit ratchets inward
+                        # and never yanks an arm that starts outside it. The old cube could not
+                        # be entered from outside; a fixed one can.
+                        ee = one.teleop.ee_position()
+                        lim_r, lim_f = effective_limits(one.home_ee, args.reach, args.floor)
+                        allowed = clamp_to_workspace(ee, lim_r, lim_f)
+                        if not np.allclose(allowed, ee):
+                            import mink  # noqa: PLC0415
+                            one.teleop.target = mink.SE3.from_rotation_and_translation(
+                                rotation=one.teleop.target.rotation(),
+                                translation=allowed,
+                            )
 
-                        # Progress is "the cursor moved OR the arm closed the gap".
-                        # Without the first half, a legitimately slow leg looks stalled;
-                        # without the second, an arm pinned against something never does.
-                        if advanced or err < arm.park_best_err - PARK_PROGRESS_EPS:
-                            arm.park_best_err = min(arm.park_best_err, err)
-                            arm.park_progress_t = t
-                        if t - arm.park_progress_t > PARK_STALL_SECONDS:
-                            arm.mode = "hold"; enter_hold(arm); hint("")
-                            print(f"\n⛔ PARK BLOCKED — the arm stopped following "
-                                  f"{lag:.3f} rad behind the path, no progress for "
+                        step = q_target - one.prev_q
+                        q_target = one.prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
+
+                        lo = np.array([YAM_JOINTS[i][1] for i in range(1, N_ARM + 1)]) + JOINT_LIMIT_MARGIN
+                        hi = np.array([YAM_JOINTS[i][2] for i in range(1, N_ARM + 1)]) - JOINT_LIMIT_MARGIN
+                        q_target = np.clip(q_target, lo, hi)
+
+                        full = np.zeros(one.robot.num_dofs())
+                        full[:N_ARM] = q_target
+                        if one.robot.num_dofs() > N_ARM:
+                            full[N_ARM] = clamp_gripper(one.gripper_value)
+                        one.robot.command_joint_pos(full)
+                        one.prev_q = q_target.copy()
+
+                    elif one.mode == "replay" and replay is not None:
+                        # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
+                        # whole reason the feature exists rather than reusing the waypoint
+                        # runner: a park traverses a *shape* at a constant joint speed, which
+                        # throws away exactly the thing hand-guiding provides. Human timing and
+                        # hesitation are the signal (docs/ROADMAP.md §6.6), so the cursor here
+                        # is a clock.
+                        q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+                        # ⭐ The decision is made by `replay_step` in src/recording.py, which
+                        # has its own tests. This branch only carries it out and narrates it —
+                        # same split as ArmSession, and the reason is that this code path
+                        # commands the arm and could not otherwise be exercised without one.
+                        #
+                        # ⛔ `n_compare=N_ARM` leaves the gripper out of the "is the arm
+                        # keeping up" check. The jaws legitimately sit far from their commanded
+                        # value while closing on an object, and counting that as falling behind
+                        # would stall every playback that grips anything.
+                        rs = replay_step(replay, replay_s, q, real_dt, speed=replay_speed,
+                                         max_lag=MAX_CURSOR_LAG, n_compare=N_ARM)
+                        replay_s = rs.cursor
+                        full = q.copy()
+                        full[:N_ARM] = rs.target[:N_ARM]
+                        if one.robot.num_dofs() > N_ARM and len(rs.target) > N_ARM:
+                            # ⛔ Through the clamp, never straight from the file. A recording
+                            # made while the jaws rested on a stop would otherwise drive them
+                            # back onto it and HOLD there. That is stall torque, and it is how
+                            # motor 7 was cooked three times (FINDINGS §4).
+                            full[N_ARM] = clamp_gripper(float(rs.target[N_ARM]))
+                        one.robot.command_joint_pos(full)
+
+                        replay_worst_lag = max(replay_worst_lag, rs.lag)
+                        # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
+                        # motion Julien is already running rather than from a speed sweep that
+                        # would command the arm faster than any existing code allows. Reasoning
+                        # in src/recording.py::TrackingLog and ROADMAP §7.5.
+                        if tracking is not None and replay_prev_target is not None:
+                            tracking.observe(rs.target, replay_prev_target, q, real_dt)
+                        replay_prev_target = list(rs.target)
+                        if rs.held:
+                            replay_held_s += real_dt
+                        else:
+                            replay_progress_t = t
+                        if rs.finished:
+                            one.mode = "hold"; enter_hold(one); hint("")
+                            # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
+                            # 2.3 s longer than the recording and the old message reported only
+                            # the total, so it read as a bug with no explanation. The whole
+                            # difference is the loop holding the clock while the arm catches up,
+                            # which is a decision this code makes on purpose. A readout has to
+                            # show what can go wrong, not only what looks tidy — the same lesson
+                            # as showing the jaw temperature separately (FINDINGS §11).
+                            planned = replay.duration / replay_speed
+                            elapsed = t - replay_t0
+                            print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
+                            print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
+                                  f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
+                            # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
+                            # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
+                            # was the loop running below 100 Hz while the cursor advanced in
+                            # nominal time. That is fixed, and this check stays so a future
+                            # version cannot reintroduce it silently.
+                            unaccounted = elapsed - planned - replay_held_s
+                            if abs(unaccounted) > 0.15 + 0.05 * elapsed:
+                                print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
+                                      f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
+                            print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
+                                  f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
+                            if replay_held_s > 0.15 * planned:
+                                print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
+                                      f"of the run waiting. Try a lower speed for a faithful replay.\n")
+                            else:
+                                print()
+                            if tracking is not None and tracking.cycles > 20:
+                                # ⚠️ MEASURED, so read it as such. The playback holds its clock
+                                # once the arm falls behind, so the speeds here are not an even
+                                # sweep, and load changes with the arm's pose. It is the cheap
+                                # first answer; ROADMAP §7.5 has the active sweep if this is
+                                # ambiguous.
+                                print("     how well each joint kept up "
+                                      f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
+                                for i, worst, at_speed, top, lag_top in tracking.rows():
+                                    if top < 0.01:
+                                        continue
+                                    name = YAM_JOINTS.get(i + 1, ("joint",))[0]
+                                    print(f"       {name:<14} worst lag {worst:.3f} rad at "
+                                          f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
+                                          f"with {lag_top:.3f} rad of lag")
+                                # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
+                                # of what the arm can physically follow, and on 2026-08-13 the
+                                # only copy of it was a paste into a chat window. Saved per
+                                # playback under a timestamp, so nothing overwrites anything.
+                                # ⚠️ Never lets a failed write end a session: the arm is in HOLD
+                                # at this point and a missing diagnostic file is not worth a
+                                # traceback. FINDINGS §34.4.
+                                try:
+                                    names = [YAM_JOINTS.get(i + 1, ("joint",))[0]
+                                             for i in range(tracking.n_joints)]
+                                    rec = tracking.to_dict(names)
+                                    rec["meta"] = {
+                                        "arm": one.name,
+                                        "slot": replay_slot,
+                                        "played_at": dt_now(),
+                                        "commit": git_commit(),
+                                        "speed": round(replay_speed, 3),
+                                        "taught_speed_p99": round(replay.joint_speed(99), 4),
+                                        "recording_duration_s": round(replay.duration, 3),
+                                        "recording_meta": dict(replay.meta),
+                                        "elapsed_s": round(elapsed, 3),
+                                        "held_s": round(replay_held_s, 3),
+                                        "worst_lag_rad": round(replay_worst_lag, 5),
+                                        "loop_hz": round(loop_hz, 1),
+                                        "max_cursor_lag": MAX_CURSOR_LAG,
+                                        "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
+                                    }
+                                    TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+                                    stamp = dt_now().replace(":", "-")
+                                    out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
+                                    out.write_text(json.dumps(rec, indent=1) + "\n")
+                                    print(f"     ⭐ saved this table → "
+                                          f"{out.relative_to(REPO)}")
+                                except Exception as exc:  # noqa: BLE001
+                                    print(f"     ⚠️  could not save the tracking table: "
+                                          f"{type(exc).__name__}: {exc}")
+                            replay = None
+                        elif t - replay_progress_t > PARK_STALL_SECONDS:
+                            # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
+                            # and wrong for ever: an arm that cannot catch up is blocked, and a
+                            # playback that sits silently holding its clock is the treadmill
+                            # bug again (FINDINGS §24). Same patience the park uses.
+                            one.mode = "hold"; enter_hold(one); hint("")
+                            print(f"\n⛔ PLAYBACK BLOCKED — the arm stopped following "
+                                  f"{rs.lag:.3f} rad behind the recording, no progress for "
                                   f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                        elif arm.park_marks and arm.park_s >= arm.park_marks[0][1]:
-                            # ⭐ Time each waypoint. Julien: *"you can't really see how
-                            # long each parking section took, you can only see the park
-                            # itself."* Now each leg reports its own seconds as it is
-                            # passed, which is also the number to watch when tuning
-                            # speed and corner radius.
-                            name, _ = arm.park_marks.pop(0)
-                            print(f"  ⭐ slot {name} in {t - arm.park_leg_t:.1f}s"
-                                  + (f" → next {arm.park_marks[0][0]}" if arm.park_marks else ""))
-                            arm.park_leg_t = t
+                            replay = None
                         elif t >= next_park_report:
                             next_park_report = t + 1.0
-                            # ⛔ A HINT, NOT THE STATUS ROW — same fix as the sequence
-                            # echo. Routed through `screen.set` this replaced the
-                            # temperature heartbeat with the progress readout, so during
-                            # the one motion where an operator most wants to see a
-                            # temperature climbing, it was the line that had been
-                            # painted over.
-                            hint(f"  moving… {arm.park_path.length - arm.park_s:.2f} rad of path "
-                                 f"left, {err:.3f} to the final pose, {lag:.3f} behind")
-                    else:
-                        leg = park_verdict(err, t - arm.park_progress_t > PARK_STALL_SECONDS,
-                                           PARK_TOLERANCE, PARK_SETTLED,
-                                           stopped_briefly=t - arm.park_progress_t
-                                           > PARK_SETTLE_SECONDS)
-                        if leg in ("arrived", "settled"):
-                            extra = ("" if leg == "arrived" else
-                                     " — as close as the arm holds itself under load")
-                            arm.mode = "hold"; enter_hold(arm)
-                            hint("")        # the progress readout has nothing left to say
-                            # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
-                            # passed at the end of the path, which resets the leg clock
-                            # moments before arrival — so this line used to report a 4.4 s
-                            # park as "reached in 0.0s". FINDINGS §34.3.
-                            # ⭐ Both numbers are shown because they answer different
-                            # questions: the total is what changes when speed, corner
-                            # radius or the ease ramp is tuned, and the settling time is
-                            # how long the arm took to close the last of the gap after the
-                            # commanded path had already run out.
-                            total = t - arm.park_start_t
-                            settling = t - arm.park_leg_t
-                            tail = (f", {settling:.1f}s of that settling"
-                                    if 0.05 < settling < total - 0.05 else "")
-                            print(f"⭐ PARK reached in {total:.1f}s{tail} "
-                                  f"({err:.3f} rad off{extra}) → HOLD")
-                            # ⭐ The handover from "drive to the start pose" to "play the
-                            # recording". It lives HERE, in the arrival branch, so a park
-                            # that was blocked or interrupted can never roll into a
-                            # playback: only a park that actually arrived does.
-                            if replay_pending is not None:
-                                replay = replay_pending
-                                replay_pending = None
-                                replay_t0, replay_s = t, 0.0
-                                replay_progress_t = t
-                                replay_held_s, replay_worst_lag = 0.0, 0.0
-                                replay_prev_target = list(replay.start_pose() or ())
-                                tracking = TrackingLog(replay.n_joints)
-                                arm.mode = "replay"
-                                print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
-                                      f"movement at {replay_speed:.2f}x. "
-                                      "Press h or t to stop.\n")
-                        elif leg == "blocked":
-                            # ⛔ Never spin silently. If the arm has stopped closing the
-                            # gap the honest thing is to say so and hold, not to keep
-                            # printing a number that is not changing — which is exactly
-                            # how the old treadmill bug hid for two sessions.
-                            arm.mode = "hold"; enter_hold(arm); hint("")
-                            print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
-                                  f"progress for {PARK_STALL_SECONDS:.0f}s.")
-                            print(f"   The command ran {lag:.3f} rad ahead of the arm; "
-                                  f"SafeRobot limited "
-                                  f"{getattr(robot, 'limited_cycles', 0)} cycles.")
-                            print("   Something is blocking it, or the pose is "
-                                  "unreachable. Now HOLDING.\n")
+                            hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
+                                 f"{rs.lag:.3f} rad behind")
+
+                    elif one.mode == "park" and one.park_path is not None and one.park_target is not None:
+                        q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+                        # ⭐ Completion is judged from the MEASURED pose, never from the
+                        # command — the command always arrives first, so testing it would
+                        # declare success while the arm was still travelling.
+                        err = float(np.max(np.abs(one.park_target - q)))
+                        lag = float(np.max(np.abs(one.park_cmd - q))) if one.park_cmd is not None else 0.0
+                        at_end = one.park_s >= one.park_path.length
+
+                        # ⛔ ARRIVAL IS GATED ON THE CURSOR REACHING THE END, not on the
+                        # error alone. A run like `p 1 2 1` finishes where it started, so
+                        # the error to the FINAL target is small at t=0 too — judging on it
+                        # would declare the whole sequence complete before moving.
+                        if not at_end:
+                            # Hold the cursor if the arm has fallen behind. The trajectory
+                            # is a SHAPE now; a command racing ahead while the arm cuts its
+                            # own corner is not the shape anyone chose.
+                            advanced = False
+                            if lag < MAX_CURSOR_LAG:
+                                ramp = easing_factor(
+                                    EASINGS[ease_idx], one.park_s, one.park_path.length - one.park_s,
+                                    0.0 if args.no_smooth else one.park_ramp)
+                                one.park_s = min(one.park_path.length,
+                                             one.park_s + one.park_speed * ramp * dt)
+                                advanced = True
+                            one.park_cmd = one.park_path.point_at(one.park_s)
+                            one.robot.command_joint_pos(one.park_cmd)
+
+                            # Progress is "the cursor moved OR the arm closed the gap".
+                            # Without the first half, a legitimately slow leg looks stalled;
+                            # without the second, an arm pinned against something never does.
+                            if advanced or err < one.park_best_err - PARK_PROGRESS_EPS:
+                                one.park_best_err = min(one.park_best_err, err)
+                                one.park_progress_t = t
+                            if t - one.park_progress_t > PARK_STALL_SECONDS:
+                                one.mode = "hold"; enter_hold(one); hint("")
+                                print(f"\n⛔ PARK BLOCKED — the arm stopped following "
+                                      f"{lag:.3f} rad behind the path, no progress for "
+                                      f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
+                            elif one.park_marks and one.park_s >= one.park_marks[0][1]:
+                                # ⭐ Time each waypoint. Julien: *"you can't really see how
+                                # long each parking section took, you can only see the park
+                                # itself."* Now each leg reports its own seconds as it is
+                                # passed, which is also the number to watch when tuning
+                                # speed and corner radius.
+                                name, _ = one.park_marks.pop(0)
+                                print(f"  ⭐ slot {name} in {t - one.park_leg_t:.1f}s"
+                                      + (f" → next {one.park_marks[0][0]}" if one.park_marks else ""))
+                                one.park_leg_t = t
+                            elif t >= next_park_report:
+                                next_park_report = t + 1.0
+                                # ⛔ A HINT, NOT THE STATUS ROW — same fix as the sequence
+                                # echo. Routed through `screen.set` this replaced the
+                                # temperature heartbeat with the progress readout, so during
+                                # the one motion where an operator most wants to see a
+                                # temperature climbing, it was the line that had been
+                                # painted over.
+                                hint(f"  moving… {one.park_path.length - one.park_s:.2f} rad of path "
+                                     f"left, {err:.3f} to the final pose, {lag:.3f} behind")
                         else:
-                            robot.command_joint_pos(arm.park_cmd)
-                            if err < arm.park_best_err - PARK_PROGRESS_EPS:
-                                arm.park_best_err, arm.park_progress_t = err, t
+                            leg = park_verdict(err, t - one.park_progress_t > PARK_STALL_SECONDS,
+                                               PARK_TOLERANCE, PARK_SETTLED,
+                                               stopped_briefly=t - one.park_progress_t
+                                               > PARK_SETTLE_SECONDS)
+                            if leg in ("arrived", "settled"):
+                                extra = ("" if leg == "arrived" else
+                                         " — as close as the arm holds itself under load")
+                                one.mode = "hold"; enter_hold(one)
+                                hint("")        # the progress readout has nothing left to say
+                                # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
+                                # passed at the end of the path, which resets the leg clock
+                                # moments before arrival — so this line used to report a 4.4 s
+                                # park as "reached in 0.0s". FINDINGS §34.3.
+                                # ⭐ Both numbers are shown because they answer different
+                                # questions: the total is what changes when speed, corner
+                                # radius or the ease ramp is tuned, and the settling time is
+                                # how long the arm took to close the last of the gap after the
+                                # commanded path had already run out.
+                                total = t - one.park_start_t
+                                settling = t - one.park_leg_t
+                                tail = (f", {settling:.1f}s of that settling"
+                                        if 0.05 < settling < total - 0.05 else "")
+                                print(f"⭐ PARK reached in {total:.1f}s{tail} "
+                                      f"({err:.3f} rad off{extra}) → HOLD")
+                                # ⭐ The handover from "drive to the start pose" to "play the
+                                # recording". It lives HERE, in the arrival branch, so a park
+                                # that was blocked or interrupted can never roll into a
+                                # playback: only a park that actually arrived does.
+                                if replay_pending is not None:
+                                    replay = replay_pending
+                                    replay_pending = None
+                                    replay_t0, replay_s = t, 0.0
+                                    replay_progress_t = t
+                                    replay_held_s, replay_worst_lag = 0.0, 0.0
+                                    replay_prev_target = list(replay.start_pose() or ())
+                                    tracking = TrackingLog(replay.n_joints)
+                                    one.mode = "replay"
+                                    print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
+                                          f"movement at {replay_speed:.2f}x. "
+                                          "Press h or t to stop.\n")
+                            elif leg == "blocked":
+                                # ⛔ Never spin silently. If the arm has stopped closing the
+                                # gap the honest thing is to say so and hold, not to keep
+                                # printing a number that is not changing — which is exactly
+                                # how the old treadmill bug hid for two sessions.
+                                one.mode = "hold"; enter_hold(one); hint("")
+                                print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
+                                      f"progress for {PARK_STALL_SECONDS:.0f}s.")
+                                print(f"   The command ran {lag:.3f} rad ahead of the arm; "
+                                      f"SafeRobot limited "
+                                      f"{getattr(one.robot, 'limited_cycles', 0)} cycles.")
+                                print("   Something is blocking it, or the pose is "
+                                      "unreachable. Now HOLDING.\n")
+                            else:
+                                one.robot.command_joint_pos(one.park_cmd)
+                                if err < one.park_best_err - PARK_PROGRESS_EPS:
+                                    one.park_best_err, one.park_progress_t = err, t
 
                 # ---- 5. report --------------------------------------------
                 # CONTROLS mode reports continuously, not once a second: he is watching
