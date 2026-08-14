@@ -23,7 +23,14 @@
 > uv run scripts/check_rig.py
 > ```
 >
-> ✅ **Both adapters are out of DFU and all 14 motors are healthy.** 31-34 °C, jaws reconciling with the usual −2π shift.
+> ✅ **As of 2026-08-14 ~18:00: both adapters were out of DFU and all 14 motors healthy** — 31-34 °C, jaws reconciling with the usual −2π shift. ⚠️ **That is a dated reading, not a fact about the rig.** Run the command; it recomputes the answer ([FINDINGS §33.3](FINDINGS.md)).
+>
+> ⭐ **Two things the 2026-08-14 evening reading showed that earlier notes in this file do not**, both device-level and neither of them energising anything:
+>
+> | reading | what the file says elsewhere |
+> |---|---|
+> | ⭐ **Arm G's CAN adapter is back on the bus** (bus 0 addr 4, running firmware) | the block below says G was unplugged for a colleague on 2026-08-13. ⛔ **An adapter on the USB bus does not mean the arm is available or powered** — ask him before planning on it |
+> | ⚠️ **One D405 camera, serial `255323071773`** | [§5.5](HANDOFF.md) items 5b and 6 record **two** on the bus as of 2026-08-13 16:52. The second (`260323072846`) is not attached now |
 >
 > ### ✅✅⭐⭐⭐ WHERE THE PROJECT ACTUALLY IS, IN FOUR LINES
 >
