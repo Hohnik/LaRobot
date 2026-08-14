@@ -32,9 +32,26 @@ operation and it is not risk-free:
   · Have the power switch reachable.
   · A motor holding a stale setpoint from a previous session could twitch.
 
-⚠️ Known sharp edge in the vendor code: `motor_on()` retries in a `while` loop
-until a motor's error code clears. A motor stuck in a hard error can spin there.
-`--attempt-error-clear` (default off) controls whether we let it try at all.
+⛔⭐⭐ THE SHARP EDGE, AND UNTIL 2026-08-14 THIS PARAGRAPH WAS A LIE
+
+`motor_on()` loops `clean_error()` until a motor's error code reads normal, so
+pinging a faulted motor **clears the fault**. It does that with the root log level
+forced to ERROR, and the two messages that name the fault are logged at WARNING
+and INFO, so **the diagnosis is suppressed and the final reading looks healthy.**
+
+⛔ This file used to claim that `--attempt-error-clear` was "default off" and
+"controls whether we let it try at all". **The flag was parsed, documented, shown
+in `--help`, and read by nothing.** The clear loop ran on every `--yes`. That is
+why arm G's red flashing lights stopped after the 18:00 ping on 2026-08-13, and
+why the fault type was never learned. FINDINGS §39.
+
+✅ **The flag now works.** By default a latched fault is **reported and left
+alone**, naming the code and what the LED looks like. Pass
+`--attempt-error-clear` to restore the vendor behaviour and clear it.
+
+⭐ What the lights mean (DAMIAO DM-J4340-2EC manual, "Indicator status"):
+green steady = enabled; **red steady = disabled, which is normal for a powered
+arm nobody is commanding**; **red flashing = a latched fault.**
 """
 
 from __future__ import annotations
@@ -42,6 +59,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -50,7 +68,10 @@ from yam_can import (  # noqa: E402
     DEFAULT_ARM,
     YAM_BITRATE,
     YAM_MOTOR_TYPES,
+    MotorFaultNotCleared,
     add_i2rt_to_path,
+    describe_motor_error,
+    do_not_clear_motor_faults,
     open_motor_interface,
 )
 
@@ -100,7 +121,9 @@ def main() -> int:
     ap.add_argument(
         "--attempt-error-clear",
         action="store_true",
-        help="allow the vendor retry loop to clear motor errors (can spin on a hard fault)",
+        help="allow the vendor retry loop to CLEAR a latched motor fault (it can also spin on a "
+        "hard fault). Default off, which reports the fault and leaves it in place so it can be "
+        "diagnosed. ⚠️ Until 2026-08-14 this flag was wired to nothing and clearing always happened.",
     )
     args = ap.parse_args()
 
@@ -110,7 +133,12 @@ def main() -> int:
     print(f"motor IDs to ping : {args.ids}")
     print(f"bitrate           : {args.bitrate}")
     print(f"decode as         : {types}")
-    print("frames per motor  : enable (…FC) then disable (…FD)\n")
+    print("frames per motor  : enable (…FC) then disable (…FD)")
+    if args.attempt_error_clear:
+        print("on a latched fault: ⚠️ CLEAR IT (…FB), repeatedly, until the code reads normal")
+    else:
+        print("on a latched fault: report it and LEAVE IT ALONE, so it can be diagnosed")
+    print()
 
     if not args.yes:
         print("DRY RUN — nothing was transmitted. Re-run with --yes to actually ping.")
@@ -128,23 +156,41 @@ def main() -> int:
 
     alive: list[int] = []
     enabled: list[int] = []
-    try:
-        for motor_id in args.ids:
+    faulted: list[tuple[int, int | None]] = []
+
+    def ping_one(motor_id: int) -> None:
+        """Enable one motor for a frame, report what it said, disable it again."""
+        try:
+            info = iface.motor_on(motor_id, motor_types[motor_id])
+            enabled.append(motor_id)
+            alive.append(motor_id)
+            print(f"  ✓ motor {motor_id} ({types[motor_id]}): {describe(info)}")
+        except MotorFaultNotCleared as fault:
+            # ⛔ NOT a communication failure. The motor answered, and what it said
+            # was "I am in a fault". This is the branch that used to be invisible:
+            # the vendor cleared the fault and reported a healthy motor instead.
+            alive.append(motor_id)
+            faulted.append((motor_id, fault.code))
+            print(f"  ⛔ motor {motor_id} ({types[motor_id]}): LATCHED FAULT, left in place")
+            print(f"       {describe_motor_error(fault.code)}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  ✗ motor {motor_id}: no reply ({type(exc).__name__})")
+        finally:
             try:
-                info = iface.motor_on(motor_id, motor_types[motor_id])
-                enabled.append(motor_id)
-                alive.append(motor_id)
-                print(f"  ✓ motor {motor_id} ({types[motor_id]}): {describe(info)}")
+                iface.motor_off(motor_id)
+                if motor_id in enabled:
+                    enabled.remove(motor_id)
             except Exception as exc:  # noqa: BLE001
-                print(f"  ✗ motor {motor_id}: no reply ({type(exc).__name__})")
-            finally:
-                try:
-                    iface.motor_off(motor_id)
-                    if motor_id in enabled:
-                        enabled.remove(motor_id)
-                except Exception as exc:  # noqa: BLE001
-                    print(f"    ⚠️  motor {motor_id} did not confirm disable: {type(exc).__name__}")
-                time.sleep(0.02)
+                print(f"    ⚠️  motor {motor_id} did not confirm disable: {type(exc).__name__}")
+            time.sleep(0.02)
+
+    try:
+        # ⭐ This context manager is the whole of the fix. Inside it the vendor's
+        # clean_error refuses and raises MotorFaultNotCleared instead, carrying the
+        # code the parser recorded on its way past. Outside it, nothing changes.
+        with do_not_clear_motor_faults() if not args.attempt_error_clear else nullcontext():
+            for motor_id in args.ids:
+                ping_one(motor_id)
     finally:
         for motor_id in list(enabled):
             try:
@@ -164,6 +210,26 @@ def main() -> int:
         return 1
     if len(alive) < len(args.ids):
         print(f"missing: {[i for i in args.ids if i not in alive]}")
+
+    if faulted:
+        print(f"\n⛔ {len(faulted)} motor(s) are holding a LATCHED FAULT, and it was NOT cleared:")
+        for motor_id, code in faulted:
+            print(f"   motor {motor_id}: {describe_motor_error(code)}")
+        print(
+            "\n   These motors will be showing a FLASHING RED light. Write down the codes\n"
+            "   before doing anything else — they are the only record of what happened,\n"
+            "   and the next enable frame from any tool will clear them (docs/FINDINGS.md §39).\n"
+            "   To clear them deliberately:  uv run scripts/ping_motors.py --arm "
+            f"{args.arm} --yes --attempt-error-clear"
+        )
+        return 1
+
+    print("✓ no motor is holding a fault.")
+    if not args.attempt_error_clear:
+        print(
+            "  ⭐ And that is a real reading rather than a cleared one: error clearing was OFF,\n"
+            "     so a latched fault would have been reported instead of erased."
+        )
     return 0
 
 

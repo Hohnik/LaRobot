@@ -12,7 +12,9 @@
 > uv run scripts/check_rig.py
 > ```
 >
-> ✅ **BOTH ARMS ARE CONNECTED AND MEASURED HEALTHY as of 18:00.** All 14 motors answer, **every error code reads `0x1 (normal)`**, and temperatures are 31-35 °C against a 55 °C warning. Julien reported **red lights blinking** on arm G; **no motor is reporting a fault**, and the likely explanation is that every motor is set to enter damping mode 400 ms after its last command, which is where an idle arm permanently sits. ⛔ **Nothing in this repo documents what any LED means** — that is a real gap. [FINDINGS §36.0](FINDINGS.md) has the method and the numbers.
+> ✅ **BOTH ARMS ARE CONNECTED AND MEASURED HEALTHY as of 2026-08-14 09:10.** Both CANables on the bus running their firmware, both SpaceMice, both D405s. **Every one of the 140 readable motor registers is identical on the two arms apart from per-unit calibration, and nothing has moved since it was first recorded on 2026-08-10** ([FINDINGS §38](FINDINGS.md)).
+>
+> ⛔⭐⭐ **AND THE RED BLINKING LIGHTS WERE A REAL FAULT AFTER ALL. This corrects the block that used to sit here.** It said *"no motor is reporting a fault"* and offered the 400 ms damping timeout as the likely explanation. **The vendor manual now says otherwise: red STEADY is a disabled motor, which is the normal state of a powered idle arm, and red FLASHING is a latched fault** ([FINDINGS §39.0](FINDINGS.md)). ⛔ **`err=0x1` did not contradict that, because `0x1` means "enabled right now" and the command that read it had just enabled the motor.** The LED table is in step 1 below.
 >
 > ⚠️⚠️ **ARM G IS SHARED WITH A COLLEAGUE. ASK BEFORE PLANNING ON IT.** Julien, 2026-08-13: *"I briefly unplugged arm G from USB so my colleague can use it. Whenever we need both, just let me know, I can instantly get it back."* ⭐ **This does not delay the next job**, because its first milestone runs the N-arm code with N=1 on arm B alone. **Ask for arm G before step 3 of that plan, not before starting it.** [FINDINGS §35.6](FINDINGS.md). ⚠️ The camera on arm G stays plugged in even when the arm's CAN adapter is out, so a camera count tells you nothing about whether an arm is available.
 >
@@ -45,7 +47,19 @@
 >
 > ⛔⭐ **CORRECTED 2026-08-14, 09:15, and the correction saves bench time.** The version of this plan written on 08-13 at 19:30 asked Julien to test **five** things. **Two of them were already confirmed on 2026-08-13 at 17:21** — the PARK timer fix on three parks with the arithmetic reconciling ([FINDINGS §35.0](FINDINGS.md)) and the saved tracking file ([FINDINGS §35.1](FINDINGS.md)) — and **this file said so 30 lines higher up while still asking for them here.** That is the seventh instance of the [§33.3](FINDINGS.md) staleness pattern, and the first one where the two contradicting statements were in the same document. **His hardware time is the critical path, so a plan that spends it re-confirming settled work is a real cost, not an untidiness.**
 >
-> ✅ **1. The motor LEDs — still Julien's, and it is the only thing that must happen BEFORE anything else runs.** Nothing an agent can do. ⭐ **`ping_motors.py` sends an enable frame which may itself clear a latched state**, so running it first destroys the observation ([FINDINGS §37.6](FINDINGS.md)). **Record: which arm, which motors, blinking or steady, and whether both arms look the same.** ⚠️ The blinking had already stopped by 08-13 evening, so there may be nothing left to see — say so if the lights are all steady, because that is also an answer.
+> ⬜⭐⭐ **1. The motor LEDs — still Julien's, and NOW THERE IS A KEY TO READ THEM.** ⭐ **Found in the vendor manual 2026-08-14 ([FINDINGS §39.0](FINDINGS.md)), and it refutes what this repo believed:**
+>
+> | light | means |
+> |---|---|
+> | green, steady | enabled, working normally |
+> | ⭐ **red, STEADY** | **disabled. This is the normal state of a powered arm nobody is commanding.** Nothing is wrong |
+> | ⛔ **red, FLASHING** | **a latched fault.** `8` over-voltage · `9` under-voltage · `A` over-current · `B` MOS overheat · `C` coil overheat · `D` loss of communication · `E` overload |
+>
+> ⛔ **So [FINDINGS §36.0](FINDINGS.md)'s guess was wrong.** It reasoned that a blinking light was the expected idle indication of a motor in damping mode. **Steady red is the idle indication; blinking red is a fault.** Arm G really was holding a fault when Julien saw those lights.
+>
+> ⛔⭐ **And the reason the fault type is unknown is now certain rather than suspected: `ping_motors.py` was erasing it.** The vendor's `motor_on()` clears a latched fault in a loop while the log level is forced to ERROR, so the diagnosis is suppressed and the final reading looks healthy — and the `--attempt-error-clear` flag that claimed to control this **was read by nothing** ([FINDINGS §39.1](FINDINGS.md)). ✅ **Fixed: a fault is now reported and left in place**, and `--attempt-error-clear` clears it deliberately.
+>
+> **So: glance at both arms. All steady red is healthy. Any flashing red, run the ping in step 3 and write the code down** — it is the only record, and the next enable frame from any tool clears it.
 >
 > ✅✅ **2. DONE 2026-08-14 09:10 — the register diff is clean on both arms, and there is now a script for it.** [FINDINGS §38](FINDINGS.md). **140 reads** (10 registers × 7 motors × 2 arms), run three times, identical every time. **Every register agrees on both arms except `inertia` and `flux`, and both are measured per-motor data.** `timeout` reads **8000 on all 14 motors**, so the safety timeout is enabled everywhere. ⭐ **The result that actually answers the worry: `inertia` matches the value recorded on 2026-08-10 in [§1](FINDINGS.md) to every digit**, which is what rules out a re-calibration having been saved to flash. ⛔ **What it cannot cover, and it is the risk [§37.6](FINDINGS.md) named: the `PMAX`/`VMAX`/`TMAX` scaling limits are not readable at all** — they are hardcoded Python constants in the SDK, not registers it can ask for. [FINDINGS §38.1](FINDINGS.md) has what bounds them instead, and why "both arms read zero at rest" is not the evidence it looks like.
 >
@@ -53,7 +67,7 @@
 > uv run scripts/check_rig.py && uv run scripts/check_arms_match.py --yes
 > ```
 >
-> ⏸️ **3. The motor state — deliberately NOT run, and this is a decision rather than an omission.** `ping_motors.py` is the only way to read an error code or a temperature, and it is agent-safe. **It was held back because it may clear the latched state step 1 wants to observe, and it would add nothing today:** yesterday at 18:00 every motor read `err=0x1 (normal)` at 31-35 °C, and this morning's register diff shows nothing has changed since. **Run it after the LED glance:**
+> ⏸️ **3. The motor state — deliberately NOT run, and this is a decision rather than an omission.** `ping_motors.py` is the only way to read an error code or a temperature, and it is agent-safe. **It was held back because it CLEARS the latched state step 1 wants to observe** — which was a suspicion on 08-13 and is now confirmed from the code ([FINDINGS §39.1](FINDINGS.md)) — **and because it would add nothing today:** yesterday at 18:00 every motor read `err=0x1 (normal)` at 31-35 °C, and this morning's register diff shows nothing has moved since. ⭐ **It is now safe to run in the sense that matters: it reports a fault instead of erasing it.** **Run it after the LED glance:**
 >
 > ```bash
 > uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes

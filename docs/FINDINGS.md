@@ -2209,3 +2209,76 @@ With everything unplugged it printed *"the USB bus reports nothing at all, which
 ⭐ **`src/provenance.py` was extracted in the same change.** `git_commit()` and `dt_now()` had lived inside `scripts/teleop_session.py`, and the register baseline is the third thing to record provenance after the recorder and the tracking log. Three call sites is where a copied helper starts to drift, and `src/spacemouse.py` exists because a device fix once landed in only one of two copies. ⚠️ `teleop_session.py` still has its own identical pair; they collapse into the module during the `ArmSession` restructure, which rewrites that file anyway. Doing it today would edit the script Julien is about to test, for no gain.
 
 **370 → 384 headless tests.**
+
+---
+
+## 39. ⛔⭐⭐ WHAT THE LEDS MEAN — AND `ping_motors.py` HAS BEEN ERASING THE FAULT IT WAS SENT TO READ — 2026-08-14, 09:40
+
+> [§36.0](FINDINGS.md) recorded a real gap: *"What the LEDs mean is undocumented anywhere in this repo."* It is now documented, from the vendor's own manual, and **the answer refutes what §36.0 concluded.** Chasing it also turned up a flag that was documented, advertised in `--help`, and wired to nothing.
+
+### 39.0 ⭐⭐ THE LED TABLE, FROM THE VENDOR MANUAL
+
+**Source: DAMIAO "DM-J4340-2EC reduction motor User Manual V1.0", 2024.03.14, section "Indicator status".** Both motor families on these arms are covered — joints 1-3 are DM4340, joints 4-7 DM4310, and the DM4310 manual says the same thing.
+
+| light | ERR bit | what it means |
+|---|---|---|
+| **green, steady** | 1 | enable mode, normal working status |
+| ⭐ **red, STEADY** | 0 | **disabled mode. This is NOT a fault.** |
+| ⛔ **red, FLASHING** | — | **a latched fault.** The code says which |
+
+**The fault codes, verbatim from the manual:** `8` overpressure (over-voltage) · `9` undervoltage · `A` overcurrent · `B` MOS overheating · `C` motor coil overheating · `D` loss of communication · `E` overload.
+
+✅ **The vendored SDK's table agrees exactly** (`i2rt/motor_drivers/utils.py::MotorErrorCode`): `0x0` disabled, `0x1` normal, `0x8`-`0xE` as above. Two independent sources, same table, so this is settled rather than inferred.
+
+⛔⭐ **AND IT REFUTES [§36.0](FINDINGS.md).** That section reasoned: *"Every motor is set to enter damping mode after 400 ms with no command. An arm that is powered but not being commanded sits in exactly that state permanently. A blinking LED on a powered, uncommanded motor is the expected indication rather than a warning."* **It was flagged as an unverified hypothesis, and it is wrong.** A powered, uncommanded motor is in **disabled** mode, and disabled mode is **red STEADY**. **Flashing red is a fault, full stop.** So arm G really was holding a latched fault when Julien saw those lights.
+
+⛔⭐⭐ **A second, sharper trap in the same area: the SDK calls `0x1` "normal", and the manual calls the same thing "enable mode".** Those are not the same claim. **`err=0x1` means "this motor is enabled right now"** — it says nothing about whether a fault was latched a moment earlier. [§36.0](FINDINGS.md) read `err=0x1 (normal)` on all 14 motors and concluded the lights were not reporting a fault. **The reading was taken by a command that had just enabled the motor**, so `0x1` was guaranteed by the act of measuring.
+
+### 39.1 ⛔⛔⭐⭐ `motor_on()` CLEARS FAULTS IN A LOOP, SILENTLY — AND THE FLAG THAT WAS SUPPOSED TO STOP IT WAS DEAD
+
+`dm_driver.py:152-182`, the vendor's `motor_on()`:
+
+```python
+motor_info = self.parse_recv_message(message, MotorType.DM4310, ignore_error=True)
+if int(motor_info.error_code, 16) != MotorErrorCode.normal:
+    while int(motor_info.error_code, 16) != MotorErrorCode.normal:
+        logging.info(f"motor {motor_id} error: {motor_info.error_message}")
+        self.clean_error(motor_id=motor_id)     # sends 0xFB
+        ...
+        message = self._send_message_get_response(id, motor_id, data)
+```
+
+**So enabling a motor clears any latched fault, repeatedly, until the code reads normal.** And two things make it silent:
+
+1. `motor_on()` opens with `logging.getLogger().setLevel(logging.ERROR)` and restores the level on the way out. **The line naming the fault is `logging.info`, and the parser's own `logging.warning` naming it is also below ERROR.** Both are suppressed for exactly the duration of the clearing.
+2. The value returned at the end is the **post-clear** reading, so the caller sees a healthy motor.
+
+⛔⛔ **And `scripts/ping_motors.py` claimed to control this and did not.** Its docstring said *"`--attempt-error-clear` (default off) controls whether we let it try at all"*, and `--help` said the same. **The string `attempt_error_clear` appeared exactly twice in the file: once in that docstring, once in the `add_argument` call. It was never read.** The clear loop ran on every single `--yes`.
+
+⭐⭐ **This closes the open question in [§37.6](FINDINGS.md), which could only hedge.** That section wrote: *"`ping_motors.py --yes` sends an enable frame… Running it may itself have cleared a latched state… Nothing distinguishes those two from the data collected."* **It is no longer a maybe.** The code is written to clear, in a loop, with the diagnosis suppressed. **That is why arm G's red lights stopped after the 18:00 ping on 2026-08-13, and why the fault type is permanently unknown.**
+
+⚠️ **The fault type is lost and cannot be recovered.** Given Julien's account — a colleague *"tried to connect them as well, and he got them to connect"* — `0xD loss of communication` is the natural candidate, since that is what a CAN client dropping off produces and the 400 ms timeout is its mechanism. ⛔ **That is a guess and it must stay labelled as one.** Any of `0x8`-`0xE` would have produced the same flashing red light.
+
+### 39.2 ✅ THE FIX: a fault is now REPORTED rather than erased, and the flag means what it says
+
+**Default behaviour is now "report and leave it alone".** `--attempt-error-clear` restores the vendor behaviour.
+
+- `src/yam_can.py` gains `MotorFaultNotCleared`, `do_not_clear_motor_faults()`, `describe_motor_error()` and the `MOTOR_LED_FOR_ERROR` table, plus two wrappers installed by `patch_dm_driver_for_gs_usb()` beside the existing drain hardening.
+- ⭐ **The error nibble is decoded before delegating to the vendor's parser, not read off its result.** Two reasons, and both are why the obvious implementation fails: with `ignore_error=False` the parser **raises**, so there is no result; and the log level is already forced to ERROR, so no handler ever sees the message.
+- ⭐ **`clean_error` was intercepted rather than the enable path rewritten**, because `motor_on` is already wrapped here with bus-draining and retries that exist because of a **measured** cascade failure — three consecutive runs failing at motors 4, then 7, then succeeding. Bypassing `motor_on` to read the code directly would have thrown that away.
+
+⚠️⚠️ **The default policy is still to clear, and that is deliberate rather than timid.** `clean_error` has a second caller: `DMChainCanInterface`'s own motor-recovery routine (`dm_driver.py:639`), which runs **during a real session** and must be able to clear and re-enable. Making refusal the global default would turn a recoverable motor into a dead arm. **Only a diagnostic opts out, and only around its own read.** `test_the_default_policy_still_clears` guards it.
+
+⭐ **The risk profile is unusually good and worth stating exactly: a motor reporting `0x1` takes byte-for-byte the same path as before.** The new branch can only execute on a motor that is already faulted, which is precisely the case that was being mishandled. Every run anyone has ever made was the `0x1` case.
+
+### 39.3 ⭐ WHAT THIS MEANS AT THE BENCH, IN ONE PARAGRAPH
+
+**Glance at the arms before running anything.** All lights **red and steady** is a healthy, powered, uncommanded rig — nothing wrong. **Any light flashing red is a real latched fault**, and `uv run scripts/ping_motors.py --arm <B|G> --yes` will now **name it and leave it in place** instead of quietly erasing it. Write the code down; it is the only record. Clear it deliberately with `--attempt-error-clear` when you are done reading it.
+
+### 39.4 ⛔ THE PATTERN, AND IT IS WORKING-CONTRACT RULE 7 AGAIN
+
+**A guard that was written once and never re-derived against the thing it guards.** The flag was added in good faith, with an accurate description of a real hazard, and the wiring was never done — so the description became a false statement that read as a safety feature. Rule 7 asks *what path reaches the hazard without passing through you?* Here the answer was *every path*, because the guard was not in any of them.
+
+⭐ **Third instance of the same shape in two days.** [§36.5](FINDINGS.md): `ArmSession` carried a dead `stall_since` variable that made a missing gripper stall guard look present. [§38.3](FINDINGS.md): a verdict that reported "nothing changed" when nothing had been compared. **A guard, a variable and a message, each describing something that was not there.** The defence that has actually worked all three times is a test that asserts the guard can *fail*, rather than one that asserts it passes.
+
+**384 → 396 headless tests.**

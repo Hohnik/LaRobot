@@ -20,11 +20,143 @@ adapter an active node (it will acknowledge frames it hears), which is why
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 I2RT_PATH = REPO_ROOT / "third_party" / "i2rt"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ⭐⭐ MOTOR FAULTS: what the LEDs mean, and how to read a fault without erasing it
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Source: DAMIAO "DM-J4340-2EC reduction motor User Manual V1.0", 2024.03.14,
+# section "Indicator status". The DM4310 manual says the same. Both motor models
+# are on these arms (joints 1-3 are DM4340, joints 4-7 DM4310).
+#
+# ⛔ THE PART THAT MATTERS, AND IT REFUTES WHAT THIS REPO BELIEVED:
+#
+#     Green, steady    ERR bit 1   enabled, working normally
+#     RED, STEADY      ERR bit 0   DISABLED. This is not a fault.
+#     RED, FLASHING    --          A FAULT, latched. The code says which.
+#
+# An arm that is powered but not being commanded sits in *disabled* mode, so its
+# lights are RED AND STEADY. FINDINGS §36.0 guessed that a *blinking* red light
+# was that normal idle indication. It is not: blinking red is a fault.
+#
+# ⛔ And the SDK's name for code 0x1 is misleading. It calls it "normal", while
+# the manual calls the same thing "enable mode". So `err=0x1` means "this motor
+# is enabled RIGHT NOW" — it says nothing about whether a fault was latched
+# before something enabled it. That distinction is the whole of FINDINGS §39.
+MOTOR_LED_FOR_ERROR = {
+    0x0: ("disabled", "red, steady — normal for a powered arm nobody is commanding"),
+    0x1: ("normal / enabled", "green, steady"),
+    0x8: ("over voltage", "red, FLASHING"),
+    0x9: ("under voltage", "red, FLASHING"),
+    0xA: ("over current", "red, FLASHING"),
+    0xB: ("mosfet over temperature", "red, FLASHING"),
+    0xC: ("motor coil over temperature", "red, FLASHING"),
+    0xD: ("loss of communication", "red, FLASHING"),
+    0xE: ("overload", "red, FLASHING"),
+}
+
+
+def describe_motor_error(code: int | None) -> str:
+    """Name an error code and say what the motor's LED looks like while it holds it."""
+    if code is None:
+        return "unknown (no reply was decoded)"
+    name, led = MOTOR_LED_FOR_ERROR.get(code, ("unrecognised code", "unknown"))
+    return f"0x{code:X} {name} — LED: {led}"
+
+
+class MotorFaultNotCleared(RuntimeError):
+    """A motor reported a latched fault and we deliberately did NOT clear it.
+
+    ⭐ Raised instead of clearing, so the fault survives to be diagnosed. The
+    vendor's ``motor_on()`` otherwise loops ``clean_error()`` until the code
+    reads normal, which destroys the evidence — and it does so while the root
+    log level is forced to ERROR, so every message naming the fault is
+    suppressed. See FINDINGS §39.
+    """
+
+    def __init__(self, motor_id: int, code: int | None) -> None:
+        self.motor_id = motor_id
+        self.code = code
+        super().__init__(f"motor {motor_id}: latched fault {describe_motor_error(code)}, NOT cleared")
+
+
+# ⚠️ Default True, which is exactly today's behaviour. `clean_error` is also
+# called by `DMChainCanInterface`'s own motor-recovery routine
+# (dm_driver.py:639), which runs during a real session and MUST keep working.
+# Only a diagnostic caller opts out, and only around its own read.
+_clear_motor_faults = True
+
+
+@contextmanager
+def do_not_clear_motor_faults():
+    """Within this block, a latched motor fault is REPORTED rather than cleared.
+
+    ⛔ For diagnostics only. Never wrap a control loop in this: the chain
+    interface's recovery path depends on being able to clear and re-enable, and
+    a raise there would surface as a dead arm rather than a diagnosis.
+    """
+    global _clear_motor_faults
+    previous = _clear_motor_faults
+    _clear_motor_faults = False
+    try:
+        yield
+    finally:
+        _clear_motor_faults = previous
+
+
+def _wrap_clean_error(original: Any) -> Any:
+    """Make ``clean_error`` refuse while ``do_not_clear_motor_faults()`` is active.
+
+    ⭐ Why the code it reports cannot be stale, which is the obvious worry about
+    reading state off the instance. ``motor_on()`` only reaches ``clean_error``
+    *after* parsing a reply whose code was not ``0x1``, and the parser wrapper
+    records the code on exactly that path. So a refusal always reports the fault
+    from the reply that caused it. The one caller that clears without a preceding
+    parse is the chain's recovery routine (``dm_driver.py:639``), and that runs
+    only under the default policy, where this wrapper delegates without ever
+    reading the recorded value.
+    """
+
+    def wrapper(self: Any, motor_id: int, *args: Any, **kwargs: Any) -> Any:
+        if not _clear_motor_faults:
+            raise MotorFaultNotCleared(motor_id, getattr(self, "_last_motor_fault", None))
+        return original(self, motor_id, *args, **kwargs)
+
+    return wrapper
+
+
+def _wrap_parse_recv_message(original: Any) -> Any:
+    """Record a fault code on the interface before the vendor's parser can hide it.
+
+    ⛔ Why decode it here rather than read it off the parsed result: the vendor's
+    parser **raises** on a fault when ``ignore_error`` is False, so on that path
+    there is no result to read. And it logs the fault at WARNING while
+    ``motor_on()`` has forced the root level to ERROR, so the message never
+    reaches a handler either. Decoding the nibble before delegating is the only
+    place the value is reliably available.
+
+    The expression is the vendor's own, from ``dm_driver.parse_recv_message``:
+    the error lives in the high nibble of byte 0.
+    """
+
+    def wrapper(self: Any, message: Any, motor_type: Any, ignore_error: bool = False) -> Any:
+        try:
+            code = (message.data[0] & 0xF0) >> 4
+            if code != 0x1:
+                self._last_motor_fault = code
+        except Exception:  # noqa: BLE001, S110
+            # Never let bookkeeping break a read. A malformed frame is the
+            # vendor parser's problem to report, not ours to mask.
+            pass
+        return original(self, message, motor_type, ignore_error)
+
+    return wrapper
 
 YAM_BITRATE = 1_000_000  # I2RT documents 1 Mbit/s; see third_party/i2rt README
 
@@ -413,6 +545,26 @@ def patch_dm_driver_for_gs_usb() -> None:
             return wrapper
 
         setattr(dm_driver.DMSingleMotorCanInterface, name, make(original))
+
+    # ⛔⭐ Let a fault be READ without being erased. See FINDINGS §39.
+    #
+    # `motor_on()` loops `clean_error()` until the error code reads normal, and it
+    # does that with the root log level forced to ERROR, so the two messages that
+    # name the fault (one WARNING in the parser, one INFO in the loop) are both
+    # suppressed. The result is that pinging a faulted motor clears it silently
+    # and reports a healthy reading. That is how the evidence for arm G's red
+    # flashing lights was destroyed on 2026-08-13 at 18:00.
+    #
+    # ⚠️ Both wrappers are inert by default: `clean_error` only changes behaviour
+    # inside `do_not_clear_motor_faults()`, and the parser wrapper only records a
+    # number on the instance. A motor reporting 0x1 takes byte-for-byte the same
+    # path as before, which is every run anyone has made.
+    dm_driver.DMSingleMotorCanInterface.clean_error = _wrap_clean_error(
+        dm_driver.DMSingleMotorCanInterface.clean_error
+    )
+    dm_driver.DMSingleMotorCanInterface.parse_recv_message = _wrap_parse_recv_message(
+        dm_driver.DMSingleMotorCanInterface.parse_recv_message
+    )
 
     patch_gs_usb_for_macos()
     patch_gs_usb_echo_filter()
