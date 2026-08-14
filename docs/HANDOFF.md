@@ -15,7 +15,7 @@
 >
 > ⚠️ **The session log at §7 is 44 rows long. Do not read it front to back.** Its rows are dated and each one names the FINDINGS sections it produced; use it to answer *"when did X change and why"*, not to get oriented.
 >
-> ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and the next job is `--arms`
+> ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
 > ⭐⭐ **Run this before anything else. It answers "what state is the rig in?", which is the right first question here:**
 >
@@ -29,8 +29,18 @@
 >
 > 1. ⭐⭐ **The single-arm system is finished and confirmed on the arm.** Julien, end of 2026-08-14: *"Everything feels great. And as before, QQ works. Uh, all of the modes work."* [FINDINGS §51](FINDINGS.md).
 > 2. ⭐⭐ **The bimanual restructure's step 1 is COMPLETE and verified**: all **247** references to one arm's state now go through a single `ArmSession`, landed as five commits, and he has driven every mode on it ([FINDINGS §50](FINDINGS.md)).
-> 3. ⬜⭐⭐ **THE NEXT JOB IS STEP 2: add `--arms`, the `a` selector (B → G → BOTH) and per-arm status rows.** ⛔ `--arms` still does not exist; step 1 made the state *shape* right for N arms and nothing more. [ROADMAP §6.1](ROADMAP.md).
+> 3. ⏳⭐⭐ **STEP 2 IS BUILT AND NOT YET SEEN ON THE ARM.** `--arms B` works, `a` cycles which arm the mode keys aim at, and the status is one row per arm — three commits, 486 headless tests ([FINDINGS §52](FINDINGS.md)). ⛔ **`--arms B,G` deliberately REFUSES**, because one puck, one axis map, one robot and one park pose are still session-level: two arms would drive B, never build G, and print a plan naming both. ⬜ **The next job is the eight plumbing commits in [FINDINGS §52.5](FINDINGS.md), and none of them needs the arm.**
 > 4. ⚠️ **Two things built on 2026-08-14 can only prove themselves during a failure**, so they are not confirmed and cannot be: the safe stop that parks on a crash ([FINDINGS §47.0](FINDINGS.md)) and the incident recorder ([FINDINGS §45](FINDINGS.md)).
+>
+> ### ⬜⭐⭐ THE BENCH TEST THAT IS OWED, AND IT IS ONE QUESTION — about two minutes
+>
+> ```bash
+> uv run scripts/teleop_session.py --yes --arms B --start-mode hold
+> ```
+>
+> **Drive it normally, then quit with `q q`. Does it feel identical?** ⭐ **The only things that should look different:** the status row now reads **`[B TELEOP  ]`** instead of `[TELEOP  ]`, and **`⏺ REC` sits beside the clock** rather than after the temperatures. Press **`a`** once: it should say arm B is the only arm in this session. ⛔ **Anything else that differs is a defect** — step 2 changed no control path, no limit and no default.
+>
+> ⚠️ **`--arms B` and `--arm B` are the same thing** and both work; every other script here still takes `--arm` only.
 >
 > ⭐ **If you are a fresh agent, read working-contract rule 11 in §4 below before anything else.** It is how Julien wants a session run, it was added on 2026-08-14, and it is the rule this file was missing for a week.
 >

@@ -38,28 +38,37 @@ can still prove the mode machine behaves.
   all arms; mode changes apply to the selected one).
 - **IK stepping.** `CartesianTeleop` already owns that; this holds one and calls it.
 
-⚠️ **STATUS, 2026-08-13: built, unit-tested, brought up to date, and STILL NOT wired
-into `teleop_session.py`.** That wiring is a separate, reviewable step, deliberately not
-done in the same session as writing this. Session 4 is the standing warning — three
-changes that passed 34 tests, three dry runs and a simulated IK loop produced three
-failures on first hardware contact, one of which dropped 4.3 kg. When it is wired,
-ROADMAP §6.1 says how: `--arms B` runs the N-arm code with **N=1** first, so the
-restructure is verified against a feel Julien already knows, separately from the
-two-arm risk.
+✅ **STATUS, 2026-08-14: WIRED IN, and confirmed on the arm.** All 247 references to one
+arm's state in `teleop_session.main()` now go through this class, landed as five commits
+([FINDINGS §50](../docs/FINDINGS.md)), and Julien has driven every mode on it: *"Everything
+feels great. And as before, QQ works. Uh, all of the modes work."* ([§51](../docs/FINDINGS.md)).
+⭐ Step 2 then added `--arms`, the `a` selector and one status row per arm
+([§52](../docs/FINDINGS.md)). ⚠️ **Two arms still refuse to start** — one puck, one axis
+map, one robot and one park pose are still session-level in the script — so `--arms B,G`
+errors and says what is missing.
+
+⛔ **THIS DOCSTRING SAID *"STILL NOT wired"* UNTIL 2026-08-14, which was true when written
+on 08-13 and wrong the next day.** It is the same staleness pattern as the paragraph below
+and as the six instances in [FINDINGS §33.3](../docs/FINDINGS.md): a written claim about
+live state is a cache with no invalidation. ⭐ The remedy that works here is not writing it
+more carefully — it is that `uv run scripts/check_restructure.py` recomputes the real
+answer, so prefer running it over trusting any sentence in this header.
 
 ⛔⭐⭐ **AND A WARNING WORTH MORE THAN THE CLASS ITSELF: THIS FILE WENT STALE IN ONE
-HOUR.** It was committed 2026-08-12 at 14:16 with a park built from a queue of legs and
-a per-leg speed ramp. At **15:15 the same day** `teleop_session.py` replaced exactly that
-with a single blended `JointPath`, and the commit message says the earlier version *"was
-the wrong thing"*. This class then sat for a day modelling a design the script no longer
-had, **with all 17 of its tests passing the whole time**, because the tests asserted the
-superseded behaviour. It was found by auditing before the restructure rather than by
-anything failing.
+HOUR, WHILE UNWIRED.** It was committed 2026-08-12 at 14:16 with a park built from a queue
+of legs and a per-leg speed ramp. At **15:15 the same day** `teleop_session.py` replaced
+exactly that with a single blended `JointPath`, and the commit message says the earlier
+version *"was the wrong thing"*. This class then sat for a day modelling a design the
+script no longer had, **with all 17 of its tests passing the whole time**, because the
+tests asserted the superseded behaviour. It was found by auditing before the restructure
+rather than by anything failing.
 
-⚠️ **So: an unwired class is a copy of a design, and a copy drifts.** Whenever
-`teleop_session.py` changes how an arm behaves, this file is the second place that change
-has to land, and nothing enforces it. **The fix is to finish the wiring** — after that
-there is one copy. Until then, diff this against the script's park before trusting it.
+⚠️ **The lesson, kept because it explains the shape of the work: an unwired class is a
+copy of a design, and a copy drifts.** The fix was to finish the wiring, and that is done
+— the script no longer holds a second copy of this state. ⛔ **What it still holds is a
+second copy of the park LOOP**: `step_path()` here and the `mode == "park"` branch there
+implement the same motion, and only the branch runs. Diff them before trusting this one,
+and see [ROADMAP §6.1](../docs/ROADMAP.md) for where they are meant to collapse.
 
 ⛔ **What this deliberately does NOT own, decided 2026-08-13: recording and playback.**
 They look like per-arm state and they are not. `amazon-far/abc` wants 14 states and 14

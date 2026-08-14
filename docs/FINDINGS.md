@@ -3000,3 +3000,82 @@ Every step found something that had nothing to do with moving a field:
 ⭐ **Recommendation on record: the scrubbing version could be built before step 2 if he wants it**, because it concerns playback rather than driving, so it is the least entangled of the three uses he ranked. ⚠️ His call, and both orders are defensible.
 
 **452 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 52. ✅⭐⭐⭐ STEP 2 IS BUILT — `--arms`, THE `a` SELECTOR, ONE ROW PER ARM — AND THE TESTED PARK IS NOT THE ONE THAT RUNS — 2026-08-14, evening
+
+> [ROADMAP §6.1](ROADMAP.md) step 2, landed as three commits: `9aae3a8` the flag, `2a2dab8` the selector, `8557e76` the rows. **486 headless tests, `check_restructure.py` green, nothing pushed.** ⬜ **Not yet seen on the arm** — the bench test is one question and it is in [HANDOFF](HANDOFF.md).
+
+### 52.0 ✅ WHAT IS NOW BUILT, AND WHAT IT DELIBERATELY REFUSES TO DO
+
+| piece | state |
+|---|---|
+| `--arms B` / `--arms B,G` parse, `--arm B` unchanged | ✅ `src/arm_session.py::parse_arms`, 11 tests |
+| `a` cycles which arm the MODE keys aim at, B → G → BOTH | ✅ `ArmSelector`, 5 tests |
+| one status row per arm, session facts on the first row only | ✅ `StatusLine.set_rows` + `status_row()`, 18 tests |
+| ⛔ **two arms actually running** | ❌ **refused, on purpose** — see 52.1 |
+
+⛔⭐ **`--arms B,G` ERRORS OUT AND SAYS WHY, and that refusal is the safety content of the whole step.** Step 1 moved one arm's *state* onto an object, so the shape takes N arms. Everything around it is still single-arm: **one SpaceMouse is opened, one axis map is loaded, one robot is built, one park pose is read.** So two arms would drive B, never build G, and print a plan naming both. ⚠️ **The hazard is not a flag that does nothing — it is a flag that reads as two arms being under control while the second is not being commanded at all**, and an uncommanded arm that someone has raised sags ([§11](FINDINGS.md)). That is working-contract rule 4: never warn-and-continue on a hazard you have correctly identified.
+
+⭐ **A subprocess test pins the refusal**, because a dry run is the only way a headless test can reach `main()` at all. ⚠️ **When step 2's remaining plumbing lands, that test has to be deliberately deleted** — which is the point: the refusal can neither outlive its reason nor quietly vanish before it.
+
+### 52.1 ⛔⭐⭐⭐ THE FINDING OF THE STEP: STEP 1 MOVED THE STATE AND NOT THE BEHAVIOUR, SO THE TESTED PARK IS THE ONE THAT DOES NOT RUN
+
+**Checked, not assumed** — `rg 'arm\.(step_path|begin_path|enter_hold|enter_teleop|enter_guide|resync|clamp_gripper|read_thermal|gripper_stall_release)\(' scripts/teleop_session.py` returns **nothing**. The script calls exactly one method on the class, `arm.alive()`, once, in the incident record.
+
+⛔ **So `ArmSession` today is two things at once:** the live home of 21 fields of per-arm state, which the script reads and writes on every cycle — and **eleven methods that nothing outside their own tests has ever executed.** `step_path()` implements the park; the park that actually drives the arm is the `mode == "park"` branch in `main()`. Both exist, both are maintained, and **the tested one is inert.**
+
+⚠️⚠️ **WHY THIS IS WORSE THAN ORDINARY DUPLICATION, AND IT IS A [§0](FINDINGS.md) DEFECT IN THE DOCUMENTATION LAYER.** A reader who opens `scripts/test_arm_session.py`, sees 45 passing tests covering the park cursor, the waypoint marks, the stall verdict and the gripper release, and concludes *the park is proven* would be **wrong about the code that moves 4.3 kg** — and nothing in the file says so. The claim is true of a copy. This is the same shape as a measurement whose instrument is not recorded beside it ([§36.3](FINDINGS.md)): the number is real, the thing it describes is not what the reader thinks.
+
+⭐ **What the class's own docstring said until this session:** *"STATUS, 2026-08-13: built, unit-tested, brought up to date, and STILL NOT wired into `teleop_session.py`."* True when written, wrong the next morning when step 1 landed. It now says what is wired and what is not, and points at `check_restructure.py` — **a script that recomputes the answer, rather than a sentence that has to be maintained** ([§33.3](FINDINGS.md)).
+
+⭐⭐ **THE DECISION, WITH THE REASONING, so it is not re-litigated:** the remaining plumbing **parameterises the script's own closures by arm** rather than switching the script over to the class's methods. Two arms then run on code Julien has already driven, with no behaviour change to confirm. **Collapsing the two implementations is the right end state and it is a separate, behaviour-changing commit** that costs a bench session — tracked in [ROADMAP §8.2](ROADMAP.md). ⛔ **The one trap found while checking equivalence:** the script does `arm.mode = "park"` and *then* calls its own `enter_hold()`, which does not touch the mode; the class's `enter_hold()` sets `mode = "hold"`. A naive substitution at that one site would leave a park running in HOLD. Every site needs that check, which is exactly why it is not a mechanical change.
+
+### 52.2 ⭐⭐ THE STATUS ROW COULD ONLY EVER BE EXECUTED ON THE ARM, AND NOW IT CANNOT BE THE THING THAT KILLS A SESSION
+
+The heartbeat row was **sixty lines inside the 100 Hz loop**. No test could reach it, `--yes` is required to get near it, and it runs one second into a session — so a formatting slip in it would present as *the session dying for no visible reason*, with the motors live.
+
+⭐ It is now `status_row()` at module level with **13 tests** against a fake arm, and they pin the three things the row exists to show — each of which was once a defect found by *looking at this line*:
+
+| the row shows | the defect it exists for |
+|---|---|
+| `??°C ⚠️BLIND`, never a number | a failed read became 0 °C and disarmed the thermal stop ([§24.1](FINDINGS.md)) |
+| drift from where GUIDE started | 33 s of an arm sinking while the readout said 35 °C ([§11](FINDINGS.md)) |
+| how much reach is left | the workspace wall was invisible ([§41.1](FINDINGS.md)) |
+
+Plus the two that would kill a session rather than mislead: a six-motor arm (`--no-gripper`) has no jaw temperature and must not `IndexError`, and **the row must never command anything.**
+
+⭐ **The transferable form, and it sharpens the rule this repo already had.** *The class decides, the script narrates* was written to make decisions testable. **It said nothing about the narration, and the narration is what a human reads to decide whether to hit the power switch.** A display block inside a control loop is untestable code in the most-read part of the program.
+
+### 52.3 ⚠️ TWO MORE INSTANCES OF THE STALENESS PATTERN, BOTH IN `COMMANDS.md`, BOTH FIXED
+
+[§33.3](FINDINGS.md) counted six; these are the eighth and ninth, and they were found by reading the file to add one row to it:
+
+1. **It advertised `--box 0.4`**, removed on 2026-08-14 when the workspace became a sphere plus a floor ([§43](FINDINGS.md)). The flag now errors, deliberately, so the document was recommending a command that fails.
+2. **It said `ö`/`ä` change the gripper step**, wrong since 2026-08-13. Those keys mean the ease ramp everywhere now, and the gripper step became `--gripper-step` precisely because one key meaning two things pushed the step to its 0.200 ceiling by accident ([§30](FINDINGS.md)).
+
+⭐ **Both are the "cache with no invalidation" pattern in its cheapest form:** a document that lists flags will go stale every time a flag changes, and nothing checks it. **The remedy that would actually work is mechanical** — a check that every flag named in `COMMANDS.md` exists in the script's parser, and that every flag in the parser is named in `COMMANDS.md`. Not built; logged in [ROADMAP §8.2](ROADMAP.md).
+
+### 52.4 ⚠️ A COUNT THAT WENT DOWN WHILE THINGS WERE ADDED, AND WHY IT IS NOT A REGRESSION
+
+`check_restructure.py` reported **196** `arm.<field>` accesses after step 1 and **189** after step 2c, while two new fields were being added. **Nothing was lost.** The status block now reads its arm through the loop variable `one`, so those reads are `one.<field>` and the checker — which counts accesses through the name `arm` specifically — cannot see them.
+
+⛔ **So that number is a coherence check, not a progress metric**, and comparing it across commits invites exactly the wrong conclusion. The check that matters is the one above it: *none of the 21 moved names survives as a local*.
+
+### 52.5 ⬜ WHAT REMAINS BEFORE TWO ARMS CAN RUN, in the order I would do it
+
+Each is a commit, each leaves the script runnable, and **none of them needs the arm**:
+
+1. ⬜ The per-arm closures take an arm: `resync` · `enter_hold` · `enter_teleop` · `enter_guide` · `clamp_gripper` · `begin_path`.
+2. ⬜ Per-arm axis map and control frame (the store already supports it — `--fork-map` exists and is tested).
+3. ⬜ Per-arm park pose and slots (`park_slots(data, name)` is already keyed by arm).
+4. ⬜ Per-arm puck: one `pick_device_by_wiggle(exclude=…)` call per arm, which is built and tested (`scripts/test_puck_assignment.py`).
+5. ⬜ Per-arm CONTROLS and button state: `last_active_axis` · `last_active_value` · `last_input_kind` · `learn_button` · `buttons_prev`.
+6. ⬜ `for one in arms:` around the thermal read, the stall guard and the mode action; mode keys apply to `selection.names()`.
+7. ⬜ The shutdown and consent flow over N arms — ⛔ **a fault on one arm stops both** (ROADMAP §6's ruling), and the park-then-disable path has to run for every arm.
+8. ⬜ Build N robots, drop the refusal, delete the test that pins it, and refuse `--start-mode guide` when N>1.
+
+⚠️ **Then, and only then, step 3 needs arm G**, which a colleague borrows ([§35.6](FINDINGS.md)). **That is the next thing that needs Julien for a physical action.**
+
+**486 headless tests. Nothing pushed (working-contract rule 9).**
