@@ -3584,3 +3584,136 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
 ⭐ **What proves it worked:** `uv run scripts/check_recordings.py` shows `7.json` with **`arms` = `B,G`**, and the playback drove both arms.
 
 **512 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 57. ⛔⭐⭐⭐ SIX DEFECTS FROM HIS THIRD TWO-ARM SESSION, AND THE SPEED ANSWER IS A LAYER NOBODY HAD LOOKED AT — 2026-08-15, small hours
+
+> Julien: *"works really well in general"*, then two specific complaints that were both right and both pointed at real defects. **519 headless tests, eight checks green, nothing pushed.**
+
+### 57.0 ✅ WHAT WORKED, from his output
+
+Recording two arms works: `⏺ RECORDING B TELEOP · G TELEOP (14 joints per sample)`, then `⏹ RECORDED 4.9s, 440 samples`, then saved. ⭐ **The 14-wide sample, the per-arm modes in the label and the save all did what they were built to do on the first try.** Both arms parked to their own slice of the start pose, one at 0.60 rad of travel and the other at 1.05.
+
+⭐ **Also confirmed:** MIRROR with the leader in TELEOP and then in GUIDE, `--max-speed 5` accepted and survived (44-48 °C against a 55 °C warning), and the loop at 88-90 Hz with two arms.
+
+### 57.1 ⛔⭐⭐⭐ THE PLAYBACK CANCELLED ITSELF, AND HIS LOG HELD THE PROOF ONE LINE APART
+
+```
+     arm B is at the start pose; waiting for G.
+  ⚠️  playback cancelled — it never reached the start pose.
+```
+
+**The "leaving PARK abandons the run" block fires for any arm whose mode is no longer `park` while `park_path` is still set.** An ARRIVAL sets the mode to `hold` and left the path in place, so the next cycle treated a **completed** park as an abandoned one and cancelled the pending playback the park existed to reach.
+
+⚠️⚠️ **IT COULD NOT SHOW WITH ONE ARM.** The handover happened in the same cycle as the arrival, so nothing was pending when that block ran. With two arms the first arrival WAITS for the second, so the pending playback was still there to cancel. **That is the third defect in two days whose signature is "correct at N=1 by construction"** ([§54.1](FINDINGS.md), [§56.5](FINDINGS.md)).
+
+✅ **Fixed twice over, deliberately.** The arrival clears its own path, and the cancel is gated on the **measured** remaining path (`left > PARK_TOLERANCE`). ⭐ The second half is the one that cannot rot: a future exit that forgets to tidy up still cannot cancel a playback whose park actually finished.
+
+### 57.2 ⛔⭐⭐ A STALE READ IN THE PLAYBACK, AND IT WOULD HAVE CORRUPTED THE ONE MEASUREMENT THAT MATTERS
+
+When the playback moved out of the per-arm loop ([§56](FINDINGS.md)) it kept feeding `q` to the tracking log. `q` had been that arm's measured pose. **It is still a bound local of `main()` from other branches** — the park, the save handler — so it did not raise.
+
+⛔ **It silently handed `TrackingLog` a 7-element snapshot taken at the end of the park, against 14-element targets**, and `observe()` quietly compared the first seven joints. That table is the only measurement anyone has of what the arm can physically follow ([§37.1](FINDINGS.md)), and it would have been wrong with nothing on screen to say so.
+
+⭐ **Found by scanning the moved block for every name it READS but never WRITES**, which left only `all` and `range`. ⚠️ **No checker can see this class today:** `q` resolves, so check 4 is satisfied, and it is not a loop variable, so check 6 is not either.
+
+### 57.3 ⛔⭐⭐⭐ THE SPEED ANSWER: `SafeRobot` CLIPS THE COMMAND TO 0.25 rad FROM THE MEASURED POSE
+
+**Julien:** *"The max speed increasing didn't work as well as I was hoping. The robot was never blocked by anything. It just, like, didn't kind of catch up at high speeds."* **He was right on both counts, and the reason is a layer below anything the speed discussion had touched.**
+
+`SafeRobot.command_joint_pos` applies **two** limits, and only the first was ever discussed:
+
+1. a rate limit: the command may not move more than `max_speed · dt` per call — this is what `--max-speed` raises;
+2. ⛔ **a following-error limit: the command may never be more than `max_lag` = 0.25 rad from the MEASURED position.**
+
+⭐⭐ **So the mirror's gap can never be closed by more speed.** The gap it measures is `leader − follower_measured`, which is `(leader − command) + (command − follower_measured)`, and the second term is clipped at 0.25. **With a 0.35 rad trip limit, the leader only has to get 0.10 rad ahead of the follower's command.** Past a certain leader speed that is unavoidable, whatever `max_speed` says.
+
+⚠️ **AND THE OTHER HALF OF WHY IT FELT LIKE NOTHING HAPPENED: `--max-speed` never touched teleop at all.** TELEOP clamps its own per-cycle joint change to `MAX_JOINT_STEP` = 0.015 rad, which is **1.5 rad/s** and sits below `--max-speed`. He raised the ceiling to 5 and teleop stayed exactly as fast as before.
+
+✅ **Three changes, none of which moves a default:**
+
+| flag | what it is |
+|---|---|
+| `--max-speed` | the `SafeRobot` rate cap (existed since earlier tonight) |
+| ⭐ `--teleop-speed` | the per-cycle IK clamp, **the number that actually binds teleop, a park and a playback** |
+| ⭐ `--mirror-gap` | how far the follower may fall behind before the link stops. **A tolerance, not a speed** |
+
+⭐ **And the plan line now prints every layer and which one wins:** `joint speed : teleop 2.50 · planned 2.50 · mirror 5.00 rad/s`, with a second line naming the 0.25 rad following-error limit. [§37.0](FINDINGS.md) cost four days to the same invisibility; naming the number was the fix then, and showing which one binds is the fix now.
+
+⭐⭐ **RECOMMENDATION ON RECORD, and it is his call as always** ([§37.2](FINDINGS.md)): `--max-speed 2 --teleop-speed 2`, which doubles teleop and matches the raise-in-steps plan already written down. For MIRROR add `--mirror-gap 0.6`, because the follower's lag at speed is physics rather than a fault. ⛔ **Watch the `⚠️ STUCK lead` warning, not temperature** — 44-48 °C in his `--max-speed 5` run against a 55 °C warning.
+
+### 57.4 ⭐⭐ THE MIRROR STOP NOW HAS THREE MEASURED CAUSES, because two were not enough
+
+At `--max-speed 1.5` it correctly said *"the leader moved it at 2.21 rad/s and the follower may only move at 1.50"*. ⛔ **At `--max-speed 5` it said *"blocked, at a joint limit, or faulted"* and nothing was blocked.** The follower was tracking as hard as it could.
+
+✅ `MirrorLink` measures the **follower's** speed as well as the leader's, giving three causes decided in order of certainty:
+
+| cause | test | what it means |
+|---|---|---|
+| `stuck` | the follower barely moved (< 0.05 rad/s) | blocked, at a joint limit, or faulted |
+| `follow_limit` | the leader was faster than the follow allowance | the SOFTWARE limit binds — raise `--max-speed` |
+| `tracking` | the follower moved nearly as fast as asked and still lost ground | ⭐ **the ARM is the limit** — more speed will not help |
+
+⭐ The script adds the hardware's own evidence: `SafeRobot`'s clip count **for that link**, which is direct proof the command was being held back. And the advice differs per cause, including saying plainly when more speed will not help.
+
+⛔ **The message was also TRUNCATED in his run**, losing the half that named the cause. `StatusLine.say()` fits each line to the terminal while a live block is up. The reason and the detail are separate fields now, one per line, with a test asserting both stay short.
+
+### 57.5 ⛔⭐⭐ I DISARMED A GUARD BY RENAMING A LABEL, AND CAUGHT IT THE SAME DAY
+
+`check_recordings.py::label_verdict` flags a recording whose label says HOLD while the arm moved at hand-guiding speed. **Its rule was `method == "live:hold"`, an exact match on a label FORMAT.**
+
+Making the recorder multi-arm changed the label to `live:B:hold`, or `live:B:guide+G:mirror`. ⛔ **So the check that caught `3.json` would never have fired again.** Nothing failed. It parses the label now — strip `live:`, split on `+`, drop any `ARM:` prefix — and a test pins seven cases across both formats.
+
+⚠️ **The general form: a guard that matches a string is coupled to a format, and a format change is exactly the kind of edit nobody thinks of as touching safety.**
+
+### 57.6 ⛔ HE OVERWROTE `1.json`, WHICH IS THE FIFTH TIME A SLOT HAS BEEN LOST
+
+His two-arm recording saved to slot 1 and replaced a hand-guided one-arm take from 2026-08-13. Twice before, an overwrite destroyed the only copy of a measurement ([§33.2](FINDINGS.md), [§34.7](FINDINGS.md)), and once more three hours later. **Every time, the prompt said nothing about what was in the slot.**
+
+✅ **An occupied slot now names what it holds and asks for the same digit again**, the shape `l` and `p` already use. `src/recording.py::describe_slot` reads the FILE rather than the name, and reports an unreadable slot as unreadable, because that matters most to whoever is about to replace it.
+
+### 57.7 ⛔⭐⭐ A DOCSTRING DESCRIBED A FEATURE THAT WAS NEVER WRITTEN
+
+`src/mirror.py`'s header has said since 2026-08-11 that *"alignment reports its progress and gives up rather than chasing forever, exactly like PARK's stall detector."* **The gap check only ever ran in the `following` state.** A leader that kept moving during ALIGNING had the follower chasing it indefinitely.
+
+⚠️ Julien never hit it, because the plan line tells him to hold the leader still and he did. ⭐⭐ **The lesson is about writing, not about mirrors: a design note written in the present tense reads afterwards as a description of the code.** This one sat three days inside the file whose whole argument is that untested behaviour fails on first contact.
+
+✅ Implemented, with the patience PARK uses, and the header now says both what it does and that it was false until today.
+
+### 57.8 ⛔ A PARK COULD HIJACK A PENDING PLAYBACK
+
+`l` parks each arm to the recording's start pose and hands over on arrival, because **the first command of a playback is the only dangerous one**. Pressing `p 0` during that park replaced the path with a park to the BASE pose, and the arrival still handed over. **The recording would have begun from a pose it was never taught.**
+
+✅ `begin_path` cancels a pending playback unless it is the playback's own call. ⭐ Found by auditing rather than by hitting it: it needs `p` pressed inside the two or three seconds the start-pose park takes.
+
+### 57.9 ⚠️ THREE OF MY OWN TEST SCENARIOS IN A ROW DID NOT MODEL WHAT THEY CLAIMED
+
+1. Two arms parking "together" was checked by comparing command COUNTS, which sequential parking also satisfies ([§56](FINDINGS.md)).
+2. A follower "at its physical limit" closed a third of the gap per cycle, which keeps up easily; the link never tripped.
+3. An alignment "chasing a moving leader" had the follower 1.0 rad ABOVE the leader and then moved the leader UP, so the leader closed the gap itself.
+
+⭐⭐ **All three passed while proving nothing, and all three were caught by printing the per-cycle trace.** That is now the rule, written into the tests themselves: **a dynamics scenario built from intuition needs its trace read once before its assertion is trusted.** It is working-contract rule 5 applied to the test's own setup rather than to the claim.
+
+### 57.10 ⬜ WHAT IS NEXT
+
+1. ⬜⭐⭐ **Record and play back two arms end to end.** The cancel bug stopped him at the last step, and it is fixed. Procedure: [§57.11](FINDINGS.md).
+2. ⬜⭐ **Try `--max-speed 2 --teleop-speed 2`** and see whether teleop feels different, which is the first time that number has ever moved.
+3. ⬜ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23).
+4. ⬜ **A collision model** ([ROADMAP §8.2](ROADMAP.md) item 25) — needs his decision on the margin.
+5. ⬜ **The throttle message that names an unmeasured cause** ([ROADMAP §8.2](ROADMAP.md) item 21). It is the last of the four guessing messages; three were fixed tonight.
+
+### 57.11 ⬜⭐⭐ THE RUN THAT IS OWED — the two-arm recording, end to end
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 2 --teleop-speed 2 --mirror-gap 0.6
+```
+
+1. **`a` to BOTH, `t`** — drive both arms with both pucks for a few seconds.
+2. **`w`**, move both arms, **`w`**, then **`7`**. ⭐ Slot 7 is empty; an occupied slot now tells you what is in it and asks again.
+3. **`l` then `7`, then Enter.** Both arms park to their own start pose. ⭐ **Watch for *"waiting for G"* followed by the playback actually starting** — that is the fixed bug.
+4. **`q` `q`.**
+
+⭐ **Proof afterwards:** `uv run scripts/check_recordings.py` shows `7.json` with `arms` = `B,G`, and the playback printed a per-joint table naming rows `B base_yaw`, `G base_yaw` and so on.
+
+**519 headless tests. Nothing pushed (working-contract rule 9).**
