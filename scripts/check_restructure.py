@@ -64,6 +64,9 @@ MOVED_SO_FAR = [
     # Two pucks have two answers to "which control did you just use".
     "last_active_axis", "last_active_value", "last_input_kind", "learn_button",
     "buttons_prev",
+    # ⭐ Step 2 plumbing 7/8: the last chain read, per arm, kept for the incident record —
+    # a fresh read on a dead chain raises, so the last good one is what describes a failure.
+    "states", "temps",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
@@ -176,13 +179,26 @@ def run(moved: list[str]) -> int:
     if not bare and not decl:
         print(f"✓ none of the {len(moved)} moved name(s) survive as locals: {', '.join(moved)}")
 
-    # 2. They must actually be reached through the object.
+    # 2. They must actually be reached through an ArmSession object.
+    #
+    # ⚠️ THROUGH `arm` **OR** `one`, and widening it was forced by real code rather than by
+    # taste. Step 2 wraps the per-cycle work in `for one in arms:`, so the thermal read
+    # reaches `stall_since`, `hottest` and `jaw_temp` through the loop variable. Keyed on
+    # `arm` alone, this check reported *"moved but never read through `arm` — did the field
+    # get dropped?"* for three fields that had just been moved correctly.
+    #
+    # ⛔ The two names mean different things and this is not a rename: `arm` is the
+    # constructed object, `one` is whichever arm the current iteration is acting on. Check 3
+    # stays keyed on `arm` alone for exactly that reason — the ordering question is about
+    # construction, and `one` only ever comes from a list built after it.
+    holders = ("arm", "one")
     used = {}
     for node in ast.walk(fn):
         if (isinstance(node, ast.Attribute) and node.attr in moved
-                and isinstance(node.value, ast.Name) and node.value.id == "arm"):
+                and isinstance(node.value, ast.Name) and node.value.id in holders):
             used[node.attr] = used.get(node.attr, 0) + 1
-    print(f"✓ arm.<field> accesses: {sum(used.values())}  {dict(sorted(used.items()))}")
+    print(f"✓ arm.<field> / one.<field> accesses: {sum(used.values())}  "
+          f"{dict(sorted(used.items()))}")
     missing = [m for m in moved if m not in used]
     if missing:
         faults += len(missing)

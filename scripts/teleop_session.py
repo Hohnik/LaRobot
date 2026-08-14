@@ -983,7 +983,9 @@ def main() -> int:  # noqa: PLR0915
         robot, note = build_robot(arm_names[0], zero_gravity=(start_mode == "guide"),
                                   with_gripper=not args.no_gripper)
         print(f"  {note}\n")
-        chain = robot.motor_chain
+        # ⚠️ `chain = robot.motor_chain` was here and is gone. The thermal read is per arm
+        # now and asks `one.robot.motor_chain` each cycle, which is also the honest thing to
+        # ask: a cached chain handle from one arm is meaningless to another.
 
         # ⭐⭐ STEP 1 OF THE BIMANUAL RESTRUCTURE STARTS HERE. ROADMAP §6.1.
         #
@@ -1328,12 +1330,24 @@ def main() -> int:  # noqa: PLR0915
                                    "released until you choose below (Ctrl-C again forces it)")
                     break
 
-                # ---- 1. is the robot still there? -------------------------
-                if not chain_alive(robot):
-                    stop_reason = (
-                        "the motor chain STOPPED — I2RT's control thread exited, almost "
-                        "certainly on a motor fault. Commands are no longer reaching the arm."
-                    )
+                # ---- 1. is every robot still there? -----------------------
+                # ⛔⭐ A FAULT ON ONE ARM STOPS ALL OF THEM. ROADMAP §6's ruling, and the
+                # reason is physical: a chain death on B must not leave G uncommanded and
+                # sagging while the operator is still looking at B.
+                #
+                # ⛔⭐⭐ NOTE THE SHAPE, BECAUSE `break` CHANGED MEANING HERE. This used to
+                # be `if not chain_alive(robot): stop_reason = …; break`, straight out of the
+                # `while`. Inside a `for one in arms:` a `break` leaves only the FOR, so the
+                # cycle would carry on commanding arms with a stop already decided. The stop
+                # is recorded in the loop and acted on after it.
+                for one in arms:
+                    if not one.alive():
+                        stop_reason = (
+                            f"arm {one.name}: the motor chain STOPPED — I2RT's control "
+                            "thread exited, almost certainly on a motor fault. Commands "
+                            "are no longer reaching the arm."
+                        )
+                if stop_reason:
                     break
 
                 # ---- 2. temperatures and the gripper stall guard -----------
@@ -1344,48 +1358,60 @@ def main() -> int:  # noqa: PLR0915
                 # and printed a calm "hottest 0°C". A guard with a path around it is
                 # the defect this repo keeps paying for (working contract rule 7);
                 # here the path was its own exception handler. See ThermalGuard.
-                try:
-                    states = chain.read_states()
-                    read_error = None
-                except Exception as exc:  # noqa: BLE001
-                    states, read_error = None, f"{type(exc).__name__}: {exc}"
+                #
+                # ⚠️ Per arm, and each arm keeps its OWN last reading, because the incident
+                # record wants the last good values from a chain that may now be dead.
+                for one in arms:
+                    try:
+                        one.states = one.robot.motor_chain.read_states()
+                        read_error = None
+                    except Exception as exc:  # noqa: BLE001
+                        one.states, read_error = None, f"{type(exc).__name__}: {exc}"
 
-                if states is None:
-                    arm.hottest, arm.jaw_temp = None, None
-                    arm.stall_since = None                # cannot judge a stall we cannot see
-                    verdict = arm.thermal.update(None)
-                else:
-                    temps, arm.hottest, arm.jaw_temp = motor_temperatures(states, N_ARM)
-                    verdict = arm.thermal.update(
-                        arm.hottest, arm.jaw_temp,
-                        motor=temps.index(arm.hottest) if arm.hottest is not None else None)
-                    # ---- gripper stall guard ------------------------------
-                    # ⚠️ With --no-gripper the chain has 6 motors, so states[6] would
-                    # IndexError. It used to be guarded by raising StopIteration out of
-                    # the shared try — which worked, but meant the "no gripper" path and
-                    # the "read failed" path were the same code path. Now it is just an
-                    # if, because there is nothing left to jump out of.
-                    jaw = states[N_ARM] if len(states) > N_ARM else None
-                    if jaw is None:
-                        arm.stall_since = None
-                    elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
-                            and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
-                        if arm.stall_since is None:
-                            arm.stall_since = loop_start
-                        elif loop_start - arm.stall_since > GRIPPER_STALL_SECONDS:
-                            measured_jaw = float(np.asarray(robot.get_joint_pos(), dtype=float)[N_ARM])
-                            print(f"\n⚠️  GRIPPER STALLED ({jaw.eff:+.2f} Nm, not moving) — releasing it to "
-                                  f"{measured_jaw:.3f} so it stops pushing.\n")
-                            arm.gripper_value = measured_jaw
-                            arm.stall_since = None
+                    if one.states is None:
+                        one.hottest, one.jaw_temp = None, None
+                        one.stall_since = None            # cannot judge a stall we cannot see
+                        verdict = one.thermal.update(None)
                     else:
-                        arm.stall_since = None
+                        one.temps, one.hottest, one.jaw_temp = motor_temperatures(
+                            one.states, N_ARM)
+                        verdict = one.thermal.update(
+                            one.hottest, one.jaw_temp,
+                            motor=one.temps.index(one.hottest)
+                            if one.hottest is not None else None)
+                        # ---- gripper stall guard ------------------------------
+                        # ⚠️ With --no-gripper the chain has 6 motors, so states[6] would
+                        # IndexError. It used to be guarded by raising StopIteration out of
+                        # the shared try — which worked, but meant the "no gripper" path and
+                        # the "read failed" path were the same code path. Now it is just an
+                        # if, because there is nothing left to jump out of.
+                        jaw = one.states[N_ARM] if len(one.states) > N_ARM else None
+                        if jaw is None:
+                            one.stall_since = None
+                        elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
+                                and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
+                            if one.stall_since is None:
+                                one.stall_since = loop_start
+                            elif loop_start - one.stall_since > GRIPPER_STALL_SECONDS:
+                                measured_jaw = float(np.asarray(
+                                    one.robot.get_joint_pos(), dtype=float)[N_ARM])
+                                print(f"\n⚠️  ARM {one.name} GRIPPER STALLED "
+                                      f"({jaw.eff:+.2f} Nm, not moving) — releasing it to "
+                                      f"{measured_jaw:.3f} so it stops pushing.\n")
+                                one.gripper_value = measured_jaw
+                                one.stall_since = None
+                        else:
+                            one.stall_since = None
 
-                if verdict.warning:
-                    detail = f"  ({read_error})" if read_error else ""
-                    print(f"\n⚠️  {verdict.warning}{detail}\n")
-                if verdict.stop_reason:
-                    stop_reason = verdict.stop_reason
+                    if verdict.warning:
+                        detail = f"  ({read_error})" if read_error else ""
+                        print(f"\n⚠️  arm {one.name}: {verdict.warning}{detail}\n")
+                    # ⛔ Recorded, not `break`ed — see the note on the liveness loop above.
+                    # ⚠️ A thermal stop on ONE arm stops the session, same ruling as a chain
+                    # death: the alternative is one arm cooking while the other is driven.
+                    if verdict.stop_reason:
+                        stop_reason = f"arm {one.name}: {verdict.stop_reason}"
+                if stop_reason:
                     break
 
                 # ---- 3. keys ----------------------------------------------
@@ -2755,33 +2781,47 @@ def main() -> int:  # noqa: PLR0915
                 bad_stop = bool(stop_reason) and "quit requested" not in (stop_reason or "")
                 # ⚠️ Every value below is the LAST one the loop managed to read, not a
                 # fresh read. A fresh read on a dead chain raises, and the last good
-                # reading is what actually describes the failure. `states` and `temps`
-                # persist past the loop because Python keeps a function's locals.
+                # reading is what actually describes the failure. Each arm keeps its own
+                # last read in `one.states` / `one.temps` for exactly this.
+                #
+                # ⭐ ONE ENTRY PER ARM, in `arms` order. With two arms a single `"arm"` key
+                # would have to name one of them, and the other arm's torques at the moment
+                # of the fall are the ones that might explain it. `arms` is empty on the
+                # failed-build path, so the list is simply empty rather than guarded.
                 facts = {} if not bad_stop else {
                     "stop_reason": stop_reason,
-                    # ⚠️ Not `arm.name`: this block also runs when the build failed and
-                    # `arm` is None. Every read of the object below is wrapped in
-                    # `_safe_fact` for the same reason.
-                    "arm": arm_names[0],
-                    "mode": _safe_fact(lambda: arm.mode),
-                    "commanded_joints": _safe_fact(
-                        lambda: [round(float(v), 4) for v in arm.prev_q]),
-                    "measured_joints": _safe_fact(
-                        lambda: [round(float(getattr(s, "pos", float("nan"))), 4) for s in states]),
-                    "ee": _safe_fact(lambda: [round(float(v), 4) for v in arm.teleop.ee_position()]),
+                    "arms": [one.name for one in arms] or arm_names,
                     "reach_limit": args.reach,
                     "floor_limit": args.floor,
                     "loop_hz": _safe_fact(lambda: round(loop_hz, 1)),
-                    "hottest_seen_c": _safe_fact(lambda: arm.thermal.max_seen),
-                    "hottest_jaw_seen_c": _safe_fact(lambda: arm.thermal.max_jaw_seen),
-                    "last_temperatures_c": _safe_fact(
-                        lambda: [round(float(v), 1) for v in temps]),
-                    # ⭐ The field whose absence cost the most on 2026-08-14: the gravity
-                    # torques at the moment of failure had to be recovered by simulating
-                    # the joint angles, when the arm had measured them and thrown them away.
-                    "last_torques_nm": _safe_fact(
-                        lambda: [round(float(getattr(s, "eff", float("nan"))), 3) for s in states]),
-                    "chain_alive": _safe_fact(lambda: bool(arm.alive())),
+                    "per_arm": [
+                        {
+                            "arm": one.name,
+                            "mode": _safe_fact(lambda one=one: one.mode),
+                            "commanded_joints": _safe_fact(
+                                lambda one=one: [round(float(v), 4) for v in one.prev_q]),
+                            "measured_joints": _safe_fact(
+                                lambda one=one: [round(float(getattr(s, "pos", float("nan"))), 4)
+                                                 for s in one.states]),
+                            "ee": _safe_fact(
+                                lambda one=one: [round(float(v), 4)
+                                                 for v in one.teleop.ee_position()]),
+                            "hottest_seen_c": _safe_fact(lambda one=one: one.thermal.max_seen),
+                            "hottest_jaw_seen_c": _safe_fact(
+                                lambda one=one: one.thermal.max_jaw_seen),
+                            "last_temperatures_c": _safe_fact(
+                                lambda one=one: [round(float(v), 1) for v in one.temps]),
+                            # ⭐ The field whose absence cost the most on 2026-08-14: the
+                            # gravity torques at the moment of failure had to be recovered by
+                            # simulating the joint angles, when the arm had measured them and
+                            # thrown them away.
+                            "last_torques_nm": _safe_fact(
+                                lambda one=one: [round(float(getattr(s, "eff", float("nan"))), 3)
+                                                 for s in one.states]),
+                            "chain_alive": _safe_fact(lambda one=one: bool(one.alive())),
+                        }
+                        for one in arms
+                    ],
                 }
                 if bad_stop:
                     print("\n" + describe(write_incident(stop_reason or "unknown", facts)))

@@ -430,6 +430,18 @@ class ArmSession:
         # error that would hide one arm's gripper behind the other arm's shoulder.
         self.hottest: float | None = None
         self.jaw_temp: float | None = None
+        # ⛔⭐ THE LAST CHAIN READ THIS ARM MANAGED, kept because the incident record needs
+        # it AFTER the chain has died. On 2026-08-14 the arm fell, the CAN link went away,
+        # and every value describing that instant was lost — the gravity torques had to be
+        # recovered by simulating joint angles the arm had already measured and thrown away
+        # ([FINDINGS §45](../docs/FINDINGS.md)). A fresh read on a dead chain raises; the
+        # last good reading is what actually describes the failure.
+        #
+        # ⚠️ `None` means the read failed, exactly like `hottest`. Never an empty list: an
+        # empty list would read as "seven motors reporting nothing", which is a different
+        # and much calmer claim than "I could not ask".
+        self.states: Any = None
+        self.temps: Any = None
 
     # ---------------------------------------------------------- liveness ----
 
