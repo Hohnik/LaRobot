@@ -2962,3 +2962,41 @@ Every step found something that had nothing to do with moving a field:
 ⚠️ **`--arms` still does not exist.** Step 1 made the state *shape* right for N arms; it did not add the flag. That is step 2's job.
 
 **450 → 452 headless tests.**
+
+---
+
+## 51. ✅✅⭐⭐⭐ THE RESTRUCTURE IS CONFIRMED ON THE ARM — STEP 1 IS FULLY CLOSED — 2026-08-14, 18:00
+
+> Julien, after driving a session on arm B: *"Everything feels great. And as before, QQ works. Uh, all of the modes work."*
+
+### 51.0 ✅ WHAT THAT CONFIRMS, AND IT IS THE WHOLE OF STEP 1
+
+⭐⭐ **[ROADMAP §6.1](ROADMAP.md)'s N=1 test has passed.** It asked exactly one question — *does `--arms B` at N=1 feel identical?* — and the answer is yes, across **all modes**, which is what the earlier partial confirmation was missing.
+
+| what he confirmed | what it covers |
+|---|---|
+| ⭐ *"all of the modes work"* | ⭐⭐ **the gap from [§47](FINDINGS.md) is closed.** The earlier *"teleop feels identical"* only exercised `prev_q` and `home_ee`. All modes means GUIDE (`guide_ref`), the gripper (`gripper_value`, `stall_since`), PARK (all 11 park fields), CONTROLS, and `mode` itself |
+| ⭐ *"QQ works"* | the new one-key park-then-disable from [§49](FINDINGS.md), on hardware |
+| *"Everything feels great"* | no behaviour change, which was the entire requirement of a 247-reference mechanical move |
+
+✅ **So all five commits of step 1 are confirmed together**, along with the workspace sphere, the floor at the base plane, and the `q q` key. **Nothing in the 2026-08-14 body of work is now unverified on hardware**, except two things that can only show themselves during a failure: the safe stop ([§47.0](FINDINGS.md)) and the incident recorder ([§45](FINDINGS.md)).
+
+⭐⭐ **The silent hazard in [§50.2](FINDINGS.md) is also confirmed as handled.** He drove *"all of the modes"*, which includes starting in GUIDE. Had the `arm.mode = start_mode` handover been missing, that session would have run weightless while reporting HOLD.
+
+### 51.1 ⭐ WHAT THIS MEANS FOR THE SHAPE OF THE WORK
+
+⭐⭐ **The single-arm system is now finished and verified end to end**, and it has been rebuilt on a class that takes N arms. **Everything from here is addition rather than repair.** The remaining bimanual steps are [ROADMAP §6.1](ROADMAP.md) 2 through 6, and **step 3 is the first that needs arm G**, which a colleague borrows.
+
+⚠️ **`--arms` still does not exist.** Step 1 made the state *shape* right for N arms. **Adding the flag, the `a` selector and the per-arm status rows is step 2**, and it is now the next piece of engineering work in the whole project.
+
+### 51.2 ⭐⭐ AND HE ASKED WHETHER THE SPEED DIAL WAS ALREADY WRITTEN DOWN. IT WAS.
+
+> *"It would be great to have an option where maybe, like, the scroll of maybe the other mouse or something could be activated to continuously change the speeds. Then I already mentioned this at some point. Didn't I already tell you about this? If so, then just let me know where you wrote it down and when you're gonna plan on doing it."*
+
+✅ **Yes, on 2026-08-13, and it was written up the same day** in [ROADMAP §7.6](ROADMAP.md) with his original words quoted, plus [ROADMAP §8.2](ROADMAP.md) item 13 as the tracked entry. ⭐ **That is the continuation system working as designed**: he raised an idea, it was recorded, and a day later the record answered the question instead of the idea being re-derived.
+
+⛔⭐ **But re-reading it found that my own deferral reasoning was too strong, and it is now corrected in [ROADMAP §7.6](ROADMAP.md).** The note said the dial *"belongs after the two-arm work, or it will fight the assignment logic that already exists."* **Only one arm is driven today**, arm G is usually unplugged, so the second puck is free right now. **The real cost is designing a third puck role twice, which is much smaller than a conflict.**
+
+⭐ **Recommendation on record: the scrubbing version could be built before step 2 if he wants it**, because it concerns playback rather than driving, so it is the least entangled of the three uses he ranked. ⚠️ His call, and both orders are defensible.
+
+**452 headless tests. Nothing pushed (working-contract rule 9).**
