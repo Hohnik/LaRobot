@@ -25,7 +25,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import ArmSession, ParkLeg, parse_arms  # noqa: E402
+from arm_session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
 
 #: The real thing, so a rename of an arm cannot leave these tests passing against a
 #: rig that no longer has that arm.
@@ -570,6 +570,42 @@ def test_an_empty_entry_is_refused_rather_than_dropped() -> None:
     """`--arms B,` is a typo, and silently reading it as one arm would hide it."""
     assert "empty entry" in _rejected(None, "B,")
     assert "empty entry" in _rejected(None, "")
+
+
+def test_the_selector_starts_on_the_first_arm() -> None:
+    """⚠️ Not on BOTH. A session that opens with both arms selected would make the first
+    `g` anyone presses weightless on 8.6 kg."""
+    assert ArmSelector(["B", "G"]).label == "B"
+    assert ArmSelector(["B", "G"]).names() == ["B"]
+
+
+def test_the_selector_visits_each_arm_before_BOTH() -> None:
+    sel = ArmSelector(["B", "G"])
+    assert [sel.cycle() for _ in range(3)] == ["G", "BOTH", "B"]
+
+
+def test_BOTH_means_every_arm() -> None:
+    sel = ArmSelector(["B", "G"])
+    sel.cycle(); sel.cycle()
+    assert sel.label == "BOTH"
+    assert sel.names() == ["B", "G"]
+
+
+def test_one_arm_has_nothing_to_cycle_and_says_so() -> None:
+    """⭐ No invented BOTH for a single arm: BOTH of one arm is that arm, and a key that
+    appears to change something while changing nothing is FINDINGS §17.1."""
+    sel = ArmSelector(["B"])
+    assert sel.only_one()
+    assert sel.cycle() == "B"
+    assert sel.names() == ["B"]
+
+
+def test_a_selector_needs_an_arm() -> None:
+    try:
+        ArmSelector([])
+    except ValueError:
+        return
+    raise AssertionError("an empty session was accepted")
 
 
 def _dry_run(*flags: str):  # noqa: ANN202

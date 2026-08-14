@@ -168,6 +168,64 @@ def parse_arms(single: str | None, spec: str | None,
     return names
 
 
+class ArmSelector:
+    """Which arm a MODE key applies to. `a` cycles it: B → G → BOTH → B.
+
+        sel = ArmSelector(["B", "G"])
+        sel.label            # "B"
+        sel.cycle()          # "G"
+        sel.cycle()          # "BOTH"
+        sel.names()          # ["B", "G"]
+
+    ⛔⭐ WHY MODE KEYS NEED A SELECTOR AT ALL, and it is a safety argument rather than a
+    convenience one. ROADMAP §6 decided it: a global `g` would put **8.6 kg** weightless
+    in one keypress, and GUIDE is the mode where an error in the dynamics model becomes a
+    *falling* arm rather than a droop ([FINDINGS §11.1](../docs/FINDINGS.md)). So a mode
+    change is aimed at one arm unless the operator has deliberately selected BOTH.
+
+    ⭐ **Driving is NOT selected.** Each arm follows its own puck, continuously, always —
+    that is the whole point of two arms. Only mode changes and edits are aimed. Julien's
+    own words for the goal are in ROADMAP §6, and the split is in its decision table.
+
+    ⚠️ **With one arm there is nothing to cycle**, and `cycle()` says so by returning the
+    same label rather than inventing a BOTH that means the same as B. A key that appears
+    to do something while doing nothing is the `b` defect again
+    ([FINDINGS §17.1](../docs/FINDINGS.md)).
+    """
+
+    BOTH = "BOTH"
+
+    def __init__(self, names: list[str]) -> None:
+        if not names:
+            raise ValueError("a session needs at least one arm")
+        self._names = list(names)
+        #: ⭐ Every arm, then BOTH — so the first press moves to the *other* arm rather
+        #: than to BOTH. Aiming at one arm is the safe end of this cycle, so the cheapest
+        #: presses stay there.
+        self._targets = [*self._names] + ([self.BOTH] if len(self._names) > 1 else [])
+        self._at = 0
+
+    @property
+    def label(self) -> str:
+        """What the status row shows: an arm's name, or `BOTH`."""
+        return self._targets[self._at]
+
+    def cycle(self) -> str:
+        """Advance to the next target and return its label."""
+        self._at = (self._at + 1) % len(self._targets)
+        return self.label
+
+    def names(self) -> list[str]:
+        """The arms a mode key applies to right now."""
+        if self.label == self.BOTH:
+            return list(self._names)
+        return [self.label]
+
+    def only_one(self) -> bool:
+        """True when there is nothing to select between, so `a` has nothing to do."""
+        return len(self._targets) == 1
+
+
 @dataclass
 class ParkLeg:
     """One waypoint in a run: its slot name and the pose to reach."""

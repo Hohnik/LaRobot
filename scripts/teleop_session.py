@@ -109,7 +109,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
-from arm_session import ArmSession, parse_arms  # noqa: E402
+from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
@@ -308,6 +308,8 @@ HELP = """
   SPEED     - / +  linear             , / .  rotation
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
+  ARMS      a  which arm the MODE keys aim at (B → G → BOTH). Driving always drives
+               every arm; only mode changes and edits are aimed
   OTHER     r  wrist rotation on/off   ?  help
   QUIT      q  then: q = park+disable (all of it)   p = park   g = weightless   d = disable
             ⭐ to park WITHOUT quitting, press p in the session, then t to carry on
@@ -880,6 +882,23 @@ def main() -> int:  # noqa: PLR0915
         arm.mode = start_mode
         arm.prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
 
+        # ⭐⭐ THE LIST THE LOOP WILL ITERATE, AND THE SELECTOR THAT AIMS THE MODE KEYS.
+        # ROADMAP §6.1 step 2.
+        #
+        # ⚠️ One entry today, built by hand rather than in a loop, because building a
+        # second robot is a hardware action and `--arms B,G` still refuses. When it stops
+        # refusing, the single build above becomes the body of `for name in arm_names:`
+        # and this line becomes the list it appends to.
+        #
+        # ⭐ `arm` stays the name for the one arm being acted on, which is what keeps the
+        # 196 `arm.<field>` sites and `scripts/check_restructure.py` meaningful.
+        arms = [arm]
+        # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg
+        # weightless in one keypress, and GUIDE is where a dynamics-model error becomes a
+        # falling arm rather than a droop (FINDINGS §11.1). Each arm always follows its
+        # own puck. `src/arm_session.py::ArmSelector` holds the cycle and its tests.
+        selection = ArmSelector(arm_names)
+
         # ⭐ DEFAULT PARK POSE = WHEREVER THE ARM STARTED. Julien: *"if the standard
         # set position for park mode is just the starting position, then I can always
         # just press p and then d, and I don't have to do anything with my hands."*
@@ -1447,6 +1466,30 @@ def main() -> int:  # noqa: PLR0915
                         print("   Press the puck button you want for OPEN …")
                         print("   (learned by pressing, never assumed — which physical button")
                         print("    sets which HID bit has never been measured on this unit)\n")
+                        continue
+                    if k == "a":
+                        # ⭐⭐ WHICH ARM THE MODE KEYS AIM AT — ROADMAP §6's decision, and
+                        # the reason is in `ArmSelector`: `g` on two arms at once is 8.6 kg
+                        # going weightless on one keypress.
+                        #
+                        # ⚠️ Handled HERE, above the mode dispatch, for the same reason `b`
+                        # and `v` are: which arm a key applies to is a property of the
+                        # SESSION, not of a mode. A selector that worked only in TELEOP
+                        # would be the `b` defect again (FINDINGS §17.1).
+                        if any(other.mode == "map" for other in arms):
+                            # ⛔ CONTROLS is a wizard that belongs to the arm it was
+                            # entered on: it asks the operator to push one axis at a time
+                            # and edits that arm's map from the answers. Re-aiming the
+                            # keys underneath it would write one arm's answers into
+                            # another arm's map, which is the blast-radius bug the
+                            # per-arm map store exists to prevent.
+                            hint("leave CONTROLS (m) before changing which arm is selected")
+                        elif selection.only_one():
+                            hint(f"arm {selection.label} is the only arm in this session "
+                                 f"— two arms is ROADMAP §6.1 step 3")
+                        else:
+                            print(f"\n⭐ SELECTED: {selection.cycle()} — mode keys apply to "
+                                  "it. Driving always applies to every arm.\n")
                         continue
                     if k == "v":
                         # ⭐ Cycle which frame the puck's directions mean. Safe to do

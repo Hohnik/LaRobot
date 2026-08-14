@@ -46,6 +46,7 @@ uv run scripts/read_arm_state.py --yes --arm B
 | **`l`** then `0`-`9` | ⭐ **PLAY a recording back.** Shows the plan and waits for **Enter**, so a slip on `l` (which sits beside `ö`/`ä`) can never start the arm. It parks to the recording's start pose first, then follows it in real time. `-`/`+` set the speed, capped from the recording's own measured top speed |
 | `e` | cycle the **ease profile** — `none` / `in` / `out` / `both` / `s-curve`. Works in **any** mode |
 | `v` | control **frame** — world / tool / camera. ⚠️ Each frame keeps its **own** axis map |
+| **`a`** | ⭐ **which arm the MODE keys aim at** — `B` → `G` → `BOTH`. **Driving always drives every arm**; only mode changes and edits are aimed. ⛔ Aimed rather than global because `g` on two arms is **8.6 kg** going weightless in one keypress ([FINDINGS §11.1](FINDINGS.md)). With one arm it says so and changes nothing. Refuses while CONTROLS (`m`) is open, since that wizard belongs to the arm it was entered on |
 | `r` | wrist rotation on / off *(on by default)* |
 | `,` / `.` | rotation speed slower / faster — **corner blending while a run is being typed or moving** |
 | **`x` `y` `z`** | flip **X / Y / UP** — **saved to `config/spacemouse_map.json`** |
