@@ -3067,8 +3067,8 @@ Plus the two that would kill a session rather than mislead: a six-motor arm (`--
 
 Each is a commit, each leaves the script runnable, and **none of them needs the arm**:
 
-1. ⬜ The per-arm closures take an arm: `resync` · `enter_hold` · `enter_teleop` · `enter_guide` · `clamp_gripper` · `begin_path`.
-2. ⬜ Per-arm axis map and control frame (the store already supports it — `--fork-map` exists and is tested).
+1. ✅ **DONE, `b33ff82`.** The per-arm helpers take the arm they act on: `resync` · `enter_hold` · `enter_teleop` · `enter_guide` · `begin_path` · `park_plan_line`, about thirty call sites. ⚠️ `clamp_gripper` takes no arm on purpose — the band is a property of the gripper hardware, identical on both arms, and it is passed to `park_target_from` as a one-argument callable.
+2. ⬜ Per-arm axis map and control frame — **88 sites, so split it in two** (`control_frame` first, then `axis_map`), the way step 1 was split. The store already supports per-arm maps (`--fork-map`, tested). ⛔ **The trap is the same one `mode` hit** ([§50.1](FINDINGS.md)): the plan print, the pre-build `map_store.for_arm()` call, the `finally` block and the closing summary all run where `arm` may be `None`, so they need a session-level `start_frame` beside `arm.frame` — **a second name, not one variable assigned twice.**
 3. ⬜ Per-arm park pose and slots (`park_slots(data, name)` is already keyed by arm).
 4. ⬜ Per-arm puck: one `pick_device_by_wiggle(exclude=…)` call per arm, which is built and tested (`scripts/test_puck_assignment.py`).
 5. ⬜ Per-arm CONTROLS and button state: `last_active_axis` · `last_active_value` · `last_input_kind` · `learn_button` · `buttons_prev`.
@@ -3078,4 +3078,22 @@ Each is a commit, each leaves the script runnable, and **none of them needs the 
 
 ⚠️ **Then, and only then, step 3 needs arm G**, which a colleague borrows ([§35.6](FINDINGS.md)). **That is the next thing that needs Julien for a physical action.**
 
-**486 headless tests. Nothing pushed (working-contract rule 9).**
+### 52.6 ⭐⭐ A NEW MECHANICAL CHECK, AND IT WAS FALSIFIED BEFORE IT WAS TRUSTED
+
+Turning six closures into functions that take an arm created about thirty call sites where **Python cannot see a wrong argument count until the line runs** — and every one of those lines is inside the control loop with the motors live.
+
+⛔ **None of the existing nets covers arity.** `compile()` accepts it. Check 4 asks only whether a *name* resolves. **A dry run returns before the loop** ([§42.0](FINDINGS.md)). So a mis-called helper's first execution would have been on the arm, mid-session.
+
+✅ **`check_restructure.py` check 5** finds every function inside `main()` whose first parameter is named `one`, then verifies every call to it passes at least one positional argument and a legal count. It reports how many helpers it found, so a rename makes it **go quiet rather than wrong**.
+
+⭐⭐ **And it was tested by breaking the file, not by reading it.** Two patched copies — one call with the arm removed, one with an argument too many — and it refused both, naming the line. ⚠️ **This is the [§0](FINDINGS.md) discipline applied to a checker instead of to the code:** a green verdict from a check nobody has ever seen fail is not evidence. It is the same rule as *prefer a test that could falsify the claim* (working-contract rule 5), aimed one level up.
+
+### 52.7 ⛔ A FIELD THAT HAD BEEN LYING SINCE `v` WAS FIRST PRESSED, AND ONLY THE COLLAPSE WOULD HAVE FOUND IT
+
+`ArmSession.frame` is set at construction from `--frame` and **was never updated when `v` cycled the control frame.** The session moved to `tool`; the object still said `world`.
+
+⭐ **Nothing reads it today, which is exactly why it was invisible** — the script builds its `CartesianTeleop` from its own `control_frame` local. ⛔ **But `ArmSession.enter_teleop()` builds one from `self.frame`**, so the collapse in [§8.2 item 23](ROADMAP.md) would have quietly put the arm back in the frame the session started in — a wrong axis mapping, arriving as *the puck drives the wrong way after pressing `v`*, with no exception anywhere.
+
+⚠️ **The general form, and it is worth more than the one-line fix:** a field that nothing reads cannot be wrong yet, and it is not therefore harmless. **It is a loaded trap for whoever wires it up.** Unwired state has no feedback path — the same reason this whole class went stale in an hour while unwired ([§52.1](FINDINGS.md)).
+
+**486 headless tests. `check_restructure.py` green with five checks. Nothing pushed (working-contract rule 9).**
