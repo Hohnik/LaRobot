@@ -113,7 +113,7 @@ from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
-from screen import StatusLine  # noqa: E402
+from screen import StatusLine, display_width  # noqa: E402
 from teleop import (  # noqa: E402
     FLOOR_LIMIT,
     FRAMES,
@@ -528,6 +528,84 @@ def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP,
         time.sleep(1.0 / CONTROL_HZ)
 
 
+def status_row(one: ArmSession, lead: str, reach: float, floor: float) -> str:
+    """ONE arm's heartbeat row: its mode, its temperatures, its pose, its warnings.
+
+    `lead` is the session's own facts — the clock, the recording, the loop rate — which
+    ride the FIRST row only. Later rows get a run of spaces of the same display width, so
+    the temperature columns line up down the block.
+
+    ⭐⭐ WHY THIS IS A FUNCTION AND NOT SIXTY LINES INSIDE THE LOOP. It was those sixty
+    lines until 2026-08-14, which meant the row a human reads to know what the arm is
+    doing could only ever be executed on the arm — no test could reach it, and a
+    formatting error in it would surface as a session dying one second after starting.
+    As a function it is testable against a fake arm, which is the same argument
+    `ArmSession` itself is built on: **the class decides, the script narrates, and the
+    narration is worth proving too.**
+
+    ⚠️ It reads and formats. It must never command anything, and it must never raise —
+    a display fault has no business stopping a session that is holding 4.3 kg.
+    """
+    q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+    extra = ""
+    if one.mode == "teleop" and one.teleop is not None:
+        extra = f"  EE {np.round(one.teleop.ee_position(), 3)}"
+        # ⭐⭐ SHOW THE WORKSPACE WALL, because it used to be invisible. Julien,
+        # 2026-08-13: *"it stops moving in the direction I want it to move even though the
+        # arm hasn't even close to fully extended."* Showing it settled the cause in one
+        # session, and the limit is now a fixed sphere around the base plus a floor rather
+        # than a cube that moved every time TELEOP was entered. FINDINGS §41.1 and §43.
+        lim_r, lim_f = effective_limits(one.home_ee, reach, floor)
+        ee_now = one.teleop.ee_position()
+        out, up = workspace_room(ee_now, lim_r, lim_f)
+        extra += f"  reach {out:.2f}/{lim_r:.2f}m"
+        if out > 0.9 * lim_r:
+            extra += " ⚠️ AT THE EDGE"
+        # ⚠️ The floor is only worth screen space when it is close. With the floor at the
+        # base plane this starts warning around z = 0, which is roughly desk height and
+        # exactly where a pick happens. So it reads as "you are down at the desk" rather
+        # than as an alarm.
+        if up < 0.10:
+            extra += f"  ⚠️ {up * 100:.0f}cm above the floor (z={ee_now[2]:+.2f})"
+        # ⭐ How far the goal is running ahead of the pose actually achieved. Pinned at the
+        # limit = the arm cannot follow (joint limit, singularity, something in the way),
+        # which used to present only as the arm behaving strangely. See
+        # CartesianTeleop._limit_lead().
+        lead_m, lead_r = one.teleop.lead()
+        if lead_m > 0.8 * one.teleop.max_lead_m or lead_r > 0.8 * one.teleop.max_lead_rad:
+            extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
+        # ⭐ Say WHY the arm feels slow. Near the workspace edge the solver needs several
+        # rad/s per joint for the same tip speed, so the twist gets throttled — and without
+        # this line that reads as unexplained sluggishness.
+        # ⚠️ The message names the reach limit as the cause and the data does not always
+        # support that: at sigma_min 0.1713, which the throttle's own docstring calls
+        # comfortable, it printed "SLOWED to 19%" (FINDINGS §41.2). Tracked as ROADMAP
+        # §8.2 item 21; the wording is not fixed here because the fix is a measurement.
+        if one.teleop.speed_scale < 0.95:
+            extra += f"  ⚠️ SLOWED to {one.teleop.speed_scale * 100:.0f}% (near the reach limit)"
+    # ⭐ `jaw` is shown separately from `hottest` on purpose. Watching this number plateau
+    # is the actual test of the 2π gripper frame fix; watching `hottest` is not, because
+    # the shoulder sits hotter than the gripper all session.
+    # ⛔ "??" when the read failed, never a number. A fabricated 0 °C is exactly what made
+    # a disarmed thermal guard look healthy on screen (FINDINGS §24.1), and the readout is
+    # the only place a human would have noticed.
+    therm = (f"hottest {one.hottest:4.0f}°C" if one.hottest is not None
+             else "hottest   ??°C ⚠️BLIND")
+    if one.jaw_temp is not None:
+        therm += f"  jaw {one.jaw_temp:4.0f}°C"
+    # ⭐ GUIDE reports DRIFT from where it went weightless. On 2026-08-10 the arm sank to
+    # its own stops over ~33 s while this line calmly read "hottest 35°C" — gravity
+    # compensation was 39% short at the elbow (FINDINGS §11) and nothing on screen was
+    # measuring the one quantity that was going wrong. The cause is fixed; the instrument
+    # should exist anyway. A readout must show what can fail, not what looks calm.
+    if one.mode == "guide" and one.guide_ref is not None:
+        sank = float(np.max(np.abs(q[:N_ARM] - one.guide_ref[:N_ARM])))
+        extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
+    label = "CONTROLS" if one.mode == "map" else one.mode.upper()
+    return (f"[{one.name} {label:8}]{lead}  {therm}"
+            f"  q {np.round(q[:N_ARM], 2)}{extra}   ")
+
+
 def main() -> int:  # noqa: PLR0915
     ap = argparse.ArgumentParser(description="Interactive YAM session: guide, teleop, park.")
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
@@ -831,8 +909,11 @@ def main() -> int:  # noqa: PLR0915
     # ⭐ It stays an object rather than a pair of floats, and the reason is worth keeping:
     # "I cannot read the temperature" is a state that has to be tracked and acted on, and
     # it used to be indistinguishable from 0 °C. See `ThermalGuard`.
-    hottest: float | None = None
-    jaw_temp = None
+    # ⚠️ `hottest` and `jaw_temp` were declared here. They are `ArmSession` fields now, so
+    # each arm reports its OWN temperatures on its own status row — as session locals they
+    # were one arm's reading painted on whichever row was being drawn.
+    # ⛔ Not left here as `arm.hottest = None`: that would run before `arm` exists, which
+    # is the ordering fault `scripts/check_restructure.py` check 3 catches.
     next_park_report = 0.0
     # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
     # `ArmSession` fields, and the class's own constructor sets exactly the same values
@@ -1174,14 +1255,14 @@ def main() -> int:  # noqa: PLR0915
                     states, read_error = None, f"{type(exc).__name__}: {exc}"
 
                 if states is None:
-                    hottest, jaw_temp = None, None
+                    arm.hottest, arm.jaw_temp = None, None
                     arm.stall_since = None                # cannot judge a stall we cannot see
                     verdict = arm.thermal.update(None)
                 else:
-                    temps, hottest, jaw_temp = motor_temperatures(states, N_ARM)
+                    temps, arm.hottest, arm.jaw_temp = motor_temperatures(states, N_ARM)
                     verdict = arm.thermal.update(
-                        hottest, jaw_temp,
-                        motor=temps.index(hottest) if hottest is not None else None)
+                        arm.hottest, arm.jaw_temp,
+                        motor=temps.index(arm.hottest) if arm.hottest is not None else None)
                     # ---- gripper stall guard ------------------------------
                     # ⚠️ With --no-gripper the chain has 6 motors, so states[6] would
                     # IndexError. It used to be guarded by raising StopIteration out of
@@ -2331,77 +2412,33 @@ def main() -> int:  # noqa: PLR0915
                               f"{' ' * 6}", end="", flush=True)
                 elif t >= next_report:
                     next_report += 1.0
-                    q = np.asarray(robot.get_joint_pos(), dtype=float)
-                    extra = ""
-                    if arm.mode == "teleop" and arm.teleop is not None:
-                        extra = f"  EE {np.round(arm.teleop.ee_position(), 3)}"
-                        # ⭐⭐ SHOW THE WORKSPACE WALL, because it used to be invisible.
-                        # Julien, 2026-08-13: *"it stops moving in the direction I want it
-                        # to move even though the arm hasn't even close to fully
-                        # extended."* Showing it settled the cause in one session, and the
-                        # limit is now a fixed sphere around the base plus a floor rather
-                        # than a cube that moved every time TELEOP was entered.
-                        # FINDINGS §41.1 and §43.
-                        lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
-                        ee_now = arm.teleop.ee_position()
-                        out, up = workspace_room(ee_now, lim_r, lim_f)
-                        extra += f"  reach {out:.2f}/{lim_r:.2f}m"
-                        if out > 0.9 * lim_r:
-                            extra += " ⚠️ AT THE EDGE"
-                        # ⚠️ The floor is only worth screen space when it is close. With the
-                        # floor at −0.10 this starts warning around z = 0, the base plane,
-                        # which is roughly desk height and is exactly where a pick happens.
-                        # So it reads as "you are down at the desk" rather than as an alarm.
-                        if up < 0.10:
-                            extra += f"  ⚠️ {up * 100:.0f}cm above the floor (z={ee_now[2]:+.2f})"
-                        # ⭐ How far the goal is running ahead of the pose actually
-                        # achieved. Pinned at the limit = the arm cannot follow (joint
-                        # limit, singularity, something in the way), which used to
-                        # present only as the arm behaving strangely. See
-                        # CartesianTeleop._limit_lead().
-                        lead_m, lead_r = arm.teleop.lead()
-                        if lead_m > 0.8 * arm.teleop.max_lead_m or lead_r > 0.8 * arm.teleop.max_lead_rad:
-                            extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
-                        # ⭐ Say WHY the arm feels slow. Near the workspace edge the
-                        # solver needs several rad/s per joint for the same tip
-                        # speed, so the twist gets throttled — and without this line
-                        # that reads as unexplained sluggishness.
-                        if arm.teleop.speed_scale < 0.95:
-                            extra += f"  ⚠️ SLOWED to {arm.teleop.speed_scale * 100:.0f}% (near the reach limit)"
-                    # ⭐ `jaw` is shown separately from `hottest` on purpose — see the
-                    # comment where it is read. Watching this number plateau is the
-                    # actual test of the 2π frame fix; watching `hottest` is not,
-                    # because the shoulder sits hotter than the gripper all session.
-                    # ⛔ "??" when the read failed, never a number. A fabricated 0 °C
-                    # is exactly what made a disarmed thermal guard look healthy on
-                    # screen, and the readout is the only place a human would notice.
-                    therm = (f"hottest {hottest:4.0f}°C" if hottest is not None
-                             else "hottest   ??°C ⚠️BLIND")
-                    if jaw_temp is not None:
-                        therm += f"  jaw {jaw_temp:4.0f}°C"
-                    # ⭐ GUIDE reports DRIFT from where it went weightless. On 2026-08-10
-                    # the arm sank to its own stops over ~33 s while this line calmly read
-                    # "hottest 35°C" — because gravity compensation was 39% short at the
-                    # elbow (FINDINGS §11) and nothing on screen was measuring the one
-                    # quantity that was going wrong. The cause is fixed; the instrument
-                    # should exist anyway. Same lesson as showing the jaw temperature
-                    # separately: a readout must show what can fail, not what looks calm.
-                    if arm.mode == "guide" and arm.guide_ref is not None:
-                        sank = float(np.max(np.abs(q[:N_ARM] - arm.guide_ref[:N_ARM])))
-                        extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
-                    # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT ROW, not only in the
+                    # ⭐⭐ ONE ROW PER ARM. ROADMAP §6.1 step 2.
+                    #
+                    # ⭐ THE SESSION FACTS RIDE THE FIRST ROW AND ARE NOT REPEATED. The
+                    # clock, the recording and the loop rate belong to the session, not to
+                    # an arm, and printing them twice would invite reading two arms as
+                    # having two clocks. Later rows are padded to the same width so the
+                    # temperature columns line up down the block.
+                    #
+                    # ⚠️ Padded with `display_width`, not `len`: `⏺` and `⚠️` are one
+                    # character and two columns, so `len` would misalign the rows by
+                    # exactly the number of symbols (`src/screen.py::display_width`).
+                    lead = f" t={t:6.1f}s"
+                    # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT, not only in the
                     # message that started it. A session where recording is silently still
                     # running produces a demonstration full of whatever happened next, and
-                    # the operator finds out at training time. So it rides the one line
-                    # that is always on screen.
-                    rec = f"  ⏺ REC {t - take_t0:5.1f}s" if take is not None else ""
+                    # the operator finds out at training time.
+                    if take is not None:
+                        lead += f"  ⏺ REC {t - take_t0:5.1f}s"
                     # ⭐ THE LOOP RATE, because it was 87 Hz for a whole session and nothing
                     # said so. It only became visible when a playback summary failed to add
                     # up. Shown only when it drops, so a healthy loop costs no width.
                     if loop_hz < 0.92 * CONTROL_HZ:
-                        rec += f"  ⚠️{loop_hz:3.0f}Hz"
-                    print(f"\r[{'CONTROLS' if arm.mode == 'map' else arm.mode.upper():8}] t={t:6.1f}s  {therm}"
-                          f"{rec}  q {np.round(q[:N_ARM], 2)}{extra}   ", end="", flush=True)
+                        lead += f"  ⚠️{loop_hz:3.0f}Hz"
+                    pad = " " * display_width(lead)
+                    screen.set_rows([status_row(one, lead if i == 0 else pad,
+                                                args.reach, args.floor)
+                                     for i, one in enumerate(arms)])
 
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))
 

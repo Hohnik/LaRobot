@@ -161,6 +161,62 @@ def test_the_live_block_is_not_duplicated_when_messages_and_hints_interleave() -
     assert sum("Enter=go" in r for r in rows) <= 1, "the run plan row was duplicated"
 
 
+def test_two_arms_get_a_row_each_in_the_order_given() -> None:
+    """⭐ ROADMAP §6.1 step 2: one status row per arm. Order is the caller's — the order
+    the arms were named on `--arms` — so a row does not move between sessions."""
+    buf, screen = fresh()
+    screen.set_rows(["[B TELEOP] t=12.0s  hottest 44°C", "[G HOLD  ]          hottest 41°C"])
+    rows = [r for r in rows_of(buf.getvalue()) if r.strip()]
+    assert len(rows) == 2, f"expected one row per arm, got {rows}"
+    assert rows[0].startswith("[B TELEOP]") and rows[1].startswith("[G HOLD")
+
+
+def test_a_hint_stays_above_every_arm_row() -> None:
+    """The hint is what the OPERATOR is doing; the arm rows are what the arms are doing."""
+    buf, screen = fresh()
+    screen.set_rows(["[B TELEOP] t=12.0s", "[G HOLD  ]"])
+    screen.hint("RUN 1 → 2 · Enter=go")
+    rows = [r for r in rows_of(buf.getvalue()) if r.strip()]
+    assert rows[0].startswith("RUN 1"), f"the hint is not on top: {rows}"
+    assert rows[-1].startswith("[G HOLD"), "the last arm must be the bottom row"
+
+
+def test_dropping_from_two_rows_to_one_leaves_no_stale_row_behind() -> None:
+    """⛔ The shrink case, which is how a dead arm's row would otherwise stay on screen
+    reporting a temperature nobody is reading any more."""
+    buf, screen = fresh()
+    screen.set_rows(["[B TELEOP] t=12.0s  hottest 44°C", "[G HOLD  ]  hottest 41°C"])
+    screen.set_rows(["[B TELEOP] t=13.0s  hottest 44°C"])
+    rows = [r for r in rows_of(buf.getvalue()) if r.strip()]
+    assert rows == ["[B TELEOP] t=13.0s  hottest 44°C"], f"a stale row survived: {rows}"
+
+
+def test_one_row_behaves_exactly_as_the_single_line_it_replaced() -> None:
+    """⚠️ The N=1 guarantee: `set` is `set_rows([text])`, so nothing about a one-arm
+    session's display changed when the status became a list."""
+    buf_a, screen_a = fresh()
+    buf_b, screen_b = fresh()
+    screen_a.set("[HOLD    ] t= 108.0s  hottest   40°C")
+    screen_b.set_rows(["[HOLD    ] t= 108.0s  hottest   40°C"])
+    assert buf_a.getvalue() == buf_b.getvalue()
+
+
+def test_a_multi_line_message_over_TWO_arm_rows_keeps_the_block_intact() -> None:
+    """⛔ The `say()` defect of 2026-08-12, re-derived against the multi-row block rather
+    than assumed to still hold. Every banner in the session carries newlines, and with two
+    arm rows there are two rows for the second line of a message to land on."""
+    buf, screen = fresh()
+    screen.set_rows(["[B TELEOP] t=12.0s  hottest 44°C", "[G HOLD  ]  hottest 41°C"])
+    screen.say("\n⭐ MODE: HOLD\n")
+    rows = rows_of(buf.getvalue())
+    assert sum("hottest 44" in r for r in rows) == 1, "arm B's row exists twice"
+    assert sum("hottest 41" in r for r in rows) == 1, "arm G's row exists twice"
+    banner = [r for r in rows if "MODE: HOLD" in r]
+    assert banner and banner[0].strip() == "⭐ MODE: HOLD", f"welded: {banner}"
+    live = [r for r in rows if r.startswith("[")]
+    assert len(live) == 2 and live[0].startswith("[B "), f"the block is not intact: {live}"
+
+
 def test_the_startup_plan_is_NOT_truncated_because_nothing_is_live_yet() -> None:
     """⭐ The whole `--arm` plan and HELP go through `say()` before the loop starts.
     Truncating those would cut the information he reads to decide whether to pass

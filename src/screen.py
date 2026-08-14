@@ -105,7 +105,10 @@ class StatusLine:
     def __init__(self, stream: Any = None, width: int | None = None) -> None:
         self.stream = stream if stream is not None else sys.stdout
         self._width = width
-        self._current = ""
+        #: ⭐ A LIST, because the status is one row PER ARM since 2026-08-14. With one arm
+        #: it holds one string and behaves exactly as the single `_current` it replaced.
+        #: ⚠️ Empty strings are dropped when painting, so a blank row never eats a line.
+        self._status: list[str] = []
         self._hint = ""
         self._rows = 0          # how many rows the live block currently occupies
 
@@ -141,7 +144,7 @@ class StatusLine:
         return "\r" + (f"\x1b[{self._rows - 1}A" if self._rows > 1 else "")
 
     def _paint(self) -> None:
-        rows = [r for r in (self._hint, self._current) if r]
+        rows = [r for r in (self._hint, *self._status) if r]
         out = [self._rewind()]
         for i, row in enumerate(rows):
             out.append("\x1b[K" + self._fit(row))
@@ -159,7 +162,22 @@ class StatusLine:
 
     def set(self, text: str) -> None:
         """Repaint the bottom line — the heartbeat. Cheap enough to call every cycle."""
-        self._current = text
+        self.set_rows([text])
+
+    def set_rows(self, rows: list[str]) -> None:
+        """Repaint the heartbeat as SEVERAL rows — one per arm. Bottom-most is last.
+
+        ⭐ WHY THIS EXISTS. Two arms have two modes, two temperatures and two poses, and
+        cramming them into one row makes the row unreadable at exactly the moment there is
+        most to read. ROADMAP §6.1 step 2 asks for one row per arm.
+
+        ⚠️ The hint stays ABOVE all of them, because it is what the operator is doing
+        rather than what an arm is doing.
+
+        ⛔ Order is the caller's and is never sorted here. It is the order the arms were
+        given on `--arms`, so the row an operator looks at does not move between sessions.
+        """
+        self._status = list(rows)
         self._paint()
 
     def hint(self, text: str = "") -> None:
@@ -220,7 +238,7 @@ class StatusLine:
         # to decide whether to press `--yes`. Losing a column of a temperature readout
         # is cosmetic; losing the end of "map scope: SHARED — edits affect BOTH arms" is
         # not.
-        live = self._rows > 0 or self._current or self._hint
+        live = self._rows > 0 or any(self._status) or bool(self._hint)
         lines = [self._fit(line) if live else line for line in text.split("\n")]
         out = [self._rewind()]
         for line in lines:
@@ -238,13 +256,13 @@ class StatusLine:
 
     def clear(self) -> None:
         """Drop the live block entirely — used before long blocks of plain output."""
-        self._current = self._hint = ""
+        self._status, self._hint = [], ""
         self._paint()
 
     def done(self) -> None:
         """End the live block so ordinary printing can resume on a fresh row."""
         if self._rows:
             self.stream.write("\n")
-        self._current = self._hint = ""
+        self._status, self._hint = [], ""
         self._rows = 0
         self.stream.flush()

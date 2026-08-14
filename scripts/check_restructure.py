@@ -47,6 +47,11 @@ MOVED_SO_FAR = [
     "park_path", "park_s", "park_marks", "park_target", "park_cmd", "park_best_err",
     "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
     "thermal", "teleop", "mode",
+    # ⭐ Step 2c, 2026-08-14: this cycle's temperatures. They were session locals, so they
+    # were one arm's reading available to whichever row was being painted — and the status
+    # is one row per arm now. `ArmSession.read_thermal()` sets them too, so the class stays
+    # coherent for a caller that does not read the chain itself.
+    "hottest", "jaw_temp",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and

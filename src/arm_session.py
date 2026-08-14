@@ -329,6 +329,16 @@ class ArmSession:
         self._smooth = True                     # the caller's --no-smooth, per run
 
         self.thermal = ThermalGuard(warn_at=warn_at, stop_at=stop_at)
+        # ⛔⭐ THIS CYCLE'S READING, AND `None` MEANS BLIND RATHER THAN COLD. The status
+        # row prints `??°C ⚠️BLIND` for `None`, never a number: a fabricated 0 °C is what
+        # made a disarmed thermal guard look healthy on screen (FINDINGS §24.1), and the
+        # readout is the only place a human would have noticed.
+        #
+        # ⭐ Per arm, because the row is per arm. As a session-level pair these were one
+        # arm's temperatures painted on whichever row happened to be drawn — the shape of
+        # error that would hide one arm's gripper behind the other arm's shoulder.
+        self.hottest: float | None = None
+        self.jaw_temp: float | None = None
 
     # ---------------------------------------------------------- liveness ----
 
@@ -356,10 +366,12 @@ class ArmSession:
         if states is None:
             self.stall_since = None      # a stall cannot be judged if it cannot be seen
             self._states = None
+            self.hottest, self.jaw_temp = None, None
             return self.thermal.update(None), None, None
         self._states = states
         temps, hottest, jaw = motor_temperatures(states, N_ARM)
         motor = temps.index(hottest) if hottest is not None else None
+        self.hottest, self.jaw_temp = hottest, jaw
         return self.thermal.update(hottest, jaw, motor=motor), hottest, jaw
 
     def gripper_stall_release(self, t: float) -> float | None:
