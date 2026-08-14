@@ -815,6 +815,8 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 - **Which model.** Probably diffusion. Papers to come from him.
 - **Recording rate, image size, and what counts as an action.** ⛔ All three have to be fixed *before* collecting, because changing them later means re-collecting.
 - **A start-of-session checklist.** Gripper calibration after a power cycle already exists; camera identification and a bandwidth check will need to join it.
+- ❓⭐ **Should the quit menu be able to RESUME the session?** New 2026-08-14 from his *"q p doing the base position and then going back to teleoperate and continuing"*. ⛔ It is a structural change, since the quit menu sits *after* the control loop has exited, so resuming means an outer loop around `main()`'s body. **It collides with the half-finished restructure and should wait for it** ([FINDINGS §49.1](FINDINGS.md)). ⚠️ **It may also be unnecessary: plain `p` already parks without quitting, and `t` carries on.** That is now printed in the menu and the help.
+- ❓⭐ **Should a park target be allowed that is NOT a measured pose?** New 2026-08-14, from his *"park should allow for a normal park mode to zero or to, like, the standard position"*. ⛔ **Every park slot today is a pose the arm physically held**, saved with `s <digit>`, and [FINDINGS §37.3](FINDINGS.md) turned on exactly that property. A computed all-zero target puts the tip 0.206 m out and 0.174 m up, so it is very likely fine, **and "very likely fine" is the wording that precedes the failures in [FINDINGS §0](FINDINGS.md).** ⭐ **The alternative needs no code: he saves the standard pose once with `s 0`.** It then becomes a measured base slot and `q q` returns to it forever.
 
 ### 8.4 Deliberately deferred, and by whose decision
 

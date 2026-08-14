@@ -2858,3 +2858,46 @@ hottest motor seen this session: 0°C
 ⭐⭐ **Recommendation: option 1, and improve the checker first.** For N arms the script will hold a *list* initialised empty before the `try` anyway, so `arm = None` is the shape the design is heading for. **Doing the checker first keeps the safety net ahead of the change it protects.**
 
 ⚠️ **`mode` (48 references) has its own version of the same problem** and it is already recorded: `build_robot()` reads it to decide `zero_gravity`, so the script must keep a local `mode` for the pre-construction decision even after the field moves. **Neither of the last two groups is a pure substitution.** Three of four were; these are not, and that is worth knowing before starting them.
+
+---
+
+## 49. ✅⭐ `q q` PARKS AND DISABLES IN ONE KEY — AND TWO PARTS OF HIS REQUEST ARE DELIBERATELY NOT BUILT — 2026-08-14, 16:45
+
+> Julien, 2026-08-14: *"Adding g to the q menu sounds good. There should be an option that just combines park and disable. Maybe just pressing q should allow for park and disable, but park should allow for a normal park mode to zero or to, like, the standard position because then it would also allow for q p doing the base position and then going back to teleoperate and continuing, etcetera."*
+
+### 49.0 ✅ WHAT WAS BUILT, AND ONE THING THAT ALREADY EXISTED
+
+⭐ **`q` then `q` now parks and disables in one key.** It is the keyboard equivalent of Ctrl-C, which has done exactly this since 2026-08-12. Same motion, same guards, same interruptibility.
+
+⛔ **It only releases the arm if the park actually arrived**, which is the rule the Ctrl-C path already follows: *"I could not reach the safe pose"* is exactly when a human should decide rather than a default. **A stalled or interrupted park leaves the arm holding and the menu open**, and says which of `arrived` / `stalled` / `stopped` / `dead` happened.
+
+⚠️ **`g` was already in the quit menu**, and has been since 2026-08-11. Nothing needed adding. Recorded so nobody later reads his line as an unfinished request.
+
+⭐ **One line of discoverability was added instead of a feature.** He described wanting *"q p doing the base position and then going back to teleoperate and continuing"*. **The plain `p` key already does that without quitting**: in a normal session `p` parks, the arm then holds, and `t` carries straight on. The quit menu and the help block now both say so.
+
+### 49.1 ❓⭐⭐ TWO PARTS ARE NOT BUILT, AND BOTH ARE HIS TO DECIDE
+
+**① Resuming a session out of the quit menu.** If what he wants is `q` → park → *back to driving*, that is a **structural change, not a key binding.** The control loop is `while running: …` and the quit menu sits *after* it, so "resume" means re-entering a loop that has already exited. That needs an outer loop around `main()`'s body.
+
+⛔ **And it collides with the restructure that is half-done.** [ROADMAP §6.1](ROADMAP.md) step 1 is moving `main()`'s state onto `ArmSession`, 118 of 247 references in. **Changing the shape of the loop while its state is mid-migration would make both changes unreviewable.** ⭐ **Recommendation: do it after the restructure lands**, when `main()` is in its final shape. ⚠️ It may also be unnecessary, since plain `p` already parks without quitting.
+
+**② A park target at "zero, or the standard position".** ⛔ **This would be the first park target that is not a MEASURED pose, and that is a real change rather than a detail.** Every park slot today comes from `s <digit>`, which saves where the arm physically is. [§37.3](FINDINGS.md) turned on exactly this distinction: a proposal to clamp park targets against the joint-limit margin was retracted *because* park targets are measured poses the arm has already held, so clamping them would refuse to return to a reachable pose.
+
+⭐ **A computed "all joints zero" target is reachable and compact** — the model puts the tip at `[0.111, 0.000, 0.174]`, 0.206 m from the base, which is close in and 17 cm up. **So it is very likely fine.** ⚠️ *"Very likely fine"* is the wording that precedes the failures in [§0](FINDINGS.md), and driving 4.3 kg to a pose nobody has ever measured the arm in deserves his word first.
+
+⭐ **The cheap alternative that needs no new machinery: he saves the standard pose once with `s 0`.** That makes it a measured pose, it becomes the base slot, and `q q` returns to it forever after. **That is one keypress and it changes nothing in the code.**
+
+### 49.2 ⭐ THE MENU AS IT NOW READS
+
+```
+The arm is HOLDING its pose. It will not be released until you choose.
+   q = PARK then DISABLE — the whole shutdown in one key
+   p = PARK — drive back to the park pose, then it holds there
+   g = go weightless so you can park it by hand
+   d = disable now (⚠️ a raised arm will sag)
+   ⭐ to park WITHOUT quitting, use p in the session itself, then t
+```
+
+⚠️ **Not on the arm yet.** `q q` runs the same `park_and_wait()` that `q p` and Ctrl-C already use, so the motion is proven; what is new is the key and the release-only-if-arrived decision.
+
+**450 headless tests, unchanged.**

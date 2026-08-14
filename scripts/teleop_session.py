@@ -308,7 +308,9 @@ HELP = """
   SPEED     - / +  linear             , / .  rotation
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
-  OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide, d disable
+  OTHER     r  wrist rotation on/off   ?  help
+  QUIT      q  then: q = park+disable (all of it)   p = park   g = weightless   d = disable
+            ⭐ to park WITHOUT quitting, press p in the session, then t to carry on
 """
 
 MAP_HELP = """
@@ -2341,21 +2343,52 @@ def main() -> int:  # noqa: PLR0915
             if chain_alive(robot) and not auto_parked:
                 enter_hold()
                 print("\nThe arm is HOLDING its pose. It will not be released until you choose.")
+                print("   q = PARK then DISABLE — the whole shutdown in one key")
                 print("   p = PARK — drive back to the park pose, then it holds there")
                 print("   g = go weightless so you can park it by hand")
                 print("   d = disable now (⚠️ a raised arm will sag)")
+                # ⭐ Discoverability, not a new feature. `p` in a NORMAL session already
+                # parks and leaves the arm holding, so `t` afterwards carries straight on.
+                # Julien described wanting *"q p doing the base position and then going
+                # back to teleoperate and continuing"*, and the plain `p` key does that
+                # today without quitting at all. Saying so here costs one line.
+                print("   ⭐ to park WITHOUT quitting, use p in the session itself, then t")
                 while True:
                     k = keys.get()
-                    if k == "p":
+                    if k == "q":
+                        # ⭐⭐ PARK THEN DISABLE, ONE KEY. Julien's request, 2026-08-14:
+                        # *"There should be an option that just combines park and disable.
+                        # Maybe just pressing q should allow for park and disable."*
+                        #
+                        # `q q` is now the keyboard equivalent of Ctrl-C, which has parked
+                        # and disabled in one action since 2026-08-12. Same motion, same
+                        # guards, same interruptibility.
+                        #
+                        # ⛔ IT ONLY RELEASES THE ARM IF THE PARK ACTUALLY ARRIVED. That is
+                        # the same rule the Ctrl-C path follows: *"I could not reach the safe
+                        # pose"* is exactly when a human should decide rather than a default.
+                        # A stalled or interrupted park leaves the arm holding and the menu
+                        # open.
+                        outcome = park_and_wait(robot, keys, park, clamp_gripper,
+                                                ramp=arm.park_ramp, speed=arm.park_speed)
+                        if outcome == "arrived":
+                            print("\n   Parked. Disabling the motors now.\n")
+                            break
+                        enter_hold()
+                        print(f"\n⚠️  the park ended as {outcome!r}, so the arm is NOT being "
+                              "released.")
+                        print("   q = try again    p = park    g = weightless    d = disable")
+                    elif k == "p":
                         # ⭐ Julien's request: *"it would also be good to do park mode
                         # [at quit], because then I can do park mode and then disable…
                         # I don't have to do anything with my hands."* With the park
                         # pose defaulting to wherever the arm started, `q p d` is a
                         # complete hands-free shutdown — and Ctrl-C now does the same
                         # thing in one keystroke.
-                        park_and_wait(robot, keys, park, clamp_gripper)
+                        park_and_wait(robot, keys, park, clamp_gripper,
+                                      ramp=arm.park_ramp, speed=arm.park_speed)
                         enter_hold()
-                        print("   p = park again    g = weightless    d = disable")
+                        print("   q = park+disable    p = park again    g = weightless    d = disable")
                     elif k == "g":
                         enter_guide()
                         print("\n⭐ weightless — park the arm, then press d to disable.")
