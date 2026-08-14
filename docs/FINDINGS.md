@@ -3215,3 +3215,130 @@ uv run scripts/teleop_session.py --yes --arms B --start-mode hold
 ⭐ **Drive it, press `m` and leave it, park with `p 0`, and quit with `q q`.** The only visible differences from the last session are three lines of wording: `axis map B  :` and `park pose B :` in the plan, and `axis map B:` in the closing summary.
 
 **486 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 54. ✅✅⭐⭐⭐ STEP 2 IS COMPLETE — TWO ARMS BUILD, AND THE NEXT THING NEEDED IS JULIEN AT THE BENCH — 2026-08-14, night
+
+> Five more commits (`e3a5c71` … `66a563e`). **498 headless tests, `check_restructure.py` green with eight checks, nothing pushed.** ⬜ **`--arms B,G` has never run on the hardware** — that run is step 3 and it is his ([§54.7](FINDINGS.md)).
+
+### 54.0 ✅ WHAT NOW WORKS, AND WHAT DELIBERATELY DOES NOT
+
+⭐ **`--arms B,G --start-mode hold` builds two arms and drives them from one loop.** Everything below `ArmSession` is per arm: the robot, the puck, the axis map, the control frame, the base pose and slots, the CONTROLS memory, the temperatures, the last chain read, and this cycle's puck deflection. **34 fields**, proven by the checker rather than claimed.
+
+| deliberately refused | why |
+|---|---|
+| ⛔ `--start-mode guide` with two arms | ROADMAP §6's ruling: two arms weightless on a first run is the worst possible first run. `g` reaches the same state, but only after the operator selected BOTH and pressed a key at a rig they are watching |
+| ⛔ `w` and `l` with two arms connected | `Trajectory` holds ONE arm's joints and the playback cursor is one session clock. ABC wants 14 states in one timeline ([§9.2](ROADMAP.md)), so this is the recorder's job ([ROADMAP §8.2](ROADMAP.md) item 7), not a small extension |
+| ⛔ `m` CONTROLS with BOTH selected | it edits one map from one wiggle. It says to press `a` first |
+
+### 54.1 ⛔⭐⭐⭐ THE LOOP VARIABLE LEAKED, AND AT N=1 THAT WORKS PERFECTLY
+
+**Python leaves a `for` variable bound after the loop ends.** So `one.robot` written *below* a `for one in arms:` block still runs, using whichever arm the loop finished on. ⭐⭐ **With one arm that is always the right arm.** It works, every test passes, and it proves nothing.
+
+⛔ **How it got in:** a `robot` → `one.robot` rewrite was bounded by line numbers, and the start line it searched for matched the FIRST `for one in arms:` in the file — the liveness loop, not the mode loop it was written for. It ran across the session-level blocks in between, and three lines came out reading a leaked variable:
+
+| site | what it would have done at N=2 |
+|---|---|
+| the recording sampler | recorded arm G's joints while the label said the session's first arm |
+| the button-driven gripper | moved arm G's jaws when arm B's puck button was held |
+| the save-pose handler | saved arm G's pose under arm B's name |
+
+✅ **`check_restructure.py` check 6 now refuses any use of `one` outside a region that binds it** — a `for` loop (Name *or* tuple target), a function parameter, a comprehension generator, or a `lambda one=one:`. It found exactly those three.
+
+⭐ **Two of them were fixed by naming the arm out loud** (`rec_arm = arms[0]`, `arm`). **The third was fixed structurally, and it needed to be anyway: the puck block is now per arm.** It read `arm.reader` once, outside any loop, so with two arms it would have read one hand and handed that deflection to both arms.
+
+⛔⭐ **AND I NEARLY DID IT AGAIN TWO COMMITS LATER.** The CONTROLS readout began with `arm = wizard`, which repoints the session's own `arm` for the REST of the loop, including the incident record and the teardown. Same shape, same silence at N=1.
+
+⭐⭐ **So check 6 now watches `arm` too**, with a sharper rule: since the build became `for name in arm_names:`, `arm` holds the LAST arm built once the loop ends, so **every read of it after that loop is about "an arm" where the code means "the session"**. Six such reads existed. All six are now loops over `arms`, including the closing temperature report, which prints per arm.
+
+### 54.2 ⚠️ CONTROLS OWNS THE WHOLE LIVE BLOCK, so the other arm's row is not painted during it
+
+While CONTROLS is open its readout replaces the status rows, because it repaints continuously rather than once a second: the operator is watching the arm and the readout together to attribute a motion to a gesture.
+
+⚠️ **At N=2 that means the other arm's row disappears while the wizard is open.** It is deliberate for now, and bounded: `m` refuses when two arms are selected, so the wizard is always a conversation with one named arm. ⭐ **If it turns out to matter on the bench, the fix is small** — paint the other arms' rows above the wizard's line instead of replacing them, which `StatusLine.set_rows()` already supports.
+
+### 54.3 ⭐⭐ WHICH KEYS AIM, AND WHICH DO NOT — as built
+
+Three names, computed once per keypress: `aimed` (every selected arm), `edit_arm` (the first selected arm), `wizard` (the arm inside CONTROLS, if any).
+
+| keys | act on | why |
+|---|---|---|
+| `g` `t` `h` | every selected arm | a mode change is what `a` exists to aim |
+| `s` `p` + digits | every selected arm, each to ITS OWN slot | `s 1` with BOTH selected records two poses under one digit, which is what a two-arm waypoint is |
+| `o` `c` | every selected arm in TELEOP | they are commands, and BOTH means both grippers |
+| `-` `+` `ö` `ä` in a park | every selected arm's speed and ease ramp | those live on the arm |
+| `x` `y` `z` `1` `2` `3` `f` `u` `0` `b` `v` `m` | ⭐ **the FIRST selected arm only** | [§53.5](FINDINGS.md): a SHARED map is ONE object, so twice would flip a motion back to where it started |
+| `w` `l` `q` `?` `e` `r` `,` `.` | the session | the recorder spans arms; the ease profile, corner blending and both speeds are one setting |
+
+⚠️ **One consequence worth knowing at the bench: `p 1 2` with BOTH selected starts a run on each arm at the same moment**, each through its own slots. A slot empty on one arm is skipped for that arm only and never cancels the other's run.
+
+### 54.4 ✅⭐⭐ THE SHUTDOWN PARK IS N-ARM AND FINALLY HAS TESTS — 12 of them
+
+`park_and_wait()` became `park_arms()`, taking the list and advancing **every arm on every cycle**.
+
+⭐ **Sequential parking would also have worked and would have been worse**, for two reasons that have nothing to do with speed: *"any key stops it"* would stop only the arm currently moving, and the second arm would hold a pose for the whole of the first arm's park with nobody watching it.
+
+⚠️ **A dead chain is skipped, not fatal.** That arm cannot be commanded and is already sagging; the live arm can still be parked, which beats leaving it holding and far beats disabling it. The dead one is named loudly. ⭐ **The worst outcome wins** — dead, then stalled, then stopped, then arrived — because the caller releases the motors only on `arrived`.
+
+⭐⭐ **This path had NO tests in either form**, while being what Ctrl-C, `q q`, a thermal cut-out and any loop exception run, with the arm raised when it starts and released when it finishes. It was verified only by Julien pressing Ctrl-C on live hardware.
+
+⛔⭐ **AND ONE OF THE NEW TESTS COULD NOT FAIL FOR THE REASON IT CLAIMED.** It asserted that two arms received a similar NUMBER of commands, which sequential parking satisfies too: two arms a similar distance from their targets need a similar number of cycles either way. **That is working-contract rule 5 exactly** — evidence that cannot distinguish the claim from its opposite. It now logs the ORDER of commands across both arms, and I ran it against a deliberately sequential implementation to watch it refuse before trusting it.
+
+### 54.5 ⭐ THE BUILD LOOP, AND THE ONE THING THAT MADE IT MORE THAN A `for`
+
+⛔ **`build_robot()` stays in the script, visible.** It energises motors and is the most dangerous call in the project. With two arms it runs twice, and **the second build starts while the first arm is already holding under power** — so an arm is appended to `arms` the moment it is constructed, and a session whose second build fails still disables the first arm on the way out.
+
+⛔ **The teardown disables every arm, each wrapped on its own.** An unwrapped loop whose first `shutdown_robot()` raised would leave the second arm's motors **energised and unattended**, which is the worst possible end to a teardown. If one cannot be confirmed disabled, it says so and says to cut the mains.
+
+### 54.6 ⭐⭐ THE CHECKER HAS EIGHT CHECKS NOW, AND EVERY ONE OF THEM CAUGHT SOMETHING REAL
+
+`uv run scripts/check_restructure.py` — **run it after every commit in this series.**
+
+| check | what it caught, in this repo, for real |
+|---|---|
+| 1 no moved name survives as a local | the original 247-reference move |
+| 2 fields are read through `arm` or `one` | had to widen when the per-cycle work became a loop, or it called three correctly-moved fields "dropped" |
+| 3 nothing reads `arm` at or before construction | ⛔ `frame=arm.frame` ON the construction line ([§53.1](FINDINGS.md)) |
+| 4 every name resolves | ⛔ a region replacement that deleted `status_row()` along with the function it replaced |
+| 5 per-arm helpers are called with an arm | arity, which `compile()`, check 4 and a dry run are all blind to |
+| 6 no leaked loop variable | ⛔ three leaked `one` uses, then six stale `arm` reads ([§54.1](FINDINGS.md)) |
+| 7 retired names stay retired | `control_frame` and `park`, deleted rather than moved |
+| 8 progress | the series has a visible finish line |
+
+⭐⭐ **Checks 3, 5 and 6 were each falsified before being trusted** — patched copies of the file, until the check refused by line number. ⚠️ **A green verdict from a check nobody has watched fail is not evidence.**
+
+### 54.7 ⬜⭐⭐⭐ STEP 3 IS JULIEN'S, AND IT IS THE FIRST TIME TWO ARMS HAVE EVER RUN
+
+⛔ **Everything below needs a human at the rig.** Working-contract rule 1: anything that sends a setpoint is his.
+
+**Prerequisites, all checked and true as of 2026-08-14 night, with nothing energised:**
+
+- ✅ **Both CAN adapters are on the bus**, out of DFU (`check_rig.py`).
+- ✅ **Both arms have gripper calibration** in `config/gripper_limits.json` — B and G, so `--arms B,G` can run with the gripper enabled. ⚠️ Arm G's saved range reconciles by a −2π shift, which `build_robot()` verifies at startup and **refuses loudly** if it cannot. That refusal is a pass, not a failure: it happens before any control loop starts.
+- ✅ **Two SpaceMice are attached.** The session asks for each puck by wiggle, in `--arms` order: arm B's first, then arm G's, with the first one excluded.
+- ✅ **Both D405 cameras are attached** (serials `255323071773` and `260323072846`), which is not needed for this run and is recorded because the count has changed twice.
+
+```bash
+uv run scripts/check_rig.py && uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+```
+
+**Then the run itself. Desk clear, gripper enabled, hand near the mains:**
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+```
+
+⭐ **What to expect, in order:** wiggle arm B's puck, then arm G's · two build lines, one per arm · **two status rows**, arm B on top with the clock beside it · both arms HOLDING.
+
+⭐⭐ **The five things worth trying, cheapest and safest first:**
+
+1. **Read the two rows.** Each should show its own temperatures and its own joint angles.
+2. **`a`** — it should say `SELECTED: G`, then `BOTH`, then back to `B`.
+3. **`t` with only B selected** — arm B enters TELEOP and arm G stays HOLDING. Drive B with its puck. ⛔ **Then check the thing this whole design turns on: does arm G's puck move arm G?** Driving is never aimed, so it should, in whatever mode G is in.
+4. **`a` to BOTH, then `t`** — both arms in TELEOP, each following its own hand.
+5. **`q` then `q`** — both arms park at the same time, then disable. ⚠️ **This is the path with 12 new tests and zero hardware runs.** Watch that both arms move together rather than one after the other.
+
+⛔ **What CANNOT work yet, so it is not a defect:** `w` and `l` refuse with two arms connected, `--start-mode guide` refuses, and `m` refuses while BOTH is selected. ⚠️ **And GUIDE on two arms is 8.6 kg going weightless** — ROADMAP §6.1 step 4 puts it last on purpose. Do it with one arm selected first, if at all.
+
+**498 headless tests. Nothing pushed (working-contract rule 9).**

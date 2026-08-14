@@ -42,24 +42,26 @@ can still prove the mode machine behaves.
   all arms; mode changes apply to the selected one).
 - **IK stepping.** `CartesianTeleop` already owns that; this holds one and calls it.
 
-✅ **STATUS, 2026-08-14 (late): WIRED IN, confirmed on the arm, and this class now holds
-EVERY per-arm piece of session state — 33 fields.** The 247-reference move landed as five
-commits ([FINDINGS §50](../docs/FINDINGS.md)) and Julien drove every mode on it
-([§51](../docs/FINDINGS.md)). Step 2 added `--arms`, the `a` selector and one status row per
-arm, also confirmed on the arm ([§53.0](../docs/FINDINGS.md)). Eight further commits moved
-the rest: the control frame, the axis map and its start-of-session copy, the base pose and
-the saved slots, the puck, what CONTROLS remembers, this cycle's temperatures, and the last
-chain read ([§53](../docs/FINDINGS.md)).
+✅✅ **STATUS, 2026-08-14 (night): STEP 2 IS COMPLETE AND TWO ARMS RUN FROM ONE LOOP.**
+The 247-reference move landed as five commits ([FINDINGS §50](../docs/FINDINGS.md)); Julien
+drove every mode on it ([§51](../docs/FINDINGS.md)); sixteen further commits made everything
+below this class per arm and added `--arms`, the `a` selector and one status row per arm
+([§52](../docs/FINDINGS.md), [§53](../docs/FINDINGS.md), [§54](../docs/FINDINGS.md)).
 
-⚠️ **Two arms still refuse to start.** Three pieces of the script are single-arm: the key
-dispatch, the shutdown flow, and the build itself. `--arms B,G` errors and says so, and
-[§53.6](../docs/FINDINGS.md) carries the settled design for all three.
+⭐ **This class now holds 34 per-arm fields**: the robot and its puck, the mode, the axis map
+and its start-of-session copy, the control frame, the base pose and saved slots, the eleven
+park fields, the CONTROLS memory and button edge, the thermal guard with this cycle's
+temperatures, the last chain read, and this cycle's puck deflection.
+`uv run scripts/check_restructure.py` proves none of it survives as a local in the script,
+and it makes eight checks — **every one of which caught something real** ([§54.6](../docs/FINDINGS.md)).
 
-⭐ **What this class deliberately does NOT hold, and each is a decision:** key DISPATCH
-(which arm a key is aimed at is a session question, answered by `ArmSelector`), the puck
-HANDLE (it must be closed even when no arm was ever built), the shared session knobs
-(linear and angular speed, corner blending, the ease profile), and the recorder — see the
-last paragraph of this docstring for why that one is not a matter of taste.
+⬜ **What has NOT happened: two arms have never run on the hardware.** That is ROADMAP §6.1
+step 3 and it is Julien's, because building a robot sends setpoints. The procedure is
+[FINDINGS §54.7](../docs/FINDINGS.md).
+
+⚠️ **Three things refuse with two arms connected, all on purpose:** `--start-mode guide`,
+`w`/`l` (the recorder is single-arm until ABC's two-arm format exists), and `m` while BOTH is
+selected.
 
 ⛔ **THIS DOCSTRING SAID *"STILL NOT wired"* UNTIL 2026-08-14, which was true when written
 on 08-13 and wrong the next day.** It is the same staleness pattern as the paragraph below
