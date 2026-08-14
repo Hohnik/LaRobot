@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 from recording import (  # noqa: E402
+    Layout,
     Sample, Trajectory, TrackingLog, replay_step, safe_time_scale,
 )
 
@@ -320,7 +321,7 @@ def test_the_gripper_is_LEFT_OUT_of_the_lag_measurement_when_asked() -> None:
     q = list(traj.pose_at(0.5))
     q[6] -= 0.4                                              # jaws well off target
     all_joints = replay_step(traj, 0.5, q, dt=0.01, max_lag=0.15)
-    arm_only = replay_step(traj, 0.5, q, dt=0.01, max_lag=0.15, n_compare=6)
+    arm_only = replay_step(traj, 0.5, q, dt=0.01, max_lag=0.15, compare=range(6))
     assert all_joints.held, "counting the gripper, this looks stuck"
     assert not arm_only.held, "ignoring the gripper, the arm is following fine"
 
@@ -358,7 +359,7 @@ def test_a_whole_playback_run_reaches_the_end_and_follows_the_path() -> None:
     cursor, measured, cycles = 0.0, traj.start_pose(), 0
     seen = []
     while cycles < 10_000:
-        step = replay_step(traj, cursor, measured, dt=0.01, speed=1.0, n_compare=6)
+        step = replay_step(traj, cursor, measured, dt=0.01, speed=1.0, compare=range(6))
         cursor, measured = step.cursor, step.target
         seen.append(step.target[0])
         cycles += 1
@@ -638,6 +639,74 @@ def test_a_mismatch_is_reported_even_when_the_speed_looks_fine() -> None:
     from check_recordings import label_verdict  # noqa: PLC0415
 
     assert label_verdict("live:guide", ["guide", "teleop"], 0.1)[1] == "mismatch"
+
+# ------------------------------------------------- how a sample maps onto arms ----
+
+
+def test_a_two_arm_sample_slices_back_into_its_arms() -> None:
+    """⭐ The flat vector is the arms concatenated in `--arms` order, which is exactly ABC's
+    "14 states per timestep, two arms in one timeline" (ROADMAP §9.2)."""
+    layout = Layout(("B", "G"), 7)
+    sample = list(range(14))
+    assert sample[layout.slice_for("B")] == list(range(7))
+    assert sample[layout.slice_for("G")] == list(range(7, 14))
+    assert layout.n_joints == 14
+
+
+def test_the_grippers_are_left_out_of_the_lag_measurement() -> None:
+    """⛔ With one arm the gripper was the LAST element, so a prefix count could skip it.
+    With two arms arm B's gripper sits at index 6, in the middle, so it takes indices."""
+    assert Layout(("B", "G"), 7).tracked_indices(6) == [0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12]
+    assert Layout(("B",), 7).tracked_indices(6) == [0, 1, 2, 3, 4, 5]
+
+
+def test_a_recording_made_BEFORE_the_layout_existed_still_reads() -> None:
+    """⛔⭐ Julien has recordings in slots 1 to 6 made before two arms existed. A format
+    change that quietly stopped reading them would throw away hardware time already spent."""
+    old = Layout.from_meta({"arm": "B", "method": "live:guide"}, 7)
+    assert old.arms == ("B",) and old.per_arm == 7
+    assert old.tracked_indices(6) == [0, 1, 2, 3, 4, 5]
+
+
+def test_a_layout_with_no_metadata_at_all_still_yields_something_playable() -> None:
+    """⚠️ A missing field must never be the reason a demonstration cannot be played."""
+    blank = Layout.from_meta({}, 7)
+    assert blank.per_arm == 7 and len(blank.arms) == 1
+
+
+def test_the_lag_can_be_measured_on_the_SECOND_arm_only() -> None:
+    """⭐ Proves the index list is really used rather than a prefix: arm B matches perfectly
+    while arm G is 0.5 rad out, and comparing only G's joints must see it."""
+    traj = Trajectory()
+    traj.append(0.0, [0.0] * 14)
+    traj.append(1.0, [0.0] * 14)
+    measured = [0.0] * 7 + [0.5] + [0.0] * 6
+    only_b = replay_step(traj, 0.5, measured, dt=0.01, compare=range(6))
+    only_g = replay_step(traj, 0.5, measured, dt=0.01, compare=range(7, 13))
+    assert only_b.lag == 0.0, "arm B agrees, so comparing B alone must see no lag"
+    assert abs(only_g.lag - 0.5) < 1e-9, "arm G is 0.5 rad out and must be seen"
+
+
+def test_a_two_arm_recording_survives_save_and_load_with_its_layout() -> None:
+    """⭐ The round trip that matters: the arm names and the joints-per-arm travel WITH the
+    samples, so a playback can slice them apart again. Written to a temp file rather than
+    asserted on a dict, because `save`/`load` is where a format change actually bites."""
+    import tempfile
+
+    traj = Trajectory(meta={"arm": "B", **Layout(("B", "G"), 7).to_meta()})
+    for i in range(5):
+        traj.append(i * 0.01, [float(i)] * 7 + [float(i) + 100.0] * 7)
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "9.json"
+        traj.save(path)
+        back = Trajectory.load(path)
+    assert back.n_joints == 14
+    layout = Layout.from_meta(back.meta, back.n_joints)
+    assert layout.arms == ("B", "G") and layout.per_arm == 7
+    last = back.samples[-1].q
+    assert list(last[layout.slice_for("B")]) == [4.0] * 7
+    assert list(last[layout.slice_for("G")]) == [104.0] * 7
+
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())

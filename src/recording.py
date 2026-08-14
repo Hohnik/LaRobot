@@ -97,6 +97,70 @@ class Sample:
     q: tuple[float, ...]
 
 
+@dataclass(frozen=True)
+class Layout:
+    """How one flat sample maps onto arms. `arms` in order, `per_arm` joints each.
+
+        Layout(("B", "G"), 7).slice_for("G")        -> slice(7, 14)
+        Layout(("B", "G"), 7).tracked_indices(6)    -> [0..5, 7..12]   (no grippers)
+
+    ⭐⭐ WHY A RECORDING IS ONE FLAT VECTOR AND NOT A DICT PER ARM. `amazon-far/abc`, the
+    training format this rig is aiming at, stores **14 states and 14 actions per timestep —
+    two arms in ONE timeline** ([ROADMAP §9.2](../docs/ROADMAP.md)). Concatenating the arms
+    in `--arms` order gives exactly that, so the internal format and the target format have
+    the same shape and no conversion can silently reorder them.
+
+    ⛔ AND IT IS WHY THE ARM ORDER IS METADATA RATHER THAN A CONVENTION. A recording made
+    with `--arms B,G` and played back in a `--arms G,B` session would drive each arm with
+    the other's joints. The names travel with the samples so the caller can check.
+    """
+
+    arms: tuple[str, ...]
+    per_arm: int
+
+    @property
+    def n_joints(self) -> int:
+        return len(self.arms) * self.per_arm
+
+    def slice_for(self, arm: str) -> slice:
+        """Which part of a flat sample belongs to `arm`."""
+        i = self.arms.index(arm)
+        return slice(i * self.per_arm, (i + 1) * self.per_arm)
+
+    def tracked_indices(self, n_arm: int) -> list[int]:
+        """Every ARM joint, with the grippers left out.
+
+        ⛔ The grippers must not count towards "has the arm fallen behind". Jaws sit far
+        from their commanded value while closing on an object, and counting that as lag
+        would stall every playback that grips anything. With one arm a prefix count said
+        this; with two the gripper sits in the MIDDLE of the vector, so it takes indices.
+        """
+        return [i * self.per_arm + j
+                for i in range(len(self.arms))
+                for j in range(min(n_arm, self.per_arm))]
+
+    def to_meta(self) -> dict[str, Any]:
+        return {"arms": list(self.arms), "joints_per_arm": self.per_arm}
+
+    @classmethod
+    def from_meta(cls, meta: dict[str, Any], n_joints: int) -> Layout:
+        """Read the layout back, INCLUDING from recordings made before it existed.
+
+        ⭐ Old files carry `meta["arm"] = "B"` and 7 joints and nothing else. They are still
+        playable, and they must be: Julien has recordings in slots 1 to 6 that were made
+        before two arms existed, and a format change that quietly stopped reading them would
+        throw away hardware time he has already spent.
+        """
+        arms = meta.get("arms")
+        if isinstance(arms, list) and arms:
+            per_arm = int(meta.get("joints_per_arm") or (n_joints // len(arms)) or n_joints)
+            return cls(tuple(str(a) for a in arms), per_arm)
+        # ⚠️ One arm, from a file written before the layout was recorded. Fall back to the
+        # single `arm` field, and to the sample width for the joint count.
+        one = meta.get("arm")
+        return cls((str(one) if one else "?",), n_joints)
+
+
 @dataclass
 class Trajectory:
     """A hand-taught movement: samples in time order, plus how it was made.
@@ -411,7 +475,7 @@ class ReplayStep:
 
 def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
                 speed: float = 1.0, max_lag: float = 0.15,
-                n_compare: int | None = None) -> ReplayStep:
+                compare: Sequence[int] | None = None) -> ReplayStep:
     """Advance a playback by one control cycle.
 
     ⭐ WHY A CLOCK AND NOT A DISTANCE ALONG THE PATH. The waypoint runner
@@ -430,18 +494,23 @@ def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: 
     seconds" is a *session* judgement: only the caller knows how long it has been true and
     what to say about it. Same division of labour as `src/arm_session.py`.
 
-    `n_compare` limits the lag measurement to the first N joints. Pass the arm's joint
-    count to leave the gripper out: the jaws legitimately sit far from their commanded
-    value while closing on an object, and counting that as "the arm cannot follow" would
-    stall every playback that grips anything.
+    `compare` lists which joint INDICES count towards the lag. Leave the grippers out: the
+    jaws legitimately sit far from their commanded value while closing on an object, and
+    counting that as "the arm cannot follow" would stall every playback that grips anything.
+
+    ⚠️ IT USED TO BE `n_compare`, a count of leading joints, which worked while the gripper
+    was the LAST element of a one-arm sample. With two arms the vector is `[B0..B6, G0..G6]`
+    and arm B's gripper sits in the middle, so a prefix can no longer express "skip the
+    grippers". `Layout.tracked_indices()` builds the list.
     """
     if not traj.samples:
         raise ValueError("cannot play back an empty recording")
     if speed <= 0:
         raise ValueError(f"speed must be positive, got {speed}")
     target = traj.pose_at(cursor)
-    n = len(target) if n_compare is None else min(n_compare, len(target), len(measured))
-    lag = max((abs(target[i] - measured[i]) for i in range(n)), default=0.0)
+    usable = min(len(target), len(measured))
+    idx = range(usable) if compare is None else [i for i in compare if i < usable]
+    lag = max((abs(target[i] - measured[i]) for i in idx), default=0.0)
     held = lag >= max_lag
     moved = cursor if held else cursor + dt * speed
     return ReplayStep(

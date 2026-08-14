@@ -118,7 +118,13 @@ from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from mirror import DEFAULT_ALIGN_SPEED, MirrorLink, pick_pair  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
-from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
+from recording import (  # noqa: E402
+    Layout,
+    TrackingLog,
+    Trajectory,
+    replay_step,
+    safe_time_scale,
+)
 from screen import StatusLine, display_width  # noqa: E402
 from teleop import (  # noqa: E402
     FLOOR_LIMIT,
@@ -910,6 +916,17 @@ def main() -> int:  # noqa: PLR0915
     replay_prev_target: list[float] | None = None
     tracking: TrackingLog | None = None   # per-joint answer to "how fast can it go?"
     replay_pending: Trajectory | None = None   # parked to its start, waiting to run
+    # ⭐⭐ WHICH ARMS A PLAYBACK DRIVES, in the RECORDING's order, and how its samples map
+    # onto them. Both come from the file's own metadata rather than from the session, so a
+    # recording made with `--arms B,G` cannot be replayed onto `--arms G,B` with each arm
+    # driven by the other's joints.
+    replay_layout: Layout | None = None
+    replay_arms: list[ArmSession] = []
+    #: ⛔ Which of those arms have finished parking to the start pose. The playback may not
+    #: begin until EVERY one has: a two-arm demonstration whose arms start seconds apart is
+    #: not the demonstration that was recorded, and the whole point of one timeline is that
+    #: they stay in step.
+    replay_ready: set[str] = set()
     # ⭐⭐ ONE ARM FOLLOWS THE OTHER, joint for joint. Julien's idea, 2026-08-11: *"be able
     # to move one of the arms in the guide mode and have the second arm just mirror the exact
     # movements with zero latency."*
@@ -1245,6 +1262,23 @@ def main() -> int:  # noqa: PLR0915
                 fn()
                 return
             print("  ⚠️  enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)")
+
+        def sample_layout() -> Layout:
+            """How a recording's flat sample maps onto this session's arms, right now.
+
+            ⛔⭐ A FUNCTION RATHER THAN A VARIABLE, AND THAT IS THE POINT. The first draft
+            assigned `take_layout` in the per-cycle sampler (section 3.4) and read it in the
+            `w` key handler (section 3) — **which runs earlier in the same cycle.** Pressing
+            `w` on the very first cycle of a session would have raised `NameError` inside the
+            control loop with the motors live, and no test or dry run reaches that line. It is
+            the same ordering fault `check_restructure.py` check 3 exists for, one variable
+            over.
+
+            ⚠️ Recomputed on each call, which costs one `num_dofs()` per use and cannot go
+            stale. `--no-gripper` changes the answer, so caching it at startup would be wrong
+            as well as fragile.
+            """
+            return Layout(tuple(one.name for one in arms), arms[0].robot.num_dofs())
 
         def park_plan_line(one: ArmSession) -> str:
             """The one line showing what a run will do and how it will feel.
@@ -1591,7 +1625,28 @@ def main() -> int:  # noqa: PLR0915
                             print(f"\n  ⚠️  nothing saved in recording {k} — "
                                   "press w to record one.\n")
                             continue
-                        replay_pending = Trajectory.load(path)
+                        loaded = Trajectory.load(path)
+                        # ⭐ THE LAYOUT COMES FROM THE FILE. `Layout.from_meta` also reads
+                        # recordings made before two arms existed — Julien has several in
+                        # slots 1-6 — so they stay playable on the arm they name.
+                        layout = Layout.from_meta(loaded.meta, loaded.n_joints)
+                        by_name = {one.name: one for one in arms}
+                        missing = [n for n in layout.arms if n not in by_name]
+                        if missing:
+                            print(f"\n  ⚠️  recording {k} was made with arm(s) "
+                                  f"{', '.join(layout.arms)} and this session has "
+                                  f"{', '.join(by_name)}. Missing: {', '.join(missing)}.")
+                            print("     Start the session with those arms to play it.\n")
+                            continue
+                        if layout.n_joints != loaded.n_joints:
+                            print(f"\n  ⚠️  recording {k} says {layout.n_joints} joints in its "
+                                  f"metadata and holds {loaded.n_joints}. Refusing rather "
+                                  "than guessing which is right.\n")
+                            continue
+                        replay_pending = loaded
+                        replay_layout = layout
+                        replay_arms = [by_name[n] for n in layout.arms]
+                        replay_ready = set()
                         replay_slot = k
                         # ⭐⭐ 1.00x IS THE TAUGHT SPEED, AND THE DEFAULT IS WHATEVER THE ARM
                         # CAN ACTUALLY FOLLOW. Reworked 2026-08-13, on Julien's suggestion:
@@ -1637,14 +1692,17 @@ def main() -> int:  # noqa: PLR0915
                             # pose is a jump across whatever separates them. So the
                             # existing, tested, interruptible park drives there, and only
                             # when it arrives does playback begin.
-                            # ⚠️ `rec_arm`, the arm the recording belongs to. Playback is
-                            # session-level and single-arm today, and `l` refuses when more
-                            # than one arm is connected, so this parks the arm that will
-                            # actually follow the recording.
-                            begin_path(rec_arm,
-                                       [("recording start",
-                                         list(replay_pending.start_pose()))],
-                                       "the recording's start pose")
+                            # ⭐⭐ EVERY ARM THE RECORDING DRIVES PARKS TO ITS OWN SLICE of
+                            # the start pose. This is the safety point of the whole feature:
+                            # playback commands poses a hand physically put the arm in, and
+                            # the only dangerous command is the FIRST one, which would jump
+                            # from wherever the arm is now.
+                            start = list(replay_pending.start_pose() or ())
+                            for one in replay_arms:
+                                begin_path(one, [("recording start",
+                                                  start[replay_layout.slice_for(one.name)])],
+                                           f"arm {one.name}'s start pose in recording "
+                                           f"{replay_slot}")
                             print("     then it plays the recording. Press h or t to stop.\n")
                         else:
                             replay_pending = None
@@ -2117,20 +2175,11 @@ def main() -> int:  # noqa: PLR0915
                         # and this cannot be tested on the arm from here — so this fixes
                         # the message and changes nothing the motors see.
                         hint(f"already in {MODE_KEYS[k]}")
-                    elif k in "wl" and len(arms) > 1:
-                        # ⛔⭐ THE RECORDER IS SINGLE-ARM AND REFUSING IS THE HONEST ANSWER.
-                        # `Trajectory` holds ONE arm's joints and the playback cursor is one
-                        # session-level clock, so with two arms a recording would capture arm
-                        # B while the demonstration used both, and a playback would drive
-                        # both arms from the same slice of one arm's data.
-                        #
-                        # ⚠️ ABC wants 14 states and 14 actions per timestep — both arms in
-                        # ONE timeline (ROADMAP §9.2) — so this is not a small extension of
-                        # the current format. It is ROADMAP §8.2 item 7, and until it exists
-                        # a recording made with two arms connected would be a dataset that
-                        # lies about how it was produced.
-                        hint(f"{'recording' if k == 'w' else 'playback'} is one arm at a "
-                             "time until the two-arm recorder exists (ROADMAP §9.2)")
+                    # ⚠️ `w` and `l` REFUSED with two arms until 2026-08-14 night, because
+                    # `Trajectory` held one arm's joints and a two-arm demonstration would have
+                    # been saved as half of itself. The recorder now samples every arm into one
+                    # timeline, which is ABC's own shape (ROADMAP §9.2), so the refusal is gone
+                    # along with the test that pinned it.
                     elif k == "w":
                         # ⭐ START OR STOP RECORDING. Deliberately allowed in EVERY mode,
                         # not only GUIDE. Hand-guiding is the intended use and the reason
@@ -2146,15 +2195,22 @@ def main() -> int:  # noqa: PLR0915
                                 # timeline (ROADMAP §9.2), so when the recorder spans N arms
                                 # this becomes the list of names in the same order as the
                                 # samples. Changing it now would write a shape nothing reads.
-                                "arm": rec_arm.name,
-                                "method": f"live:{rec_arm.mode}",
+                                # ⭐ `arm` is kept as well as `arms` so that anything already
+                                # reading the old field still finds one, and `arms` is what
+                                # playback uses. `Layout.from_meta` reads either.
+                                "arm": arms[0].name,
+                                **sample_layout().to_meta(),
+                                "method": "live:" + "+".join(
+                                    f"{one.name}:{one.mode}" for one in arms),
                                 "nominal_hz": CONTROL_HZ,
-                                "frame": rec_arm.frame,
+                                "frame": arms[0].frame,
                             })
                             take_t0 = t
-                            take_modes = [rec_arm.mode]
-                            print(f"\n⏺  RECORDING arm {rec_arm.name} — "
-                                  f"{rec_arm.mode.upper()} mode. Press w again to stop.\n")
+                            take_modes = [f"{one.name}:{one.mode}" for one in arms]
+                            print("\n⏺  RECORDING " + " · ".join(
+                                f"{one.name} {one.mode.upper()}" for one in arms)
+                                + f"  ({sample_layout().n_joints} joints per sample). "
+                                "Press w again to stop.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
                             # ON 2026-08-13. `take` was left in place while the "which slot?"
@@ -2382,12 +2438,14 @@ def main() -> int:  # noqa: PLR0915
                 # is the only thing that means anything: in GUIDE the position gain is zero,
                 # so there is no command to record, and the arm is wherever the hand put it.
                 #
-                # ⚠️ `arms[0]`, SPELLED OUT. The recorder is session-level and records ONE arm
-                # today, and a leaked loop variable here read whichever arm the previous loop
-                # ended on (FINDINGS §54.1). `w` refuses when more than one arm is connected,
-                # so naming the first arm is honest rather than arbitrary. The two-arm
-                # recorder is ROADMAP §8.2 item 7.
-                rec_arm = arms[0]
+                # ⭐⭐ EVERY ARM, CONCATENATED IN `--arms` ORDER, which is exactly the shape
+                # ABC wants: 14 states per timestep, two arms in ONE timeline (ROADMAP §9.2).
+                # `src/recording.py::Layout` owns the mapping and its tests.
+                #
+                # ⚠️ Sampled in ONE list comprehension so every arm's position comes from the
+                # same cycle. Reading the arms in separate statements would put a control
+                # cycle between them, and a demonstration whose two halves are 10 ms apart is
+                # a demonstration with a lie in it.
                 if take is not None:
                     # ⛔⭐ A RECORDING PROBLEM MUST NEVER TAKE DOWN THE SESSION, and this
                     # wrapper is the whole reason the block exists. `append` raises on a
@@ -2399,7 +2457,10 @@ def main() -> int:  # noqa: PLR0915
                     # recording is a convenience feature: it has no business being able to
                     # release the arm.
                     try:
-                        take.append(t - take_t0, rec_arm.robot.get_joint_pos())
+                        take.append(t - take_t0,
+                                    [v for one in arms
+                                     for v in np.asarray(one.robot.get_joint_pos(),
+                                                         dtype=float)])
                         # ⛔⭐ RECORD EVERY MODE THE RECORDING PASSED THROUGH, not only the
                         # one it started in. Julien's recording of 2026-08-13 17:21 was
                         # stamped `method: live:hold` because he pressed `w` while in HOLD
@@ -2408,8 +2469,13 @@ def main() -> int:  # noqa: PLR0915
                         # thing ROADMAP §6.6 says matters most about a recording. A dataset
                         # that mislabels how a demonstration was produced is worse than one
                         # that omits it. FINDINGS §35.4.
-                        if rec_arm.mode not in take_modes:
-                            take_modes.append(rec_arm.mode)
+                        # ⭐ Every arm's mode, so a two-arm demonstration records that arm B
+                        # was hand-guided while arm G was mirroring it. `method` is the one
+                        # thing ROADMAP §6.6 says matters most about a recording.
+                        for one in arms:
+                            stamp = f"{one.name}:{one.mode}"
+                            if stamp not in take_modes:
+                                take_modes.append(stamp)
                     except Exception as exc:  # noqa: BLE001
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")
@@ -2602,145 +2668,6 @@ def main() -> int:  # noqa: PLR0915
                             one.robot.command_joint_pos(full)
                             one.prev_q = full[:N_ARM].copy()
 
-                    elif one.mode == "replay" and replay is not None:
-                        # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
-                        # whole reason the feature exists rather than reusing the waypoint
-                        # runner: a park traverses a *shape* at a constant joint speed, which
-                        # throws away exactly the thing hand-guiding provides. Human timing and
-                        # hesitation are the signal (docs/ROADMAP.md §6.6), so the cursor here
-                        # is a clock.
-                        q = np.asarray(one.robot.get_joint_pos(), dtype=float)
-                        # ⭐ The decision is made by `replay_step` in src/recording.py, which
-                        # has its own tests. This branch only carries it out and narrates it —
-                        # same split as ArmSession, and the reason is that this code path
-                        # commands the arm and could not otherwise be exercised without one.
-                        #
-                        # ⛔ `n_compare=N_ARM` leaves the gripper out of the "is the arm
-                        # keeping up" check. The jaws legitimately sit far from their commanded
-                        # value while closing on an object, and counting that as falling behind
-                        # would stall every playback that grips anything.
-                        rs = replay_step(replay, replay_s, q, real_dt, speed=replay_speed,
-                                         max_lag=MAX_CURSOR_LAG, n_compare=N_ARM)
-                        replay_s = rs.cursor
-                        full = q.copy()
-                        full[:N_ARM] = rs.target[:N_ARM]
-                        if one.robot.num_dofs() > N_ARM and len(rs.target) > N_ARM:
-                            # ⛔ Through the clamp, never straight from the file. A recording
-                            # made while the jaws rested on a stop would otherwise drive them
-                            # back onto it and HOLD there. That is stall torque, and it is how
-                            # motor 7 was cooked three times (FINDINGS §4).
-                            full[N_ARM] = clamp_gripper(float(rs.target[N_ARM]))
-                        one.robot.command_joint_pos(full)
-
-                        replay_worst_lag = max(replay_worst_lag, rs.lag)
-                        # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
-                        # motion Julien is already running rather than from a speed sweep that
-                        # would command the arm faster than any existing code allows. Reasoning
-                        # in src/recording.py::TrackingLog and ROADMAP §7.5.
-                        if tracking is not None and replay_prev_target is not None:
-                            tracking.observe(rs.target, replay_prev_target, q, real_dt)
-                        replay_prev_target = list(rs.target)
-                        if rs.held:
-                            replay_held_s += real_dt
-                        else:
-                            replay_progress_t = t
-                        if rs.finished:
-                            one.mode = "hold"; enter_hold(one); hint("")
-                            # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
-                            # 2.3 s longer than the recording and the old message reported only
-                            # the total, so it read as a bug with no explanation. The whole
-                            # difference is the loop holding the clock while the arm catches up,
-                            # which is a decision this code makes on purpose. A readout has to
-                            # show what can go wrong, not only what looks tidy — the same lesson
-                            # as showing the jaw temperature separately (FINDINGS §11).
-                            planned = replay.duration / replay_speed
-                            elapsed = t - replay_t0
-                            print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
-                            print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
-                                  f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
-                            # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
-                            # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
-                            # was the loop running below 100 Hz while the cursor advanced in
-                            # nominal time. That is fixed, and this check stays so a future
-                            # version cannot reintroduce it silently.
-                            unaccounted = elapsed - planned - replay_held_s
-                            if abs(unaccounted) > 0.15 + 0.05 * elapsed:
-                                print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
-                                      f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
-                            print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
-                                  f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
-                            if replay_held_s > 0.15 * planned:
-                                print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
-                                      f"of the run waiting. Try a lower speed for a faithful replay.\n")
-                            else:
-                                print()
-                            if tracking is not None and tracking.cycles > 20:
-                                # ⚠️ MEASURED, so read it as such. The playback holds its clock
-                                # once the arm falls behind, so the speeds here are not an even
-                                # sweep, and load changes with the arm's pose. It is the cheap
-                                # first answer; ROADMAP §7.5 has the active sweep if this is
-                                # ambiguous.
-                                print("     how well each joint kept up "
-                                      f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
-                                for i, worst, at_speed, top, lag_top in tracking.rows():
-                                    if top < 0.01:
-                                        continue
-                                    name = YAM_JOINTS.get(i + 1, ("joint",))[0]
-                                    print(f"       {name:<14} worst lag {worst:.3f} rad at "
-                                          f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
-                                          f"with {lag_top:.3f} rad of lag")
-                                # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
-                                # of what the arm can physically follow, and on 2026-08-13 the
-                                # only copy of it was a paste into a chat window. Saved per
-                                # playback under a timestamp, so nothing overwrites anything.
-                                # ⚠️ Never lets a failed write end a session: the arm is in HOLD
-                                # at this point and a missing diagnostic file is not worth a
-                                # traceback. FINDINGS §34.4.
-                                try:
-                                    names = [YAM_JOINTS.get(i + 1, ("joint",))[0]
-                                             for i in range(tracking.n_joints)]
-                                    rec = tracking.to_dict(names)
-                                    rec["meta"] = {
-                                        "arm": one.name,
-                                        "slot": replay_slot,
-                                        "played_at": dt_now(),
-                                        "commit": git_commit(),
-                                        "speed": round(replay_speed, 3),
-                                        "taught_speed_p99": round(replay.joint_speed(99), 4),
-                                        "recording_duration_s": round(replay.duration, 3),
-                                        "recording_meta": dict(replay.meta),
-                                        "elapsed_s": round(elapsed, 3),
-                                        "held_s": round(replay_held_s, 3),
-                                        "worst_lag_rad": round(replay_worst_lag, 5),
-                                        "loop_hz": round(loop_hz, 1),
-                                        "max_cursor_lag": MAX_CURSOR_LAG,
-                                        "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
-                                    }
-                                    TRACKING_DIR.mkdir(parents=True, exist_ok=True)
-                                    stamp = dt_now().replace(":", "-")
-                                    out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
-                                    out.write_text(json.dumps(rec, indent=1) + "\n")
-                                    print(f"     ⭐ saved this table → "
-                                          f"{out.relative_to(REPO)}")
-                                except Exception as exc:  # noqa: BLE001
-                                    print(f"     ⚠️  could not save the tracking table: "
-                                          f"{type(exc).__name__}: {exc}")
-                            replay = None
-                        elif t - replay_progress_t > PARK_STALL_SECONDS:
-                            # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
-                            # and wrong for ever: an arm that cannot catch up is blocked, and a
-                            # playback that sits silently holding its clock is the treadmill
-                            # bug again (FINDINGS §24). Same patience the park uses.
-                            one.mode = "hold"; enter_hold(one); hint("")
-                            print(f"\n⛔ PLAYBACK BLOCKED — the arm stopped following "
-                                  f"{rs.lag:.3f} rad behind the recording, no progress for "
-                                  f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                            replay = None
-                        elif t >= next_park_report:
-                            next_park_report = t + 1.0
-                            hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
-                                 f"{rs.lag:.3f} rad behind")
-
                     elif one.mode == "park" and one.park_path is not None and one.park_target is not None:
                         q = np.asarray(one.robot.get_joint_pos(), dtype=float)
                         # ⭐ Completion is judged from the MEASURED pose, never from the
@@ -2829,18 +2756,33 @@ def main() -> int:  # noqa: PLR0915
                                 # recording". It lives HERE, in the arrival branch, so a park
                                 # that was blocked or interrupted can never roll into a
                                 # playback: only a park that actually arrived does.
-                                if replay_pending is not None:
-                                    replay = replay_pending
-                                    replay_pending = None
-                                    replay_t0, replay_s = t, 0.0
-                                    replay_progress_t = t
-                                    replay_held_s, replay_worst_lag = 0.0, 0.0
-                                    replay_prev_target = list(replay.start_pose() or ())
-                                    tracking = TrackingLog(replay.n_joints)
-                                    one.mode = "replay"
-                                    print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
-                                          f"movement at {replay_speed:.2f}x. "
-                                          "Press h or t to stop.\n")
+                                if replay_pending is not None and one in replay_arms:
+                                    # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each
+                                    # one parks a different distance and therefore finishes at
+                                    # a different moment. Starting the clock on the first
+                                    # arrival would have the second arm still parking while
+                                    # the recording ran, and a two-arm demonstration whose
+                                    # halves are seconds apart is not the one that was taught.
+                                    replay_ready.add(one.name)
+                                    waiting = [a.name for a in replay_arms
+                                               if a.name not in replay_ready]
+                                    if waiting:
+                                        print(f"     arm {one.name} is at the start pose; "
+                                              f"waiting for {', '.join(waiting)}.")
+                                    else:
+                                        replay = replay_pending
+                                        replay_pending = None
+                                        replay_t0, replay_s = t, 0.0
+                                        replay_progress_t = t
+                                        replay_held_s, replay_worst_lag = 0.0, 0.0
+                                        replay_prev_target = list(replay.start_pose() or ())
+                                        tracking = TrackingLog(replay.n_joints)
+                                        for a in replay_arms:
+                                            a.mode = "replay"
+                                        print(f"\n▶  PLAYING {replay.duration:.1f}s of "
+                                              f"recorded movement on "
+                                              f"{'+'.join(a.name for a in replay_arms)} at "
+                                              f"{replay_speed:.2f}x. Press h or t to stop.\n")
                             elif leg == "blocked":
                                 # ⛔ Never spin silently. If the arm has stopped closing the
                                 # gap the honest thing is to say so and hold, not to keep
@@ -2858,6 +2800,169 @@ def main() -> int:  # noqa: PLR0915
                                 one.robot.command_joint_pos(one.park_cmd)
                                 if err < one.park_best_err - PARK_PROGRESS_EPS:
                                     one.park_best_err, one.park_progress_t = err, t
+
+                # ---- 4a. the playback: ONE cursor, every arm it was recorded from ----
+                #
+                # ⭐⭐ SESSION-LEVEL, AND IT HAS TO BE. The cursor is a clock, and one clock
+                # drives every arm. Inside the per-arm loop this block called `replay_step`
+                # once per arm, which with two arms would advance the SAME cursor twice per
+                # cycle — a playback running at double speed, silently.
+                #
+                # ⭐ FOLLOW THE RECORDING IN TIME, not along its length. A park traverses a
+                # *shape* at a constant joint speed, which throws away the thing hand-guiding
+                # provides: human timing and hesitation are the signal (ROADMAP §6.6).
+                if replay is not None and replay_layout is not None and all(
+                        a.mode == "replay" for a in replay_arms):
+                    # ⛔ MEASURED IN THE RECORDING'S ARM ORDER, never the session's. The
+                    # layout came out of the file, so the slices line up with the samples
+                    # even if `--arms` was given the other way round.
+                    measured = np.concatenate([
+                        np.asarray(a.robot.get_joint_pos(), dtype=float) for a in replay_arms])
+                    # ⛔ The grippers are left out of the "is it keeping up" check by INDEX,
+                    # because with two arms the first gripper sits in the middle of the
+                    # vector. Jaws legitimately sit far from their commanded value while
+                    # closing on an object, and counting that as lag would stall every
+                    # playback that grips anything.
+                    rs = replay_step(replay, replay_s, measured, real_dt, speed=replay_speed,
+                                     max_lag=MAX_CURSOR_LAG,
+                                     compare=replay_layout.tracked_indices(N_ARM))
+                    replay_s = rs.cursor
+                    for a in replay_arms:
+                        piece = np.asarray(rs.target[replay_layout.slice_for(a.name)],
+                                           dtype=float)
+                        full = np.asarray(a.robot.get_joint_pos(), dtype=float).copy()
+                        n_j = min(N_ARM, len(piece))
+                        full[:n_j] = piece[:n_j]
+                        if a.robot.num_dofs() > N_ARM and len(piece) > N_ARM:
+                            # ⛔ Through the clamp, never straight from the file. A recording
+                            # made while the jaws rested on a stop would otherwise drive them
+                            # back onto it and HOLD there. That is stall torque, and it is how
+                            # motor 7 was cooked three times (FINDINGS §4).
+                            full[N_ARM] = clamp_gripper(float(piece[N_ARM]))
+                        a.robot.command_joint_pos(full)
+                        a.prev_q = full[:N_ARM].copy()
+                    replay_worst_lag = max(replay_worst_lag, rs.lag)
+                    # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
+                    # motion Julien is already running rather than from a speed sweep that
+                    # would command the arm faster than any existing code allows. Reasoning
+                    # in src/recording.py::TrackingLog and ROADMAP §7.5.
+                    if tracking is not None and replay_prev_target is not None:
+                        tracking.observe(rs.target, replay_prev_target, q, real_dt)
+                    replay_prev_target = list(rs.target)
+                    if rs.held:
+                        replay_held_s += real_dt
+                    else:
+                        replay_progress_t = t
+                    if rs.finished:
+                        for a in replay_arms:
+                            a.mode = "hold"; enter_hold(a)
+                        hint("")
+                        # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
+                        # 2.3 s longer than the recording and the old message reported only
+                        # the total, so it read as a bug with no explanation. The whole
+                        # difference is the loop holding the clock while the arm catches up,
+                        # which is a decision this code makes on purpose. A readout has to
+                        # show what can go wrong, not only what looks tidy — the same lesson
+                        # as showing the jaw temperature separately (FINDINGS §11).
+                        planned = replay.duration / replay_speed
+                        elapsed = t - replay_t0
+                        print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
+                        print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
+                              f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
+                        # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
+                        # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
+                        # was the loop running below 100 Hz while the cursor advanced in
+                        # nominal time. That is fixed, and this check stays so a future
+                        # version cannot reintroduce it silently.
+                        unaccounted = elapsed - planned - replay_held_s
+                        if abs(unaccounted) > 0.15 + 0.05 * elapsed:
+                            print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
+                                  f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
+                        print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
+                              f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
+                        if replay_held_s > 0.15 * planned:
+                            print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
+                                  f"of the run waiting. Try a lower speed for a faithful replay.\n")
+                        else:
+                            print()
+                        if tracking is not None and tracking.cycles > 20:
+                            # ⚠️ MEASURED, so read it as such. The playback holds its clock
+                            # once the arm falls behind, so the speeds here are not an even
+                            # sweep, and load changes with the arm's pose. It is the cheap
+                            # first answer; ROADMAP §7.5 has the active sweep if this is
+                            # ambiguous.
+                            print("     how well each joint kept up "
+                                  f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
+                            for i, worst, at_speed, top, lag_top in tracking.rows():
+                                if top < 0.01:
+                                    continue
+                                name = YAM_JOINTS.get(i + 1, ("joint",))[0]
+                                print(f"       {name:<14} worst lag {worst:.3f} rad at "
+                                      f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
+                                      f"with {lag_top:.3f} rad of lag")
+                            # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
+                            # of what the arm can physically follow, and on 2026-08-13 the
+                            # only copy of it was a paste into a chat window. Saved per
+                            # playback under a timestamp, so nothing overwrites anything.
+                            # ⚠️ Never lets a failed write end a session: the arm is in HOLD
+                            # at this point and a missing diagnostic file is not worth a
+                            # traceback. FINDINGS §34.4.
+                            try:
+                                # ⭐ Names per ARM, because with two arms the table is 14 rows
+                                # and `YAM_JOINTS` only names seven. A table with "base_yaw"
+                                # twice and no way to tell which arm is a measurement nobody
+                                # can act on.
+                                names = [
+                                    f"{a.name} {YAM_JOINTS.get(j + 1, ('joint',))[0]}"
+                                    for a in replay_arms
+                                    for j in range(replay_layout.per_arm)
+                                ][:tracking.n_joints]
+                                rec = tracking.to_dict(names)
+                                rec["meta"] = {
+                                    "arms": [a.name for a in replay_arms],
+                                    "joints_per_arm": replay_layout.per_arm,
+                                    "slot": replay_slot,
+                                    "played_at": dt_now(),
+                                    "commit": git_commit(),
+                                    "speed": round(replay_speed, 3),
+                                    "taught_speed_p99": round(replay.joint_speed(99), 4),
+                                    "recording_duration_s": round(replay.duration, 3),
+                                    "recording_meta": dict(replay.meta),
+                                    "elapsed_s": round(elapsed, 3),
+                                    "held_s": round(replay_held_s, 3),
+                                    "worst_lag_rad": round(replay_worst_lag, 5),
+                                    "loop_hz": round(loop_hz, 1),
+                                    "max_cursor_lag": MAX_CURSOR_LAG,
+                                    "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
+                                }
+                                TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+                                stamp = dt_now().replace(":", "-")
+                                out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
+                                out.write_text(json.dumps(rec, indent=1) + "\n")
+                                print(f"     ⭐ saved this table → "
+                                      f"{out.relative_to(REPO)}")
+                            except Exception as exc:  # noqa: BLE001
+                                print(f"     ⚠️  could not save the tracking table: "
+                                      f"{type(exc).__name__}: {exc}")
+                        replay = None
+                    elif t - replay_progress_t > PARK_STALL_SECONDS:
+                        # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
+                        # and wrong for ever: an arm that cannot catch up is blocked, and a
+                        # playback that sits silently holding its clock is the treadmill
+                        # bug again (FINDINGS §24). Same patience the park uses.
+                        for a in replay_arms:
+                            a.mode = "hold"; enter_hold(a)
+                        hint("")
+                        print("\n⛔ PLAYBACK BLOCKED — "
+                              f"{'+'.join(a.name for a in replay_arms)} stopped following "
+                              f"{rs.lag:.3f} rad behind the recording, no progress for "
+                              f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
+                        replay = None
+                    elif t >= next_park_report:
+                        next_park_report = t + 1.0
+                        hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
+                             f"{rs.lag:.3f} rad behind")
+
 
                 # ---- 5. report --------------------------------------------
                 # CONTROLS mode reports continuously, not once a second: he is watching

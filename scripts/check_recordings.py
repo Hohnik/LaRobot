@@ -25,7 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from recording import Trajectory  # noqa: E402
+from recording import Layout, Trajectory  # noqa: E402
 
 #: Above this, a tail is the §30.1 defect: it produced 1.8 to 4.4 s. Below it, a tail is
 #: the arm coming to rest before the key was pressed, which is not a fault and not
@@ -81,8 +81,11 @@ def main() -> int:
         print(f"no recordings in {folder}")
         return 0
 
-    print(f"{'file':>9} {'commit':>9} {'recorded':>17} {'dur':>7} {'padding':>9} "
-          f"{'share':>6} {'peak p99':>9}  {'how it was made':<22}")
+    # ⭐ `arms` is a column since 2026-08-14, when a recording became able to hold more
+    # than one arm. A two-arm file and a one-arm file look identical in every other column,
+    # and playing the wrong one into the wrong session is the mistake worth making visible.
+    print(f"{'file':>9} {'arms':>6} {'commit':>9} {'recorded':>17} {'dur':>7} "
+          f"{'padding':>9} {'share':>6} {'peak p99':>9}  {'how it was made':<22}")
     padded: list[str] = []
     contradictory: list[str] = []
     for path in files:
@@ -108,7 +111,11 @@ def main() -> int:
         )
         if fault:
             contradictory.append(path.name)
-        print(f"{path.name:>9} {str(traj.meta.get('commit', '?')):>9} "
+        # ⚠️ Read through `Layout.from_meta`, which also understands files written before
+        # the layout existed: they carry a single `arm` field and nothing else.
+        layout = Layout.from_meta(traj.meta, traj.n_joints)
+        arms_col = ",".join(layout.arms)
+        print(f"{path.name:>9} {arms_col:>6} {str(traj.meta.get('commit', '?')):>9} "
               f"{str(traj.meta.get('recorded_at', '?'))[:16]:>17} "
               f"{traj.duration:6.2f}s {pad:8.2f}s {share:5.1f}% "
               f"{traj.joint_speed(99):8.2f}{flag}  {method:<22}")
