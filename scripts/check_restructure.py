@@ -84,7 +84,11 @@ STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 #: `ArmSession.frame` for two days, only the local was updated on a frame change, and the
 #: object quietly disagreed with the session. Deleting one copy is the fix; this list is
 #: what stops it being re-created.
-RETIRED_LOCALS = ["control_frame"]
+#: ⭐ `park` and `slots` are here rather than in MOVED_SO_FAR because they were RENAMED as
+#: well as moved. `park` became `ArmSession.base_pose` — a `park` beside the eleven
+#: `park_*` motion fields would read as one of them — and `slots` became `ArmSession.slots`
+#: only after the file read moved to `saved_slots`, keyed by arm name.
+RETIRED_LOCALS = ["control_frame", "park", "slots"]
 
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:

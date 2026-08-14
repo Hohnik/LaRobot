@@ -454,9 +454,14 @@ def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
     threading.__excepthook__(args)
 
 
-def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP,
+def park_and_wait(robot, keys, base_pose, clamp_gripper, ramp: float = PARK_RAMP,
                   speed: float = PARK_SPEED, easing=EASINGS[2]) -> str:  # noqa: ANN001
-    """Drive to the park pose, **blocking**, and say how it ended.
+    """Drive to the base pose, **blocking**, and say how it ended.
+
+    ⚠️ The parameter was called `park` until 2026-08-14. It is the arm's BASE pose, the
+    one Ctrl-C returns to, and calling it `park` invited confusion with the eleven
+    `park_*` fields that describe a park in progress. Same rename as
+    `ArmSession.base_pose`.
 
     Returns `"arrived"` · `"stalled"` · `"stopped"` (a key was pressed) · `"dead"`.
 
@@ -472,7 +477,7 @@ def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP,
     already ending. Same trajectory maths, different scheduling — collapsing them
     would mean a blocking call inside the 100 Hz loop.
     """
-    tgt, warn = park_target_from(robot.get_joint_pos(), park,
+    tgt, warn = park_target_from(robot.get_joint_pos(), base_pose,
                                  gripper_index=N_ARM, clamp=clamp_gripper)
     if warn:
         print(f"\n  ⚠️  {warn}.")
@@ -767,8 +772,11 @@ def main() -> int:  # noqa: PLR0915
     #
     # So `park` (slot 0, the base) is only ever changed deliberately with `s 0`, while
     # `s 1`…`s 9` fill waypoints that Ctrl-C ignores completely.
-    slots = park_slots(load_json(PARK_FILE, {}), arm_names[0])
-    park = slots.get(BASE_SLOT)
+    # ⚠️ Read here, per arm, and handed to `ArmSession` at construction. There is no
+    # session-level `park` or `slots` any more: both are this arm's own, keyed by arm name
+    # in `config/park_pose.json` since 2026-08-12. `check_restructure.py` RETIRED_LOCALS
+    # keeps the old names from coming back.
+    saved_slots = {name: park_slots(load_json(PARK_FILE, {}), name) for name in arm_names}
     # ⚠️ The eleven park fields used to be initialised here. They are `ArmSession`
     # fields now, and the class's constructor sets every one to the identical value —
     # `PARK_SPEED` 0.40 and `PARK_RAMP` 0.20 are the same constant in both files, which
@@ -862,7 +870,10 @@ def main() -> int:  # noqa: PLR0915
             print(f"  ⚠️  UNBOUND  : {names} — arm {name} will NOT perform these until they "
                   "are bound (m)")
     print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[start_frame]}  (v cycles it live)")
-    print(f"  park pose   : {np.round(park, 3).tolist() if park else 'none saved — press s to set one'}")
+    for name in arm_names:
+        base = saved_slots[name].get(BASE_SLOT)
+        print(f"  park pose {name} : "
+              f"{np.round(base, 3).tolist() if base else 'none saved — press s to set one'}")
     print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
@@ -974,7 +985,8 @@ def main() -> int:  # noqa: PLR0915
         arm = ArmSession(robot, name=arm_names[0], frame=start_frame,
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
                          warn_at=TEMP_WARN, stop_at=TEMP_STOP,
-                         axis_map=map_store.for_arm(arm_names[0], start_frame))
+                         axis_map=map_store.for_arm(arm_names[0], start_frame),
+                         slots=saved_slots[arm_names[0]], base_slot=BASE_SLOT)
         # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
         #
         # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for a
@@ -1020,8 +1032,8 @@ def main() -> int:  # noqa: PLR0915
         # and PARK will faithfully return it to drooped — which is why the plan line
         # prints the actual numbers rather than just saying "default".
         startup_pose = np.asarray(robot.get_joint_pos(), dtype=float)
-        if park is None:
-            park = startup_pose.tolist()
+        if arm.base_pose is None:
+            arm.base_pose = startup_pose.tolist()
             print(f"  park pose   : none saved — defaulting to the pose the arm is in NOW, "
                   f"{np.round(startup_pose[:N_ARM], 3).tolist()}")
             print("                (press s to set a different one; q then p then d parks and quits)")
@@ -1368,9 +1380,9 @@ def main() -> int:  # noqa: PLR0915
                             data = with_park_slot(load_json(PARK_FILE, {}), arm.name,
                                                   name, q.tolist())
                             save_json(PARK_FILE, data)
-                            slots = park_slots(data, arm.name)
+                            arm.slots = park_slots(data, arm.name)
                             if k == "0":
-                                park = q.tolist()
+                                arm.base_pose = q.tolist()
                                 print(f"\n  ⭐ BASE pose (0) saved — this is where Ctrl-C "
                                       f"parks before disabling:\n     {np.round(q[:N_ARM], 3)}\n")
                             else:
@@ -1539,7 +1551,8 @@ def main() -> int:  # noqa: PLR0915
                             pending = None
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
-                            legs, missing = resolve_park_legs(wanted, park, slots)
+                            legs, missing = resolve_park_legs(wanted, arm.base_pose,
+                                                              arm.slots)
                             if missing:
                                 print(f"\n  ⚠️  nothing saved in slot {', '.join(missing)}"
                                       " — press s then that digit to record one.\n")
@@ -1559,7 +1572,8 @@ def main() -> int:  # noqa: PLR0915
                         if k in ("\r", "\n", " ", "p"):
                             wanted = park_sequence[:]
                             park_sequence.clear()
-                            legs, missing = resolve_park_legs(wanted, park, slots)
+                            legs, missing = resolve_park_legs(wanted, arm.base_pose,
+                                                              arm.slots)
                             if missing:
                                 print(f"\n  ⚠️  skipping empty slot(s) {', '.join(missing)}.\n")
                             if legs:
@@ -1892,7 +1906,8 @@ def main() -> int:  # noqa: PLR0915
                         print(f"     saved: {have or 'none'}\n")
                     elif k == "s":
                         pending = "save"
-                        saved_now = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
+                        saved_now = ", ".join(sorted(n for n in arm.slots
+                                                     if n != BASE_SLOT))
                         print(f"\n  SAVE this pose to which slot?  0 = the BASE pose "
                               f"(where Ctrl-C parks), 1-9 = a waypoint.")
                         print(f"     waypoints already saved: {saved_now or 'none'}"
@@ -1900,7 +1915,7 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "p":
                         pending = "park"
                         park_sequence.clear()
-                        have = ", ".join(sorted(n for n in slots if n != BASE_SLOT))
+                        have = ", ".join(sorted(n for n in arm.slots if n != BASE_SLOT))
                         print(f"\n  PARK to which?  0 = base, 1-9 = a waypoint, "
                               f"Enter = base.")
                         print(f"     Type several digits for a SEQUENCE, then Enter."
@@ -2556,7 +2571,7 @@ def main() -> int:  # noqa: PLR0915
             planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
             unplanned = not planned_quit
             auto_parked = False
-            if chain_alive(robot) and (interrupted or unplanned) and park is not None:
+            if chain_alive(robot) and (interrupted or unplanned) and arm.base_pose is not None:
                 enter_hold(arm)
                 if interrupted:
                     print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
@@ -2564,7 +2579,7 @@ def main() -> int:  # noqa: PLR0915
                     print(f"\n⭐ SAFE STOP after {stop_reason!r} — the chain is still alive, so")
                     print("   the arm is being parked to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
-                outcome = park_and_wait(robot, keys, park, clamp_gripper,
+                outcome = park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
                                         ramp=arm.park_ramp, speed=arm.park_speed)
                 if outcome == "arrived":
                     auto_parked = True
@@ -2602,7 +2617,7 @@ def main() -> int:  # noqa: PLR0915
                         # pose"* is exactly when a human should decide rather than a default.
                         # A stalled or interrupted park leaves the arm holding and the menu
                         # open.
-                        outcome = park_and_wait(robot, keys, park, clamp_gripper,
+                        outcome = park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
                                                 ramp=arm.park_ramp, speed=arm.park_speed)
                         if outcome == "arrived":
                             print("\n   Parked. Disabling the motors now.\n")
@@ -2618,7 +2633,7 @@ def main() -> int:  # noqa: PLR0915
                         # pose defaulting to wherever the arm started, `q p d` is a
                         # complete hands-free shutdown — and Ctrl-C now does the same
                         # thing in one keystroke.
-                        park_and_wait(robot, keys, park, clamp_gripper,
+                        park_and_wait(robot, keys, arm.base_pose, clamp_gripper,
                                       ramp=arm.park_ramp, speed=arm.park_speed)
                         enter_hold(arm)
                         print("   q = park+disable    p = park again    g = weightless    d = disable")

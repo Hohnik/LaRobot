@@ -294,7 +294,9 @@ class ArmSession:
     def __init__(self, robot: Any, name: str, frame: str = "world",
                  gripper_min: float = 0.02, gripper_max: float = 0.98,
                  warn_at: float = 55.0, stop_at: float = 65.0,
-                 axis_map: Any = None) -> None:
+                 axis_map: Any = None,
+                 slots: dict[str, list] | None = None,
+                 base_slot: str = "default") -> None:
         self.robot = robot
         self.name = name
         self.frame = frame
@@ -316,6 +318,28 @@ class ArmSession:
         # a copy of a different map.
         self.axis_map = axis_map
         self.axis_map_at_start = axis_map.copy() if axis_map is not None else None
+
+        # ⭐⭐ THIS ARM'S SAVED POSES, AND THE ONE Ctrl-C GOES TO.
+        #
+        # ⛔ THE BASE POSE AND THE WAYPOINTS ARE DIFFERENT THINGS, and it is a safety
+        # requirement rather than a preference. Julien, 2026-08-12: *"the control-c park to
+        # disable needs to always go back to the stable parking save. If I save a new
+        # parking option it shouldn't go back to that and then disable."* Ctrl-C parks and
+        # then RELEASES the motors, so the pose it chooses must be one that is safe to let
+        # go in. A waypoint saved mid-task, with the arm extended over the desk holding
+        # something, is exactly what that must never be.
+        #
+        # ⭐ Called `base_pose` and not `park`, deliberately: this file already has eleven
+        # `park_*` fields describing the motion in progress, and a `park` beside them would
+        # read as one of them. The old session local was named `park`, which is why
+        # `check_restructure.py` carries it in RETIRED_LOCALS.
+        #
+        # ⚠️ `None` is a real state, not a missing value: it means no pose has ever been
+        # saved for this arm. The script then defaults it to wherever the arm was when the
+        # session started, which it can only do after the robot exists.
+        self.slots: dict[str, list] = dict(slots or {})
+        self.base_slot = base_slot
+        self.base_pose: list | None = self.slots.get(base_slot)
 
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0
