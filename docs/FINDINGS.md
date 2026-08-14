@@ -2901,3 +2901,64 @@ The arm is HOLDING its pose. It will not be released until you choose.
 ⚠️ **Not on the arm yet.** `q q` runs the same `park_and_wait()` that `q p` and Ctrl-C already use, so the motion is proven; what is new is the key and the release-only-if-arrived decision.
 
 **450 headless tests, unchanged.**
+
+---
+
+## 50. ✅⭐⭐⭐ STEP 1 OF THE BIMANUAL RESTRUCTURE IS COMPLETE — 247 OF 247 REFERENCES MOVED — 2026-08-14, 17:30
+
+> [ROADMAP §6.1](ROADMAP.md) step 1: move one arm's state out of `main()`'s locals onto an `ArmSession`, so that N of them can run in one loop. **Landed as five commits, each leaving the script runnable.**
+
+### 50.0 ✅ THE SERIES, AND WHAT EACH STEP COST
+
+| step | moved | `arm.<field>` | left |
+|---|---|---|---|
+| 1a `b52b72e` | `prev_q` · `guide_ref` · `home_ee`, and the object is constructed | 15 | 191 |
+| 1b `ca3befd` | `gripper_value` · `stall_since` | 33 | 171 |
+| 1c `ffa036e` | the 11 park fields | 118 | 76 |
+| 1d `27ba506` | `thermal` · `teleop` | 148 | 48 |
+| ⭐ **1e** | **`mode`** | ⭐ **196** | ⭐ **0** |
+
+⭐ **`main()` now holds no per-arm state.** What stays in the script is what [ROADMAP §6.1](ROADMAP.md) said should: building the robot, reading the SpaceMouse, key handling, and the session-level recorder and playback, which span every arm because ABC's format is two arms in one timeline ([§9.2](ROADMAP.md)).
+
+⭐⭐ **Each step was verified by four things and none of them is the arm:** 450 headless tests, `check_restructure.py`, dry runs in all three start modes, and `teleop_sim.py` for the IK path. **The arm test is still owed** and it is one question: does `--arms B` at N=1 feel identical?
+
+### 50.1 ⛔⭐⭐ `mode` WENT LAST, AND THE REASON IS A REAL CONSTRAINT
+
+`build_robot()` is called with `zero_gravity=(start_mode == "guide")`, and it runs **before** the robot exists, so before the `ArmSession` that would hold the mode can exist either. ⭐ **The name with the most references, 48 of them, was therefore the last one that could move** — the opposite of the order anyone would pick for comfort.
+
+✅ **Solved with a second name rather than a second assignment.** `start_mode` is a plain local, used exactly three times: set from `args.start_mode`, read by `build_robot()`, and handed to `arm.mode` immediately after construction. ⚠️ **Deliberately not one variable assigned twice**, which would leave the script and the object out of step for the lines in between.
+
+### 50.2 ⛔⭐⭐⭐ THE ONE HAZARD IN THE WHOLE SERIES THAT WOULD HAVE BEEN SILENT
+
+**`ArmSession.__init__` sets `self.mode = "hold"`.** That is the right default for a class that may be built before anyone has chosen a mode.
+
+⛔⛔ **So if the script had not assigned `arm.mode = start_mode`, then `--start-mode guide` would build a WEIGHTLESS robot and run the loop believing it was in HOLD.** Nothing raises. The arm hangs from gravity compensation alone while the screen reads HOLD. ⭐ **That is the [§0](FINDINGS.md) defect class exactly, and GUIDE is the mode where a dynamics-model error becomes a falling arm** ([§11](FINDINGS.md)).
+
+⭐ **Found by asking what the class's own default was, not by anything failing.** No test caught it, no dry run caught it, and the checker could not: every substitution was correct, and the fault would have been the *absence* of a line nobody had written. ⚠️ **This is the limit of a mechanical check: it verifies that what is there is right, never that something missing should be there.**
+
+✅ **Two tests now pin it**: one asserts the class still defaults to `hold`, one asserts the script still contains the handover. Together they make the requirement visible rather than remembered.
+
+### 50.3 ⭐ WHAT THE FIVE STEPS ACTUALLY BOUGHT, BEYOND THE REFACTOR
+
+Every step found something that had nothing to do with moving a field:
+
+| step | what it turned up |
+|---|---|
+| 1a | `nonlocal` names are invisible to a parser-driven rewrite ([§42.1](FINDINGS.md)) |
+| 1b | ⛔ **a dry run returns before most of `main()`**, so three nets had holes ([§42.0](FINDINGS.md)) |
+| 1c | ⛔ **`ast.col_offset` counts BYTES**, and this source is full of emoji ([§48.1](FINDINGS.md)) |
+| 1d | the closing summary reads state on the *failed-build* path, so a naive move breaks the DFU message ([§48.3](FINDINGS.md)) |
+| 1e | ⛔⭐ **the class's own default would have silently overridden `--start-mode`** |
+
+⭐⭐ **Four of the five were found by a check refusing, and the fifth by reading the class.** None was found by the code failing. That is the argument for the series-of-commits-with-a-checker shape, stated as a tally rather than as a preference.
+
+### 50.4 ⬜ WHAT COMES NEXT, IN ORDER
+
+1. ⬜⭐⭐ **The hardware test, and it asks ONE question:** `uv run scripts/teleop_session.py --yes --arm B --start-mode hold`, then drive normally. **Does it feel identical?** ⚠️ Try GUIDE and the gripper too, since [§47](FINDINGS.md) records that "teleop feels identical" only covered the fields TELEOP reads.
+2. ⬜ **Step 2: the `a` selector** (B → G → BOTH) and per-arm status rows. Still one arm.
+3. ⬜ **Step 3: `--arms B,G`.** ⚠️ First step that needs arm G, which a colleague borrows ([§35.6](FINDINGS.md)).
+4. ⬜ Steps 4-6: GUIDE on two arms, then mirror mode, then the two-arm recorder.
+
+⚠️ **`--arms` still does not exist.** Step 1 made the state *shape* right for N arms; it did not add the flag. That is step 2's job.
+
+**450 → 452 headless tests.**

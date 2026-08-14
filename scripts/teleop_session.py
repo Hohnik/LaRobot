@@ -762,7 +762,17 @@ def main() -> int:  # noqa: PLR0915
     # `ArmSession(` call rather than this line, so it can still catch a genuine
     # use-before-build.
     arm: ArmSession | None = None
-    mode = args.start_mode
+    # ⛔⭐⭐ `start_mode` IS A SEPARATE NAME FROM `arm.mode`, AND THAT IS THE WHOLE REASON
+    # `mode` WAS THE LAST FIELD TO MOVE. `build_robot()` below is called with
+    # `zero_gravity=(start_mode == "guide")`, and it runs BEFORE the robot exists — so
+    # before the `ArmSession` that would hold the mode can exist either. The name with the
+    # most references (48) was therefore the last one that could move, which is the
+    # opposite of the order anyone would choose for comfort. FINDINGS §50.
+    #
+    # ⚠️ It is deliberately NOT the same variable. Keeping one `mode` and assigning it
+    # twice would put the script and the object out of step for the lines in between,
+    # which is the state neither models.
+    start_mode = args.start_mode
     stop_reason: str | None = None
     # ⚠️ `teleop` was declared here as None. It is `ArmSession.teleop` now, and the class's
     # own constructor already sets it to None. ⛔ Leaving this line would run before `arm`
@@ -786,7 +796,7 @@ def main() -> int:  # noqa: PLR0915
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
         print(f"building robot — enables {n_motors} motors, starts the control loop …")
-        robot, note = build_robot(args.arm, zero_gravity=(mode == "guide"),
+        robot, note = build_robot(args.arm, zero_gravity=(start_mode == "guide"),
                                   with_gripper=not args.no_gripper)
         print(f"  {note}\n")
         chain = robot.motor_chain
@@ -810,6 +820,19 @@ def main() -> int:  # noqa: PLR0915
         arm = ArmSession(robot, name=args.arm, frame=control_frame,
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
                          warn_at=TEMP_WARN, stop_at=TEMP_STOP)
+        # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
+        #
+        # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for a
+        # class that may be built before anyone has chosen a mode. **The script has already
+        # chosen one**, from `--start-mode`, and `build_robot()` above has already acted on
+        # it by deciding `zero_gravity`.
+        #
+        # ⛔ Without this assignment, `--start-mode guide` would build a WEIGHTLESS robot
+        # and then run the loop believing it was in HOLD. **Nothing would raise.** The arm
+        # would hang from gravity compensation alone while the screen said HOLD, which is
+        # the defect class FINDINGS §0 exists for. Found by asking what the class's own
+        # default is, not by anything failing. FINDINGS §50.
+        arm.mode = start_mode
         arm.prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
 
         # ⭐ DEFAULT PARK POSE = WHEREVER THE ARM STARTED. Julien: *"if the standard
@@ -964,7 +987,6 @@ def main() -> int:  # noqa: PLR0915
             clamp and the 6-vs-7-joint reconciliation that once dropped an arm apply
             to each of them, not just the first.
             """
-            nonlocal mode
             targets = []
             for _, pose in legs:
                 tgt, warn = park_target_from(robot.get_joint_pos(), pose,
@@ -978,7 +1000,7 @@ def main() -> int:  # noqa: PLR0915
             arm.park_s = 0.0
             arm.park_target = targets[-1]
             arm.park_cmd = start.copy()
-            mode = "park"
+            arm.mode = "park"
             enter_hold()
             arm.park_best_err = float(np.max(np.abs(arm.park_target - start)))
             arm.park_progress_t = t
@@ -990,11 +1012,11 @@ def main() -> int:  # noqa: PLR0915
                   f"{arm.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
                   "Press h or t to stop.\n")
 
-        if mode == "teleop":
+        if arm.mode == "teleop":
             enter_teleop()
-        elif mode == "hold":
+        elif arm.mode == "hold":
             enter_hold()
-        elif mode == "guide":
+        elif arm.mode == "guide":
             # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
             # by enter_guide() — so the drift reference has to be taken here too, or the
             # readout silently shows nothing for the whole first GUIDE period. That gap
@@ -1022,7 +1044,7 @@ def main() -> int:  # noqa: PLR0915
         with KeyReader() as keys:
             if not keys.enabled:
                 print("⚠️  stdin is not a terminal — keys will not work. Ctrl-C still does.\n")
-            print(f"⭐ MODE: {mode.upper()}\n")
+            print(f"⭐ MODE: {arm.mode.upper()}\n")
 
             # ⛔⭐ CTRL-C MUST NOT RELEASE THE ARM, and it used to.
             #
@@ -1417,7 +1439,7 @@ def main() -> int:  # noqa: PLR0915
                     # MAP mode is entered explicitly, announces itself loudly, holds
                     # the arm still, and echoes the effect of every key. Nothing it
                     # can do moves a motor.
-                    if mode == "map":
+                    if arm.mode == "map":
                         # ⛔ EVERY EDIT IN THIS BRANCH IS KEY-DRIVEN. Moving the puck
                         # must never change the map — see FINDINGS §11 for what
                         # happened when it did.
@@ -1429,13 +1451,13 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  controls now:")
                             print(axis_map.describe(control_frame))
                             if k == "t":
-                                mode = "teleop"; enter_teleop()
+                                arm.mode = "teleop"; enter_teleop()
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
                             elif k == "g":
-                                mode = "guide"; enter_guide()
+                                arm.mode = "guide"; enter_guide()
                                 print("\n⭐ MODE: GUIDE — arm is weightless\n")
                             else:
-                                mode = "hold"; enter_hold()
+                                arm.mode = "hold"; enter_hold()
                                 print("\n⭐ MODE: HOLD\n")
                         elif k == "f":
                             if active is None:
@@ -1526,7 +1548,7 @@ def main() -> int:  # noqa: PLR0915
                     # character must never be an action.
                     if k == "q":
                         stop_reason = "quit requested"
-                    elif k == "m" and mode != "map":
+                    elif k == "m" and arm.mode != "map":
                         # ⭐ CONTROLS mode DRIVES the arm — that is the whole point, and it
                         # is why this calls enter_teleop() rather than enter_hold(). The
                         # previous version held the arm still, which made it useless for
@@ -1534,7 +1556,7 @@ def main() -> int:  # noqa: PLR0915
                         # until you have watched the arm go that way. Julien:
                         # *"the actual mapping has to happen while the arm is moving so I
                         # can see what the different directions are doing."*
-                        mode = "map"; enter_teleop()
+                        arm.mode = "map"; enter_teleop()
                         last_active_axis = None
                         print("\n⭐ MODE: CONTROLS — the arm MOVES, one isolated axis, half speed.\n")
                         print(map_reference(control_frame))
@@ -1544,14 +1566,14 @@ def main() -> int:  # noqa: PLR0915
                         print("  wrong, press f. If a control should do something else, press 1-6.\n")
                         if not rotation:
                             print("  ⚠️  wrist rotation is OFF (r toggles) — ROLL/PITCH/YAW will not move.\n")
-                    elif k == "g" and mode != "guide":
-                        mode = "guide"; hint(""); enter_guide()
+                    elif k == "g" and arm.mode != "guide":
+                        arm.mode = "guide"; hint(""); enter_guide()
                         print("\n⭐ MODE: GUIDE — arm is weightless\n")
-                    elif k == "t" and mode != "teleop":
-                        mode = "teleop"; hint(""); enter_teleop()
+                    elif k == "t" and arm.mode != "teleop":
+                        arm.mode = "teleop"; hint(""); enter_teleop()
                         print("\n⭐ MODE: TELEOP — SpaceMouse drives\n")
-                    elif k == "h" and mode != "hold":
-                        mode = "hold"; hint(""); enter_hold()
+                    elif k == "h" and arm.mode != "hold":
+                        arm.mode = "hold"; hint(""); enter_hold()
                         print("\n⭐ MODE: HOLD\n")
                     elif k in MODE_KEYS:
                         # ⛔ ALREADY IN THAT MODE — say so, do not call it unrecognised.
@@ -1578,13 +1600,13 @@ def main() -> int:  # noqa: PLR0915
                         if take is None:
                             take = Trajectory(meta={
                                 "arm": args.arm,
-                                "method": f"live:{mode}",
+                                "method": f"live:{arm.mode}",
                                 "nominal_hz": CONTROL_HZ,
                                 "frame": control_frame,
                             })
                             take_t0 = t
-                            take_modes = [mode]
-                            print(f"\n⏺  RECORDING — {mode.upper()} mode. Press w again to stop.\n")
+                            take_modes = [arm.mode]
+                            print(f"\n⏺  RECORDING — {arm.mode.upper()} mode. Press w again to stop.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
                             # ON 2026-08-13. `take` was left in place while the "which slot?"
@@ -1646,9 +1668,9 @@ def main() -> int:  # noqa: PLR0915
                               f"Enter = base.")
                         print(f"     Type several digits for a SEQUENCE, then Enter."
                               f"   waypoints: {have or 'none'}\n")
-                    elif k == "o" and mode == "teleop":
+                    elif k == "o" and arm.mode == "teleop":
                         arm.gripper_value = clamp_gripper(arm.gripper_value + gripper_step)
-                    elif k == "c" and mode == "teleop":
+                    elif k == "c" and arm.mode == "teleop":
                         arm.gripper_value = clamp_gripper(arm.gripper_value - gripper_step)
                     elif k in KEY_STEP_UP:
                         # ⭐⭐ ö AND ä MEAN THE EASE RAMP EVERYWHERE NOW. Changed
@@ -1721,14 +1743,14 @@ def main() -> int:  # noqa: PLR0915
                         # is meaningless while the puck is not driving, and a key that
                         # does nothing where you are is the defect class that made `b`
                         # look broken (FINDINGS §17.1).
-                        if mode == "park":
+                        if arm.mode == "park":
                             arm.park_speed = min(1.5, arm.park_speed * 1.25)
                             hint(f"park speed {arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale *= 1.25
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "-":
-                        if mode == "park":
+                        if arm.mode == "park":
                             arm.park_speed = max(0.05, arm.park_speed / 1.25)
                             hint(f"park speed {arm.park_speed:.2f} rad/s")
                         else:
@@ -1743,7 +1765,7 @@ def main() -> int:  # noqa: PLR0915
                 # one that gets forgotten is the one that matters: an arm resuming a
                 # planned trajectory after the operator pressed HOLD is doing something
                 # nobody asked for.
-                if mode != "park" and arm.park_path is not None:
+                if arm.mode != "park" and arm.park_path is not None:
                     left = arm.park_path.length - arm.park_s
                     if left > PARK_TOLERANCE:
                         print(f"\n  ⚠️  run abandoned with {left:.2f} rad of path left — "
@@ -1760,7 +1782,7 @@ def main() -> int:  # noqa: PLR0915
                 # ⛔ Same rule for a playback in progress: leaving the mode abandons it.
                 # An arm resuming a recorded movement after the operator pressed HOLD is
                 # doing something nobody asked for.
-                if mode != "replay" and replay is not None:
+                if arm.mode != "replay" and replay is not None:
                     left = replay.duration - replay_s
                     if left > 0.05:
                         print(f"\n  ⚠️  playback abandoned with {left:.1f}s left.\n")
@@ -1799,8 +1821,8 @@ def main() -> int:  # noqa: PLR0915
                         # thing ROADMAP §6.6 says matters most about a recording. A dataset
                         # that mislabels how a demonstration was produced is worse than one
                         # that omits it. FINDINGS §35.4.
-                        if mode not in take_modes:
-                            take_modes.append(mode)
+                        if arm.mode not in take_modes:
+                            take_modes.append(arm.mode)
                     except Exception as exc:  # noqa: BLE001
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")
@@ -1853,20 +1875,20 @@ def main() -> int:  # noqa: PLR0915
                     if axis_map.button_action(pressed) is None:
                         print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
                               f"gripper buttons (works in any mode)\n")
-                    elif mode not in ("teleop", "map"):
+                    elif arm.mode not in ("teleop", "map"):
                         print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
-                              f"you are in {mode.upper()}\n")
+                              f"you are in {arm.mode.upper()}\n")
 
-                if learn_button is None and robot.num_dofs() > N_ARM and mode in ("teleop", "map"):
+                if learn_button is None and robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
                     action = axis_map.button_action(buttons)
                     if action == "open":
                         arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
                     elif action == "close":
                         arm.gripper_value = clamp_gripper(arm.gripper_value - GRIPPER_BUTTON_RATE * dt)
 
-                if mode in ("teleop", "map") and arm.teleop is not None:
+                if arm.mode in ("teleop", "map") and arm.teleop is not None:
 
-                    if mode == "map":
+                    if arm.mode == "map":
                         # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
                         # direction is applied, so the arm performs exactly one motion and
                         # it is obvious which gesture caused it. Half speed, because this
@@ -1932,7 +1954,7 @@ def main() -> int:  # noqa: PLR0915
                     robot.command_joint_pos(full)
                     arm.prev_q = q_target.copy()
 
-                elif mode == "replay" and replay is not None:
+                elif arm.mode == "replay" and replay is not None:
                     # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
                     # whole reason the feature exists rather than reusing the waypoint
                     # runner: a park traverses a *shape* at a constant joint speed, which
@@ -1975,7 +1997,7 @@ def main() -> int:  # noqa: PLR0915
                     else:
                         replay_progress_t = t
                     if rs.finished:
-                        mode = "hold"; enter_hold(); hint("")
+                        arm.mode = "hold"; enter_hold(); hint("")
                         # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
                         # 2.3 s longer than the recording and the old message reported only
                         # the total, so it read as a bug with no explanation. The whole
@@ -2061,7 +2083,7 @@ def main() -> int:  # noqa: PLR0915
                         # and wrong for ever: an arm that cannot catch up is blocked, and a
                         # playback that sits silently holding its clock is the treadmill
                         # bug again (FINDINGS §24). Same patience the park uses.
-                        mode = "hold"; enter_hold(); hint("")
+                        arm.mode = "hold"; enter_hold(); hint("")
                         print(f"\n⛔ PLAYBACK BLOCKED — the arm stopped following "
                               f"{rs.lag:.3f} rad behind the recording, no progress for "
                               f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
@@ -2071,7 +2093,7 @@ def main() -> int:  # noqa: PLR0915
                         hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
                              f"{rs.lag:.3f} rad behind")
 
-                elif mode == "park" and arm.park_path is not None and arm.park_target is not None:
+                elif arm.mode == "park" and arm.park_path is not None and arm.park_target is not None:
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     # ⭐ Completion is judged from the MEASURED pose, never from the
                     # command — the command always arrives first, so testing it would
@@ -2106,7 +2128,7 @@ def main() -> int:  # noqa: PLR0915
                             arm.park_best_err = min(arm.park_best_err, err)
                             arm.park_progress_t = t
                         if t - arm.park_progress_t > PARK_STALL_SECONDS:
-                            mode = "hold"; enter_hold(); hint("")
+                            arm.mode = "hold"; enter_hold(); hint("")
                             print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                   f"{lag:.3f} rad behind the path, no progress for "
                                   f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
@@ -2138,7 +2160,7 @@ def main() -> int:  # noqa: PLR0915
                         if leg in ("arrived", "settled"):
                             extra = ("" if leg == "arrived" else
                                      " — as close as the arm holds itself under load")
-                            mode = "hold"; enter_hold()
+                            arm.mode = "hold"; enter_hold()
                             hint("")        # the progress readout has nothing left to say
                             # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
                             # passed at the end of the path, which resets the leg clock
@@ -2167,7 +2189,7 @@ def main() -> int:  # noqa: PLR0915
                                 replay_held_s, replay_worst_lag = 0.0, 0.0
                                 replay_prev_target = list(replay.start_pose() or ())
                                 tracking = TrackingLog(replay.n_joints)
-                                mode = "replay"
+                                arm.mode = "replay"
                                 print(f"\n▶  PLAYING {replay.duration:.1f}s of recorded "
                                       f"movement at {replay_speed:.2f}x. "
                                       "Press h or t to stop.\n")
@@ -2176,7 +2198,7 @@ def main() -> int:  # noqa: PLR0915
                             # gap the honest thing is to say so and hold, not to keep
                             # printing a number that is not changing — which is exactly
                             # how the old treadmill bug hid for two sessions.
-                            mode = "hold"; enter_hold(); hint("")
+                            arm.mode = "hold"; enter_hold(); hint("")
                             print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
                                   f"progress for {PARK_STALL_SECONDS:.0f}s.")
                             print(f"   The command ran {lag:.3f} rad ahead of the arm; "
@@ -2193,7 +2215,7 @@ def main() -> int:  # noqa: PLR0915
                 # CONTROLS mode reports continuously, not once a second: he is watching
                 # the arm and the readout together to attribute a motion to a gesture,
                 # and a 1 Hz readout is useless for that.
-                if mode == "map":
+                if arm.mode == "map":
                     # Both scales are always shown. Julien could not tell that ,/. were
                     # doing nothing here because only the active axis's resulting speed
                     # was displayed — a missing key looked identical to a key that worked.
@@ -2219,7 +2241,7 @@ def main() -> int:  # noqa: PLR0915
                     next_report += 1.0
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     extra = ""
-                    if mode == "teleop" and arm.teleop is not None:
+                    if arm.mode == "teleop" and arm.teleop is not None:
                         extra = f"  EE {np.round(arm.teleop.ee_position(), 3)}"
                         # ⭐⭐ SHOW THE WORKSPACE WALL, because it used to be invisible.
                         # Julien, 2026-08-13: *"it stops moving in the direction I want it
@@ -2272,7 +2294,7 @@ def main() -> int:  # noqa: PLR0915
                     # quantity that was going wrong. The cause is fixed; the instrument
                     # should exist anyway. Same lesson as showing the jaw temperature
                     # separately: a readout must show what can fail, not what looks calm.
-                    if mode == "guide" and arm.guide_ref is not None:
+                    if arm.mode == "guide" and arm.guide_ref is not None:
                         sank = float(np.max(np.abs(q[:N_ARM] - arm.guide_ref[:N_ARM])))
                         extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
                     # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT ROW, not only in the
@@ -2286,7 +2308,7 @@ def main() -> int:  # noqa: PLR0915
                     # up. Shown only when it drops, so a healthy loop costs no width.
                     if loop_hz < 0.92 * CONTROL_HZ:
                         rec += f"  ⚠️{loop_hz:3.0f}Hz"
-                    print(f"\r[{'CONTROLS' if mode == 'map' else mode.upper():8}] t={t:6.1f}s  {therm}"
+                    print(f"\r[{'CONTROLS' if arm.mode == 'map' else arm.mode.upper():8}] t={t:6.1f}s  {therm}"
                           f"{rec}  q {np.round(q[:N_ARM], 2)}{extra}   ", end="", flush=True)
 
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))

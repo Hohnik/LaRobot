@@ -474,6 +474,40 @@ def test_each_arm_keeps_its_own_frame() -> None:
     assert (a.frame, b.frame) == ("world", "tool")
 
 
+
+# ── the restructure's one silent hazard, pinned 2026-08-14 (FINDINGS §50) ─────
+
+
+def test_the_class_defaults_to_hold_which_is_why_the_script_must_override_it() -> None:
+    """⛔⭐⭐ THE PAIR OF FACTS THAT MAKES THE HAZARD VISIBLE.
+
+    `ArmSession` defaults to `hold`, which is right for a class that may be built before
+    anyone has chosen a mode. The script has already chosen one, from `--start-mode`, and
+    `build_robot()` has already acted on it by deciding `zero_gravity`.
+
+    ⛔ So if the script ever stops assigning `arm.mode = start_mode`, then
+    `--start-mode guide` builds a WEIGHTLESS robot and runs the loop believing it is in
+    HOLD. Nothing raises. The arm hangs from gravity compensation while the screen says
+    HOLD, which is the defect class FINDINGS §0 exists for.
+    """
+    arm = ArmSession(FakeRobot(), name="B")
+    assert arm.mode == "hold", "the class default changed; re-read FINDINGS §50"
+
+
+def test_the_script_still_hands_its_start_mode_to_the_class() -> None:
+    """⚠️ A source check, because this line lives in `main()` and no headless test can
+    reach it. If it is ever deleted the failure is silent, so the check is cheap
+    insurance rather than a real test."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    assert "arm.mode = start_mode" in src, (
+        "the script no longer passes --start-mode to the ArmSession, so a guide start "
+        "would run as HOLD with a weightless arm"
+    )
+    assert "zero_gravity=(start_mode ==" in src, (
+        "build_robot no longer reads start_mode; if it reads arm.mode instead it runs "
+        "before the object exists"
+    )
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

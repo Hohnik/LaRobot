@@ -46,7 +46,7 @@ MOVED_SO_FAR = [
     "prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since",
     "park_path", "park_s", "park_marks", "park_target", "park_cmd", "park_best_err",
     "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
-    "thermal", "teleop",
+    "thermal", "teleop", "mode",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
@@ -60,7 +60,7 @@ MOVED_SO_FAR = [
 #:     assignment to `arm`, or the ordering check goes blind.
 #:   * `mode` is read by `build_robot()` to decide `zero_gravity`, before the robot and
 #:     therefore the ArmSession exist. The script keeps a local `mode` for that decision.
-STILL_TO_MOVE = ["mode"]
+STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:
