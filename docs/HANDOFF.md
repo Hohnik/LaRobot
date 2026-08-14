@@ -1,8 +1,19 @@
 # Handoff — start here if you have no context
 
-> **Written 2026-08-10, kept current — last updated 2026-08-13, end of session 30.** This file exists so a fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
+> **Written 2026-08-10, kept current — last updated 2026-08-14, end of session 44.** This file exists so a fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) → [ROADMAP.md](ROADMAP.md). ⚠️ **§2 below is the live state, not the README** — the README's "what works right now" is session 2's snapshot and says so. `git log` carries the reasoning for every change, and the commit messages are deliberately long because they hold the *why*.
+>
+> ⭐⭐ **If you have no context, read these four things and nothing else first:**
+>
+> | read | why |
+> |---|---|
+> | the block immediately below | where the project is, in four lines, and what the next job is |
+> | ⭐ **§4 rule 11** | **how Julien wants a session run.** Added 2026-08-14, and it is the rule this file lacked for a week |
+> | ⭐ **§4 rule 8** | how to write to him. It has been rejected once and refined three times |
+> | [FINDINGS §0](FINDINGS.md) | **this stack fails by lying, not by crashing.** Every defect in it produced a confident, plausible, wrong answer and raised no exception |
+>
+> ⚠️ **The session log at §7 is 44 rows long. Do not read it front to back.** Its rows are dated and each one names the FINDINGS sections it produced; use it to answer *"when did X change and why"*, not to get oriented.
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and the next job is `--arms`
 >
@@ -519,7 +530,11 @@ ioreg -p IOUSB -w0 -l | grep -iE "USB Product Name|USB Serial Number"
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **A remote of Julien's own** | ⚠️ Partly addressed 2026-08-12 — 56 commits now sit on the branch `julien/yam-teleop-wip` in his friend's public repo, so the work is no longer on one Mac alone. That branch is not a backup he controls, so a private remote of his own remains open |
 
-⚠️ **Untested on hardware, all built and verified in simulation or headlessly.** Treat the first run of each as a test: the speed throttle near the workspace edge, and all of `src/mirror.py`. ✅ Confirmed working by Julien since being built: control frames (`v`), per-frame maps, the pure-rotation fix, and the camera at 30 fps in both window and terminal.
+⚠️ **Untested on hardware, and the list is now down to ONE thing: `src/mirror.py`.** Treat its first run as a test. ⚠️ Its `MIRROR_SIGNS` is a geometric *prediction*, not a measurement, so expect to adjust it the first time `mirror` is used.
+
+✅ **Everything else in this section is confirmed on hardware.** Control frames (`v`) and the per-frame maps, the pure-rotation fix, the camera at 30 fps in both window and terminal, and — as of 2026-08-14 — **the speed throttle near the workspace edge**, which printed `⚠️ SLOWED to 19%` in his own session. ⚠️ The throttle's *message* names a cause the data does not support, which is [FINDINGS §41.2](FINDINGS.md) and tracked as [ROADMAP §8.2](ROADMAP.md) item 21.
+
+⭐ **And the two things that can never be confirmed on demand**, because they only run when something goes wrong: the safe stop that parks on a crash ([FINDINGS §47.0](FINDINGS.md)) and the incident recorder ([FINDINGS §45](FINDINGS.md)). **Do not read their absence from the confirmed list as a gap in testing** — it is a property of what they are.
 
 > ### ⭐ A LIVE THREAD IN THE OTHER REPO — do not lose it
 >
