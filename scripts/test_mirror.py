@@ -29,6 +29,7 @@ from mirror import (  # noqa: E402
     MirrorLink,
     follower_target,
     gap,
+    pick_pair,
 )
 
 DT = 0.01
@@ -193,6 +194,39 @@ def test_a_seven_dof_follower_and_six_dof_leader_do_not_crash() -> None:
     link = MirrorLink()
     cmd = link.step(np.zeros(6), np.zeros(7), DT)
     assert cmd is not None and len(cmd) == 7
+
+
+# ------------------------------------------------------- who leads, who follows ----
+
+
+def refused(names, selected):  # noqa: ANN001, ANN201
+    """The message `pick_pair` refuses with, or a failure if it accepted the input."""
+    try:
+        got = pick_pair(names, selected)
+    except ValueError as exc:
+        return str(exc)
+    raise AssertionError(f"pick_pair({names}, {selected}) returned {got} instead of refusing")
+
+
+def test_the_selected_arm_leads() -> None:
+    """⭐ The operator selects the arm they are about to put their hands on, which is how
+    every other aimed key in the session already works."""
+    assert pick_pair(["B", "G"], ["B"]) == ("B", "G")
+    assert pick_pair(["B", "G"], ["G"]) == ("G", "B")
+
+
+def test_BOTH_selected_is_refused_rather_than_guessed() -> None:
+    """⛔ "Both arms lead" has no meaning, and picking the first would engage a motion on
+    whichever arm happened to come first in `--arms`."""
+    assert "select ONE arm" in refused(["B", "G"], ["B", "G"])
+
+
+def test_one_arm_cannot_mirror() -> None:
+    assert "exactly two arms" in refused(["B"], ["B"])
+
+
+def test_an_arm_outside_the_session_is_refused() -> None:
+    assert "not in this session" in refused(["B", "G"], ["X"])
 
 
 def main() -> int:

@@ -70,6 +70,38 @@ DEFAULT_ENGAGE_TOLERANCE = 0.05  # rad — below this, following starts
 DEFAULT_MAX_GAP = 0.35          # rad — above this while following, stop: something is wrong
 
 
+def pick_pair(arm_names: list[str], selected: list[str]) -> tuple[str, str]:
+    """Which arm leads and which follows. Returns `(leader, follower)`.
+
+        pick_pair(["B", "G"], ["B"])   ->  ("B", "G")
+        pick_pair(["B", "G"], ["G"])   ->  ("G", "B")
+
+    ⭐ THE SELECTED ARM LEADS, because the operator selects the arm they are about to put
+    their hands on. Everything else in the session already works that way: `a` aims the
+    mode keys at the arm you are about to change.
+
+    ⛔ REFUSES WHEN BOTH ARE SELECTED, rather than picking the first. "Both arms lead" has
+    no meaning, and guessing would engage a motion on whichever arm happened to be first
+    in `--arms` — a moving arm chosen by the order of a command-line flag.
+
+    Raises `ValueError` with a message written for the person at the keyboard; the caller
+    prints it as a hint.
+    """
+    if len(arm_names) != 2:
+        raise ValueError(
+            f"mirror needs exactly two arms and this session has {len(arm_names)}. "
+            "Start it with --arms B,G.")
+    if len(selected) != 1:
+        raise ValueError(
+            "select ONE arm to lead, with a. That arm is the one you hand-guide; the "
+            "other one follows it.")
+    leader = selected[0]
+    if leader not in arm_names:
+        raise ValueError(f"arm {leader} is not in this session ({', '.join(arm_names)})")
+    follower = next(name for name in arm_names if name != leader)
+    return leader, follower
+
+
 def follower_target(leader_q: Any, mode: str = "copy") -> np.ndarray:
     """The follower's joint targets for the leader's measured pose.
 

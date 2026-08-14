@@ -116,6 +116,7 @@ from spacemouse import (  # noqa: E402
 )
 from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
+from mirror import DEFAULT_ALIGN_SPEED, MirrorLink, pick_pair  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine, display_width  # noqa: E402
@@ -204,6 +205,12 @@ MODE_KEYS = {"g": "GUIDE", "t": "TELEOP", "h": "HOLD"}
 # trajectory is a SHAPE now, and a command that races ahead while the arm cuts its own
 # corner is not the shape anyone chose. SafeRobot's 0.25 rad lag limit is the backstop
 # below this; this keeps the path faithful rather than merely safe.
+# ⭐ How fast the follower closes the initial gap in MIRROR mode. ⚠️ IMPORTED from
+# `src/mirror.py` rather than repeated, so there is ONE number. It is aliased here only
+# because the plan line quotes it to the operator before they press Enter — the first draft
+# of this line wrote `0.30` next to a comment claiming it came from the module, which is the
+# staleness pattern in miniature: a duplicate plus a sentence asserting there is no duplicate.
+MIRROR_ALIGN_SPEED = DEFAULT_ALIGN_SPEED
 MAX_CURSOR_LAG = 0.15
 # ⭐ Two DIFFERENT patiences, and separating them removed a four-second dead wait at
 # the end of every park. "Has the controller finished settling?" is answered in a
@@ -315,6 +322,9 @@ HELP = """
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
   ARMS      a  which arm the MODE keys aim at (B → G → BOTH). Driving always drives
                every arm; only mode changes and edits are aimed
+  MIRROR    i  the SELECTED arm leads, the other follows it joint for joint. Shows the
+               plan and waits for Enter; i again turns it off. Hand-guide the leader
+               in GUIDE and hold it still until the row says FOLLOWING
   OTHER     r  wrist rotation on/off   ?  help
   QUIT      q  then: q = park+disable (all of it)   p = park   g = weightless   d = disable
             ⭐ to park WITHOUT quitting, press p in the session, then t to carry on
@@ -586,7 +596,8 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
     return next(o for o in order if o in outcomes)
 
 
-def status_row(one: ArmSession, lead: str, reach: float, floor: float) -> str:
+def status_row(one: ArmSession, lead: str, reach: float, floor: float,
+               note: str = "") -> str:
     """ONE arm's heartbeat row: its mode, its temperatures, its pose, its warnings.
 
     `lead` is the session's own facts — the clock, the recording, the loop rate — which
@@ -659,6 +670,11 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float) -> str:
     if one.mode == "guide" and one.guide_ref is not None:
         sank = float(np.max(np.abs(q[:N_ARM] - one.guide_ref[:N_ARM])))
         extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
+    # ⭐ `note` is whatever the session knows about this arm that the arm does not: today
+    # only the mirror link's state, which is a relationship between two arms and therefore
+    # cannot live on either.
+    if note:
+        extra = f"  {note}{extra}"
     label = "CONTROLS" if one.mode == "map" else one.mode.upper()
     return (f"[{one.name} {label:8}]{lead}  {therm}"
             f"  q {np.round(q[:N_ARM], 2)}{extra}   ")
@@ -721,6 +737,13 @@ def main() -> int:  # noqa: PLR0915
                          f"never been measured. ⛔ Do NOT raise it above 0 — Julien's point, "
                          f"2026-08-14: a floor above the desk means nothing can be picked "
                          f"up off it.")
+    ap.add_argument("--mirror", default="copy", choices=["copy", "mirror"],
+                    help="how the follower reproduces the leader in MIRROR mode (key i). "
+                         "copy = the same joint angles, correct for arms standing SIDE BY "
+                         "SIDE, which is how they stand today. mirror = negate the joints "
+                         "that reverse under reflection, for arms FACING each other. "
+                         "⚠️ The mirror signs are a geometric prediction and have never "
+                         "been tried on hardware")
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
                          "Without this, both arms share one map and editing changes both")
@@ -877,6 +900,20 @@ def main() -> int:  # noqa: PLR0915
     replay_prev_target: list[float] | None = None
     tracking: TrackingLog | None = None   # per-joint answer to "how fast can it go?"
     replay_pending: Trajectory | None = None   # parked to its start, waiting to run
+    # ⭐⭐ ONE ARM FOLLOWS THE OTHER, joint for joint. Julien's idea, 2026-08-11: *"be able
+    # to move one of the arms in the guide mode and have the second arm just mirror the exact
+    # movements with zero latency."*
+    #
+    # ⚠️ SESSION-LEVEL, because a mirror is a RELATIONSHIP between two arms rather than a
+    # property of either. The follower's `mode` is `"mirror"`; the leader keeps whatever mode
+    # it is in, which is the point — hand-guide it in GUIDE and the follower copies.
+    #
+    # ⛔ The engagement logic lives in `src/mirror.py::MirrorLink` and has 18 tests, because
+    # the risky part is the FIRST cycle: the two arms are never in the same pose, so
+    # commanding the leader's angles straight across would make the follower jump the gap.
+    mirror_link: MirrorLink | None = None
+    mirror_leader: ArmSession | None = None
+    mirror_follower: ArmSession | None = None
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_sequence: list[str] = []
@@ -1600,6 +1637,25 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  play cancelled.\n")
                         continue
 
+                    if pending == "mirror_go":
+                        pending = None
+                        if k in ("\r", "\n", " ") and mirror_follower is not None:
+                            # ⛔ The follower goes under POSITION control before anything is
+                            # commanded. If it were left weightless the commands would do
+                            # nothing at all, and the readout would show it tracking.
+                            mirror_follower.mode = "mirror"
+                            enter_hold(mirror_follower)
+                            mirror_link = MirrorLink(mode=args.mirror,
+                                                     align_speed=MIRROR_ALIGN_SPEED)
+                            print(f"\n▶  MIRROR engaged: arm {mirror_follower.name} is "
+                                  f"following arm {mirror_leader.name}. "
+                                  "Press h, t, g or i to stop it.\n")
+                        else:
+                            mirror_leader = mirror_follower = None
+                            hint("")
+                            print("\n  mirror cancelled.\n")
+                        continue
+
                     if pending in ("park", "confirm"):
                         # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
                         # moving. Julien: *"I can change the park speeds whilst it's
@@ -1780,6 +1836,42 @@ def main() -> int:  # noqa: PLR0915
                         else:
                             print(f"\n⭐ SELECTED: {selection.cycle()} — mode keys apply to "
                                   "it. Driving always applies to every arm.\n")
+                        continue
+                    if k == "i":
+                        # ⭐⭐ MIRROR MODE. The selected arm leads; the other follows.
+                        #
+                        # ⛔ IT ASKS TWICE, exactly like `l`. Engaging starts a MOTION on the
+                        # follower — it ramps to the leader's pose — and the operator's hands
+                        # and eyes are on the leader at that moment. A single keypress that
+                        # moves an arm nobody is looking at is the one thing this session's
+                        # design refuses.
+                        if mirror_link is not None:
+                            mirror_link = None
+                            for one in arms:
+                                if one.mode == "mirror":
+                                    one.mode = "hold"; enter_hold(one)
+                            hint("")
+                            print("\n  ⭐ MIRROR off — the follower is HOLDING.\n")
+                            continue
+                        try:
+                            lead_name, follow_name = pick_pair(
+                                [one.name for one in arms], selection.names())
+                        except ValueError as exc:
+                            hint(str(exc))
+                            continue
+                        mirror_leader = next(o for o in arms if o.name == lead_name)
+                        mirror_follower = next(o for o in arms if o.name == follow_name)
+                        pending = "mirror_go"
+                        start_gap = float(np.max(np.abs(
+                            np.asarray(mirror_follower.robot.get_joint_pos(), dtype=float)[:N_ARM]
+                            - np.asarray(mirror_leader.robot.get_joint_pos(), dtype=float)[:N_ARM])))
+                        print(f"\n⭐ MIRROR: arm {lead_name} LEADS, arm {follow_name} FOLLOWS "
+                              f"({args.mirror}).")
+                        print(f"     arm {follow_name} will first close a {start_gap:.2f} rad "
+                              f"gap at {MIRROR_ALIGN_SPEED} rad/s, then track continuously.")
+                        print(f"     ⚠️ HOLD ARM {lead_name} STILL until it says FOLLOWING, and "
+                              f"keep the space around arm {follow_name} clear.")
+                        print("     Enter engages · any other key cancels · i again turns it off\n")
                         continue
                     if k == "v":
                         # ⭐ Cycle which frame the puck's directions mean. Safe to do
@@ -2215,6 +2307,15 @@ def main() -> int:  # noqa: PLR0915
                 # one that gets forgotten is the one that matters: an arm resuming a
                 # planned trajectory after the operator pressed HOLD is doing something
                 # nobody asked for.
+                # ⛔ Leaving MIRROR by any route drops the link. One place rather than a
+                # cancel in each of g/t/h/i, because the one that gets forgotten is the one
+                # that matters: a follower still tracking after the operator pressed HOLD is
+                # an arm moving for a reason nobody can see.
+                if mirror_link is not None and not any(one.mode == "mirror" for one in arms):
+                    mirror_link = None
+                    hint("")
+                    print("  ⭐ MIRROR off — the follower left the mode.\n")
+
                 # ⚠️ Per arm, because one arm can be parking while the other is being
                 # driven. Each arm's run is abandoned by ITS OWN mode leaving `park`.
                 for one in arms:
@@ -2437,6 +2538,34 @@ def main() -> int:  # noqa: PLR0915
                             full[N_ARM] = clamp_gripper(one.gripper_value)
                         one.robot.command_joint_pos(full)
                         one.prev_q = q_target.copy()
+
+                    elif one.mode == "mirror" and mirror_link is not None:
+                        # ⭐⭐ ONE ARM FOLLOWS THE OTHER. Every decision is `MirrorLink`'s
+                        # (18 tests, no robot handle); this branch reads the two poses,
+                        # carries the command out, and narrates. Same split as `replay_step`
+                        # and `ArmSession` — the code that commands an arm is the code that
+                        # cannot be tested without one, so it is kept as thin as possible.
+                        lead_q = np.asarray(mirror_leader.robot.get_joint_pos(), dtype=float)
+                        follow_q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+                        cmd = mirror_link.step(lead_q, follow_q, real_dt)
+                        if cmd is None:
+                            # ⛔ The link stopped itself: the follower fell too far behind, so
+                            # it is blocked, at a joint limit, or faulted. Continuing would
+                            # keep commanding a pose it cannot reach, which is how a motor
+                            # ends up held against a stop.
+                            print(f"\n⛔ MIRROR STOPPED — {mirror_link.stop_reason}\n")
+                            one.mode = "hold"; enter_hold(one); hint("")
+                            mirror_link = None
+                        else:
+                            full = np.asarray(cmd, dtype=float).copy()
+                            # ⛔ The jaws go through the clamp, never straight from the leader.
+                            # A leader whose jaws rest on a stop would otherwise drive the
+                            # follower's onto its own stop and HOLD there, which is stall
+                            # torque and is how motor 7 was cooked three times (FINDINGS §4).
+                            if one.robot.num_dofs() > N_ARM and len(full) > N_ARM:
+                                full[N_ARM] = clamp_gripper(float(full[N_ARM]))
+                            one.robot.command_joint_pos(full)
+                            one.prev_q = full[:N_ARM].copy()
 
                     elif one.mode == "replay" and replay is not None:
                         # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
@@ -2756,9 +2885,14 @@ def main() -> int:  # noqa: PLR0915
                     if loop_hz < 0.92 * CONTROL_HZ:
                         lead += f"  ⚠️{loop_hz:3.0f}Hz"
                     pad = " " * display_width(lead)
-                    screen.set_rows([status_row(one, lead if i == 0 else pad,
-                                                args.reach, args.floor)
-                                     for i, one in enumerate(arms)])
+                    screen.set_rows([
+                        status_row(one, lead if i == 0 else pad, args.reach, args.floor,
+                                   note=(mirror_link.status(
+                                       mirror_leader.robot.get_joint_pos(),
+                                       one.robot.get_joint_pos())
+                                       if mirror_link is not None and one.mode == "mirror"
+                                       else ""))
+                        for i, one in enumerate(arms)])
 
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))
 

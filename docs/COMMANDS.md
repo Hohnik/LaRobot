@@ -46,6 +46,7 @@ uv run scripts/read_arm_state.py --yes --arm B
 | **`l`** then `0`-`9` | ⭐ **PLAY a recording back.** Shows the plan and waits for **Enter**, so a slip on `l` (which sits beside `ö`/`ä`) can never start the arm. It parks to the recording's start pose first, then follows it in real time. `-`/`+` set the speed, capped from the recording's own measured top speed |
 | `e` | cycle the **ease profile** — `none` / `in` / `out` / `both` / `s-curve`. Works in **any** mode |
 | `v` | control **frame** — world / tool / camera. ⚠️ Each frame keeps its **own** axis map |
+| **`i`** | ⭐⭐ **MIRROR — the selected arm leads, the other follows it joint for joint.** Julien's idea: hand-guide one arm in GUIDE and the other reproduces the movement. It **asks twice**, like `l`: engaging starts a motion on the follower while your hands and eyes are on the leader. `i` again turns it off, and so does any mode key aimed at the follower. ⚠️ **Hold the leader still until the status row says FOLLOWING** — until then the follower is closing the initial gap at 0.30 rad/s, and a moving target may never let it close. ⛔ Needs two arms and exactly ONE selected. `--mirror mirror` negates the joints that reverse when arms FACE each other; the default `copy` is right for arms side by side, which is how they stand today |
 | **`a`** | ⭐ **which arm the MODE keys aim at** — `B` → `G` → `BOTH`. **Driving always drives every arm**; only mode changes and edits are aimed. ⛔ Aimed rather than global because `g` on two arms is **8.6 kg** going weightless in one keypress ([FINDINGS §11.1](FINDINGS.md)). With one arm it says so and changes nothing. Refuses while CONTROLS (`m`) is open, since that wizard belongs to the arm it was entered on |
 | `r` | wrist rotation on / off *(on by default)* |
 | `,` / `.` | rotation speed slower / faster — **corner blending while a run is being typed or moving** |
@@ -58,7 +59,7 @@ uv run scripts/read_arm_state.py --yes --arm B
 
 ⭐ **`q` `p` `d` is a hands-free shutdown.** The park pose defaults to **wherever the arm was when the session started**, so unless you have saved one with `s`, pressing `p` at the quit prompt drives it back to where it began and `d` then releases it. This also means the two arms no longer have to be placed the same way before a session — each parks back to its own measured start.
 
-Useful flags: `--arms B` · `--start-mode hold|guide|teleop` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--gripper-step 0.02` · `--reach 0.60` · `--floor 0.0` · `--fork-map` / `--share-map`
+Useful flags: `--arms B,G` · `--start-mode hold|guide|teleop` · `--mirror copy|mirror` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--gripper-step 0.02` · `--reach 0.60` · `--floor 0.0` · `--fork-map` / `--share-map`
 
 ⛔ **`--box` is gone and this line advertised it until 2026-08-14.** It was replaced by `--reach` (how far the tip may go from the base) and `--floor` (how low it may go) when the workspace limit became a sphere plus a floor ([FINDINGS §43](FINDINGS.md)). Passing `--box` now errors, deliberately, rather than accepting a flag whose meaning had moved.
 
