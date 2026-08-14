@@ -293,11 +293,29 @@ class ArmSession:
 
     def __init__(self, robot: Any, name: str, frame: str = "world",
                  gripper_min: float = 0.02, gripper_max: float = 0.98,
-                 warn_at: float = 55.0, stop_at: float = 65.0) -> None:
+                 warn_at: float = 55.0, stop_at: float = 65.0,
+                 axis_map: Any = None) -> None:
         self.robot = robot
         self.name = name
         self.frame = frame
         self.mode = "hold"
+
+        # ⭐⭐ WHICH PUCK DIRECTION DRIVES WHICH MOTION, for THIS arm in THIS frame.
+        #
+        # ⚠️ Passed to the constructor rather than assigned afterwards, and that is a
+        # deliberate contrast with `mode`. `mode` cannot be a constructor argument, because
+        # `build_robot()` reads it to decide zero-gravity and runs before the robot exists —
+        # so the script has to hand it over on the next line, and a forgotten handover would
+        # have been silent ([FINDINGS §50.2](../docs/FINDINGS.md)). The map has no such
+        # constraint: `AxisMapStore` can be read before anything is built. **So it is
+        # impossible to forget rather than merely tested for.**
+        #
+        # ⭐ `axis_map_at_start` is copied HERE rather than by the caller, because the two
+        # must be taken at the same instant. `0` in CONTROLS reverts to it, and the closing
+        # summary reports "was:" from it, so a copy taken a few lines later would quietly be
+        # a copy of a different map.
+        self.axis_map = axis_map
+        self.axis_map_at_start = axis_map.copy() if axis_map is not None else None
 
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0

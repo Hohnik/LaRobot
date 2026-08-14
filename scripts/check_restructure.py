@@ -52,6 +52,10 @@ MOVED_SO_FAR = [
     # is one row per arm now. `ArmSession.read_thermal()` sets them too, so the class stays
     # coherent for a caller that does not read the chain itself.
     "hottest", "jaw_temp",
+    # ⭐ Step 2 plumbing 3/8: this arm's axis map, and the copy `0` in CONTROLS reverts to.
+    # Both are handed to the constructor rather than assigned afterwards, so they cannot be
+    # half-set — see the note in `src/arm_session.py`.
+    "axis_map", "axis_map_at_start",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and

@@ -742,13 +742,19 @@ def main() -> int:  # noqa: PLR0915
     # otherwise the shared one. Editing a shared map changes both arms, so the scope
     # is printed in the plan and again at exit. Never leave that implicit.
     map_store = AxisMapStore.load(MAP_FILE)
-    if args.fork_map:
-        map_store.fork(arm_names[0])
-    elif args.share_map:
-        map_store.unfork(arm_names[0])
-    axis_map = map_store.for_arm(arm_names[0], start_frame)
+    # ⭐ Each named arm, so `--fork-map` with two arms gives EACH of them its own map
+    # rather than only the first. That is what the flag's own help says it does ("give
+    # THIS arm its own axis map"), and with one arm it is exactly what it did before.
+    for name in arm_names:
+        if args.fork_map:
+            map_store.fork(name)
+        elif args.share_map:
+            map_store.unfork(name)
     map_store_at_start = map_store.copy()
-    axis_map_at_start = axis_map.copy()
+    # ⚠️ No `axis_map` local any more. Each arm carries its own map and its own
+    # start-of-session copy, handed to `ArmSession` at construction so it cannot be
+    # forgotten. The store stays the source; this file only reads it here and at exit.
+    # `scripts/check_restructure.py` RETIRED_LOCALS keeps the old name from coming back.
     # ⭐⭐ THE BASE POSE AND THE WAYPOINTS ARE DIFFERENT THINGS. Julien's ruling,
     # 2026-08-12: *"the control-c park to disable needs to always go back to the stable
     # parking save. If I save a new parking option it shouldn't go back to that and then
@@ -845,12 +851,17 @@ def main() -> int:  # noqa: PLR0915
     print(f"  start mode  : {args.start_mode}")
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
-    print(f"  axis map    : {axis_map.one_line(start_frame)}   (m to change it live)")
-    print(f"  map scope   : {map_store.scope_note(arm_names[0])}")
+    # ⭐ One map line per arm, read from the store — the same values the arms are about to
+    # be built with. With one arm the line reads as it always did apart from the arm's name.
+    for name in arm_names:
+        plan_map = map_store.for_arm(name, start_frame)
+        print(f"  axis map {name}  : {plan_map.one_line(start_frame)}   (m to change it live)")
+        print(f"  map scope   : {map_store.scope_note(name)}")
+        if plan_map.unbound():
+            names = ", ".join(motions_for(start_frame)[i]["short"] for i in plan_map.unbound())
+            print(f"  ⚠️  UNBOUND  : {names} — arm {name} will NOT perform these until they "
+                  "are bound (m)")
     print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[start_frame]}  (v cycles it live)")
-    if axis_map.unbound():
-        names = ", ".join(motions_for(start_frame)[i]["short"] for i in axis_map.unbound())
-        print(f"  ⚠️  UNBOUND  : {names} — the arm will NOT perform these until they are bound (m)")
     print(f"  park pose   : {np.round(park, 3).tolist() if park else 'none saved — press s to set one'}")
     print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
@@ -887,6 +898,14 @@ def main() -> int:  # noqa: PLR0915
     # `ArmSession(` call rather than this line, so it can still catch a genuine
     # use-before-build.
     arm: ArmSession | None = None
+    # ⛔⭐ DECLARED HERE FOR THE SAME REASON `arm` IS, and the reason is now stronger than
+    # it was for `arm`. The `finally` block and the closing summary both iterate `arms` —
+    # to save each arm's axis map, and to report it — and both run on the path where
+    # `build_robot()` FAILED. An unbound name there would replace *"No candleLight CAN
+    # adapter found"* with a `NameError`, on the failure Julien hits most often.
+    # ⭐ An empty list is better than a `None` guard: the loops simply do not run, so
+    # there is no second code path to keep correct. FINDINGS §48.3.
+    arms: list[ArmSession] = []
     # ⛔⭐⭐ `start_mode` IS A SEPARATE NAME FROM `arm.mode`, AND THAT IS THE WHOLE REASON
     # `mode` WAS THE LAST FIELD TO MOVE. `build_robot()` below is called with
     # `zero_gravity=(start_mode == "guide")`, and it runs BEFORE the robot exists — so
@@ -954,7 +973,8 @@ def main() -> int:  # noqa: PLR0915
         # covers the construction statement itself (FINDINGS §53.1).
         arm = ArmSession(robot, name=arm_names[0], frame=start_frame,
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
-                         warn_at=TEMP_WARN, stop_at=TEMP_STOP)
+                         warn_at=TEMP_WARN, stop_at=TEMP_STOP,
+                         axis_map=map_store.for_arm(arm_names[0], start_frame))
         # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
         #
         # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for a
@@ -980,7 +1000,7 @@ def main() -> int:  # noqa: PLR0915
         #
         # ⭐ `arm` stays the name for the one arm being acted on, which is what keeps the
         # 196 `arm.<field>` sites and `scripts/check_restructure.py` meaningful.
-        arms = [arm]
+        arms.append(arm)
         # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg
         # weightless in one keypress, and GUIDE is where a dynamics-model error becomes a
         # falling arm rather than a droop (FINDINGS §11.1). Each arm always follows its
@@ -1621,9 +1641,9 @@ def main() -> int:  # noqa: PLR0915
                         # into another would silently overwrite it — the same
                         # blast-radius bug as editing a shared map believing it was
                         # per-arm.
-                        map_store.set(arm.name, axis_map, arm.frame)
+                        map_store.set(arm.name, arm.axis_map, arm.frame)
                         arm.frame = order[(order.index(arm.frame) + 1) % len(order)]
-                        axis_map = map_store.for_arm(arm.name, arm.frame)
+                        arm.axis_map = map_store.for_arm(arm.name, arm.frame)
                         if arm.teleop is not None:
                             arm.teleop.frame = arm.frame
                         # ⛔⭐ THERE IS NOW ONE COPY OF THE FRAME, AND THAT IS THE REAL FIX
@@ -1634,15 +1654,15 @@ def main() -> int:  # noqa: PLR0915
                         # ⭐ Deleting the local is better than keeping them in step: a
                         # second copy that has to be maintained will eventually not be.
                         print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[arm.frame]}")
-                        print(f"     controls for this frame: {axis_map.one_line(arm.frame)}")
+                        print(f"     controls for this frame: {arm.axis_map.one_line(arm.frame)}")
                         print("     press m to edit THESE controls; each frame has its own\n")
                         continue
                     if k == "f" and last_input_kind == "button":
                         # Same key, same meaning everywhere: reverse the control just
                         # used. Axis -> flip its sign; button -> swap open/close.
-                        axis_map.swap_buttons()
+                        arm.axis_map.swap_buttons()
                         print("\n  ↔ SWAPPED the gripper buttons")
-                        print(axis_map.buttons_row() + "\n")
+                        print(arm.axis_map.buttons_row() + "\n")
                         continue
 
                     # ---- MAP mode owns the keyboard while it is active --------
@@ -1657,12 +1677,12 @@ def main() -> int:  # noqa: PLR0915
                         # must never change the map — see FINDINGS §11 for what
                         # happened when it did.
                         active = last_active_axis
-                        driven = axis_map.motion_driven_by(active) if active is not None else None
+                        driven = arm.axis_map.motion_driven_by(active) if active is not None else None
                         if k == "q":
                             stop_reason = "quit requested"
                         elif k in "tghm":
                             print("\n  controls now:")
-                            print(axis_map.describe(arm.frame))
+                            print(arm.axis_map.describe(arm.frame))
                             if k == "t":
                                 arm.mode = "teleop"; enter_teleop(arm)
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
@@ -1679,8 +1699,8 @@ def main() -> int:  # noqa: PLR0915
                                 print(f"\n  puck {PUCK_AXES[active]} drives nothing, so there is no "
                                       f"direction to reverse. Press 1-6 to give it a motion.\n")
                             else:
-                                axis_map.flip(driven)
-                                print(f"\n  ↔ REVERSED → {axis_map.row(driven, arm.frame).strip()}"
+                                arm.axis_map.flip(driven)
+                                print(f"\n  ↔ REVERSED → {arm.axis_map.row(driven, arm.frame).strip()}"
                                       f"   (push {PUCK_AXES[active]} again to feel it)\n")
                         elif k in "123456":
                             if active is None:
@@ -1694,20 +1714,20 @@ def main() -> int:  # noqa: PLR0915
                                     # then had to notice and re-bind. A straight exchange
                                     # is also an involution, so pressing the same key
                                     # again undoes it. See AxisMap.swap().
-                                    axis_map.swap(driven, target)
+                                    arm.axis_map.swap(driven, target)
                                     print(f"\n  ⇄ SWAPPED {motions_for(arm.frame)[driven]['short']} ↔ "
                                           f"{motions_for(arm.frame)[target]['short']}")
-                                    print(f"      {axis_map.row(target, arm.frame).strip()}")
-                                    print(f"      {axis_map.row(driven, arm.frame).strip()}")
+                                    print(f"      {arm.axis_map.row(target, arm.frame).strip()}")
+                                    print(f"      {arm.axis_map.row(driven, arm.frame).strip()}")
                                     print("      (press the same key again to swap back)\n")
                                 else:
                                     # The active control drove nothing, so there is nothing
                                     # to exchange with. The direction he was last pushing
                                     # becomes this motion's positive sense.
-                                    displaced = axis_map.bind(target, active, last_active_value)
+                                    displaced = arm.axis_map.bind(target, active, last_active_value)
                                     print(f"\n  ✓ puck {PUCK_AXES[active]} now drives "
                                           f"{motions_for(arm.frame)[target]['short']} → "
-                                          f"{axis_map.row(target, arm.frame).strip()}")
+                                          f"{arm.axis_map.row(target, arm.frame).strip()}")
                                     if displaced is not None:
                                         print(f"  ⚠️  {motions_for(arm.frame)[displaced]['short']} was using that "
                                               f"control and is now UNBOUND — it will not move.")
@@ -1716,16 +1736,16 @@ def main() -> int:  # noqa: PLR0915
                             if driven is None:
                                 print("\n  that control already drives nothing.\n")
                             else:
-                                axis_map.unbind(driven)
+                                arm.axis_map.unbind(driven)
                                 print(f"\n  unbound {motions_for(arm.frame)[driven]['short']} — it will not move\n")
                         elif k == "0":
-                            axis_map = axis_map_at_start.copy()
+                            arm.axis_map = arm.axis_map_at_start.copy()
                             print("\n  reverted to the controls this session started with:")
-                            print(axis_map.describe(arm.frame) + "\n")
+                            print(arm.axis_map.describe(arm.frame) + "\n")
                         elif k == "?":
                             print(map_reference(arm.frame))
                             print(MAP_HELP)
-                            print(axis_map.describe(arm.frame) + "\n")
+                            print(arm.axis_map.describe(arm.frame) + "\n")
                         # ⚠️ The rotation pair was MISSING here while the linear pair was
                         # present, so in CONTROLS mode roll/pitch/yaw could not be sped up
                         # or slowed down at all — Julien found it on the arm. The keys were
@@ -1774,7 +1794,7 @@ def main() -> int:  # noqa: PLR0915
                         print("\n⭐ MODE: CONTROLS — the arm MOVES, one isolated axis, half speed.\n")
                         print(map_reference(arm.frame))
                         print(MAP_HELP)
-                        print(axis_map.explain(arm.frame))
+                        print(arm.axis_map.explain(arm.frame))
                         print("\n  Push the puck one way at a time and watch the arm. If a direction is")
                         print("  wrong, press f. If a control should do something else, press 1-6.\n")
                         if not rotation:
@@ -1944,17 +1964,17 @@ def main() -> int:  # noqa: PLR0915
                         # Julien presses x he means "the gripper goes the wrong way",
                         # which is a statement about the arm, not about the device.
                         idx = "xyz".index(k)
-                        axis_map.flip(idx)
+                        arm.axis_map.flip(idx)
                         print(f"\n  {motions_for(arm.frame)[idx]['short']} flipped → "
-                              f"{axis_map.row(idx, arm.frame).strip()}\n")
+                              f"{arm.axis_map.row(idx, arm.frame).strip()}\n")
                     elif k in "123":
                         # Rotation motions: 1 roll, 2 pitch, 3 yaw. Digits because every
                         # sensible letter was taken, and because they read as an
                         # ordered triple the way x/y/z do.
                         idx = 3 + "123".index(k)
-                        axis_map.flip(idx)
+                        arm.axis_map.flip(idx)
                         print(f"\n  {motions_for(arm.frame)[idx]['short']} flipped → "
-                              f"{axis_map.row(idx, arm.frame).strip()}\n")
+                              f"{arm.axis_map.row(idx, arm.frame).strip()}\n")
                     elif k == "+" or k == "=":
                         # ⭐ In PARK these mean the park speed. The teleop linear scale
                         # is meaningless while the puck is not driving, and a key that
@@ -2072,7 +2092,7 @@ def main() -> int:  # noqa: PLR0915
                 buttons_prev = buttons
 
                 if learn_button is not None and pressed:
-                    warn = axis_map.learn_button(learn_button, pressed)
+                    warn = arm.axis_map.learn_button(learn_button, pressed)
                     if warn:
                         print(f"\n  ⚠️  {warn}\n")
                     elif learn_button == "open":
@@ -2082,14 +2102,14 @@ def main() -> int:  # noqa: PLR0915
                     else:
                         learn_button = None
                         print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
-                        print(axis_map.buttons_row())
+                        print(arm.axis_map.buttons_row())
                         print("   (f swaps them if they are the wrong way round)\n")
                 elif pressed:
                     # A press counts as "the control you just used", so f reverses it.
                     # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
                     # a button never rebinds anything.
                     last_input_kind = "button"
-                    if axis_map.button_action(pressed) is None:
+                    if arm.axis_map.button_action(pressed) is None:
                         print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
                               f"gripper buttons (works in any mode)\n")
                     elif arm.mode not in ("teleop", "map"):
@@ -2097,7 +2117,7 @@ def main() -> int:  # noqa: PLR0915
                               f"you are in {arm.mode.upper()}\n")
 
                 if learn_button is None and robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
-                    action = axis_map.button_action(buttons)
+                    action = arm.axis_map.button_action(buttons)
                     if action == "open":
                         arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
                     elif action == "close":
@@ -2125,7 +2145,7 @@ def main() -> int:  # noqa: PLR0915
                         drive_axes = raw_axes
                         scale_l, scale_a = args.linear_scale, angular_scale
 
-                    axes = axis_map.apply(drive_axes)
+                    axes = arm.axis_map.apply(drive_axes)
                     twist = np.array([
                         axes[0] * scale_l, axes[1] * scale_l, axes[2] * scale_l,
                         axes[3] * scale_a if rotation else 0.0,
@@ -2443,11 +2463,11 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\r[CONTROLS] push the puck …  {axes_readout(raw_axes)}  {speeds}   ",
                               end="", flush=True)
                     else:
-                        drv = axis_map.motion_driven_by(last_active_axis)
+                        drv = arm.axis_map.motion_driven_by(last_active_axis)
                         if drv is None:
                             doing = "→ nothing (press 1-6 to assign)"
                         else:
-                            v = axis_map.apply(isolated_axes(raw_axes, last_active_axis))[drv]
+                            v = arm.axis_map.apply(isolated_axes(raw_axes, last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
                                     else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
                             doing = f"→ {motions_for(arm.frame)[drv]['short']} {unit}"
@@ -2640,17 +2660,16 @@ def main() -> int:  # noqa: PLR0915
         # been produced on real hardware and were only recoverable because the file
         # happened to be committed. Two changes: nothing is written unless the map
         # actually changed, and the previous contents are kept alongside it.
-        # ⚠️ `arm_names[0]` and NOT `arm.name`: this is the `finally` block, so it runs on
-        # the path where `build_robot()` failed and `arm` is still None. That is the path
-        # Julien hits whenever the CAN adapters are in DFU (FINDINGS §48.3).
+        # ⚠️ THIS IS THE `finally` BLOCK, so it also runs on the path where
+        # `build_robot()` failed and no arm was ever created — the path Julien hits
+        # whenever the CAN adapters are in DFU (FINDINGS §48.3). `arms` is empty there,
+        # so the loop simply does not run and nothing is written unless `--fork-map`
+        # already changed the store.
         #
-        # ⛔⭐ THE FRAME HAS THE SAME PROBLEM AND IT IS SHARPER: the map has to be saved
-        # under the frame the session ENDED in, which lives on the arm — and the arm may
-        # not exist. `start_frame` is the frame it would have begun in, which is the only
-        # true answer when nothing was ever built. Same shape as `start_mode` for `mode`
-        # (FINDINGS §50.1): a second name, never one variable assigned twice.
-        frame_at_end = arm.frame if arm is not None else start_frame
-        map_store.set(arm_names[0], axis_map, frame_at_end)
+        # ⭐ Each arm saves ITS map under the frame IT ended in. Both live on the object,
+        # which is why this no longer needs a session-level copy of either.
+        for one in arms:
+            map_store.set(one.name, one.axis_map, one.frame)
         if map_store != map_store_at_start:
             try:
                 if MAP_FILE.exists():
@@ -2748,17 +2767,25 @@ def main() -> int:  # noqa: PLR0915
             print(f"hottest the GRIPPER (motor 7) got: {arm.thermal.max_jaw_seen:.0f}°C")
     else:
         print("\nno temperatures to report — the robot was never built, so no motor ran.")
-    # ⚠️ Guarded the same way as the thermal lines above: this runs after the `finally`,
-    # including on the failed-build path where `arm` was never created.
-    summary_frame = arm.frame if arm is not None else start_frame
-    print(f"axis map: {axis_map.one_line(summary_frame)}")
-    if axis_map != axis_map_at_start:
-        print(f"     was: {axis_map_at_start.one_line()}")
-    else:
-        print("     unchanged — nothing was written.")
-    if axis_map.unbound():
-        names = ", ".join(motions_for(summary_frame)[i]["short"] for i in axis_map.unbound())
-        print(f"  ⚠️  UNBOUND, the arm will not perform these: {names}")
+    # ⚠️ One report per arm, and `arms` is EMPTY on the failed-build path — same guard as
+    # the thermal lines above, expressed as a loop that does not run rather than as an
+    # `if`. That is why `arms` is declared before the `try` (FINDINGS §48.3).
+    for one in arms:
+        print(f"axis map {one.name}: {one.axis_map.one_line(one.frame)}")
+        if one.axis_map != one.axis_map_at_start:
+            print(f"     was: {one.axis_map_at_start.one_line()}")
+        else:
+            print("     unchanged — nothing was written.")
+        if one.axis_map.unbound():
+            names = ", ".join(motions_for(one.frame)[i]["short"]
+                              for i in one.axis_map.unbound())
+            print(f"  ⚠️  UNBOUND, arm {one.name} will not perform these: {names}")
+    if not arms:
+        # ⭐ Say what the map WOULD have been rather than nothing at all. The build failed,
+        # so no map was edited, and the store still holds what the session would have used.
+        print(f"\naxis map {arm_names[0]}: "
+              f"{map_store.for_arm(arm_names[0], start_frame).one_line(start_frame)}")
+        print("     nothing was edited — the robot was never built.")
     return 0
 
 
