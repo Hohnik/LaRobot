@@ -3323,6 +3323,21 @@ Three names, computed once per keypress: `aimed` (every selected arm), `edit_arm
 uv run scripts/check_rig.py && uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
 ```
 
+✅⭐ **THAT PING WAS RUN BY THE AGENT ON 2026-08-14 AT NIGHT, and all 14 motors answered:**
+no arm holding a fault, error clearing OFF so a latched fault would have been named rather
+than erased, temperatures **32-36 °C** against a 55 °C warning, every motor at rest.
+
+⭐⭐ **And it produced one fact worth having before the run: the two arms need OPPOSITE
+gripper shifts tonight.** Arm B reconciles with **−2π** (closed +0.198 → open −5.052) and arm
+G with **+2π** (closed +6.425 → open +1.197). ⚠️ **Both are handled automatically** by
+`build_robot()`'s reconciliation, and this is exactly what [§40](FINDINGS.md) established:
+**the ±2π shift is a property of the session, not of the arm.** Do not write either direction
+into a config file; run the ping.
+
+⚠️ **One thing he will see and should not read as a fault: arm B's jaws are 3.6% open**, so
+the ping warns that almost no closing travel is left. The script says it itself — *"Harmless,
+and it looks like a fault if unexpected."*
+
 **Then the run itself. Desk clear, gripper enabled, hand near the mains:**
 
 ```bash
