@@ -4,7 +4,9 @@
 >
 > **Everything takes `--arm B` or `--arm G`**, resolved by adapter *serial*, never by index. Default is `B`. Run them from `~/Developer/Projects/yam-robotics`.
 >
-> ⭐ **`teleop_session.py` also takes `--arms B` / `--arms B,G`** since 2026-08-14 — the N-arm spelling of the same flag ([ROADMAP §6.1](ROADMAP.md) step 2). `--arm` is unchanged and is still the one to type for one arm; the two must agree or the session refuses. ⛔ **`--arms B,G` refuses today and says why**: the script is still single-arm below the `ArmSession` (one puck, one axis map, one robot, one status row), and driving one arm while reporting two is worse than refusing.
+> ⭐⭐ **`teleop_session.py` takes `--arms B,G` and DRIVES BOTH ARMS**, confirmed on the hardware 2026-08-14 ([FINDINGS §55](FINDINGS.md)). `--arm` is unchanged and is still the one to type for one arm; the two spellings must agree or the session refuses. Each arm gets its own puck (assigned by wiggle), its own axis map, its own park pose and its own status row.
+>
+> ⛔ **Three things refuse with two arms, on purpose:** `--start-mode guide` (two arms weightless before anything is on screen), `w` and `l` (the recorder holds one arm's joints, so it would capture half a demonstration), and `m` while BOTH is selected (it edits one map from one wiggle). ⚠️ **This paragraph said "`--arms B,G` refuses today" until 2026-08-14 evening**, which was true for a few hours.
 
 ---
 
@@ -19,9 +21,12 @@ uv run scripts/teleop_session.py --yes --arm B
 
 # 3. After ANY power cycle, AND once per arm before its very first run. ~10 s, jaws only.
 #    ⛔ --arm is NOT optional here: without it this calibrates B whatever you meant,
-#    driving the wrong arm's jaws into both stops. G needs its own run — as of
-#    2026-08-10 config/gripper_limits.json holds B only, which is why G refuses
-#    to start with the gripper enabled.
+#    driving the wrong arm's jaws into both stops.
+#    ✅ BOTH arms are calibrated as of 2026-08-14, so --arms B,G runs with the gripper
+#    enabled. (This comment said "B only" until then, dated 2026-08-10.)
+#    ⚠️ The ±2π frame shift differs per session and per arm — B needed −2π and G +2π on
+#    2026-08-14 — and build_robot() reconciles it automatically. Never write a direction
+#    into the file; run ping_motors.py to see the current one.
 uv run scripts/calibrate_gripper.py --yes --arm B
 uv run scripts/calibrate_gripper.py --yes --arm G
 

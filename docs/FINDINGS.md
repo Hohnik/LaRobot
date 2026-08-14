@@ -3357,3 +3357,116 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
 ⛔ **What CANNOT work yet, so it is not a defect:** `w` and `l` refuse with two arms connected, `--start-mode guide` refuses, and `m` refuses while BOTH is selected. ⚠️ **And GUIDE on two arms is 8.6 kg going weightless** — ROADMAP §6.1 step 4 puts it last on purpose. Do it with one arm selected first, if at all.
 
 **498 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 55. ✅✅⭐⭐⭐ TWO ARMS RAN ON THE HARDWARE, AND HIS TWO QUESTIONS ABOUT THE REFUSALS ARE ANSWERED HERE — 2026-08-14, night
+
+> Julien, after the first two-arm session: *"Wow. Everything seems to work, and it seems quite good."* ⭐ **This is the first time two YAM arms have ever been driven from one process in this project.**
+
+### 55.0 ✅ WHAT HIS RUN PROVED, LINE BY LINE FROM HIS OWN PASTE
+
+Every one of these was read out of his terminal output rather than assumed:
+
+| what he did | what it proves |
+|---|---|
+| `--arms B,G` with no `--start-mode` → refused | the guide refusal fires, and its message names the fix |
+| `--arms B,G --start-mode hold` → plan with **two ARM lines, two axis maps, two park poses** | the plan is per arm, and each arm read its own entry from `config/park_pose.json` |
+| wiggled arm B's puck, then *"one unassigned puck left — using it for G"* | `exclude=` works: the second puck could not be the first one ([§54.1](FINDINGS.md)) |
+| two build lines, **B shifted −2π and G shifted +2π**, jaws normalising to 0.036 and 0.636 | two robots built in sequence, and the gripper reconciliation handled opposite shifts on the same rig in one session |
+| `⭐ MODE: B HOLD · G HOLD` | the startup banner is per arm |
+| `a` five times: G → BOTH → B → G → BOTH | `ArmSelector` cycles as designed and never lands on BOTH first |
+| `t` on BOTH, then `g` on B alone, `t` on B, `g` on G alone, `t` on BOTH | **mode keys aim.** GUIDE was entered on each arm separately, which is ROADMAP §6.1 step 4 done the careful way |
+| two status rows, arm B carrying the clock and `⚠️ 91Hz`, each arm its own temperatures, `q`, `EE` and `reach` | one row per arm, session facts on the first row only ([§52.2](FINDINGS.md)) |
+| `q` → *"Every arm is HOLDING its pose"*, then `q` → **both `PARKING` lines, then both `PARKED` (0.019 rad)**, then both disabled | ⭐⭐ **`park_arms()` on hardware: two arms parked TOGETHER**, not one after the other, and its 12 tests describe what actually happened |
+| per-arm closing report: temperatures and axis maps for B and G, both *"unchanged"* | the teardown is per arm and the map store wrote nothing it should not |
+
+⭐⭐ **AND A FREE MEASUREMENT WORTH MORE THAN IT LOOKS: the loop ran at 91 Hz with TWO arms.** One arm has been reading **83-88 Hz** for four sessions ([§31.1](FINDINGS.md), [ROADMAP §8.2](ROADMAP.md) item 14). **Two arms did not make it slower.** ⚠️ Read that as one sample, not a law — but it is evidence against "CAN traffic is what costs the loop its 100 Hz", because doubling the traffic did not cost anything. **The two-arm control budget is fine**, which is the thing this run had to establish.
+
+### 55.1 ⭐⭐ HIS QUESTION 1: WHY DO RECORDING AND PLAYBACK REFUSE WITH TWO ARMS?
+
+**Because a recording holds ONE arm's joint angles, so with two arms it would silently save half a demonstration.**
+
+⛔ **The concrete mechanism, checked in the code rather than reasoned about:**
+
+- `src/recording.py::Trajectory` stores one sample as one list of joint positions, and the sampler calls `take.append(t, rec_arm.robot.get_joint_pos())` — **one arm, `arms[0]`**.
+- So hand-guiding both arms through a task and pressing `w` produces a file containing arm B's 7 joints and metadata saying `"arm": "B"`. **The file is not wrong about itself.** It is simply half of what the operator just demonstrated, and nothing on screen would say so.
+- Playback is worse in kind: `replay` is a single session-level cursor, and only the arm that parked to the recording's start pose enters `replay` mode. So `l` would drive arm B through B's recording while arm G sat wherever it was. **A two-arm demonstration would replay as a one-arm motion.**
+
+⭐ **Why the fix is not a small extension:** [ROADMAP §9.2](ROADMAP.md) — `amazon-far/abc`, the target training format, wants **14 states and 14 actions per timestep, both arms in ONE timeline**. So the recorder has to grow from "one arm's angles" to "every arm's angles, in order, with the arm list in the metadata", and playback has to drive N arms from one cursor. That is [ROADMAP §8.2](ROADMAP.md) item 7, and it is the next real feature.
+
+⚠️ **Why refuse rather than let it record one arm:** a dataset that mislabels how a demonstration was produced is worse than one that omits it ([ROADMAP §6.6](ROADMAP.md) on provenance). The refusal is one line and it names the reason on screen; a quietly half-captured episode would be found at training time, weeks later.
+
+### 55.2 ⭐⭐ HIS QUESTION 2: WHY CAN HE NOT START IN GUIDE MODE?
+
+**Because `--start-mode guide` makes the arms weightless before anything is on screen, and with two arms that is 8.6 kg going limp at once.**
+
+⛔ **What GUIDE actually is:** `zero_gravity_mode` sets the position gain to **zero**, so the computed gravity compensation is the ONLY thing holding the arm up. There is no position term to absorb a modelling error. **Any shortfall in the model is an unopposed torque**, which is how the arm fell on 2026-08-10 with `--no-gripper` making the model 0.695 kg light and the elbow 39% short ([§11](FINDINGS.md)).
+
+⭐ **Why pressing `g` later is different, and it is not about trust:** by then the arm is already built and holding, the operator has chosen which arm with `a`, and they are watching. `--start-mode guide` happens during startup, while the plan is still printing and the operator's attention is on the terminal. **Same end state, completely different amount of warning.**
+
+⚠️ **He CAN still have it**, and he did in his run: select one arm, press `g`. ROADMAP §6.1 step 4 asks for GUIDE on two arms LAST, and his session did the careful version — GUIDE on B alone, then GUIDE on G alone.
+
+### 55.3 ⚠️ HIS QUESTION 3: WHAT ELSE COULD BE WEIRD? — the five things worth knowing
+
+1. ⭐ **`m` (CONTROLS) refuses while BOTH is selected**, and says to press `a` first. It edits one arm's map from one puck wiggle.
+2. ⛔ **Map edits go to the FIRST selected arm only, even with BOTH selected** — `x` `y` `z` `1` `2` `3` `f` `u` `0` `b` `v`. `AxisMapStore.for_arm()` returns the SAME object to both arms while the scope is SHARED, so applying an edit per arm would flip a motion twice and print two confirmations ([§53.5](FINDINGS.md)).
+3. ⚠️ **The map scope IS shared today**, which his plan printed twice: *"SHARED — edits here affect BOTH arms"*. Editing B's map changes G's. `--fork-map` gives each arm its own copy.
+4. ⚠️ **CONTROLS takes over the whole live block**, so the other arm's status row disappears while the wizard is open ([§54.2](FINDINGS.md)). It is deliberate and easy to change if it annoys him.
+5. ⚠️ **Arm B's jaws sit 3.6% open**, so `ping_motors.py` warns there is almost no closing travel left. The script says itself that this is harmless and looks like a fault if unexpected.
+
+### 55.4 ✅⭐⭐ MIRROR MODE IS BUILT, and it is the feature that was waiting for two arms
+
+**`i` engages it: the selected arm leads, the other follows it joint for joint.** Julien's idea, 2026-08-11: *"be able to move one of the arms in the guide mode and have the second arm just mirror the exact movements with zero latency."*
+
+⭐ **`src/mirror.py` has existed since 2026-08-11 with 14 tests and NO script to use it**, because it needed exactly the two-arm process step 2 just built. [HANDOFF §5.5](HANDOFF.md)'s task list has had it as item 1 the whole time.
+
+⛔ **It asks twice, like `l`.** Engaging starts a motion on the follower while the operator's hands and eyes are on the leader. The plan line quotes the gap it will close, the speed (0.30 rad/s), and says to hold the leader still until the row reads FOLLOWING.
+
+⭐ **What the two-stage engagement is for:** the arms are never in the same pose when you start, so commanding the leader's angles straight across would make the follower **jump** the gap at whatever the rate limiter allows. `MirrorLink` ramps at a bounded speed until the gap is under 0.05 rad, then tracks — with **one rate limit applied in both states**, because an earlier version handed over by assigning the target directly and that handover was itself a 5 rad/s jump.
+
+⚠️ **What the script adds on top of the tested class**, each for a reason from this repo's own history:
+
+- the jaws go through `clamp_gripper`, never straight from the leader ([§4](FINDINGS.md): motor 7 cooked three times)
+- `prev_q` is kept in step, so switching the follower to TELEOP afterwards does not snap it back ([§9](FINDINGS.md))
+- the follower goes under position control before anything is commanded, or it would ignore every command while the row showed it tracking
+- leaving MIRROR by ANY route drops the link, in one place rather than a cancel in each of `g`/`t`/`h`/`i`
+
+⛔ **`MIRROR_SIGNS` is still a geometric PREDICTION and has never run on hardware.** It only matters for `--mirror mirror`, for arms that FACE each other. The default `copy` is right for arms side by side, which is how they stand.
+
+⬜ **Never run on the arm.** It is ROADMAP §6.1 step 5 and it needs Julien.
+
+### 55.5 ⚠️ TWO MORE STALE BLOCKS IN `COMMANDS.md`, both found by reading it to add one row
+
+The tenth and eleventh instances of [§33.3](FINDINGS.md), and both were **hours** old rather than days:
+
+1. Its header said *"`--arms B,G` refuses today and says why"*, written that afternoon and false by the evening.
+2. Its calibration comment said *"as of 2026-08-10 `config/gripper_limits.json` holds B only, which is why G refuses to start with the gripper enabled"*. **Both arms are calibrated**, which is why his two-arm run kept the gripper.
+
+⭐ **The second one had a real cost shape:** it would have told a reader to run `calibrate_gripper.py --arm G`, and that routine **drives the jaws into both mechanical stops**. A stale sentence that recommends a motion is worse than one that merely misinforms. ⭐ **Both now carry the correcting note**, and item 24 of [ROADMAP §8.2](ROADMAP.md) is the mechanical check that would have caught the first.
+
+### 55.6 ⬜ WHAT IS NEXT, in the order I would do it
+
+1. ⬜⭐⭐ **MIRROR on the arm** ([ROADMAP §6.1](ROADMAP.md) step 5). Ten minutes, and it is the first two-arm *feature* rather than plumbing. Procedure: [§55.7](FINDINGS.md).
+2. ⬜⭐⭐ **The two-arm recorder** ([ROADMAP §8.2](ROADMAP.md) item 7, and the thing his question 1 is about). `Trajectory` grows to N arms, the sampler reads every arm, playback drives every arm from one cursor, old one-arm files keep playing. **This removes the `w`/`l` refusal** and is the last thing between the rig and collecting real demonstrations.
+3. ⬜ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23). `ArmSession.step_path()` and its tests describe a park that never runs.
+4. ⬜ **The throttle message that names an unmeasured cause** ([ROADMAP §8.2](ROADMAP.md) item 21).
+5. ⬜ **A private git remote of his own** ([ROADMAP §8.2](ROADMAP.md) item 7 in [HANDOFF §5.5](HANDOFF.md)), which needs his GitHub account.
+
+### 55.7 ⬜⭐ THE MIRROR RUN, when he wants it — about ten minutes
+
+⚠️ **Arms clear of each other and of anything on the desk.** The follower will move on its own.
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+```
+
+1. **`a` until the row shows `SELECTED: B`.** That arm leads.
+2. **`i`.** It prints the gap it will close and waits. Read it, then press **Enter**.
+3. **Watch arm G's row**: it should read `ALIGNING — x.xxx rad to close`, then `FOLLOWING (copy)`. ⚠️ **Hold arm B still until it says FOLLOWING.**
+4. **Now `g` on arm B** (it is still the selected arm) and hand-guide it slowly. Arm G should reproduce the movement.
+5. **`i`** to stop, or `h` aimed at G. Then `q` `q` as usual.
+
+⛔ **What to watch for, and what each would mean:** arm G moving in the wrong direction means `copy` is wrong for how they stand, so try `--mirror mirror` · arm G stopping with `MIRROR STOPPED` means it fell more than 0.35 rad behind, which means it is blocked, at a joint limit, or faulted · arm G never reaching FOLLOWING means arm B kept moving during ALIGNING.
+
+**502 headless tests. Nothing pushed (working-contract rule 9).**
