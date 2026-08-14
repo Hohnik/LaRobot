@@ -2543,3 +2543,110 @@ The cube re-centred on the arm at TELEOP entry, so **the arm was always at the e
 ⭐ **That is exactly what happened to `ArmSession` for a day** ([§36.2](FINDINGS.md)): a copy of a design drifted while all 17 of its tests passed, because the tests asserted the superseded behaviour. ✅ `drive()` now imports the real `clamp_to_workspace` instead of imitating it, so there is one implementation. ⚠️ **Worth a habit: when changing behaviour, grep the test files for a second implementation of it, not only the callers.**
 
 **416 → 430 headless tests.** ⚠️ **Not yet on the arm.** The reach limit only bites at 0.60 m and the floor at 0.05 m, so an ordinary session should feel unchanged; the visible difference is the status line reading `reach 0.52/0.60m` instead of `box 0.28/0.30m`.
+
+---
+
+## 44. ⛔⭐⭐ THE ARM FELL: A MOTOR STOPPED ANSWERING THE CAN BUS, AND BOTH ADAPTERS ARE NOW IN DFU — 2026-08-14, ~13:30
+
+> Julien: *"The arm just fell down when it was at the edge on its left side… I had it at the edge in different positions for a while. It worked flawlessly, and then at some point, it just collapsed and stopped working."* Then, on the next attempt, both CAN adapters came up in their firmware bootloader and the motors are blinking red.
+
+### 44.0 ⛔ WHAT ACTUALLY HAPPENED, IN ORDER
+
+```
+[TELEOP] t=49.0s  hottest 36°C  jaw 34°C  ⚠️ 89Hz  q [-1.59 2.33 1.81 1.45 -0.55 0.3]
+         EE [0.014 -0.484 0.353]  reach 0.60/0.60m ⚠️ AT THE EDGE
+ERROR:root:4th motor at DMChainCanInterface(channel=gsusb0) failed with info [5, 'DM4310']
+DM Error in control loop: fail to communicate with the motor 5 on yam_real at can channel 0
+```
+
+1. **Motor 5 (wrist_roll) stopped replying on the CAN bus.** Not a motor fault code. A communication timeout.
+2. ⭐ **It had already retried 15 times.** `set_control` calls `_send_message_get_response(..., max_retry=15)`, and each attempt waits 0.01 s for a reply then sleeps 0.001 s. **So the motor was silent for roughly 165 ms.** That is a sustained dropout, not one lost frame.
+3. I2RT's control thread raised and exited.
+4. ✅ **Our own detection worked exactly as designed** and printed *"the motor chain STOPPED… the arm is NOT being commanded. It will be sagging under gravity. Support it now if it is raised."* That guard exists because the loop once commanded a dead chain for 64 seconds ([§0](FINDINGS.md)).
+5. ⚠️ **`motors confirmed disabled: []`** — the shutdown could not disable anything, because the bus was already gone. Expected, and it is why the arm sagged rather than being released deliberately.
+6. On the next run, **both** CAN adapters enumerated as `0x0483:0xdf11 DFU in FS Mode`.
+
+### 44.1 ⛔⭐⭐ I2RT'S AUTO-RECOVERY COULD NOT HAVE HELPED, FOR THREE SEPARATE REASONS
+
+`dm_driver.py:584` has a recovery path. **All three of its conditions failed:**
+
+| condition | reality |
+|---|---|
+| `except RuntimeError` | ⛔ the exception was an **`AssertionError`**, so the clause never ran |
+| `"Motor error detected" in str(e)` | ⛔ the message is *"fail to communicate with the motor 5"* |
+| `self.enable_auto_recovery` | ⛔ **defaults to `False`** everywhere, and nothing here sets it |
+
+⭐⭐ **So the design is: a motor reporting a fault CODE can be recovered; a motor that stops ANSWERING is fatal.** The second case has no handler at all.
+
+⛔⭐ **And a bare "retry harder" fix is not the answer, which is worth stating so nobody builds it.** The transport layer already retried for ~165 ms. Extending that would delay the death, not prevent it.
+
+⛔⛔ **Do NOT turn `enable_auto_recovery` on as a response to this.** It would not have helped here, and it does something actively unwanted: it **cleans motor faults inside the control loop**, which is exactly the evidence-destroying behaviour [§39.1](FINDINGS.md) was written to stop. The rig now has a way to *read* a latched fault, and switching on a loop that erases them would throw that away.
+
+### 44.2 ⭐⭐ DID MY CHANGES CAUSE THIS? MEASURED, NOT ASSERTED
+
+**The workspace limit changed one hour before this run, so it is the first suspect and it was checked properly.**
+
+✅ **The new clamp demands LESS joint motion than the old cube would have at that exact pose.** Simulated from his joint angles, 300 cycles, at the default speed:
+
+| direction driven | new sphere clamp | old cube clamp |
+|---|---|---|
+| outward, away from the base | 0.78 rad/s demanded, no throttling | 1.00 rad/s demanded |
+| sideways, tangentially | **0.24 rad/s**, no throttling | ⛔ **6.84 rad/s**, throttled to 7.4% |
+
+⭐ **The radial pull-back is gentler than a per-axis clip**, because it corrects along the direction the arm is already extended rather than sliding it sideways. So the clamp itself did not work the arm harder.
+
+⚠️⚠️ **BUT there is one real, unproven link, and it must not be buried: the new limit let him reach a much more heavily loaded pose.** Gravity torque, computed from the model:
+
+| pose | worst joint torque | shoulder | tip distance |
+|---|---|---|---|
+| where the OLD cube stopped him, 11:00 | 4.48 Nm | **−3.47 Nm** | 0.524 m |
+| ⛔ **where it FAILED, 13:30** | **11.60 Nm** | ⛔ **−11.60 Nm** | 0.599 m |
+| parked | 6.59 Nm | 1.85 Nm | 0.210 m |
+
+**The shoulder was carrying 3.3x more torque than at the pose the old cube allowed.** ⭐ And the worst gravity load anywhere in the sampled workspace is **15.06 Nm, which occurs at a tip distance of 0.601 m** — so the new 0.60 m wall sits right at the most heavily loaded band the arm can reach.
+
+⚠️ **Context that cuts the other way, and it matters:** 11.60 Nm is 41% of the DM4340's 28 Nm encoding range, and **25% of sampled poses load some joint harder than that.** The arm holds its own 4.3 kg at any pose in GUIDE. ⛔ **And motor 5 is `wrist_roll`, carrying 0.21 Nm — the smallest load on the arm.** A shoulder-current story does not explain why *that* motor went quiet.
+
+⭐ **So: more current was flowing, and the failure was in the least-loaded motor's communication. The link is plausible via supply sag or electrical noise on the bus, and it is not established.**
+
+### 44.3 ⭐⭐ THE STRONGER EXPLANATION: A USB-LEVEL EVENT, NOT A MOTOR ONE
+
+`check_rig.py --raw` after the failure, and **three things in it point the same way:**
+
+```
+bus 0 addr 1  0x05e3:0x0626  USB3.1 Hub
+bus 0 addr 2  0x05e3:0x0610  USB2.1 Hub
+bus 0 addr 3  0x291a:0x8355  USB BillBoard          SN23456789
+bus 0 addr 4  0x0483:0xdf11  DFU in FS Mode         20593383594E
+bus 0 addr 5  0x0483:0xdf11  DFU in FS Mode         2081337C594E
+bus 1 addr 3  0x8086:0x0b5b  RealSense D405         (no serial reported)
+bus 1 addr 9  0x8086:0x0b5b  RealSense D405         260323072846
+```
+
+1. ⭐⭐ **Both CANables sit on the same hub chain on bus 0, behind two cascaded hubs and a "USB BillBoard"** — a dock. **Both entering DFU together fits one event on that chain**, which is what [§28](FINDINGS.md) guessed on physical grounds and this is the first topology evidence for it.
+2. ⛔⭐ **One D405 now reports NO serial**, where it read `255323071773` three hours earlier. **A USB device that stops returning its serial descriptor is in a partly-initialised state.**
+3. **Every address shuffled again** — the SpaceMice and cameras all moved. Fifth observed instance, and harmless only because everything resolves by serial.
+
+⭐⭐ **So the leading explanation is a power or reset event on the bus-0 hub chain**, which would take out the CAN link mid-cycle *and* leave both boards in their bootloader. **That is the fourth DFU occurrence** and [§35.5](FINDINGS.md) already recorded the cause as unexplained and certain to recur. ⚠️ It is still not proven; what is new is that the topology now supports it.
+
+⭐ **The actionable consequence is hardware, not software:** [ROADMAP §8.1](ROADMAP.md) already lists *"a powered USB 3 hub with enough ports"* as a gap. **This is now the strongest argument for it, and for not sharing that chain with a dock.**
+
+### 44.4 ⛔ WHY THE ARM SAGGING IS NOT FIXABLE IN SOFTWARE
+
+Once the CAN link is gone, **nothing can command the motors to hold.** Every motor is set to enter damping mode 400 ms after its last command ([§36.0](FINDINGS.md)), so a raised arm descends against damping rather than falling freely. **That is the best available behaviour and there is no software change that improves it.** The only real mitigations are keeping the link up, and not leaving the arm extended and high when it does not need to be.
+
+### 44.5 ✅ THE FLOOR WAS WRONG AND HE CAUGHT IT BEFORE IT RAN
+
+Julien: *"I still need to check the bottom floor five centimeter thing that you said, which sounds problematic because then I can't really pick anything up from the table anymore."* ⭐ **He is right, and it shipped wrong.**
+
+A floor **+0.05 m above the base plane** stops the tip 5 cm short of anything lying on the desk. **Picking objects off the desk is what the rig exists for.** A limit that forbids the task is worse than no limit, because it gets switched off.
+
+✅ **Changed to −0.10 m**, and the reasoning is now explicit in `src/teleop.py`: **it bounds a gross downward excursion and it is NOT desk protection.** It cannot be desk protection, because the desk height relative to the model's origin has never been measured ([ROADMAP §8.4](ROADMAP.md), his own ruling). What −0.10 achieves:
+
+- the tip can reach the desk even if the base plate is several cm thick;
+- the tip still cannot reach the **−0.377 m** this arm is otherwise capable of;
+- every park pose (z ≥ 0.174) clears it by more than 0.27 m.
+
+⭐ **Three tests now pin his requirement**, so the floor cannot creep back above the base plane: one asserts the default is ≤ 0, one asserts it still bounds the gross excursion, one asserts every park pose clears it. ⭐ The status line warns below z = 0, which is roughly desk height, so it reads as *"you are down at the desk"* rather than as an alarm.
+
+**430 → 433 headless tests.**

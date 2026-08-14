@@ -391,12 +391,28 @@ class CartesianTeleop:
 #: like a pure improvement. Working-contract rule 4: never continue past a hazard you have
 #: correctly identified.
 #:
-#: ⚠️ 0.05 m is chosen, not measured. Where the desk sits relative to the model's origin
-#: has deliberately never been measured (ROADMAP §8.4, his ruling). What IS measured: every
-#: park pose puts the tip at z ≥ 0.174 and within 0.433 m of the base, so both limits clear
-#: every pose the arm actually rests in. Both are `--reach` and `--floor` on the command line.
+#: ⛔⭐⭐ THE FLOOR IS −0.10 m AND IT WAS 0.05 FOR ABOUT AN HOUR. Julien caught it before
+#: it ever ran: *"the bottom floor five centimeter thing… sounds problematic because then I
+#: can't really pick anything up from the table anymore."* **He is right.**
+#:
+#: A floor 5 cm above the base plane stops the tip 5 cm short of anything lying on the
+#: desk, and picking objects off the desk is the whole point of the rig. A limit that
+#: forbids the task is worse than no limit, because it will simply be switched off.
+#:
+#: ⚠️⚠️ **So be exact about what this number is for. It bounds a GROSS downward excursion.
+#: It is NOT desk protection and it cannot be**, because where the desk sits relative to
+#: the model's origin has never been measured (ROADMAP §8.4, his own ruling that measuring
+#: the setup waits until the rig stops moving around). −0.10 m is chosen so that:
+#:
+#:   * the tip can reach the desk even if the base plate is several cm thick,
+#:   * the tip still cannot reach the **z = −0.377 m** this arm can otherwise get to,
+#:   * every park pose (z ≥ 0.174) clears it by a wide margin.
+#:
+#: ⭐ **The real fix is to measure the desk height once**, and then this becomes desk
+#: protection rather than a sanity bound. Until then the status line warns below z = 0,
+#: which is the base plane, so the operator can see it coming.
 REACH_LIMIT = 0.60          # m from the base
-FLOOR_LIMIT = 0.05          # m — the tip stays above this
+FLOOR_LIMIT = -0.10         # m — a bound on a gross excursion, NOT desk protection
 
 
 #: ⛔⭐⭐ HOW FAR PAST THE STARTING POSE TO OPEN A WIDENED LIMIT, and it must not be zero.

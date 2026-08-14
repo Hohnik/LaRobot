@@ -361,6 +361,38 @@ def test_starting_inside_adds_no_margin_at_all() -> None:
     for pose in ([0.211, 0.223, 0.306], [0.110, -0.003, 0.179], [0.251, 0.0, 0.209]):
         assert effective_limits(np.array(pose), 0.60, 0.05) == (0.60, 0.05)
 
+
+def test_the_DEFAULT_floor_cannot_block_a_pick_off_the_desk() -> None:
+    """⛔⭐⭐ JULIEN'S REQUIREMENT, and the floor was set wrong for about an hour.
+
+    It shipped at +0.05 m, and he caught it before it ever ran: *"the bottom floor five
+    centimeter thing… sounds problematic because then I can't really pick anything up
+    from the table anymore."* A floor above the base plane stops the tip short of
+    anything lying on the desk, and picking things off the desk is what the rig is for.
+
+    A limit that forbids the task is worse than no limit, because it gets switched off.
+    """
+    assert FLOOR_LIMIT <= 0.0, (
+        f"the default floor is {FLOOR_LIMIT:+.3f} m, above the base plane — that blocks "
+        "every pick off the desk"
+    )
+
+
+def test_the_DEFAULT_floor_still_bounds_a_gross_excursion() -> None:
+    """⚠️ The other half. The floor is not desk protection, because the desk height has
+    never been measured (ROADMAP §8.4). It bounds the 0.377 m below-base excursion this
+    arm is otherwise capable of, and it must keep doing that."""
+    assert FLOOR_LIMIT > -0.30, f"a floor at {FLOOR_LIMIT} bounds nothing useful"
+    out = clamp_to_workspace(np.array([0.2, 0.0, -0.377]), REACH_LIMIT, FLOOR_LIMIT)
+    assert out[2] == FLOOR_LIMIT
+    assert out[2] > -0.30
+
+
+def test_every_park_pose_clears_the_default_floor_by_a_wide_margin() -> None:
+    """The measured park poses. If a limit ever stopped a park, `q p d` would break."""
+    for z in (0.174, 0.179, 0.306):
+        assert z - FLOOR_LIMIT > 0.20, f"park pose at z={z} is only {z - FLOOR_LIMIT:.2f} above the floor"
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []

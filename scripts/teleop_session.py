@@ -549,11 +549,13 @@ def main() -> int:  # noqa: PLR0915
                          f"and stopped him at 71% of the arm's reach. The arm can reach "
                          f"about 0.74 m. ⛔ A safety limit: raise it deliberately.")
     ap.add_argument("--floor", type=float, default=FLOOR_LIMIT,
-                    help=f"lowest the tip may go, in metres above the base (default "
-                         f"{FLOOR_LIMIT}). ⛔ This exists because the old cube was "
-                         f"providing a floor for free and a bare sphere has none — this "
-                         f"arm can put its tip 0.377 m BELOW its own base. Every park "
-                         f"pose sits at 0.174 m or higher.")
+                    help=f"lowest the tip may go, in metres relative to the base plane "
+                         f"(default {FLOOR_LIMIT}). ⚠️ It bounds a GROSS downward excursion "
+                         f"and it is NOT desk protection: this arm can otherwise put its "
+                         f"tip 0.377 m below its own base, and where the desk sits has "
+                         f"never been measured. ⛔ Do NOT raise it above 0 — Julien's point, "
+                         f"2026-08-14: a floor above the desk means nothing can be picked "
+                         f"up off it.")
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
                          "Without this, both arms share one map and editing changes both")
@@ -2197,15 +2199,17 @@ def main() -> int:  # noqa: PLR0915
                         # than a cube that moved every time TELEOP was entered.
                         # FINDINGS §41.1 and §43.
                         lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
-                        out, up = workspace_room(teleop.ee_position(), lim_r, lim_f)
+                        ee_now = teleop.ee_position()
+                        out, up = workspace_room(ee_now, lim_r, lim_f)
                         extra += f"  reach {out:.2f}/{lim_r:.2f}m"
                         if out > 0.9 * lim_r:
                             extra += " ⚠️ AT THE EDGE"
-                        # ⚠️ The floor is only worth screen space when it is close. It sits
-                        # 0.05 m up and every park pose is above 0.17, so on a normal
-                        # session this never prints.
+                        # ⚠️ The floor is only worth screen space when it is close. With the
+                        # floor at −0.10 this starts warning around z = 0, the base plane,
+                        # which is roughly desk height and is exactly where a pick happens.
+                        # So it reads as "you are down at the desk" rather than as an alarm.
                         if up < 0.10:
-                            extra += f"  ⚠️ {up * 100:.0f}cm ABOVE THE FLOOR"
+                            extra += f"  ⚠️ {up * 100:.0f}cm above the floor (z={ee_now[2]:+.2f})"
                         # ⭐ How far the goal is running ahead of the pose actually
                         # achieved. Pinned at the limit = the arm cannot follow (joint
                         # limit, singularity, something in the way), which used to
