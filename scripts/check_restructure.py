@@ -211,7 +211,48 @@ def run(moved: list[str]) -> int:
     else:
         print("✓ every name used in main() resolves to something")
 
-    # 5. Progress, so the series has a visible finish line.
+    # 5. ⛔⭐⭐ EVERY PER-ARM HELPER IS CALLED WITH AN ARM, AND WITH THE RIGHT COUNT.
+    #
+    # Step 2 turned `enter_hold()`, `enter_teleop()`, `enter_guide()`, `resync()`,
+    # `begin_path()` and `park_plan_line()` from closures over one arm into functions that
+    # take the arm they act on — about thirty call sites. **Python cannot see a wrong
+    # argument count until the line runs**, and every one of those lines is inside the
+    # control loop with the motors live.
+    #
+    # ⚠️ The nets that already exist do not cover this: `compile()` accepts a bad arity,
+    # check 4 only asks whether a NAME resolves, and a dry run returns before the loop
+    # (FINDINGS §42.0). So the first execution of a mis-called helper would be on the arm.
+    #
+    # ⭐ A helper is recognised by its first parameter being named `one`, which is the
+    # convention this file now relies on. If that name changes, this check goes quiet
+    # rather than wrong — so it also reports how many helpers it found.
+    helpers: dict[str, tuple[int, int]] = {}    # name -> (required, total)
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            args = node.args.args
+            if args and args[0].arg == "one":
+                helpers[node.name] = (len(args) - len(node.args.defaults), len(args))
+    bad = []
+    for node in ast.walk(fn):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id in helpers):
+            required, total = helpers[node.func.id]
+            given = len(node.args) + len(node.keywords)
+            if not (required <= given <= total) or not node.args:
+                bad.append((node.lineno, node.func.id, given, required))
+    if not helpers:
+        print("⚠️ no per-arm helpers found (first parameter `one`) — check 5 is asleep")
+    elif bad:
+        faults += len(bad)
+        print(f"⛔ {len(bad)} call(s) to a per-arm helper with the wrong arguments:")
+        for lineno, name, given, required in bad:
+            print(f"     line {lineno}: {name}() got {given}, needs {required} "
+                  "(the first must be the arm)")
+    else:
+        print(f"✓ every call to the {len(helpers)} per-arm helper(s) passes an arm: "
+              f"{', '.join(sorted(helpers))}")
+
+    # 6. Progress, so the series has a visible finish line.
     remaining = {}
     for node in ast.walk(fn):
         if isinstance(node, ast.Name) and node.id in STILL_TO_MOVE:
