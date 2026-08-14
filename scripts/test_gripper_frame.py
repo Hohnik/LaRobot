@@ -34,7 +34,10 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-from yam_robot import reconcile_gripper_limits  # noqa: E402
+from yam_robot import (  # noqa: E402
+    frame_correct_gripper_limits,
+    reconcile_gripper_limits,
+)
 
 TWO_PI = 2 * math.pi
 MARGIN = 0.3  # reconcile_gripper_limits' default
@@ -101,9 +104,15 @@ def test_only_one_shift_can_ever_bracket_a_position() -> None:
     `stroke + 2*margin < 2π`. With a 5.25 rad stroke and a 0.3 margin that is
     5.85 < 6.283, leaving 0.43 rad of headroom.
 
-    ⚠️ So a longer-stroke gripper, or a bigger margin, would make two frames
-    overlap and the function would silently pick whichever it tried first. This
-    test fires if that day comes.
+    ⚠️ So a longer-stroke gripper, or a bigger margin, would make two frames overlap.
+    This test fires if that day comes.
+
+    ⛔ **UPDATED 2026-08-14: what happens in the overlap changed, so this docstring had
+    to.** It used to end *"and the function would silently pick whichever it tried
+    first"*, which was true when written. Both reconcilers now REFUSE when more than one
+    shift fits, and `test_an_AMBIGUOUS_frame_is_refused_rather_than_resolved_by_list_order`
+    pins that. **This test still earns its place**: it guards the precondition (the real
+    strokes stay narrow), while the other guards the behaviour if they ever do not.
     """
     for saved in (LIMITS_B, LIMITS_G):
         stroke = abs(saved[0] - saved[1])
@@ -211,6 +220,28 @@ def test_an_arm_with_no_saved_limits_says_so_instead_of_guessing() -> None:
 
     text = "\n".join(gripper_frame_report("NOPE", 0.0))
     assert "no saved jaw limits" in text, text
+
+
+# ------------------------------------------- an ambiguous frame must be refused ----
+
+
+def test_an_AMBIGUOUS_frame_is_refused_rather_than_resolved_by_list_order() -> None:
+    """⛔⭐ THE GUARD ADDED 2026-08-14, and it is dormant on the real rig by 0.43 rad.
+
+    Each candidate shift accepts raw positions in a window of `travel + 2·margin`, and the
+    candidates sit 2π apart. **A jaw travel wider than `2π − 2·margin` makes two windows
+    overlap**, and then both shifts "fit". Picking the first would be picking a jaw SCALE by
+    list order, and a wrong scale is what commanded the gripper 2.6 rad past its stop and
+    cooked motor 7.
+
+    ⚠️ The real arms measure 5.250 and 5.228 rad of travel, so this cannot happen today.
+    That is exactly why it has to be a refusal in the code rather than a sentence in a
+    comment: a wider re-calibration would re-introduce the choice silently.
+    """
+    wide = [3.4, -3.4]            # 6.8 rad of travel, wider than 2π
+    # A position both the un-shifted and the +2π windows accept.
+    assert frame_correct_gripper_limits(wide, 3.3) is None
+    assert reconcile_gripper_limits(wide, 3.3) is None
 
 
 def main() -> int:

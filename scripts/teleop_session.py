@@ -131,6 +131,7 @@ from teleop import (  # noqa: E402
 )
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
+    SAFE_MAX_SPEED,
     ThermalGuard,
     advance_park_command,
     build_robot,
@@ -737,6 +738,15 @@ def main() -> int:  # noqa: PLR0915
                          f"never been measured. ⛔ Do NOT raise it above 0 — Julien's point, "
                          f"2026-08-14: a floor above the desk means nothing can be picked "
                          f"up off it.")
+    ap.add_argument("--max-speed", type=float, default=SAFE_MAX_SPEED,
+                    help=f"the ceiling on every commanded joint speed, rad/s (default "
+                         f"{SAFE_MAX_SPEED}). ⛔ A SAFETY LIMIT, and the one that binds "
+                         f"everything: SafeRobot clamps every command from every mode to it, "
+                         f"below all control logic, so the park speed and any playback "
+                         f"multiplier never bind above it. ⚠️ It is a SOFTWARE limit, not the "
+                         f"hardware's — hand-guided recordings reach 2.4 to 3.7 rad/s "
+                         f"(FINDINGS §37.2). Raise it one step at a time (1.0 → 1.5 → 2.0) and "
+                         f"watch the STUCK lead warning rather than temperature")
     ap.add_argument("--mirror", default="copy", choices=["copy", "mirror"],
                     help="how the follower reproduces the leader in MIRROR mode (key i). "
                          "copy = the same joint angles, correct for arms standing SIDE BY "
@@ -960,6 +970,10 @@ def main() -> int:  # noqa: PLR0915
         print(f"  park pose {name} : "
               f"{np.round(base, 3).tolist() if base else 'none saved — press s to set arm'}")
     print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
+    # ⭐ The ceiling that binds every mode, printed because it was invisible for four days
+    # and explained every "why is it so slow" question in that time (FINDINGS §37.0).
+    speed_note = "" if args.max_speed == SAFE_MAX_SPEED else "  ⚠️ RAISED from the default"
+    print(f"  joint speed : max {args.max_speed} rad/s, every mode{speed_note}")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
 
@@ -1077,7 +1091,8 @@ def main() -> int:  # noqa: PLR0915
             print(f"building arm {name} — enables {n_motors} motors, "
                   "starts the control loop …")
             robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
-                                      with_gripper=not args.no_gripper)
+                                      with_gripper=not args.no_gripper,
+                                      max_speed=args.max_speed)
             print(f"  {note}\n")
 
             arm = ArmSession(robot, name=name, frame=start_frame,
@@ -1645,8 +1660,15 @@ def main() -> int:  # noqa: PLR0915
                             # nothing at all, and the readout would show it tracking.
                             mirror_follower.mode = "mirror"
                             enter_hold(mirror_follower)
-                            mirror_link = MirrorLink(mode=args.mirror,
-                                                     align_speed=MIRROR_ALIGN_SPEED)
+                            # ⭐ THE FOLLOW SPEED IS READ FROM THE FOLLOWER'S OWN CAP, not
+                            # repeated here. `MirrorLink`'s default is 1.0 because that is
+                            # SafeRobot's default; if `--max-speed` raises the cap, a
+                            # hardcoded 1.0 here would quietly become the binding limit and
+                            # the mirror would stay slow for no visible reason.
+                            mirror_link = MirrorLink(
+                                mode=args.mirror, align_speed=MIRROR_ALIGN_SPEED,
+                                follow_speed=getattr(mirror_follower.robot, "max_speed",
+                                                     args.max_speed))
                             print(f"\n▶  MIRROR engaged: arm {mirror_follower.name} is "
                                   f"following arm {mirror_leader.name}. "
                                   "Press h, t, g or i to stop it.\n")
@@ -2549,11 +2571,24 @@ def main() -> int:  # noqa: PLR0915
                         follow_q = np.asarray(one.robot.get_joint_pos(), dtype=float)
                         cmd = mirror_link.step(lead_q, follow_q, real_dt)
                         if cmd is None:
-                            # ⛔ The link stopped itself: the follower fell too far behind, so
-                            # it is blocked, at a joint limit, or faulted. Continuing would
-                            # keep commanding a pose it cannot reach, which is how a motor
-                            # ends up held against a stop.
-                            print(f"\n⛔ MIRROR STOPPED — {mirror_link.stop_reason}\n")
+                            # ⛔ The link stopped itself. Continuing would keep commanding a
+                            # pose the follower cannot reach, which is how a motor ends up
+                            # held against a stop.
+                            #
+                            # ⭐ The reason NAMES the joint and the measured leader speed, and
+                            # this line adds the joint's real name plus how to start again —
+                            # both were missing when Julien first hit it.
+                            joint_name = ""
+                            if mirror_link.stop_joint is not None:
+                                joint_name = f" ({YAM_JOINTS.get(mirror_link.stop_joint + 1, ('joint',))[0]})"
+                            print(f"\n⛔ MIRROR STOPPED — {mirror_link.stop_reason}"
+                                  f"{joint_name}")
+                            if (mirror_link.stop_leader_speed or 0) > mirror_link.follow_speed:
+                                print(f"     ⭐ That limit is `--max-speed`, currently "
+                                      f"{args.max_speed} rad/s, and it is a SOFTWARE limit: "
+                                      "hand-guided motion reaches 2.4-3.7 rad/s. Raise it one "
+                                      "step (--max-speed 1.5) if the follower should keep up.")
+                            print("     Press i then Enter to engage it again.\n")
                             one.mode = "hold"; enter_hold(one); hint("")
                             mirror_link = None
                         else:

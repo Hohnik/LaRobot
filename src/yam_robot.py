@@ -42,6 +42,24 @@ from yam_can import (
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GRIPPER_LIMITS_FILE = REPO_ROOT / "config" / "gripper_limits.json"
 
+#: ⭐⭐ THE CEILING ON EVERY COMMANDED JOINT SPEED, and the single most consequential
+#: number in this file. `SafeRobot` clamps every command from every mode to this, BELOW all
+#: control logic — so `MAX_PLANNED_JOINT_SPEED` (1.5), `park_speed` (up to 1.5) and any
+#: playback multiplier are all above it and never bind
+#: ([FINDINGS §37.0](../docs/FINDINGS.md)).
+#:
+#: ⚠️ IT IS A SOFTWARE LIMIT, NOT THE HARDWARE'S. Julien's own hand-guided recordings reach
+#: **2.4 to 3.7 rad/s**, so the motors do those speeds; only this refuses to command them
+#: ([§37.2](../docs/FINDINGS.md)).
+#:
+#: ⛔ RAISING IT IS JULIEN'S DECISION, one step at a time, watching `SafeRobot.max_lag`
+#: (0.25 rad; the worst ever measured is 0.181) rather than temperature — what cooks these
+#: motors is holding still against a stop, not moving. `teleop_session.py --max-speed 1.5`
+#: raises it for one session without changing this default, the same way `--reach` and
+#: `--floor` expose the workspace limits.
+SAFE_MAX_SPEED = 1.0
+
+
 # 0.5 Nm is I2RT's default and is what Julien watched slam the stops. 0.3 is
 # ~60% of it: still enough to reach both ends of a 6.57 rad stroke, noticeably
 # gentler on arrival. Only ever used by scripts/calibrate_gripper.py, which runs
@@ -149,11 +167,26 @@ def frame_correct_gripper_limits(saved: list[float], raw_pos: float, margin: flo
     lo, hi = min(saved), max(saved)
 
     # (a) put the recorded range in the same wrap frame as the raw reading
-    base = None
-    for k in (0.0, TWO_PI, -TWO_PI):
-        if lo + k - margin <= raw_pos <= hi + k + margin:
-            base = [v + k for v in saved]
-            break
+    #
+    # ⛔⭐⭐ IT REFUSES WHEN MORE THAN ONE SHIFT FITS, rather than taking the first.
+    #
+    # Each candidate shift accepts raw positions in `[lo + k − margin, hi + k + margin]`,
+    # a window of `travel + 2·margin`. The candidates are 2π apart. **So if the jaws'
+    # measured travel ever exceeds `2π − 2·margin` (5.683 rad at margin 0.3), two windows
+    # overlap and both shifts "fit" a position in the overlap.** Picking the first would be
+    # picking a jaw SCALE by list order, and a wrong scale is what commanded the gripper
+    # 2.6 rad past its stop and cooked motor 7 (see `reconcile_gripper_limits` below).
+    #
+    # ⚠️ MEASURED 2026-08-14: arm B's travel is 5.250 rad and arm G's is 5.228, so each has
+    # about 0.43 rad of headroom and a scan of every raw position from −10 to +10 rad finds
+    # exactly ONE matching shift everywhere. **The guard is dormant today**, which is why it
+    # has to be a refusal rather than a comment: a wider re-calibration would silently
+    # re-introduce the choice.
+    fits = [k for k in (0.0, TWO_PI, -TWO_PI)
+            if lo + k - margin <= raw_pos <= hi + k + margin]
+    if len(fits) > 1:
+        return None
+    base = [v + fits[0] for v in saved] if fits else None
     if base is None:
         return None
 
@@ -191,10 +224,14 @@ def reconcile_gripper_limits(saved: list[float], raw_pos: float, margin: float =
     what burned the motor.
     """
     lo, hi = min(saved), max(saved)
-    for shift in (0.0, TWO_PI, -TWO_PI):
-        if lo + shift - margin <= raw_pos <= hi + shift + margin:
-            return [saved[0] + shift, saved[1] + shift]
-    return None
+    # ⛔ Same refusal as `frame_correct_gripper_limits`: if two shifts both bracket the
+    # measured position, the choice would be a jaw SCALE decided by list order. See the
+    # comment there for the arithmetic and for the measured headroom.
+    fits = [shift for shift in (0.0, TWO_PI, -TWO_PI)
+            if lo + shift - margin <= raw_pos <= hi + shift + margin]
+    if len(fits) != 1:
+        return None
+    return [saved[0] + fits[0], saved[1] + fits[0]]
 
 
 def advance_park_command(command: Any, target: Any, step: float) -> Any:
@@ -603,6 +640,7 @@ def build_robot(
     zero_gravity: bool = False,
     allow_calibration: bool = False,
     with_gripper: bool = True,
+    max_speed: float = SAFE_MAX_SPEED,
 ) -> tuple[Any, str]:
     """Construct the real robot. Returns `(robot, note)`.
 
@@ -659,7 +697,7 @@ def build_robot(
             ee_mass=GRIPPER_MASS_KG,
             sim=False,
         )
-        return SafeRobot(get_yam_robot(**kwargs)), (
+        return SafeRobot(get_yam_robot(**kwargs), max_speed=max_speed), (
             f"gripper NOT controlled (6 DoF) — motor 7 is left free, and the gravity model "
             f"carries ee_mass={GRIPPER_MASS_KG} kg so the arm still holds itself "
             f"(~0.19 Nm residual at the elbow)."
@@ -752,7 +790,7 @@ def build_robot(
 
     # ⭐ Everything above this line is I2RT's; everything that touches the robot
     # from here on goes through the rate limiter. See SafeRobot for why.
-    return SafeRobot(robot), note
+    return SafeRobot(robot, max_speed=max_speed), note
 
 
 class SafeRobot:
@@ -796,7 +834,8 @@ class SafeRobot:
     is what turns "dangerous" into "catchable".
     """
 
-    def __init__(self, robot: Any, max_speed: float = 1.0, max_lag: float = 0.25):
+    def __init__(self, robot: Any, max_speed: float = SAFE_MAX_SPEED,
+                 max_lag: float = 0.25):
         self._robot = robot
         self.max_speed = max_speed   # rad/s, per joint
         self.max_lag = max_lag       # rad, command vs measured

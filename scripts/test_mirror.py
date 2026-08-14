@@ -229,6 +229,63 @@ def test_an_arm_outside_the_session_is_refused() -> None:
     assert "not in this session" in refused(["B", "G"], ["X"])
 
 
+# ------------------------------------------- the stop names what it measured ----
+
+
+def run_until_stopped(link, leader_step, follower_follows=True, cycles=400):  # noqa: ANN001, ANN201
+    """Drive the link with a leader that moves `leader_step` rad per cycle."""
+    lead = LEADER.copy()
+    follow = LEADER.copy()
+    for _ in range(cycles):
+        cmd = link.step(lead, follow, DT)
+        if cmd is None:
+            return link
+        if follower_follows:
+            follow = np.asarray(cmd, dtype=float).copy()
+        lead = lead + np.array([0, 0, 0, 0, 0, leader_step, 0])
+    return link
+
+
+def test_a_leader_moving_faster_than_the_limit_is_NAMED_as_the_cause() -> None:
+    """⛔⭐ THE FIX FOR THE MESSAGE JULIEN SAW. On its first real run MIRROR stopped twice
+    saying *"It is blocked, at a joint limit, or faulted."* **None of the three was true** —
+    he was hand-guiding the leader's wrist faster than the follower may move. The message now
+    reports which joint opened the gap and how fast the leader was moving it, then says which
+    explanation the numbers support."""
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    # 0.03 rad per 10 ms cycle is 3.0 rad/s, three times the follower's limit.
+    run_until_stopped(link, leader_step=0.03)
+    assert link.state == "stopped"
+    assert link.stop_joint == 5, f"joint 6 opened the gap, got index {link.stop_joint}"
+    assert link.stop_leader_speed is not None and link.stop_leader_speed > 1.0
+    assert "could not keep up" in link.stop_reason
+    assert "joint 6" in link.stop_reason
+
+
+def test_a_STUCK_follower_is_named_differently_from_a_fast_leader() -> None:
+    """⭐ The other half of the same measurement: if the leader is moving slowly and the gap
+    still opens, the follower is not moving, and the message says so."""
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    # The leader creeps at 0.5 rad/s, well inside the limit, and the follower never moves.
+    run_until_stopped(link, leader_step=0.005, follower_follows=False)
+    assert link.state == "stopped"
+    assert link.stop_leader_speed is not None and link.stop_leader_speed < 1.0
+    assert "blocked, at a joint limit, or faulted" in link.stop_reason
+
+
+def test_the_row_warns_BEFORE_the_gap_trips() -> None:
+    """⭐ Julien's first run gave no notice: the row read "tracking 0.34 rad behind" one second
+    and the link was gone the next. Past 70% of the limit it says so."""
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    link.state = "following"
+    near = LEADER.copy()
+    near[5] += 0.30                      # 86% of the limit
+    assert "near the 0.35 limit" in link.status(near, LEADER)
+    fine = LEADER.copy()
+    fine[5] += 0.10                      # 29% of the limit
+    assert "near the" not in link.status(fine, LEADER)
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []
