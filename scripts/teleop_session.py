@@ -705,7 +705,6 @@ def main() -> int:  # noqa: PLR0915
     mode = args.start_mode
     stop_reason: str | None = None
     teleop: CartesianTeleop | None = None
-    gripper_value = 0.0
     park_target = None
     # ⛔ The thermal guard is an object rather than a pair of floats, because
     # "I cannot read the temperature" is a state that has to be tracked and acted
@@ -713,8 +712,12 @@ def main() -> int:  # noqa: PLR0915
     thermal = ThermalGuard(warn_at=TEMP_WARN, stop_at=TEMP_STOP)
     hottest: float | None = None
     jaw_temp = None
-    stall_since = None
     next_park_report = 0.0
+    # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
+    # `ArmSession` fields, and the class's own constructor sets exactly the same values
+    # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
+    # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
+    # ordering check in scripts/check_restructure.py.
     park_cmd: np.ndarray | None = None      # the park TRAJECTORY, not the measurement
     park_best_err = float("inf")
     park_progress_t = 0.0
@@ -810,13 +813,13 @@ def main() -> int:  # noqa: PLR0915
                 robot.resync()
 
         def enter_teleop() -> None:
-            nonlocal teleop, gripper_value
+            nonlocal teleop
             resync()
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
             # Take the jaws exactly where they are. Do NOT clamp here: clamping on
             # entry is a command to move, and nobody asked for that.
-            gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
+            arm.gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
             teleop = CartesianTeleop(frame=control_frame)
             teleop.reset(q[:N_ARM])
             arm.home_ee = teleop.ee_position().copy()
@@ -1027,7 +1030,7 @@ def main() -> int:  # noqa: PLR0915
 
                 if states is None:
                     hottest, jaw_temp = None, None
-                    stall_since = None                # cannot judge a stall we cannot see
+                    arm.stall_since = None                # cannot judge a stall we cannot see
                     verdict = thermal.update(None)
                 else:
                     temps, hottest, jaw_temp = motor_temperatures(states, N_ARM)
@@ -1042,19 +1045,19 @@ def main() -> int:  # noqa: PLR0915
                     # if, because there is nothing left to jump out of.
                     jaw = states[N_ARM] if len(states) > N_ARM else None
                     if jaw is None:
-                        stall_since = None
+                        arm.stall_since = None
                     elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
                             and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
-                        if stall_since is None:
-                            stall_since = loop_start
-                        elif loop_start - stall_since > GRIPPER_STALL_SECONDS:
+                        if arm.stall_since is None:
+                            arm.stall_since = loop_start
+                        elif loop_start - arm.stall_since > GRIPPER_STALL_SECONDS:
                             measured_jaw = float(np.asarray(robot.get_joint_pos(), dtype=float)[N_ARM])
                             print(f"\n⚠️  GRIPPER STALLED ({jaw.eff:+.2f} Nm, not moving) — releasing it to "
                                   f"{measured_jaw:.3f} so it stops pushing.\n")
-                            gripper_value = measured_jaw
-                            stall_since = None
+                            arm.gripper_value = measured_jaw
+                            arm.stall_since = None
                     else:
-                        stall_since = None
+                        arm.stall_since = None
 
                 if verdict.warning:
                     detail = f"  ({read_error})" if read_error else ""
@@ -1585,9 +1588,9 @@ def main() -> int:  # noqa: PLR0915
                         print(f"     Type several digits for a SEQUENCE, then Enter."
                               f"   waypoints: {have or 'none'}\n")
                     elif k == "o" and mode == "teleop":
-                        gripper_value = clamp_gripper(gripper_value + gripper_step)
+                        arm.gripper_value = clamp_gripper(arm.gripper_value + gripper_step)
                     elif k == "c" and mode == "teleop":
-                        gripper_value = clamp_gripper(gripper_value - gripper_step)
+                        arm.gripper_value = clamp_gripper(arm.gripper_value - gripper_step)
                     elif k in KEY_STEP_UP:
                         # ⭐⭐ ö AND ä MEAN THE EASE RAMP EVERYWHERE NOW. Changed
                         # 2026-08-13, after Julien hit the confusion on the arm.
@@ -1798,9 +1801,9 @@ def main() -> int:  # noqa: PLR0915
                 if learn_button is None and robot.num_dofs() > N_ARM and mode in ("teleop", "map"):
                     action = axis_map.button_action(buttons)
                     if action == "open":
-                        gripper_value = clamp_gripper(gripper_value + GRIPPER_BUTTON_RATE * dt)
+                        arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
                     elif action == "close":
-                        gripper_value = clamp_gripper(gripper_value - GRIPPER_BUTTON_RATE * dt)
+                        arm.gripper_value = clamp_gripper(arm.gripper_value - GRIPPER_BUTTON_RATE * dt)
 
                 if mode in ("teleop", "map") and teleop is not None:
 
@@ -1851,7 +1854,7 @@ def main() -> int:  # noqa: PLR0915
                     full = np.zeros(robot.num_dofs())
                     full[:N_ARM] = q_target
                     if robot.num_dofs() > N_ARM:
-                        full[N_ARM] = clamp_gripper(gripper_value)
+                        full[N_ARM] = clamp_gripper(arm.gripper_value)
                     robot.command_joint_pos(full)
                     arm.prev_q = q_target.copy()
 

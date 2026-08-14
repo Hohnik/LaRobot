@@ -42,14 +42,14 @@ TARGET = REPO / "scripts" / "teleop_session.py"
 
 #: State already moved onto `ArmSession`. Add to this as each commit lands, so the
 #: check keeps proving that earlier groups have not regressed.
-MOVED_SO_FAR = ["prev_q", "guide_ref", "home_ee"]
+MOVED_SO_FAR = ["prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since"]
 
 #: Still locals of `main()`, in the order ROADMAP §6.1 moves them. `mode` is last
 #: because `build_robot()` reads it before the robot (and so the ArmSession) exists.
 STILL_TO_MOVE = [
-    "gripper_value", "park_target", "park_cmd", "park_path", "park_s", "park_marks",
+    "park_target", "park_cmd", "park_path", "park_s", "park_marks",
     "park_leg_t", "park_start_t", "park_speed", "park_ramp", "park_best_err",
-    "park_progress_t", "stall_since", "thermal", "teleop", "mode",
+    "park_progress_t", "thermal", "teleop", "mode",
 ]
 
 
@@ -138,7 +138,39 @@ def run(moved: list[str]) -> int:
         faults += len(missing)
         print(f"⛔ moved but never read through `arm`: {missing} — did the field get dropped?")
 
-    # 3. Nothing may be undefined. This is the scan that caught a NameError before it
+    # 3. ⛔⭐⭐ ORDERING: nothing may touch `arm` before `arm` is constructed.
+    #
+    # This check exists because the second commit of the series hit exactly that and
+    # NOTHING ELSE CAUGHT IT. The rewriter turned `gripper_value = 0.0` — an
+    # initialisation nine lines above the `try` — into `arm.gripper_value = 0.0`, which
+    # would raise `UnboundLocalError` because `arm` is built after `build_robot()`.
+    #
+    # ⛔ The two nets both had holes: the coherence check above passes because `arm` IS
+    # assigned somewhere in `main()`, and **the dry run never reaches that line at all**,
+    # because `--yes` is required before the device is opened and the state initialised.
+    # So the first thing to execute it would have been a real session on the arm.
+    # ⭐ It would have failed safely, before anything was energised. It would still have
+    # cost Julien a session.
+    construction = [n.lineno for n in ast.walk(fn)
+                    if isinstance(n, ast.Name) and n.id == "arm" and isinstance(n.ctx, ast.Store)]
+    if not construction:
+        faults += 1
+        print("⛔ `arm` is never assigned in main() — the ArmSession is not constructed")
+    else:
+        built_at = min(construction)
+        early = sorted({n.lineno for n in ast.walk(fn)
+                        if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+                        and n.value.id == "arm" and n.lineno < built_at})
+        if early:
+            faults += len(early)
+            print(f"⛔ `arm` is built on line {built_at}, but it is touched earlier, on "
+                  f"line(s) {early}.")
+            print("   Those run before the object exists and will raise UnboundLocalError.")
+            print("   ⚠️ A dry run cannot catch this: it returns before this part of main().")
+        else:
+            print(f"✓ `arm` is built on line {built_at} and nothing touches it earlier")
+
+    # 4. Nothing may be undefined. This is the scan that caught a NameError before it
     #    reached the arm on 2026-08-13 (FINDINGS, session 21): `replay_step` was called
     #    and never imported, so the first playback would have raised with motors live.
     known = defined_names(tree, fn)
@@ -151,7 +183,7 @@ def run(moved: list[str]) -> int:
     else:
         print("✓ every name used in main() resolves to something")
 
-    # 4. Progress, so the series has a visible finish line.
+    # 5. Progress, so the series has a visible finish line.
     remaining = {}
     for node in ast.walk(fn):
         if isinstance(node, ast.Name) and node.id in STILL_TO_MOVE:

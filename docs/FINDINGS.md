@@ -2443,3 +2443,50 @@ The same status line said **`⚠️ SLOWED to 19% (near the reach limit)`**. ⛔
 - **The full shutdown worked**: `q` → `p` parked to `[-0.04 0. 0.01 0.02 -0.05 0.03]`, arrived **0.020 rad off**, then disabled all 7 motors and confirmed it.
 - ✅ **Julien answered the LED question: "The lights are fine."** So both arms sat with normal indications while idle and powered, which is consistent with the vendor table in [§39.0](FINDINGS.md): steady red means disabled, and that is what a powered uncommanded arm shows. **The blinking red seen on 2026-08-13 was therefore a genuine fault and not a normal idle state.**
 - **The axis map was not written**: *"unchanged — nothing was written"*, which is the guard from [§32.3](FINDINGS.md) doing its job.
+
+---
+
+## 42. ⛔⭐⭐ THE RESTRUCTURE BEGAN, AND ITS SECOND COMMIT FOUND A HOLE IN EVERY EXISTING CHECK — 2026-08-14, 12:00
+
+> [ROADMAP §6.1](ROADMAP.md) step 1 moves one arm's state out of `main()`'s locals onto an `ArmSession`. It is landing as a series of commits that each leave the script runnable. Two commits are in, and the second one produced a defect that **neither the tests, nor the checker, nor a dry run** would have caught.
+
+### 42.0 ⛔⭐⭐ A DRY RUN CANNOT VALIDATE THE PART OF `main()` THAT ONLY `--yes` REACHES
+
+**What happened.** The rewriter turned `gripper_value = 0.0` into `arm.gripper_value = 0.0`. That line is an initialisation about forty lines above the `try` block, and **`arm` is constructed inside that block, after `build_robot()`.** So the line touches an object that does not exist yet and raises `UnboundLocalError`.
+
+⛔ **Three nets, three holes:**
+
+| net | why it missed this |
+|---|---|
+| 416 headless tests | none of them import `teleop_session.main()`; it needs a robot |
+| `check_restructure.py`'s coherence pass | it checks that every name *resolves*, and `arm` **is** assigned in `main()`. Order was never checked |
+| ⛔⭐ **the dry run** | **it returns before this code runs.** `--yes` is required before the SpaceMouse is opened and the state block is reached, so a dry run exits above the fault |
+
+⭐⭐ **So the first thing to execute that line would have been a real session on the arm.** It would have failed *safely* — `UnboundLocalError` before `build_robot()` energises anything — and it would still have cost Julien a session and looked like the restructure had broken the arm.
+
+✅ **Fixed, and the check now exists:** `check_restructure.py` finds the line where `arm` is constructed and refuses if any `arm.<field>` appears earlier. ⭐ **Proved by reintroducing the bug**: the checker reports `arm is built on line 750, but it is touched earlier, on line(s) [705]` and exits 1. **A guard that has not been seen to fail is not yet a guard** ([§39.4](FINDINGS.md), [§40.1](FINDINGS.md)).
+
+⚠️⭐ **The general lesson, and it is bigger than this refactor: "the dry run passed" bounds less than it appears to.** The dry-run gate sits *early* in `main()` by design, because its whole point is to avoid opening devices. **Everything below that gate is unexercised by every automated check this repo has.** That covers the state block, the control loop, the park machinery and the shutdown path — which is most of the file. It is why [§0](FINDINGS.md)'s rule about hardware is stated the way it is, and it is worth knowing precisely rather than as a feeling.
+
+### 42.1 ⛔ AND A SECOND TRAP: `nonlocal` NAMES ARE INVISIBLE TO A PARSER-DRIVEN REWRITE
+
+The rewrite is driven by the parse tree rather than by text, because a text substitution would also rewrite the word inside comments — and `mode` appears **35 times in `main()`'s own comments** ([§36.3](FINDINGS.md)'s correction). ⛔ **But `nonlocal` names are not variable nodes.** They are plain strings in `ast.Nonlocal.names`, so the rewrite skipped three `nonlocal` statements that still named the moved locals.
+
+⭐ **Python caught it** — `SyntaxError: no binding for nonlocal 'prev_q' found` — which is the good case. ⛔ **My verification did not**, because it searched `nonlocal` lines for `arm.` rather than for the bare moved names. **A check looking for the wrong pattern reports success.** Both the rewriter and the checker now handle declarations explicitly, and a declaration that loses all its names is removed rather than left empty.
+
+⭐ **A pleasant side effect of the migration:** two `nonlocal` statements disappeared entirely. Mutating `arm.field` needs no declaration, so the nested functions get simpler as state moves out.
+
+### 42.2 ⭐ WHERE THE SERIES STANDS, AND THE ORDERING CONSTRAINT THAT SHAPES IT
+
+| commit | moved | `arm.<field>` accesses | left |
+|---|---|---|---|
+| `b52b72e` step 1a | `prev_q`, `guide_ref`, `home_ee` | 15 | 191 |
+| step 1b | `gripper_value`, `stall_since` | 33 | **171** |
+
+**Remaining, largest first:** `mode` 48 · `teleop` 19 · `park_ramp` 17 · `park_speed` 15 · `park_path` 13 · `park_s` 11 · `park_marks` 8 · `park_cmd` 7 · `park_best_err` 7 · `park_progress_t` 7 · `thermal` 6 · `park_leg_t` 5 · `park_target` 5 · `park_start_t` 3.
+
+⛔⭐ **`mode` moves LAST, and this is a hard constraint rather than a preference.** `build_robot()` is called with `zero_gravity=(mode == "guide")`, and it runs *before* the robot exists — so before the `ArmSession` can exist. **The name with the most references is therefore the last one that can move**, which is the opposite of the order you would choose for comfort. ⚠️ The script will keep a local `mode` for the pre-construction decision even after the field moves; that is not duplication to be tidied away, it is the ordering made explicit.
+
+⭐ **The park group (`park_*`, 91 references) is the next natural unit**, because `ArmSession` already implements `begin_path()` and `step_path()` against exactly those fields ([§36.2](FINDINGS.md)). ⚠️ It is also the group that moves 4.3 kg and that `q p d` and Ctrl-C depend on, so it gets its own commit and its own reading.
+
+⚠️ **Nothing in this series has been on the arm.** [ROADMAP §6.1](ROADMAP.md) is explicit that the test is `--arms B` at N=1 once the series is complete, confirming it *feels identical*. Each commit is verified by: 416 headless tests, `check_restructure.py`, dry runs in all three start modes, and `teleop_sim.py` for the IK path.
