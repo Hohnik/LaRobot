@@ -37,8 +37,13 @@ So engagement is staged, and `following` is never entered until the gap is close
 
 ⚠️ And the leader must be **held still during ALIGNING**. If it is being hand-guided
 while the follower is still catching up, the target keeps moving and the gap may
-never close — so alignment reports its progress and gives up rather than chasing
-forever, exactly like PARK's stall detector.
+never close — so alignment reports its progress and gives up after
+`ALIGN_STALL_SECONDS` of no improvement, the same patience PARK's stall detector uses.
+
+⛔ **That last sentence was FALSE from 2026-08-11 until 2026-08-14.** It described an
+intention; the gap check only ever ran in the `following` state, so an alignment
+really could chase forever. It is implemented now. **A design note written in the
+present tense reads afterwards as a description of the code**, and nothing raises.
 """
 
 from __future__ import annotations
@@ -72,6 +77,10 @@ DEFAULT_MAX_GAP = 0.35          # rad — above this while following, stop: some
 #: slow. Same order as the gripper stall threshold, and for the same reason: a velocity this
 #: small is indistinguishable from encoder noise.
 STUCK_SPEED = 0.05              # rad/s
+#: ⭐ How long ALIGNING may make no progress before it gives up, in seconds. Same patience as
+#: PARK's stall detector, and for the same reason: an alignment that cannot converge is a
+#: leader that keeps moving, or a follower that cannot move, and neither improves by waiting.
+ALIGN_STALL_SECONDS = 4.0
 
 
 def pick_pair(arm_names: list[str], selected: list[str]) -> tuple[str, str]:
@@ -150,6 +159,7 @@ class MirrorLink:
         follow_speed: float = DEFAULT_FOLLOW_SPEED,
         engage_tolerance: float = DEFAULT_ENGAGE_TOLERANCE,
         max_gap: float = DEFAULT_MAX_GAP,
+        align_stall_seconds: float = ALIGN_STALL_SECONDS,
     ):
         if mode not in ("copy", "mirror"):
             raise ValueError(f"mode must be 'copy' or 'mirror', got {mode!r}")
@@ -158,6 +168,7 @@ class MirrorLink:
         self.follow_speed = follow_speed
         self.engage_tolerance = engage_tolerance
         self.max_gap = max_gap
+        self.align_stall_seconds = align_stall_seconds
         self.state = "aligning"
         self.command: np.ndarray | None = None
         self.stop_reason: str | None = None
@@ -190,6 +201,17 @@ class MirrorLink:
         #: it can and STILL losing ground, which is neither of the causes the message named.
         self.stop_follower_speed: float | None = None
         self.stop_cause: str | None = None      # "follow_limit" · "tracking" · "stuck"
+        #: ⛔⭐⭐ ALIGNING NOW GIVES UP, AND THE DOCSTRING CLAIMED IT ALREADY DID. The module
+        #: header has said since 2026-08-11 that *"alignment reports its progress and gives up
+        #: rather than chasing forever, exactly like PARK's stall detector"* — and the gap check
+        #: only ever ran in the `following` state. So a leader that kept moving during ALIGNING
+        #: had the follower chasing it indefinitely, with nothing to stop it. **The sentence was
+        #: written as a design intention and read afterwards as a description**, which is the
+        #: [FINDINGS §0](../docs/FINDINGS.md) shape: a confident, plausible, wrong statement
+        #: that raised nothing.
+        self._align_best = float("inf")
+        self._align_since = 0.0
+        self._elapsed = 0.0
         self._prev_leader: np.ndarray | None = None
         self._prev_follower: np.ndarray | None = None
         self._leader_speed = np.zeros(N_ARM)
@@ -273,6 +295,24 @@ class MirrorLink:
             self.stop_reason = (f"the follower fell {g:.3f} rad behind on joint {worst + 1} "
                                 f"(limit {self.max_gap})")
             self.stop_detail = why
+            return None
+
+        # ⛔ ALIGNING gives up rather than chasing. Progress means the gap actually closed;
+        # `align_stall_seconds` of no improvement means it never will, because the leader is
+        # still being moved or the follower cannot move.
+        self._elapsed += dt
+        if g < self._align_best - 0.003:
+            self._align_best, self._align_since = g, self._elapsed
+        if (self.state == "aligning"
+                and self._elapsed - self._align_since > self.align_stall_seconds):
+            self.state = "stopped"
+            self.stop_cause = "align_stalled"
+            self.stop_gap = g
+            self.stop_reason = (f"the follower could not close the {g:.3f} rad gap to the "
+                                f"leader (needs under {self.engage_tolerance})")
+            self.stop_detail = (f"no progress for {self.align_stall_seconds:g}s — hold the "
+                                "leader STILL while the follower catches up, or check that "
+                                "the follower can move")
             return None
 
         if self.state == "aligning" and g <= self.engage_tolerance:

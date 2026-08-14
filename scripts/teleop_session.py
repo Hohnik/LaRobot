@@ -1382,7 +1382,8 @@ def main() -> int:  # noqa: PLR0915
             return (f"PLAY {replay_slot} · {replay_pending.duration:.1f}s taught at "
                     f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go")
 
-        def begin_path(one: ArmSession, legs: list, what: str) -> None:
+        def begin_path(one: ArmSession, legs: list, what: str,
+                       for_replay: bool = False) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
 
             ⭐ THE CORRECTION THIS IMPLEMENTS. The previous version ran each leg as a
@@ -1395,6 +1396,22 @@ def main() -> int:  # noqa: PLR0915
             clamp and the 6-vs-7-joint reconciliation that once dropped an arm apply
             to each of them, not just the first.
             """
+            # ⛔⭐⭐ A PARK STARTED BY ANYTHING ELSE CANCELS A PENDING PLAYBACK, and without
+            # this the safety property of the whole playback feature can be broken by one
+            # keypress. `l` parks to the recording's START POSE and hands over on arrival; if
+            # the operator presses `p 0` while that park is running, the path is replaced by a
+            # park to the BASE pose — and the arrival still hands over, so the recording would
+            # begin from a pose it was never taught. The first command of a playback is the
+            # only dangerous one, and that is exactly the one this would get wrong.
+            #
+            # ⚠️ Found by auditing rather than by hitting it: it needs `p` pressed inside the
+            # two or three seconds the start-pose park takes.
+            nonlocal replay_pending, replay_ready
+            if not for_replay and replay_pending is not None:
+                replay_pending = None
+                replay_ready = set()
+                print("\n  ⚠️  playback cancelled — a new park replaced the drive to its "
+                      "start pose.\n")
             targets = []
             for _, pose in legs:
                 tgt, warn = park_target_from(one.robot.get_joint_pos(), pose,
@@ -1790,7 +1807,7 @@ def main() -> int:  # noqa: PLR0915
                                 begin_path(one, [("recording start",
                                                   start[replay_layout.slice_for(one.name)])],
                                            f"arm {one.name}'s start pose in recording "
-                                           f"{replay_slot}")
+                                           f"{replay_slot}", for_replay=True)
                             print("     then it plays the recording. Press h or t to stop.\n")
                         else:
                             replay_pending = None
@@ -2324,6 +2341,10 @@ def main() -> int:  # noqa: PLR0915
                                 "method": "live:" + "+".join(
                                     f"{one.name}:{one.mode}" for one in arms),
                                 "nominal_hz": CONTROL_HZ,
+                                # ⚠️ Per arm, because `v` aims at one arm: two arms can be
+                                # driven in different frames, and a single value would record
+                                # one of them as though it were both.
+                                "frames": {one.name: one.frame for one in arms},
                                 "frame": arms[0].frame,
                             })
                             take_t0 = t

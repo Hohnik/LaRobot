@@ -336,6 +336,50 @@ def test_the_reason_and_the_detail_are_SEPARATE_so_neither_gets_truncated() -> N
     assert len(link.stop_detail) < 140, f"{len(link.stop_detail)} chars is a truncation risk"
 
 
+def test_ALIGNING_gives_up_instead_of_chasing_a_moving_leader() -> None:
+    """⛔⭐⭐ THE HEADER OF `src/mirror.py` CLAIMED THIS FROM 2026-08-11 AND THE CODE DID NOT DO
+    IT. It said *"alignment reports its progress and gives up rather than chasing forever,
+    exactly like PARK's stall detector"* — and the gap check only ever ran in the `following`
+    state. A leader that kept moving during ALIGNING had the follower chasing it indefinitely.
+
+    ⚠️ Nothing raised, and Julien never hit it because he held the leader still as the plan
+    line asks. **A design note written in the present tense reads afterwards as a description
+    of the code.**
+    """
+    link = MirrorLink(align_speed=0.3, align_stall_seconds=0.2)
+    lead = LEADER.copy()
+    # ⚠️ THE FOLLOWER STARTS BEHIND AND THE LEADER MOVES AWAY. The first version of this test
+    # put the follower 1.0 rad ABOVE the leader and then moved the leader UP, so the leader
+    # closed the gap itself and alignment converged — the test passed nothing. Printing the
+    # per-cycle gap is what showed it. **A dynamics scenario written from intuition needs its
+    # trace read once before its assertion is trusted.**
+    follow = LEADER - 1.0
+    for _ in range(400):
+        cmd = link.step(lead, follow, DT)
+        if cmd is None:
+            break
+        follow = np.asarray(cmd, dtype=float).copy()
+        lead = lead + 0.02                   # the leader runs away at 2 rad/s
+    assert link.state == "stopped", "it chased a moving leader forever"
+    assert link.stop_cause == "align_stalled", f"cause was {link.stop_cause}"
+    assert "hold the leader STILL" in link.stop_detail
+
+
+def test_ALIGNING_still_converges_when_the_leader_is_held_still() -> None:
+    """⚠️ The give-up must not fire on a normal engagement. This is the case Julien actually
+    runs: the leader is held, the follower closes a gap of a couple of tenths."""
+    link = MirrorLink(align_speed=0.3, align_stall_seconds=0.2)
+    lead = LEADER.copy()
+    follow = LEADER + 0.2
+    for _ in range(400):
+        cmd = link.step(lead, follow, DT)
+        assert cmd is not None, f"it gave up while converging: {link.stop_reason}"
+        follow = np.asarray(cmd, dtype=float).copy()
+        if link.state == "following":
+            break
+    assert link.state == "following"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []
