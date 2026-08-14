@@ -1977,7 +1977,24 @@ The documents have said *"~1000 lines of `main()`"* since 2026-08-12. **Measured
 | `guide_ref` | 7 | | `home_ee` | 6 |
 | `park_target` | 6 | | `park_start_t` | 6 |
 
-⛔ **`mode` alone is 93 sites, and every one of them is in code that commands 4.3 kg on a rig with no emergency stop.** ⭐ **This measurement is the argument for doing step 1 as its own session and nothing else** — the repo already said so on instinct, and now there is a number behind it. It is also the argument for step 1 landing as **one mechanical change with no behaviour change at all**, so that `--arms B` at N=1 tests exactly one thing: whether 338 substitutions were made correctly.
+⛔ **`mode` alone is 93 sites, and every one of them is in code that commands 4.3 kg on a rig with no emergency stop.** ⭐ **This measurement is the argument for doing step 1 as its own session and nothing else** — the repo already said so on instinct, and now there is a number behind it. It is also the argument for step 1 landing as **one mechanical change with no behaviour change at all**, so that `--arms B` at N=1 tests exactly one thing: whether the substitutions were made correctly.
+
+> ### ⛔⭐⭐ CORRECTION, 2026-08-14: THE NUMBERS ABOVE COUNT COMMENTS AND STRINGS, AND OVERSTATE THE WORK BY ABOUT A THIRD
+>
+> **The table above came from a text search, and a text search for `mode` matches the word wherever it appears** — including **35 times in this very function's own comments** and 3 times inside printed strings. **Only a bare `mode` used as a variable has to be rewritten.**
+>
+> Counted again with an abstract syntax tree, which sees variables and ignores prose:
+>
+> | | text search | actual variable uses |
+> |---|---|---|
+> | all 20 names inside `main()` | **333** *(and 338 five commits ago, so this is the method that produced it)* | ⭐ **247** |
+> | `mode` alone | **93** | ⭐ **48** |
+>
+> **So the edit is about 27% smaller than published, and the headline "93 sites of `mode`" is really 48.** `main()` is now **1819** lines, having grown 13 since.
+>
+> ⚠️ **The conclusion does not change.** 247 mechanical edits across 1819 lines is still large, still deserves its own session, and is still the argument for no behaviour change so the hardware test asks exactly one question. **What changes is how much the number can be trusted.**
+>
+> ⛔ **The lesson, and it is the fourth of this shape this week, under a heading that says "MEASURED RATHER THAN ESTIMATED".** A figure produced by the wrong instrument reads as *more* reliable than a guess, because it arrives with a specific number attached. [§38.3](FINDINGS.md) conflated "we found nothing" with "we did not look", [§39.1](FINDINGS.md) had a flag wired to nothing, [§40.1](FINDINGS.md) had a safety guard with no test. **This one conflated "the word appears" with "the code refers to it".** ⭐ **Re-derive with an instrument that matches the claim** — for "how many edits", that is a parser and not a grep.
 
 ### 36.4 ⚠️ `park_speed_factor()` is now used by nothing but its own tests
 

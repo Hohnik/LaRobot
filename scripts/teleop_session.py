@@ -109,6 +109,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
+from arm_session import ArmSession  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine  # noqa: E402
@@ -704,7 +705,6 @@ def main() -> int:  # noqa: PLR0915
     mode = args.start_mode
     stop_reason: str | None = None
     teleop: CartesianTeleop | None = None
-    home_ee = None
     gripper_value = 0.0
     park_target = None
     # ⛔ The thermal guard is an object rather than a pair of floats, because
@@ -718,7 +718,6 @@ def main() -> int:  # noqa: PLR0915
     park_cmd: np.ndarray | None = None      # the park TRAJECTORY, not the measurement
     park_best_err = float("inf")
     park_progress_t = 0.0
-    guide_ref: np.ndarray | None = None
 
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
@@ -727,7 +726,27 @@ def main() -> int:  # noqa: PLR0915
                                   with_gripper=not args.no_gripper)
         print(f"  {note}\n")
         chain = robot.motor_chain
-        prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
+
+        # ⭐⭐ STEP 1 OF THE BIMANUAL RESTRUCTURE STARTS HERE. ROADMAP §6.1.
+        #
+        # One arm's state moves out of this function's locals and onto one object, so
+        # that N of them can run in one loop and `--arms B,G` becomes the same code with
+        # N=2. **No behaviour changes.** The migration is landing as a series of commits,
+        # each one moving a group of state and each one leaving this script runnable, so
+        # that a failure can be traced to a commit instead of to 247 edit sites.
+        #
+        # ⚠️ Built HERE and not earlier, for a reason that constrains the whole plan:
+        # `ArmSession` takes an already-built robot handle, and `build_robot()` above
+        # needs `mode` to decide `zero_gravity`. So `mode` is the LAST field that can
+        # move, not the first, even though it has the most references (48).
+        #
+        # ⚠️ `arm.thermal` exists and is not used yet — this function still has its own
+        # `thermal`. Migrating that is a later commit in the series; two guards are
+        # harmless because only one is ever read.
+        arm = ArmSession(robot, name=args.arm, frame=control_frame,
+                         gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
+                         warn_at=TEMP_WARN, stop_at=TEMP_STOP)
+        arm.prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
 
         # ⭐ DEFAULT PARK POSE = WHEREVER THE ARM STARTED. Julien: *"if the standard
         # set position for park mode is just the starting position, then I can always
@@ -786,13 +805,12 @@ def main() -> int:  # noqa: PLR0915
             every transition: **a mode change must re-read reality. Never carry
             cached state across one.**
             """
-            nonlocal prev_q
-            prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
+            arm.prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
             if hasattr(robot, "resync"):
                 robot.resync()
 
         def enter_teleop() -> None:
-            nonlocal teleop, home_ee, gripper_value
+            nonlocal teleop, gripper_value
             resync()
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
@@ -801,7 +819,7 @@ def main() -> int:  # noqa: PLR0915
             gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
             teleop = CartesianTeleop(frame=control_frame)
             teleop.reset(q[:N_ARM])
-            home_ee = teleop.ee_position().copy()
+            arm.home_ee = teleop.ee_position().copy()
 
         def enter_hold() -> None:
             resync()
@@ -827,9 +845,8 @@ def main() -> int:  # noqa: PLR0915
             falling arm rather than a droop, which is why `guide_ref` is recorded
             here and drift is now printed live.
             """
-            nonlocal guide_ref
             resync()
-            guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
+            arm.guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
             fn = getattr(robot, "enter_gravity_comp_idle", None)
             if callable(fn):
                 fn()
@@ -920,7 +937,7 @@ def main() -> int:  # noqa: PLR0915
             # by enter_guide() — so the drift reference has to be taken here too, or the
             # readout silently shows nothing for the whole first GUIDE period. That gap
             # is exactly the 33 seconds in which the arm sank unremarked on 2026-08-10.
-            guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
+            arm.guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
 
         dt = 1.0 / CONTROL_HZ
         # ⭐⭐ THE MEASURED LENGTH OF THE LAST CYCLE, next to the nominal one. Found on
@@ -1817,15 +1834,15 @@ def main() -> int:  # noqa: PLR0915
                     q_target = teleop.step(twist, dt)
 
                     ee = teleop.ee_position()
-                    if np.any(np.abs(ee - home_ee) > args.box):
+                    if np.any(np.abs(ee - arm.home_ee) > args.box):
                         import mink  # noqa: PLC0415
                         teleop.target = mink.SE3.from_rotation_and_translation(
                             rotation=teleop.target.rotation(),
-                            translation=np.clip(ee, home_ee - args.box, home_ee + args.box),
+                            translation=np.clip(ee, arm.home_ee - args.box, arm.home_ee + args.box),
                         )
 
-                    step = q_target - prev_q
-                    q_target = prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
+                    step = q_target - arm.prev_q
+                    q_target = arm.prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
 
                     lo = np.array([YAM_JOINTS[i][1] for i in range(1, N_ARM + 1)]) + JOINT_LIMIT_MARGIN
                     hi = np.array([YAM_JOINTS[i][2] for i in range(1, N_ARM + 1)]) - JOINT_LIMIT_MARGIN
@@ -1836,7 +1853,7 @@ def main() -> int:  # noqa: PLR0915
                     if robot.num_dofs() > N_ARM:
                         full[N_ARM] = clamp_gripper(gripper_value)
                     robot.command_joint_pos(full)
-                    prev_q = q_target.copy()
+                    arm.prev_q = q_target.copy()
 
                 elif mode == "replay" and replay is not None:
                     # ⭐⭐ FOLLOW THE RECORDING IN TIME, not along its length. This is the
@@ -2137,8 +2154,8 @@ def main() -> int:  # noqa: PLR0915
                         # ⚠️ This only reports. It changes no limit and no behaviour —
                         # deliberately, because seeing where the wall is has to come
                         # before deciding whether to move it. FINDINGS §37.5.
-                        if home_ee is not None:
-                            off = float(np.max(np.abs(teleop.ee_position() - home_ee)))
+                        if arm.home_ee is not None:
+                            off = float(np.max(np.abs(teleop.ee_position() - arm.home_ee)))
                             extra += f"  box {off:.2f}/{args.box:.2f}m"
                             if off > 0.9 * args.box:
                                 extra += " ⚠️ AT THE EDGE"
@@ -2174,8 +2191,8 @@ def main() -> int:  # noqa: PLR0915
                     # quantity that was going wrong. The cause is fixed; the instrument
                     # should exist anyway. Same lesson as showing the jaw temperature
                     # separately: a readout must show what can fail, not what looks calm.
-                    if mode == "guide" and guide_ref is not None:
-                        sank = float(np.max(np.abs(q[:N_ARM] - guide_ref[:N_ARM])))
+                    if mode == "guide" and arm.guide_ref is not None:
+                        sank = float(np.max(np.abs(q[:N_ARM] - arm.guide_ref[:N_ARM])))
                         extra = f"  drift {sank:5.3f} rad ({np.degrees(sank):4.1f}°){extra}"
                     # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT ROW, not only in the
                     # message that started it. A session where recording is silently still
