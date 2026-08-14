@@ -46,6 +46,7 @@ MOVED_SO_FAR = [
     "prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since",
     "park_path", "park_s", "park_marks", "park_target", "park_cmd", "park_best_err",
     "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
+    "thermal", "teleop",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
@@ -59,7 +60,7 @@ MOVED_SO_FAR = [
 #:     assignment to `arm`, or the ordering check goes blind.
 #:   * `mode` is read by `build_robot()` to decide `zero_gravity`, before the robot and
 #:     therefore the ArmSession exist. The script keeps a local `mode` for that decision.
-STILL_TO_MOVE = ["thermal", "teleop", "mode"]
+STILL_TO_MOVE = ["mode"]
 
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:
@@ -160,11 +161,24 @@ def run(moved: list[str]) -> int:
     # So the first thing to execute it would have been a real session on the arm.
     # ⭐ It would have failed safely, before anything was energised. It would still have
     # cost Julien a session.
+    # ⛔⭐ FIND THE `ArmSession(` CALL, NOT THE FIRST ASSIGNMENT TO `arm`.
+    #
+    # The first version of this check looked for the first `arm = …` and called that the
+    # construction point. That worked while `arm` was assigned exactly once. It stops
+    # working the moment `arm = None` has to appear before the `try`, which FINDINGS §48.3
+    # established is needed: the closing summary reads a field off `arm` on the path where
+    # `build_robot()` FAILED and the object was never built.
+    #
+    # ⛔ Under the old rule that early `None` would read as "arm is built on line 700", and
+    # every genuine ordering fault after it would pass unnoticed. **The check would have
+    # gone blind exactly when the code got more complicated**, which is the worst possible
+    # moment and is why this was changed BEFORE the change it protects.
     construction = [n.lineno for n in ast.walk(fn)
-                    if isinstance(n, ast.Name) and n.id == "arm" and isinstance(n.ctx, ast.Store)]
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                    and n.func.id == "ArmSession"]
     if not construction:
         faults += 1
-        print("⛔ `arm` is never assigned in main() — the ArmSession is not constructed")
+        print("⛔ `ArmSession(` is never called in main() — the object is not constructed")
     else:
         built_at = min(construction)
         early = sorted({n.lineno for n in ast.walk(fn)

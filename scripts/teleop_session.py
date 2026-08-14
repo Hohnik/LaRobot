@@ -748,13 +748,32 @@ def main() -> int:  # noqa: PLR0915
     reader = TwistReader(handle)
 
     robot = None
+    # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
+    #
+    # The closing summary at the bottom of this function reads a field off `arm`, and it
+    # runs on the path where `build_robot()` FAILED — the `except Exception` prints the
+    # error and falls through. That is the path Julien sees whenever the CAN adapters are
+    # in DFU, which happens often. Without this declaration that line would raise
+    # `UnboundLocalError` and replace a clear "No candleLight CAN adapter found" with a
+    # traceback.
+    #
+    # ⚠️ So every read of `arm` outside the `try` MUST be guarded by `if arm is not None`.
+    # `scripts/check_restructure.py` finds the construction point by locating the
+    # `ArmSession(` call rather than this line, so it can still catch a genuine
+    # use-before-build.
+    arm: ArmSession | None = None
     mode = args.start_mode
     stop_reason: str | None = None
-    teleop: CartesianTeleop | None = None
-    # ⛔ The thermal guard is an object rather than a pair of floats, because
-    # "I cannot read the temperature" is a state that has to be tracked and acted
-    # on. It used to be indistinguishable from 0 °C — see ThermalGuard.
-    thermal = ThermalGuard(warn_at=TEMP_WARN, stop_at=TEMP_STOP)
+    # ⚠️ `teleop` was declared here as None. It is `ArmSession.teleop` now, and the class's
+    # own constructor already sets it to None. ⛔ Leaving this line would run before `arm`
+    # exists, which the ordering check in scripts/check_restructure.py catches.
+    # ⚠️ The thermal guard used to be created here. It is `ArmSession`'s now, built by its
+    # constructor from the same `warn_at=TEMP_WARN, stop_at=TEMP_STOP` this line passed.
+    # ⛔ Leaving it here as `arm.thermal = …` would run before `arm` exists.
+    #
+    # ⭐ It stays an object rather than a pair of floats, and the reason is worth keeping:
+    # "I cannot read the temperature" is a state that has to be tracked and acted on, and
+    # it used to be indistinguishable from 0 °C. See `ThermalGuard`.
     hottest: float | None = None
     jaw_temp = None
     next_park_report = 0.0
@@ -785,9 +804,9 @@ def main() -> int:  # noqa: PLR0915
         # needs `mode` to decide `zero_gravity`. So `mode` is the LAST field that can
         # move, not the first, even though it has the most references (48).
         #
-        # ⚠️ `arm.thermal` exists and is not used yet — this function still has its own
-        # `thermal`. Migrating that is a later commit in the series; two guards are
-        # harmless because only one is ever read.
+        # ⭐ `arm.thermal` is now THE thermal guard for this session; the script no longer
+        # keeps its own. Moving it needed the `arm = None` declaration above, because the
+        # closing summary reads it on the path where this very call failed. FINDINGS §48.3.
         arm = ArmSession(robot, name=args.arm, frame=control_frame,
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
                          warn_at=TEMP_WARN, stop_at=TEMP_STOP)
@@ -855,16 +874,15 @@ def main() -> int:  # noqa: PLR0915
                 robot.resync()
 
         def enter_teleop() -> None:
-            nonlocal teleop
             resync()
             q = np.asarray(robot.get_joint_pos(), dtype=float)
             robot.command_joint_pos(q)          # leaves zero-gravity mode
             # Take the jaws exactly where they are. Do NOT clamp here: clamping on
             # entry is a command to move, and nobody asked for that.
             arm.gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
-            teleop = CartesianTeleop(frame=control_frame)
-            teleop.reset(q[:N_ARM])
-            arm.home_ee = teleop.ee_position().copy()
+            arm.teleop = CartesianTeleop(frame=control_frame)
+            arm.teleop.reset(q[:N_ARM])
+            arm.home_ee = arm.teleop.ee_position().copy()
 
         def enter_hold() -> None:
             resync()
@@ -1072,10 +1090,10 @@ def main() -> int:  # noqa: PLR0915
                 if states is None:
                     hottest, jaw_temp = None, None
                     arm.stall_since = None                # cannot judge a stall we cannot see
-                    verdict = thermal.update(None)
+                    verdict = arm.thermal.update(None)
                 else:
                     temps, hottest, jaw_temp = motor_temperatures(states, N_ARM)
-                    verdict = thermal.update(
+                    verdict = arm.thermal.update(
                         hottest, jaw_temp,
                         motor=temps.index(hottest) if hottest is not None else None)
                     # ---- gripper stall guard ------------------------------
@@ -1378,8 +1396,8 @@ def main() -> int:  # noqa: PLR0915
                         map_store.set(args.arm, axis_map, control_frame)
                         control_frame = order[(order.index(control_frame) + 1) % len(order)]
                         axis_map = map_store.for_arm(args.arm, control_frame)
-                        if teleop is not None:
-                            teleop.frame = control_frame
+                        if arm.teleop is not None:
+                            arm.teleop.frame = control_frame
                         print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[control_frame]}")
                         print(f"     controls for this frame: {axis_map.one_line(control_frame)}")
                         print("     press m to edit THESE controls; each frame has its own\n")
@@ -1846,7 +1864,7 @@ def main() -> int:  # noqa: PLR0915
                     elif action == "close":
                         arm.gripper_value = clamp_gripper(arm.gripper_value - GRIPPER_BUTTON_RATE * dt)
 
-                if mode in ("teleop", "map") and teleop is not None:
+                if mode in ("teleop", "map") and arm.teleop is not None:
 
                     if mode == "map":
                         # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
@@ -1875,7 +1893,7 @@ def main() -> int:  # noqa: PLR0915
                         axes[4] * scale_a if rotation else 0.0,
                         axes[5] * scale_a if rotation else 0.0,
                     ])
-                    q_target = teleop.step(twist, dt)
+                    q_target = arm.teleop.step(twist, dt)
 
                     # ⭐⭐ THE WORKSPACE LIMIT, changed on 2026-08-14 by Julien's decision.
                     #
@@ -1890,13 +1908,13 @@ def main() -> int:  # noqa: PLR0915
                     # ⚠️ Clamped against the ACHIEVED position so the limit ratchets inward
                     # and never yanks an arm that starts outside it. The old cube could not
                     # be entered from outside; a fixed one can.
-                    ee = teleop.ee_position()
+                    ee = arm.teleop.ee_position()
                     lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
                     allowed = clamp_to_workspace(ee, lim_r, lim_f)
                     if not np.allclose(allowed, ee):
                         import mink  # noqa: PLC0415
-                        teleop.target = mink.SE3.from_rotation_and_translation(
-                            rotation=teleop.target.rotation(),
+                        arm.teleop.target = mink.SE3.from_rotation_and_translation(
+                            rotation=arm.teleop.target.rotation(),
                             translation=allowed,
                         )
 
@@ -2201,8 +2219,8 @@ def main() -> int:  # noqa: PLR0915
                     next_report += 1.0
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     extra = ""
-                    if mode == "teleop" and teleop is not None:
-                        extra = f"  EE {np.round(teleop.ee_position(), 3)}"
+                    if mode == "teleop" and arm.teleop is not None:
+                        extra = f"  EE {np.round(arm.teleop.ee_position(), 3)}"
                         # ⭐⭐ SHOW THE WORKSPACE WALL, because it used to be invisible.
                         # Julien, 2026-08-13: *"it stops moving in the direction I want it
                         # to move even though the arm hasn't even close to fully
@@ -2211,7 +2229,7 @@ def main() -> int:  # noqa: PLR0915
                         # than a cube that moved every time TELEOP was entered.
                         # FINDINGS §41.1 and §43.
                         lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
-                        ee_now = teleop.ee_position()
+                        ee_now = arm.teleop.ee_position()
                         out, up = workspace_room(ee_now, lim_r, lim_f)
                         extra += f"  reach {out:.2f}/{lim_r:.2f}m"
                         if out > 0.9 * lim_r:
@@ -2227,15 +2245,15 @@ def main() -> int:  # noqa: PLR0915
                         # limit, singularity, something in the way), which used to
                         # present only as the arm behaving strangely. See
                         # CartesianTeleop._limit_lead().
-                        lead_m, lead_r = teleop.lead()
-                        if lead_m > 0.8 * teleop.max_lead_m or lead_r > 0.8 * teleop.max_lead_rad:
+                        lead_m, lead_r = arm.teleop.lead()
+                        if lead_m > 0.8 * arm.teleop.max_lead_m or lead_r > 0.8 * arm.teleop.max_lead_rad:
                             extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
                         # ⭐ Say WHY the arm feels slow. Near the workspace edge the
                         # solver needs several rad/s per joint for the same tip
                         # speed, so the twist gets throttled — and without this line
                         # that reads as unexplained sluggishness.
-                        if teleop.speed_scale < 0.95:
-                            extra += f"  ⚠️ SLOWED to {teleop.speed_scale * 100:.0f}% (near the reach limit)"
+                        if arm.teleop.speed_scale < 0.95:
+                            extra += f"  ⚠️ SLOWED to {arm.teleop.speed_scale * 100:.0f}% (near the reach limit)"
                     # ⭐ `jaw` is shown separately from `hottest` on purpose — see the
                     # comment where it is read. Watching this number plateau is the
                     # actual test of the 2π frame fix; watching `hottest` is not,
@@ -2480,12 +2498,12 @@ def main() -> int:  # noqa: PLR0915
                         lambda: [round(float(v), 4) for v in arm.prev_q]),
                     "measured_joints": _safe_fact(
                         lambda: [round(float(getattr(s, "pos", float("nan"))), 4) for s in states]),
-                    "ee": _safe_fact(lambda: [round(float(v), 4) for v in teleop.ee_position()]),
+                    "ee": _safe_fact(lambda: [round(float(v), 4) for v in arm.teleop.ee_position()]),
                     "reach_limit": args.reach,
                     "floor_limit": args.floor,
                     "loop_hz": _safe_fact(lambda: round(loop_hz, 1)),
-                    "hottest_seen_c": _safe_fact(lambda: thermal.max_seen),
-                    "hottest_jaw_seen_c": _safe_fact(lambda: thermal.max_jaw_seen),
+                    "hottest_seen_c": _safe_fact(lambda: arm.thermal.max_seen),
+                    "hottest_jaw_seen_c": _safe_fact(lambda: arm.thermal.max_jaw_seen),
                     "last_temperatures_c": _safe_fact(
                         lambda: [round(float(v), 1) for v in temps]),
                     # ⭐ The field whose absence cost the most on 2026-08-14: the gravity
@@ -2502,12 +2520,26 @@ def main() -> int:  # noqa: PLR0915
                 # here would sit on top of the real failure and read like a second fault.
                 print(f"\n⚠️  could not record the incident: {type(exc).__name__}: {exc}")
 
-    print(f"\nhottest motor seen this session: {thermal.max_seen:.0f}°C")
-    if thermal.max_jaw_seen:
-        # The number that decides whether the gripper frame fix held. A plateau near
-        # idle (31-36 °C) is the pass; a steady climb is the failure, and it is
-        # invisible in `hottest` because the shoulder runs hotter all session.
-        print(f"hottest the GRIPPER (motor 7) got: {thermal.max_jaw_seen:.0f}°C")
+    # ⛔⭐ GUARDED, AND THIS IS THE WHOLE REASON `arm` IS DECLARED None ABOVE.
+    #
+    # This runs after the `finally`, which means it also runs when `build_robot()` FAILED
+    # and the `except Exception` printed the error. That is the path Julien sees whenever
+    # the CAN adapters are in DFU. Without the guard, `arm.thermal` would raise there and
+    # replace *"No candleLight CAN adapter found"* with a traceback. FINDINGS §48.3.
+    #
+    # ⭐ The failed-build branch also reads better than what it replaced: it used to print
+    # `hottest motor seen this session: 0°C`, which is a fabricated number for a session
+    # that never ran. A thermal guard reporting a plausible zero is the exact defect
+    # `ThermalGuard` was written to remove ([FINDINGS §24](../docs/FINDINGS.md)).
+    if arm is not None:
+        print(f"\nhottest motor seen this session: {arm.thermal.max_seen:.0f}°C")
+        if arm.thermal.max_jaw_seen:
+            # The number that decides whether the gripper frame fix held. A plateau near
+            # idle (31-36 °C) is the pass; a steady climb is the failure, and it is
+            # invisible in `hottest` because the shoulder runs hotter all session.
+            print(f"hottest the GRIPPER (motor 7) got: {arm.thermal.max_jaw_seen:.0f}°C")
+    else:
+        print("\nno temperatures to report — the robot was never built, so no motor ran.")
     print(f"axis map: {axis_map.one_line(control_frame)}")
     if axis_map != axis_map_at_start:
         print(f"     was: {axis_map_at_start.one_line()}")
