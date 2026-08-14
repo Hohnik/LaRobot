@@ -2826,3 +2826,35 @@ hint(f"  moving… {park_path.length - park_s:.2f} rad of path ")
 The eleven fields are the state of one blended `JointPath` and its cursor. **They are read and written together by `begin_path()` and `step_path()`, which the class already implements**, so splitting them across commits would have left the script half-reading from the object and half from its own locals — a state neither the class nor the script models. ⚠️ **It is also the group that moves 4.3 kg and that `q p d` and Ctrl-C depend on**, so it got its own commit and its own reading rather than being bundled with anything else.
 
 **450 headless tests, unchanged.** ⚠️ Not on the arm. The N=1 test comes once the series is complete.
+
+### 48.3 ⛔⭐⭐ AND THE NEXT GROUP HAS A TRAP THAT STOPS THE MECHANICAL APPROACH: `thermal` WOULD BREAK THE DFU ERROR PATH
+
+**Found before moving it, by asking where `thermal` is read.** It is read *after* the `finally` block, in the closing summary:
+
+```python
+    except Exception as exc:
+        print(f"\n⛔ {type(exc).__name__}: {exc}")
+    finally:
+        ...
+    print(f"\nhottest motor seen this session: {thermal.max_seen:.0f}°C")
+```
+
+⛔⭐ **That `except Exception` catches a failed `build_robot()`, prints the error, and falls through to the summary.** It is the path Julien sees whenever the adapters are in DFU, and his own output on 2026-08-14 shows it working:
+
+```
+⛔ RuntimeError: No candleLight CAN adapter found.
+  …
+hottest motor seen this session: 0°C
+```
+
+⛔⛔ **So if `thermal` becomes `arm.thermal`, that line raises `UnboundLocalError` whenever the build fails**, because `arm` is only created *after* `build_robot()` succeeds. **A clear "no adapter found" message would be replaced by a traceback, on the failure Julien hits most often.**
+
+⭐ **The fix is a small design decision rather than a substitution, which is why this group stops the mechanical run:**
+
+1. Declare `arm = None` before the `try`, and guard the summary. ⚠️ **But that breaks the ordering check**, which finds the construction point by looking for the first assignment to `arm`. It would then see line ~700 and stop catching real faults. **So the checker must first learn to find the `ArmSession(` call instead.**
+2. Or keep a session-level `thermal` for the summary and give each arm its own for the guarding. ⚠️ Two guards for one question is what [§0](FINDINGS.md) warns about.
+3. Or move the summary inside the `try`. ⚠️ It would then stop printing on a failed build, which is the one case it is most useful.
+
+⭐⭐ **Recommendation: option 1, and improve the checker first.** For N arms the script will hold a *list* initialised empty before the `try` anyway, so `arm = None` is the shape the design is heading for. **Doing the checker first keeps the safety net ahead of the change it protects.**
+
+⚠️ **`mode` (48 references) has its own version of the same problem** and it is already recorded: `build_robot()` reads it to decide `zero_gravity`, so the script must keep a local `mode` for the pre-construction decision even after the field moves. **Neither of the last two groups is a pure substitution.** Three of four were; these are not, and that is worth knowing before starting them.

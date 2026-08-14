@@ -48,8 +48,17 @@ MOVED_SO_FAR = [
     "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
 ]
 
-#: Still locals of `main()`, in the order ROADMAP §6.1 moves them. `mode` is last
-#: because `build_robot()` reads it before the robot (and so the ArmSession) exists.
+#: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
+#: FINDINGS §48.3 has the detail:
+#:
+#:   * `thermal` is read in the closing summary, AFTER the `finally` block, on a path
+#:     that runs when `build_robot()` FAILED — so `arm` does not exist there. Moving it
+#:     naively replaces the "no adapter found" message with an UnboundLocalError, on the
+#:     failure Julien hits most often. It needs `arm = None` before the `try`, and this
+#:     checker must first learn to find the `ArmSession(` call rather than the first
+#:     assignment to `arm`, or the ordering check goes blind.
+#:   * `mode` is read by `build_robot()` to decide `zero_gravity`, before the robot and
+#:     therefore the ArmSession exist. The script keeps a local `mode` for that decision.
 STILL_TO_MOVE = ["thermal", "teleop", "mode"]
 
 
