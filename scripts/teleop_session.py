@@ -83,6 +83,11 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+# ⚠️ `Any` was used in this file's annotations since long before this import existed, and
+# it worked only because `from __future__ import annotations` never evaluates them. A real
+# import is needed the moment it appears on a variable inside `main()`, because
+# `scripts/check_restructure.py` check 4 resolves every name used there.
+from typing import Any
 
 import numpy as np
 
@@ -885,14 +890,38 @@ def main() -> int:  # noqa: PLR0915
     # ⚠️ ONE PUCK, and with two arms this becomes one call per arm with `exclude=` holding
     # the ones already taken — `pick_device_by_wiggle` already supports that and it is
     # tested (`scripts/test_puck_assignment.py`). Not wired yet: ROADMAP §6.1 step 2.
-    info = pick_device_by_wiggle(label=arm_names[0])
-    if info is None:
-        print("No SpaceMouse found (or none was moved).")
-        return 1
-    countdown_hands_off(3)
-    handle = open_device(info)
-    handle.set_nonblocking(True)
-    reader = TwistReader(handle)
+    # ⭐⭐ ONE PUCK PER ARM, ASSIGNED BY BEING MOVED. Two SpaceMice both report an EMPTY
+    # serial number (measured 2026-08-10), so the trick that made the CAN adapters
+    # unambiguous — select by serial, never by position — does not transfer. The device
+    # identifies itself by being wiggled.
+    #
+    # ⛔ `exclude` IS THE PART THAT MATTERS WITH TWO ARMS, and without it this function can
+    # hand the SAME puck to both: the single-device shortcut returns it unconditionally, and
+    # nothing stops the operator moving the one they already assigned. Both failures are
+    # silent, and the symptom — two arms following one hand — reads as a control bug rather
+    # than a device-assignment bug (`src/spacemouse.py`, 6 tests).
+    #
+    # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
+    # returns here, with nothing energised.
+    pucks: dict[str, Any] = {}
+    for name in arm_names:
+        info = pick_device_by_wiggle(label=name,
+                                     exclude=[h["path"] for h in pucks.values()])
+        if info is None:
+            print(f"No SpaceMouse found for arm {name} (or none was moved).")
+            for opened in pucks.values():
+                # ⛔ Close what was already opened. Returning without this leaves a claimed
+                # HID device behind, and the next run's wiggle then cannot see it.
+                try:
+                    opened["handle"].close()
+                except Exception:  # noqa: BLE001, S110
+                    pass
+            return 1
+        countdown_hands_off(3)
+        handle = open_device(info)
+        handle.set_nonblocking(True)
+        pucks[name] = {"path": info["path"], "handle": handle,
+                       "reader": TwistReader(handle)}
 
     robot = None
     # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
@@ -986,7 +1015,8 @@ def main() -> int:  # noqa: PLR0915
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
                          warn_at=TEMP_WARN, stop_at=TEMP_STOP,
                          axis_map=map_store.for_arm(arm_names[0], start_frame),
-                         slots=saved_slots[arm_names[0]], base_slot=BASE_SLOT)
+                         slots=saved_slots[arm_names[0]], base_slot=BASE_SLOT,
+                         reader=pucks[arm_names[0]]["reader"])
         # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
         #
         # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for a
@@ -2101,8 +2131,8 @@ def main() -> int:  # noqa: PLR0915
                 # on the next mode switch. Reading unconditionally costs nothing —
                 # TwistReader.read() is non-blocking by construction — and it is what
                 # makes button assignment work from wherever Julien happens to be.
-                raw_axes = reader.read()
-                buttons = getattr(reader, "buttons", 0)
+                raw_axes = arm.reader.read()
+                buttons = getattr(arm.reader, "buttons", 0)
                 pressed = buttons & ~buttons_prev              # rising edge only
                 buttons_prev = buttons
 
@@ -2665,7 +2695,8 @@ def main() -> int:  # noqa: PLR0915
         except Exception:  # noqa: BLE001, S110
             pass
         try:
-            handle.close()
+            for one_puck in pucks.values():
+                one_puck["handle"].close()
         except Exception:  # noqa: BLE001, S110
             pass
         # ⛔ DO NOT make this an unconditional save again.

@@ -296,7 +296,8 @@ class ArmSession:
                  warn_at: float = 55.0, stop_at: float = 65.0,
                  axis_map: Any = None,
                  slots: dict[str, list] | None = None,
-                 base_slot: str = "default") -> None:
+                 base_slot: str = "default",
+                 reader: Any = None) -> None:
         self.robot = robot
         self.name = name
         self.frame = frame
@@ -340,6 +341,22 @@ class ArmSession:
         self.slots: dict[str, list] = dict(slots or {})
         self.base_slot = base_slot
         self.base_pose: list | None = self.slots.get(base_slot)
+
+        # ⭐⭐ THE PUCK THAT DRIVES THIS ARM. One `TwistReader`, already opened and bound to
+        # one physical SpaceMouse by the wiggle assignment.
+        #
+        # ⚠️ THE MODULE DOCSTRING ABOVE USED TO SAY THIS CLASS DELIBERATELY DOES NOT OWN
+        # "reading the SpaceMouse", and that is still half true. The *device layer* stays
+        # shared and outside: enumerating, the wiggle assignment, `open_device`, and closing
+        # the handle on the way out. **What belongs to the arm is the one reader it is
+        # driven by**, because with two arms "which puck" is exactly as per-arm as "which
+        # robot" — and a session-level reader is how both arms end up following one hand.
+        #
+        # ⛔ The HANDLE is deliberately NOT here. It has to be closed even when
+        # `build_robot()` failed and no `ArmSession` was ever created, so the script keeps
+        # its own dict of handles for teardown. Two references to one object, not two
+        # copies of state.
+        self.reader = reader
 
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0

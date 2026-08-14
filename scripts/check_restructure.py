@@ -56,6 +56,10 @@ MOVED_SO_FAR = [
     # Both are handed to the constructor rather than assigned afterwards, so they cannot be
     # half-set — see the note in `src/arm_session.py`.
     "axis_map", "axis_map_at_start",
+    # ⭐ Step 2 plumbing 4/8 and 5/8: this arm's saved poses, and the puck that drives it.
+    # ⚠️ `base_pose` and `slots` were `park` and `slots` as locals — renamed as well as
+    # moved, so the old names live in RETIRED_LOCALS too.
+    "base_pose", "slots", "reader",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
@@ -84,11 +88,15 @@ STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 #: `ArmSession.frame` for two days, only the local was updated on a frame change, and the
 #: object quietly disagreed with the session. Deleting one copy is the fix; this list is
 #: what stops it being re-created.
-#: ⭐ `park` and `slots` are here rather than in MOVED_SO_FAR because they were RENAMED as
-#: well as moved. `park` became `ArmSession.base_pose` — a `park` beside the eleven
-#: `park_*` motion fields would read as one of them — and `slots` became `ArmSession.slots`
-#: only after the file read moved to `saved_slots`, keyed by arm name.
-RETIRED_LOCALS = ["control_frame", "park", "slots"]
+#: ⭐ `park` is here rather than in MOVED_SO_FAR because it was RENAMED as well as moved:
+#: it became `ArmSession.base_pose`, since a `park` beside the eleven `park_*` motion
+#: fields would read as one of them.
+#:
+#: ⚠️ `slots` is NOT here. It kept its name (`ArmSession.slots`), so MOVED_SO_FAR already
+#: forbids the bare local and additionally proves `arm.slots` is read — a strictly stronger
+#: check. Listing a name in both places is redundant and invites the reader to think the two
+#: lists mean different things about it.
+RETIRED_LOCALS = ["control_frame", "park"]
 
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:
