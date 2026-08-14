@@ -2490,3 +2490,56 @@ The rewrite is driven by the parse tree rather than by text, because a text subs
 ⭐ **The park group (`park_*`, 91 references) is the next natural unit**, because `ArmSession` already implements `begin_path()` and `step_path()` against exactly those fields ([§36.2](FINDINGS.md)). ⚠️ It is also the group that moves 4.3 kg and that `q p d` and Ctrl-C depend on, so it gets its own commit and its own reading.
 
 ⚠️ **Nothing in this series has been on the arm.** [ROADMAP §6.1](ROADMAP.md) is explicit that the test is `--arms B` at N=1 once the series is complete, confirming it *feels identical*. Each commit is verified by: 416 headless tests, `check_restructure.py`, dry runs in all three start modes, and `teleop_sim.py` for the IK path.
+
+---
+
+## 43. ✅⭐⭐ THE WORKSPACE LIMIT IS NOW A SPHERE PLUS A FLOOR — AND SWAPPING IT FOUND TWO THINGS THE CUBE HAD BEEN DOING QUIETLY — 2026-08-14, 13:00
+
+> Julien's decision, taken after [§41.1](FINDINGS.md) measured the old cube stopping him at 71% of the arm's reach. His words: *"Sounds good regarding the box."* ✅ **He also confirmed the first two restructure commits on hardware: "teleop feels identical."**
+
+### 43.0 ✅ WHAT CHANGED
+
+| | before | after |
+|---|---|---|
+| shape | ±0.30 m **cube** | **0.60 m sphere** around the base, plus a floor |
+| anchored to | ⛔ wherever TELEOP was entered, so it moved every session | ⭐ the base, so it is in the same place every time |
+| floor | accidental, a side effect of being a cube | ⭐ explicit, `0.05 m`, its own flag |
+| flags | `--box` | `--reach`, `--floor` |
+| readout | `box 0.28/0.30m` | `reach 0.52/0.60m`, plus a floor warning when close |
+| the clamp | an untested inline block in `main()` | `teleop.clamp_to_workspace()` + `effective_limits()`, **13 tests** |
+
+⛔ **`--box` is removed rather than aliased.** A flag that keeps working while its meaning changed underneath is worse than one that fails loudly, which is the same call `src/yam_can.py` made when `--arm arm1` became `--arm B`. `--box` is now an argparse error.
+
+### 43.1 ⛔⭐⭐ THE CUBE WAS PROVIDING A FLOOR, AND A BARE SPHERE HAS NONE
+
+**I recommended a radius. On checking the geometry, a radius alone is a safety regression, and I would have shipped one.**
+
+A cube centred on a tip at `z = 0.475` bounded the tip above `z = 0.175`. Measured over a grid of the first four joints, **this arm can put its tip at `z = −0.377`**, which is below its own base, and its tip x as far back as `−0.641`. **A 0.60 m sphere permits all of that.**
+
+⭐ **So the floor is not scope creep, it is replacing something that was there.** Working-contract rule 4: never continue past a hazard you have correctly identified. ⚠️ `0.05 m` is chosen and **not measured** — where the desk sits relative to the model's origin has deliberately never been measured ([ROADMAP §8.4](ROADMAP.md), his ruling). What *is* measured: every park pose on record puts the tip at `z ≥ 0.174` and within `0.433 m` of the base, so both limits clear every pose the arm rests in.
+
+### 43.2 ⛔⭐⭐ A FIXED LIMIT CAN BE ENTERED FROM OUTSIDE, WHICH THE OLD ONE COULD NOT
+
+The cube re-centred on the arm at TELEOP entry, so **the arm was always at the exact centre and the cube could never be entered from outside.** A fixed limit can be. Clamping to 0.60 m when the arm sits at 0.65 m would command it 5 cm inward **the instant TELEOP starts**, with nobody having asked.
+
+✅ `effective_limits()` opens the limit far enough to include the starting pose, derived from `home_ee` so it needs no new state. ⭐ That also gives `home_ee` a continued job after the cube stopped using it. ⚠️ **Deliberately no shrinking back during a session:** a limit that moves mid-session is what was wrong with the cube, and trading one moving wall for another would be a poor exchange.
+
+### 43.3 ⛔⭐⭐ AND THE WIDENING NEEDED A MARGIN, WHICH A TEST PROVED BY FAILING
+
+**The first version widened the limit to *exactly* the starting distance.** A test then failed: commanding pure roll from the `FOLDED` pose moved the tool point **0.178 m**, where the bound is 0.02.
+
+⭐ **The cause is a knife edge, not the arm.** `FOLDED` puts the tip at **0.610 m**, just outside the 0.60 sphere, so the limit was widened to exactly 0.610 and the tip sat *precisely on the wall*. **The clamp then fired on every cycle.** And a position clamp fighting the orientation task is already written down in `_limit_lead`'s own notes: *"the workspace box then re-clamps translation, which fights the orientation task — hence the oscillation."* My change moved that pose from never-clamped to always-clamped and activated it.
+
+⚠️ **This repo has been cut by a knife edge before:** the park stall check passed at 0.020 and stalled at 0.021 against a 0.02 tolerance ([§26](FINDINGS.md)).
+
+✅ **Fixed with `LIMIT_WIDEN_MARGIN = 0.05`, and the number is reasoned rather than tuned:** `max_lead_m` is 0.05, the distance the goal is *already* allowed to run ahead of the arm. **A limit closer than one lead-length sits inside the controller's own slack and will chatter by construction.** A test asserts the margin is at least `max_lead_m`, so the two cannot drift apart.
+
+⭐⭐ **The order this happened in is the point.** I wrote a docstring describing a ratchet, implemented something that was not a ratchet, wrote the tests, and **the tests caught both** — the wrong implementation and then the knife edge. Neither would have been visible on the arm until a folded-pose rotation went wrong.
+
+### 43.4 ⛔ A THIRD COPY OF THE OLD DESIGN WAS FOUND IN ITS OWN TEST FILE
+
+`test_teleop_ik.py`'s `drive()` **reimplemented the teleop loop, including its own `WORKSPACE_BOX = 0.30` and its own cube clamp.** After the script changed, that simulation would have kept testing a loop shape the real code no longer has, and every test would have kept passing.
+
+⭐ **That is exactly what happened to `ArmSession` for a day** ([§36.2](FINDINGS.md)): a copy of a design drifted while all 17 of its tests passed, because the tests asserted the superseded behaviour. ✅ `drive()` now imports the real `clamp_to_workspace` instead of imitating it, so there is one implementation. ⚠️ **Worth a habit: when changing behaviour, grep the test files for a second implementation of it, not only the callers.**
+
+**416 → 430 headless tests.** ⚠️ **Not yet on the arm.** The reach limit only bites at 0.60 m and the floor at 0.05 m, so an ordinary session should feel unchanged; the visible difference is the status line reading `reach 0.52/0.60m` instead of `box 0.28/0.30m`.

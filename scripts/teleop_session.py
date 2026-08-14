@@ -113,7 +113,15 @@ from arm_session import ArmSession  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine  # noqa: E402
-from teleop import FRAMES, CartesianTeleop  # noqa: E402
+from teleop import (  # noqa: E402
+    FLOOR_LIMIT,
+    FRAMES,
+    REACH_LIMIT,
+    CartesianTeleop,
+    clamp_to_workspace,
+    effective_limits,
+    workspace_room,
+)
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
     ThermalGuard,
@@ -139,7 +147,10 @@ N_ARM = 6
 LINEAR_SCALE = DEFAULT_LINEAR_SCALE     # m/s at full deflection  (was 0.04)
 ANGULAR_SCALE = DEFAULT_ANGULAR_SCALE   # rad/s at full deflection (was 0.25)
 
-WORKSPACE_BOX = 0.30
+# ⚠️ `WORKSPACE_BOX = 0.30` used to live here. The workspace limit is now
+# `REACH_LIMIT` and `FLOOR_LIMIT` in `src/teleop.py`, next to the code that applies
+# them, because the old constant sat in the script while the clamp it fed was an
+# untested inline block. FINDINGS §43.
 MAX_JOINT_STEP = 0.015     # rad/cycle ≈ 1.5 rad/s at 100 Hz
 JOINT_LIMIT_MARGIN = 0.08
 TEMP_WARN = 55.0
@@ -526,7 +537,23 @@ def main() -> int:  # noqa: PLR0915
                          "changing the gripper step live is 'not necessary currently and "
                          "all the time', and sharing the keys with the ease ramp meant a "
                          "message told him to press keys that did something else")
-    ap.add_argument("--box", type=float, default=WORKSPACE_BOX)
+    # ⭐⭐ `--box` IS GONE, replaced by `--reach` and `--floor` on 2026-08-14 by Julien's
+    # decision. ⛔ Deliberately removed rather than kept as an alias that silently means
+    # something else: the same call `src/yam_can.py` made when `--arm arm1` became
+    # `--arm B`. A flag that keeps working while its meaning has changed underneath is
+    # worse than one that fails loudly. `--box` now errors, which is the point.
+    ap.add_argument("--reach", type=float, default=REACH_LIMIT,
+                    help=f"how far the tip may go from the BASE, in metres (default "
+                         f"{REACH_LIMIT}). Replaced a ±0.30 m cube that re-centred on "
+                         f"wherever TELEOP was entered, so the wall moved every session "
+                         f"and stopped him at 71% of the arm's reach. The arm can reach "
+                         f"about 0.74 m. ⛔ A safety limit: raise it deliberately.")
+    ap.add_argument("--floor", type=float, default=FLOOR_LIMIT,
+                    help=f"lowest the tip may go, in metres above the base (default "
+                         f"{FLOOR_LIMIT}). ⛔ This exists because the old cube was "
+                         f"providing a floor for free and a bare sphere has none — this "
+                         f"arm can put its tip 0.377 m BELOW its own base. Every park "
+                         f"pose sits at 0.174 m or higher.")
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
                          "Without this, both arms share one map and editing changes both")
@@ -684,7 +711,7 @@ def main() -> int:  # noqa: PLR0915
         names = ", ".join(motions_for(control_frame)[i]["short"] for i in axis_map.unbound())
         print(f"  ⚠️  UNBOUND  : {names} — the arm will NOT perform these until they are bound (m)")
     print(f"  park pose   : {np.round(park, 3).tolist() if park else 'none saved — press s to set one'}")
-    print(f"  workspace   : ±{args.box} m box, re-centred whenever TELEOP is entered")
+    print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
 
@@ -1836,12 +1863,27 @@ def main() -> int:  # noqa: PLR0915
                     ])
                     q_target = teleop.step(twist, dt)
 
+                    # ⭐⭐ THE WORKSPACE LIMIT, changed on 2026-08-14 by Julien's decision.
+                    #
+                    # It used to be a ±0.30 m cube centred on wherever TELEOP was entered.
+                    # Measured on the arm, that stopped him at 0.524 m from the base while
+                    # the arm reaches 0.738, and the wall sat somewhere different every
+                    # session. It is now a fixed 0.60 m sphere around the base plus a floor.
+                    # Why a floor: the cube had been providing one for free, and this arm
+                    # can put its tip below its own base. See teleop.clamp_to_workspace and
+                    # FINDINGS §43.
+                    #
+                    # ⚠️ Clamped against the ACHIEVED position so the limit ratchets inward
+                    # and never yanks an arm that starts outside it. The old cube could not
+                    # be entered from outside; a fixed one can.
                     ee = teleop.ee_position()
-                    if np.any(np.abs(ee - arm.home_ee) > args.box):
+                    lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
+                    allowed = clamp_to_workspace(ee, lim_r, lim_f)
+                    if not np.allclose(allowed, ee):
                         import mink  # noqa: PLC0415
                         teleop.target = mink.SE3.from_rotation_and_translation(
                             rotation=teleop.target.rotation(),
-                            translation=np.clip(ee, arm.home_ee - args.box, arm.home_ee + args.box),
+                            translation=allowed,
                         )
 
                     step = q_target - arm.prev_q
@@ -2147,21 +2189,23 @@ def main() -> int:  # noqa: PLR0915
                     extra = ""
                     if mode == "teleop" and teleop is not None:
                         extra = f"  EE {np.round(teleop.ee_position(), 3)}"
-                        # ⭐⭐ SHOW THE WORKSPACE WALL, because it is invisible and it
-                        # moves. Julien, 2026-08-13: *"it stops moving in the direction I
-                        # want it to move even though the arm hasn't even close to fully
-                        # extended."* The box is ±0.30 m and it re-centres on whatever
-                        # pose TELEOP was entered from, so the wall sits in a different
-                        # place every session and nothing on screen said where. Hitting
-                        # it reads as the arm refusing to move.
-                        # ⚠️ This only reports. It changes no limit and no behaviour —
-                        # deliberately, because seeing where the wall is has to come
-                        # before deciding whether to move it. FINDINGS §37.5.
-                        if arm.home_ee is not None:
-                            off = float(np.max(np.abs(teleop.ee_position() - arm.home_ee)))
-                            extra += f"  box {off:.2f}/{args.box:.2f}m"
-                            if off > 0.9 * args.box:
-                                extra += " ⚠️ AT THE EDGE"
+                        # ⭐⭐ SHOW THE WORKSPACE WALL, because it used to be invisible.
+                        # Julien, 2026-08-13: *"it stops moving in the direction I want it
+                        # to move even though the arm hasn't even close to fully
+                        # extended."* Showing it settled the cause in one session, and the
+                        # limit is now a fixed sphere around the base plus a floor rather
+                        # than a cube that moved every time TELEOP was entered.
+                        # FINDINGS §41.1 and §43.
+                        lim_r, lim_f = effective_limits(arm.home_ee, args.reach, args.floor)
+                        out, up = workspace_room(teleop.ee_position(), lim_r, lim_f)
+                        extra += f"  reach {out:.2f}/{lim_r:.2f}m"
+                        if out > 0.9 * lim_r:
+                            extra += " ⚠️ AT THE EDGE"
+                        # ⚠️ The floor is only worth screen space when it is close. It sits
+                        # 0.05 m up and every park pose is above 0.17, so on a normal
+                        # session this never prints.
+                        if up < 0.10:
+                            extra += f"  ⚠️ {up * 100:.0f}cm ABOVE THE FLOOR"
                         # ⭐ How far the goal is running ahead of the pose actually
                         # achieved. Pinned at the limit = the arm cannot follow (joint
                         # limit, singularity, something in the way), which used to

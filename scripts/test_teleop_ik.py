@@ -30,14 +30,25 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from teleop import CartesianTeleop  # noqa: E402
+from teleop import (  # noqa: E402
+    FLOOR_LIMIT,
+    REACH_LIMIT,
+    CartesianTeleop,
+    clamp_to_workspace,
+    effective_limits,
+    workspace_room,
+)
 from yam_can import YAM_JOINTS  # noqa: E402
 
 DT = 0.01
 N_ARM = 6
 MAX_JOINT_STEP = 0.015
 JOINT_LIMIT_MARGIN = 0.08
-WORKSPACE_BOX = 0.30
+# ⚠️ `WORKSPACE_BOX = 0.30` used to be here, and `drive()` below applied it. The script
+# replaced that cube with a reach sphere plus a floor on 2026-08-14, and a simulation
+# that keeps applying the old limit is a copy of a design the real loop no longer has.
+# That is exactly what happened to `ArmSession` for a day while all its tests passed
+# (FINDINGS §36.2). `drive()` now imports the real clamp instead of imitating it.
 
 LO = np.array([YAM_JOINTS[i][1] for i in range(1, N_ARM + 1)]) + JOINT_LIMIT_MARGIN
 HI = np.array([YAM_JOINTS[i][2] for i in range(1, N_ARM + 1)]) - JOINT_LIMIT_MARGIN
@@ -60,11 +71,12 @@ def drive(start: np.ndarray, twist: np.ndarray, seconds: float = 10.0, **kw):
     for _ in range(int(seconds / DT)):
         q_target = tp.step(twist, DT)
         ee = tp.ee_position()
-        if np.any(np.abs(ee - home) > WORKSPACE_BOX):
+        lim_r, lim_f = effective_limits(home, REACH_LIMIT, FLOOR_LIMIT)
+        allowed = clamp_to_workspace(ee, lim_r, lim_f)
+        if not np.allclose(allowed, ee):
             import mink  # noqa: PLC0415
             tp.target = mink.SE3.from_rotation_and_translation(
-                rotation=tp.target.rotation(),
-                translation=np.clip(ee, home - WORKSPACE_BOX, home + WORKSPACE_BOX),
+                rotation=tp.target.rotation(), translation=allowed,
             )
         q = prev + np.clip(q_target - prev, -MAX_JOINT_STEP, MAX_JOINT_STEP)
         prev = np.clip(q, LO, HI)
@@ -231,6 +243,123 @@ def test_frame_note_describes_each_frame() -> None:
         "webcam does not share it"
     )
 
+
+
+# ── the workspace limit, replaced 2026-08-14 (FINDINGS §43) ──────────────────
+
+
+def test_a_pose_inside_the_limits_is_returned_untouched() -> None:
+    """Every park pose on record is inside, so a normal session never clamps."""
+    for pose in ([0.111, 0.0, 0.174], [0.110, -0.003, 0.179], [0.211, 0.223, 0.306]):
+        out = clamp_to_workspace(np.array(pose), REACH_LIMIT, FLOOR_LIMIT)
+        assert np.allclose(out, pose), (pose, out)
+
+
+def test_a_pose_beyond_the_reach_is_pulled_back_along_the_same_direction() -> None:
+    """⭐ Pulled straight in, so the direction the operator was driving is preserved.
+    Clamping per axis instead would slide the tip sideways, which is the kind of motion
+    nobody asked for (FINDINGS §18)."""
+    far = np.array([0.6, 0.0, 0.45])          # 0.75 m out
+    out = clamp_to_workspace(far, 0.60, 0.05)
+    assert abs(np.linalg.norm(out) - 0.60) < 1e-9
+    assert np.allclose(out / np.linalg.norm(out), far / np.linalg.norm(far))
+
+
+def test_the_floor_stops_the_tip_going_below_the_base() -> None:
+    """⛔ THE REASON THE FLOOR EXISTS. The old cube bounded the tip above z=0.175 as a
+    side effect of being a cube. A bare sphere has no floor, and this arm can put its
+    tip at z=-0.377, below its own base."""
+    out = clamp_to_workspace(np.array([0.2, 0.0, -0.30]), 0.60, 0.05)
+    assert out[2] == 0.05, out
+
+
+def test_reach_and_floor_can_both_bite_at_once() -> None:
+    out = clamp_to_workspace(np.array([0.7, 0.0, -0.30]), 0.60, 0.05)
+    assert np.linalg.norm([out[0], out[1]]) <= 0.60 + 1e-9
+    assert out[2] == 0.05
+
+
+def test_an_arm_that_starts_OUTSIDE_is_not_yanked_inward() -> None:
+    """⛔⭐⭐ THE ONE REAL HAZARD IN SWAPPING A MOVING LIMIT FOR A FIXED ONE.
+
+    The old cube re-centred on the arm at TELEOP entry, so it could never be entered
+    from outside. A fixed limit can be. Clamping to 0.60 when the arm sits at 0.65
+    would command it inward the instant TELEOP starts, and nobody asked for that.
+    """
+    start = np.array([0.65, 0.0, 0.20])       # 0.680 m out
+    reach, floor = effective_limits(start, 0.60, 0.05)
+    assert reach > 0.60, "the limit must open to include the starting pose"
+    assert np.allclose(clamp_to_workspace(start, reach, floor), start), "it was yanked"
+
+
+def test_a_start_BELOW_the_floor_lowers_the_floor_rather_than_lifting_the_arm() -> None:
+    start = np.array([0.2, 0.0, -0.10])
+    reach, floor = effective_limits(start, 0.60, 0.05)
+    assert floor <= -0.10
+    assert np.allclose(clamp_to_workspace(start, reach, floor), start)
+
+
+def test_a_normal_start_leaves_both_limits_exactly_as_configured() -> None:
+    reach, floor = effective_limits(np.array([0.110, -0.003, 0.179]), 0.60, 0.05)
+    assert (reach, floor) == (0.60, 0.05)
+
+
+def test_no_starting_pose_yet_means_the_configured_limits() -> None:
+    assert effective_limits(None, 0.60, 0.05) == (0.60, 0.05)
+
+
+def test_the_limit_does_NOT_shrink_back_during_a_session() -> None:
+    """⚠️ Deliberate. A limit that moves mid-session is what was wrong with the cube,
+    so widening for the starting pose is a one-time decision and holds all session."""
+    start = np.array([0.65, 0.0, 0.20])
+    reach, _ = effective_limits(start, 0.60, 0.05)
+    # the arm comes in; the limit is still derived from the same starting pose
+    again, _ = effective_limits(start, 0.60, 0.05)
+    assert again == reach
+
+
+def test_the_readout_reports_distance_out_and_height_above_the_floor() -> None:
+    out, up = workspace_room(np.array([0.219, 0.029, 0.475]), 0.60, 0.05)
+    assert abs(out - 0.524) < 0.002, out      # his measured pose, FINDINGS §41.1
+    assert abs(up - 0.425) < 1e-9, up
+
+
+def test_the_clamp_never_returns_a_position_outside_the_limits_it_was_given() -> None:
+    rng = np.random.default_rng(20260814)
+    for _ in range(400):
+        ee = rng.uniform(-1.0, 1.0, 3)
+        out = clamp_to_workspace(ee, 0.60, 0.05)
+        assert np.linalg.norm(out) <= 0.60 + 1e-9 or out[2] == 0.05
+        assert out[2] >= 0.05 - 1e-12
+
+
+def test_a_widened_limit_leaves_ROOM_and_does_not_sit_on_the_wall() -> None:
+    """⛔⭐⭐ THE KNIFE EDGE, and it cost a real regression before the margin existed.
+
+    The first version widened the limit to exactly the starting distance, so an arm
+    starting outside sat precisely on the wall and the clamp fired every cycle. A
+    position clamp fights the orientation task in the QP — written down in
+    `_limit_lead`'s own notes — and commanding pure roll from the FOLDED pose then
+    moved the tool point 0.178 m, against under 0.002 m with room to spare.
+    """
+    start = np.array([-0.183, -0.075, 0.577])      # the FOLDED pose, 0.610 m out
+    reach, _ = effective_limits(start, REACH_LIMIT, FLOOR_LIMIT)
+    room = reach - float(np.linalg.norm(start))
+    assert room >= 0.04, f"only {room:.3f} m of room past the start — the clamp will chatter"
+    assert np.allclose(clamp_to_workspace(start, reach, FLOOR_LIMIT), start)
+
+
+def test_the_widening_margin_is_at_least_one_lead_length() -> None:
+    """⭐ The reason 0.05 is the number: the goal is already allowed to lead the arm by
+    `max_lead_m`, so a limit closer than that sits inside the controller's own slack."""
+    from teleop import LIMIT_WIDEN_MARGIN  # noqa: PLC0415
+    assert LIMIT_WIDEN_MARGIN >= CartesianTeleop().max_lead_m
+
+
+def test_starting_inside_adds_no_margin_at_all() -> None:
+    """⚠️ Otherwise every normal session would quietly run a wider limit than configured."""
+    for pose in ([0.211, 0.223, 0.306], [0.110, -0.003, 0.179], [0.251, 0.0, 0.209]):
+        assert effective_limits(np.array(pose), 0.60, 0.05) == (0.60, 0.05)
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

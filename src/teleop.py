@@ -375,6 +375,121 @@ class CartesianTeleop:
         return self.configuration.get_transform_frame_to_world(self.ee_site, "site").translation()
 
 
+#: ⭐ THE WORKSPACE LIMIT, replacing a ±0.30 m cube on 2026-08-14. Julien's decision,
+#: after the cube was measured stopping him at 71% of the arm's reach.
+#:
+#: `REACH_LIMIT` is a distance from the arm's base. The old cube re-centred on wherever
+#: TELEOP was entered, so the wall sat somewhere different every session and nothing on
+#: screen said where. His words, 2026-08-13: *"it stops moving in the direction I want it
+#: to move even though the arm hasn't even close to fully extended."* Measured: he was
+#: stopped 0.524 m from the base against a reachable 0.738 m (FINDINGS §41.1).
+#:
+#: ⛔⭐⭐ `FLOOR_LIMIT` EXISTS BECAUSE THE CUBE WAS QUIETLY PROVIDING ONE. A cube centred
+#: on a tip at z = 0.475 bounded the tip above z = 0.175. **A bare sphere has no floor at
+#: all**, and this arm can put its tip at **z = −0.377**, which is below its own base. So
+#: swapping the cube for a radius alone would have removed real protection while looking
+#: like a pure improvement. Working-contract rule 4: never continue past a hazard you have
+#: correctly identified.
+#:
+#: ⚠️ 0.05 m is chosen, not measured. Where the desk sits relative to the model's origin
+#: has deliberately never been measured (ROADMAP §8.4, his ruling). What IS measured: every
+#: park pose puts the tip at z ≥ 0.174 and within 0.433 m of the base, so both limits clear
+#: every pose the arm actually rests in. Both are `--reach` and `--floor` on the command line.
+REACH_LIMIT = 0.60          # m from the base
+FLOOR_LIMIT = 0.05          # m — the tip stays above this
+
+
+#: ⛔⭐⭐ HOW FAR PAST THE STARTING POSE TO OPEN A WIDENED LIMIT, and it must not be zero.
+#:
+#: `effective_limits()` widens a limit to include the pose TELEOP started from. The first
+#: version widened it to *exactly* that distance, which left an arm starting outside
+#: sitting precisely on the wall — so the clamp fired on every single cycle.
+#:
+#: That is a knife edge, and this repo has been cut by one before: the park stall check
+#: passed at 0.020 and stalled at 0.021 against a 0.02 tolerance (FINDINGS §26).
+#:
+#: ⛔ **And clamping every cycle has a known consequence.** A position clamp fights the
+#: orientation task in the QP, which is written down in `_limit_lead`'s own notes: *"the
+#: workspace box then re-clamps translation, which fights the orientation task — hence the
+#: oscillation."* Measured: commanding pure roll from a folded pose moved the tool point
+#: **0.178 m** with the limit on the wall, against under 0.002 m with room to spare.
+#:
+#: ⭐ 0.05 m because that is `max_lead_m`, the distance the goal is already allowed to run
+#: ahead of the arm. A limit closer than one lead-length sits inside the controller's own
+#: slack and will chatter by construction.
+LIMIT_WIDEN_MARGIN = 0.05
+
+
+def effective_limits(home_ee: np.ndarray | None, reach: float,
+                     floor: float) -> tuple[float, float]:
+    """Widen the limits, if needed, so they contain the pose TELEOP started from.
+
+    ⛔⭐⭐ WHY THIS FUNCTION EXISTS AT ALL, and it is the one real hazard in swapping a
+    moving limit for a fixed one.
+
+    The old cube re-centred on the arm at the moment TELEOP began, so the arm was always
+    at the exact centre and **the cube could never be entered from outside.** A fixed
+    limit can be. If the arm is already at 0.65 m when `t` is pressed, clamping to a
+    0.60 m sphere would command it 5 cm inward **the instant TELEOP starts**, with
+    nobody having asked for it. An unrequested move at mode entry is the shape of
+    several defects in this repo already.
+
+    So the limits open just far enough to include the starting pose, and stay there for
+    that session. ⚠️ **Deliberately no decay back to the nominal limit as the arm comes
+    in.** A limit that moves during a session is what was wrong with the cube, and
+    trading one moving wall for another would be a poor exchange for the small gain.
+
+    ⭐ It needs no new state: `home_ee` is already the tip position at TELEOP entry, so
+    the widening is derived rather than remembered. That also keeps the field earning
+    its place after the cube stopped using it.
+
+    Returns `(reach, floor)` unchanged whenever the starting pose is already inside,
+    which is every pose the arm actually rests in — the furthest park pose on record
+    puts the tip 0.433 m out and 0.306 m up.
+    """
+    if home_ee is None:
+        return reach, floor
+    start = np.asarray(home_ee, dtype=float)
+    dist, height = float(np.linalg.norm(start)), float(start[2])
+    # ⚠️ The margin applies only when the limit actually has to open. An arm starting
+    # inside keeps the configured limits exactly, which is every normal session.
+    out = reach if dist <= reach else dist + LIMIT_WIDEN_MARGIN
+    low = floor if height >= floor else height - LIMIT_WIDEN_MARGIN
+    return out, low
+
+
+def clamp_to_workspace(ee: np.ndarray, reach: float, floor: float) -> np.ndarray:
+    """Pull a tip position back inside the reach sphere and above the floor.
+
+    Returns the position unchanged when it is already inside. Pass the limits through
+    `effective_limits()` first, or an arm that started outside will be yanked.
+
+    ⚠️ This clamps position only. It says nothing about speed. `_apply_speed_scale`
+    handles the arm slowing near awkward configurations, and the two are independent —
+    FINDINGS §41.2 is what happened when a message confused one for the other.
+    """
+    out = np.asarray(ee, dtype=float).copy()
+
+    dist = float(np.linalg.norm(out))
+    if dist > reach and dist > 0.0:
+        out *= reach / dist
+
+    if out[2] < floor:
+        out[2] = floor
+
+    return out
+
+
+def workspace_room(ee: np.ndarray, reach: float, floor: float) -> tuple[float, float]:
+    """How much room is left: (metres of reach used, metres above the floor).
+
+    ⭐ Reported on the status line every second. The cube was invisible, which is why
+    hitting it read as the arm refusing to move rather than as a limit being reached.
+    """
+    ee = np.asarray(ee, dtype=float)
+    return float(np.linalg.norm(ee)), float(ee[2] - floor)
+
+
 def scripted_twist(t: float, speed: float = 0.04) -> np.ndarray:
     """A slow horizontal circle, for validating IK with no input device involved.
 
