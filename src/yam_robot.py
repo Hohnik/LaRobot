@@ -59,6 +59,21 @@ GRIPPER_LIMITS_FILE = REPO_ROOT / "config" / "gripper_limits.json"
 #: `--floor` expose the workspace limits.
 SAFE_MAX_SPEED = 1.0
 
+#: ⛔⭐⭐ HOW FAR THE COMMAND MAY RUN AHEAD OF THE MEASURED POSE. **This is the limit that
+#: actually caps tracking**, and until 2026-08-15 nothing had a name for it and no flag
+#: reached it ([FINDINGS §57.3](../docs/FINDINGS.md)).
+#:
+#: ⭐ A MIRROR follower cannot be pulled closer by more `max_speed`: the gap it measures is
+#: `(leader − command) + (command − measured)`, and this clips the second term. So with a
+#: 0.35 rad trip limit the leader only has to get 0.10 rad ahead of the command.
+#:
+#: ⚠️ IT IS ALSO A TORQUE LIMIT, which is why raising it is a real decision rather than a
+#: tuning knob. The motor's push is `kp × (command − measured)`, so a bigger allowance means
+#: a harder push to catch up. `SafeRobot`'s own docstring already says the pair of limits are
+#: deliberately loose for this reason: squeeze the following error too hard and the arm cannot
+#: overcome its own friction, and loosen it and the arm hits harder when it meets something.
+SAFE_MAX_LAG = 0.25
+
 
 # 0.5 Nm is I2RT's default and is what Julien watched slam the stops. 0.3 is
 # ~60% of it: still enough to reach both ends of a 6.57 rad stroke, noticeably
@@ -641,6 +656,7 @@ def build_robot(
     allow_calibration: bool = False,
     with_gripper: bool = True,
     max_speed: float = SAFE_MAX_SPEED,
+    max_lag: float = SAFE_MAX_LAG,
 ) -> tuple[Any, str]:
     """Construct the real robot. Returns `(robot, note)`.
 
@@ -697,7 +713,8 @@ def build_robot(
             ee_mass=GRIPPER_MASS_KG,
             sim=False,
         )
-        return SafeRobot(get_yam_robot(**kwargs), max_speed=max_speed), (
+        return SafeRobot(get_yam_robot(**kwargs), max_speed=max_speed,
+                         max_lag=max_lag), (
             f"gripper NOT controlled (6 DoF) — motor 7 is left free, and the gravity model "
             f"carries ee_mass={GRIPPER_MASS_KG} kg so the arm still holds itself "
             f"(~0.19 Nm residual at the elbow)."
@@ -790,7 +807,7 @@ def build_robot(
 
     # ⭐ Everything above this line is I2RT's; everything that touches the robot
     # from here on goes through the rate limiter. See SafeRobot for why.
-    return SafeRobot(robot, max_speed=max_speed), note
+    return SafeRobot(robot, max_speed=max_speed, max_lag=max_lag), note
 
 
 class SafeRobot:
@@ -835,7 +852,7 @@ class SafeRobot:
     """
 
     def __init__(self, robot: Any, max_speed: float = SAFE_MAX_SPEED,
-                 max_lag: float = 0.25):
+                 max_lag: float = SAFE_MAX_LAG):
         self._robot = robot
         self.max_speed = max_speed   # rad/s, per joint
         self.max_lag = max_lag       # rad, command vs measured

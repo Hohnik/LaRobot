@@ -405,6 +405,19 @@ class ArmSession:
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0
         self.stall_since: float | None = None
+        #: ⛔⭐⭐ HOW MANY TIMES THE JAWS HAVE STALLED IN A ROW, and when it was last said out
+        #: loud. Julien, 2026-08-15: *"the gripper arm print was way too often, and it happened
+        #: because I was pushing on the leader arm gripper and the follower was picking
+        #: something up, so it pushed too far in."*
+        #:
+        #: ⚠️ THE GUARD IS WORKING; the REPORTING is not. In MIRROR the follower's jaw command
+        #: is the leader's measured jaw position, re-sent every cycle. So the guard releases the
+        #: jaws, the next cycle commands them back onto the object, and 0.4 s later it fires
+        #: again — for as long as the operator squeezes the leader. Twenty identical lines in
+        #: ten seconds is how a real warning gets trained into background noise, which
+        #: [FINDINGS §0](../docs/FINDINGS.md) is a catalogue of.
+        self.stall_count = 0
+        self.stall_last_said = 0.0
         self._states: Any = None        # this cycle's chain read, for the stall guard
 
         self.teleop: Any = None

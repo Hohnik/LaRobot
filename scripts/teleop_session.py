@@ -143,6 +143,7 @@ from teleop import (  # noqa: E402
 )
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
+    SAFE_MAX_LAG,
     SAFE_MAX_SPEED,
     ThermalGuard,
     advance_park_command,
@@ -794,6 +795,17 @@ def main() -> int:  # noqa: PLR0915
                          f"⚠️ It binds BELOW --max-speed, so raising --max-speed alone leaves "
                          f"teleop exactly as fast as it was — which is why raising it felt "
                          f"like nothing happened (FINDINGS §37.0). Raise both to go faster")
+    ap.add_argument("--max-lag", type=float, default=SAFE_MAX_LAG,
+                    help=f"how far the command may run ahead of the MEASURED pose, in radians "
+                         f"(default {SAFE_MAX_LAG}). ⛔⭐ THIS IS THE LIMIT THAT ACTUALLY CAPS "
+                         f"TRACKING, and it had no flag until 2026-08-15. A MIRROR follower "
+                         f"cannot be pulled closer by more --max-speed, because the command is "
+                         f"clipped to this distance from where the arm already is "
+                         f"(FINDINGS §57.3). ⚠️ IT IS ALSO A TORQUE LIMIT: the motor's push is "
+                         f"kp × (command − measured), so raising this makes the arm push harder "
+                         f"to catch up. That is how you get faster tracking AND how you get a "
+                         f"harder hit. Raise it in small steps (0.25 → 0.35) and watch what the "
+                         f"arm does when it meets something")
     ap.add_argument("--mirror-gap", type=float, default=DEFAULT_MAX_GAP,
                     help=f"how far the MIRROR follower may fall behind the leader before the "
                          f"link stops, in radians (default {DEFAULT_MAX_GAP}). ⚠️ A TOLERANCE "
@@ -1051,8 +1063,9 @@ def main() -> int:  # noqa: PLR0915
     print(f"  joint speed : teleop {min(args.teleop_speed, args.max_speed):.2f} · "
           f"planned {min(args.teleop_speed, args.max_speed):.2f} · "
           f"mirror {args.max_speed:.2f} rad/s{note}")
+    lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
     print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
-          f"the command within 0.25 rad of the measured pose)")
+          f"the command within {args.max_lag:.2f} rad of the measured pose{lag_note})")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
 
@@ -1171,7 +1184,7 @@ def main() -> int:  # noqa: PLR0915
                   "starts the control loop …")
             robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
                                       with_gripper=not args.no_gripper,
-                                      max_speed=args.max_speed)
+                                      max_speed=args.max_speed, max_lag=args.max_lag)
             print(f"  {note}\n")
 
             arm = ArmSession(robot, name=name, frame=start_frame,
@@ -1586,13 +1599,35 @@ def main() -> int:  # noqa: PLR0915
                             elif loop_start - one.stall_since > GRIPPER_STALL_SECONDS:
                                 measured_jaw = float(np.asarray(
                                     one.robot.get_joint_pos(), dtype=float)[N_ARM])
-                                print(f"\n⚠️  ARM {one.name} GRIPPER STALLED "
-                                      f"({jaw.eff:+.2f} Nm, not moving) — releasing it to "
-                                      f"{measured_jaw:.3f} so it stops pushing.\n")
                                 one.gripper_value = measured_jaw
                                 one.stall_since = None
+                                one.stall_count += 1
+                                # ⛔⭐ SAID ONCE, THEN AT MOST EVERY FIVE SECONDS WITH A COUNT.
+                                # The release happens every time; only the printing is rationed.
+                                # In MIRROR the follower's jaw command is the leader's measured
+                                # jaw, re-sent every cycle, so squeezing the leader while the
+                                # follower holds an object fires this every 0.4 s indefinitely.
+                                # Twenty identical lines is how a real warning becomes noise.
+                                if (one.stall_count == 1
+                                        or loop_start - one.stall_last_said > 5.0):
+                                    one.stall_last_said = loop_start
+                                    extra = ("" if one.stall_count == 1 else
+                                             f" ({one.stall_count} times now)")
+                                    print(f"\n⚠️  ARM {one.name} GRIPPER STALLED{extra} "
+                                          f"({jaw.eff:+.2f} Nm, not moving) — released to "
+                                          f"{measured_jaw:.3f} so it stops pushing.")
+                                    if one.stall_count > 1:
+                                        print("     Something is holding the jaws and the "
+                                              "command keeps pushing past it. In MIRROR that "
+                                              "is the leader's jaws being squeezed while the "
+                                              "follower already has hold of something.\n")
+                                    else:
+                                        print()
                         else:
                             one.stall_since = None
+                            # ⭐ Reset the streak once the jaws are free again, so the count
+                            # means "in a row" rather than "since the session began".
+                            one.stall_count = 0
 
                     if verdict.warning:
                         detail = f"  ({read_error})" if read_error else ""
