@@ -67,6 +67,9 @@ MOVED_SO_FAR = [
     # ⭐ Step 2 plumbing 7/8: the last chain read, per arm, kept for the incident record —
     # a fresh read on a dead chain raises, so the last good one is what describes a failure.
     "states", "temps",
+    # ⭐ This cycle's puck deflection. It was a session local read from ONE reader, which
+    # with two arms would drive both arms from one hand.
+    "raw_axes",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and
@@ -323,7 +326,62 @@ def run(moved: list[str]) -> int:
         print(f"✓ every call to the {len(helpers)} per-arm helper(s) passes an arm: "
               f"{', '.join(sorted(helpers))}")
 
-    # 6. Retired session-level names stay retired.
+    # 6. ⛔⭐⭐ THE LOOP VARIABLE MUST NOT LEAK OUT OF ITS LOOP.
+    #
+    # Python leaves a `for` variable bound after the loop ends, so `one.robot` written
+    # BELOW a `for one in arms:` block still runs — using whichever arm the loop happened to
+    # finish on. **With one arm that is always the right arm, so it works perfectly and
+    # proves nothing.** With two it silently reads arm G while the surrounding code is about
+    # arm B.
+    #
+    # ⛔ This check exists because it happened. A `robot` → `one.robot` rewrite bounded by
+    # line numbers ran past the end of the loop it was meant for, and three session-level
+    # lines came out reading a leaked variable: the recording sampler, the button-driven
+    # gripper, and the save-pose handler. Nothing failed, no test caught it, and a dry run
+    # never reaches those lines. FINDINGS §54.1.
+    #
+    # ⚠️ Tuple targets count: `for i, one in enumerate(arms)` binds `one` exactly as much as
+    # `for one in arms`. So does `lambda one=one:`, which the incident record uses to pin the
+    # loop value. The first version of this check knew neither and cried wolf on both.
+    def binds_one(target: ast.expr) -> bool:
+        if isinstance(target, ast.Name):
+            return target.id == "one"
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return any(binds_one(e) for e in target.elts)
+        return False
+
+    regions: list[tuple[int, int]] = []
+    for node in ast.walk(fn):
+        # ⚠️ `ast.walk` yields nodes with no position at all (`ast.arguments`, `ast.Load`),
+        # so the span is computed only for the kinds below rather than up front.
+        if not hasattr(node, "lineno"):
+            continue
+        span = (node.lineno, getattr(node, "end_lineno", None) or node.lineno)
+        if isinstance(node, ast.For) and binds_one(node.target):
+            regions.append(span)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(x.arg == "one" for x in node.args.args):
+                regions.append(span)
+        elif isinstance(node, (ast.ListComp, ast.GeneratorExp, ast.DictComp, ast.SetComp)):
+            if any(binds_one(g.target) for g in node.generators):
+                regions.append(span)
+        elif isinstance(node, ast.Lambda) and any(x.arg == "one" for x in node.args.args):
+            regions.append(span)
+
+    leaked = sorted({n.lineno for n in ast.walk(fn)
+                     if isinstance(n, ast.Name) and n.id == "one"
+                     and not any(a <= n.lineno <= b for a, b in regions)})
+    if leaked:
+        faults += len(leaked)
+        print(f"⛔ {len(leaked)} use(s) of the loop variable `one` OUTSIDE any loop that "
+              "binds it:")
+        for lineno in leaked:
+            print(f"     line {lineno}: reads whichever arm the last loop ended on")
+        print("   ⚠️ With ONE arm that is the right arm, so it works and proves nothing.")
+    else:
+        print(f"✓ `one` never leaks: {len(regions)} region(s) bind it, every use is inside one")
+
+    # 7. Retired session-level names stay retired.
     back = sorted({(n.lineno, n.id) for n in ast.walk(fn)
                    if isinstance(n, ast.Name) and n.id in RETIRED_LOCALS})
     if back:
@@ -336,7 +394,7 @@ def run(moved: list[str]) -> int:
         print(f"✓ retired session-level name(s) have not come back: "
               f"{', '.join(RETIRED_LOCALS)}")
 
-    # 7. Progress, so the series has a visible finish line.
+    # 8. Progress, so the series has a visible finish line.
     remaining = {}
     for node in ast.walk(fn):
         if isinstance(node, ast.Name) and node.id in STILL_TO_MOVE:

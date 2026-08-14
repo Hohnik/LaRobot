@@ -371,6 +371,11 @@ class ArmSession:
         # its own dict of handles for teardown. Two references to one object, not two
         # copies of state.
         self.reader = reader
+        # ⭐ THIS CYCLE'S PUCK DEFLECTION, six axes in [-1, 1], read once per cycle and used
+        # by the mode action and by the CONTROLS readout. Per arm because the reader is: two
+        # arms are two different hands, and one session-level copy would drive both arms from
+        # whichever puck happened to be read last.
+        self.raw_axes: list[float] = [0.0] * 6
 
         # ⭐⭐ WHAT THE CONTROLS WIZARD REMEMBERS ABOUT *THIS* PUCK, and it is per arm for
         # the same reason the reader is: two pucks have two "controls you just used".

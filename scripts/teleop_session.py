@@ -1428,7 +1428,7 @@ def main() -> int:  # noqa: PLR0915
                     if pending == "save":
                         pending = None
                         if k.isdigit():
-                            q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+                            q = np.asarray(arm.robot.get_joint_pos(), dtype=float)
                             name = BASE_SLOT if k == "0" else k
                             data = with_park_slot(load_json(PARK_FILE, {}), arm.name,
                                                   name, q.tolist())
@@ -2106,6 +2106,13 @@ def main() -> int:  # noqa: PLR0915
                 # ⚠️ It records the MEASURED position. For a hand-guided demonstration that
                 # is the only thing that means anything: in GUIDE the position gain is zero,
                 # so there is no command to record, and the arm is wherever the hand put it.
+                #
+                # ⚠️ `arms[0]`, SPELLED OUT. The recorder is session-level and records ONE arm
+                # today, and a leaked loop variable here read whichever arm the previous loop
+                # ended on (FINDINGS §54.1). `w` refuses when more than one arm is connected,
+                # so naming the first arm is honest rather than arbitrary. The two-arm
+                # recorder is ROADMAP §8.2 item 7.
+                rec_arm = arms[0]
                 if take is not None:
                     # ⛔⭐ A RECORDING PROBLEM MUST NEVER TAKE DOWN THE SESSION, and this
                     # wrapper is the whole reason the block exists. `append` raises on a
@@ -2117,7 +2124,7 @@ def main() -> int:  # noqa: PLR0915
                     # recording is a convenience feature: it has no business being able to
                     # release the arm.
                     try:
-                        take.append(t - take_t0, one.robot.get_joint_pos())
+                        take.append(t - take_t0, rec_arm.robot.get_joint_pos())
                         # ⛔⭐ RECORD EVERY MODE THE RECORDING PASSED THROUGH, not only the
                         # one it started in. Julien's recording of 2026-08-13 17:21 was
                         # stamped `method: live:hold` because he pressed `w` while in HOLD
@@ -2126,8 +2133,8 @@ def main() -> int:  # noqa: PLR0915
                         # thing ROADMAP §6.6 says matters most about a recording. A dataset
                         # that mislabels how a demonstration was produced is worse than one
                         # that omits it. FINDINGS §35.4.
-                        if arm.mode not in take_modes:
-                            take_modes.append(arm.mode)
+                        if rec_arm.mode not in take_modes:
+                            take_modes.append(rec_arm.mode)
                     except Exception as exc:  # noqa: BLE001
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")
@@ -2154,42 +2161,50 @@ def main() -> int:  # noqa: PLR0915
                 # on the next mode switch. Reading unconditionally costs nothing —
                 # TwistReader.read() is non-blocking by construction — and it is what
                 # makes button assignment work from wherever Julien happens to be.
-                raw_axes = arm.reader.read()
-                buttons = getattr(arm.reader, "buttons", 0)
-                pressed = buttons & ~arm.buttons_prev              # rising edge only
-                arm.buttons_prev = buttons
+                # ⭐⭐ EVERY ARM READS ITS OWN PUCK, EVERY CYCLE, IN EVERY MODE.
+                #
+                # ⛔ This whole block used to read `arm.reader` once, outside any loop.
+                # With two arms that reads ONE hand and hands its deflection to both
+                # arms — and the leaked loop variable at the bottom of it made the
+                # gripper follow whichever arm the previous loop ended on
+                # (FINDINGS §54.1).
+                for one in arms:
+                    one.raw_axes = one.reader.read()
+                    buttons = getattr(one.reader, "buttons", 0)
+                    pressed = buttons & ~one.buttons_prev              # rising edge only
+                    one.buttons_prev = buttons
 
-                if arm.learn_button is not None and pressed:
-                    warn = arm.axis_map.learn_button(arm.learn_button, pressed)
-                    if warn:
-                        print(f"\n  ⚠️  {warn}\n")
-                    elif arm.learn_button == "open":
-                        arm.learn_button = "close"
-                        print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
-                        print("   Now press the button you want for CLOSE …\n")
-                    else:
-                        arm.learn_button = None
-                        print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
-                        print(arm.axis_map.buttons_row())
-                        print("   (f swaps them if they are the wrong way round)\n")
-                elif pressed:
-                    # A press counts as "the control you just used", so f reverses it.
-                    # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
-                    # a button never rebinds anything.
-                    arm.last_input_kind = "button"
-                    if arm.axis_map.button_action(pressed) is None:
-                        print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
-                              f"gripper buttons (works in any mode)\n")
-                    elif arm.mode not in ("teleop", "map"):
-                        print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
-                              f"you are in {arm.mode.upper()}\n")
+                    if one.learn_button is not None and pressed:
+                        warn = one.axis_map.learn_button(one.learn_button, pressed)
+                        if warn:
+                            print(f"\n  ⚠️  {warn}\n")
+                        elif one.learn_button == "open":
+                            one.learn_button = "close"
+                            print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
+                            print("   Now press the button you want for CLOSE …\n")
+                        else:
+                            one.learn_button = None
+                            print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
+                            print(one.axis_map.buttons_row())
+                            print("   (f swaps them if they are the wrong way round)\n")
+                    elif pressed:
+                        # A press counts as "the control you just used", so f reverses it.
+                        # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
+                        # a button never rebinds anything.
+                        one.last_input_kind = "button"
+                        if one.axis_map.button_action(pressed) is None:
+                            print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
+                                  f"gripper buttons (works in any mode)\n")
+                        elif one.mode not in ("teleop", "map"):
+                            print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
+                                  f"you are in {one.mode.upper()}\n")
 
-                if arm.learn_button is None and one.robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
-                    action = arm.axis_map.button_action(buttons)
-                    if action == "open":
-                        arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
-                    elif action == "close":
-                        arm.gripper_value = clamp_gripper(arm.gripper_value - GRIPPER_BUTTON_RATE * dt)
+                    if one.learn_button is None and one.robot.num_dofs() > N_ARM and one.mode in ("teleop", "map"):
+                        action = one.axis_map.button_action(buttons)
+                        if action == "open":
+                            one.gripper_value = clamp_gripper(one.gripper_value + GRIPPER_BUTTON_RATE * dt)
+                        elif action == "close":
+                            one.gripper_value = clamp_gripper(one.gripper_value - GRIPPER_BUTTON_RATE * dt)
 
                 # ⭐⭐ EVERY ARM ACTS ON ITS OWN MODE, in `--arms` order. ROADMAP §6.1.
                 #
@@ -2214,15 +2229,15 @@ def main() -> int:  # noqa: PLR0915
                             # ⛔ Note what is NOT here: any call that edits the map. Deflection
                             # observes; keys edit. The mode this replaced bound on deflection
                             # and destroyed the hand-dialled map (FINDINGS §11).
-                            keep, value = isolate(raw_axes, one.last_active_axis)
+                            keep, value = isolate(one.raw_axes, one.last_active_axis)
                             if keep is not None:
                                 one.last_active_axis, one.last_active_value = keep, value
                                 one.last_input_kind = "axis"
-                            drive_axes = isolated_axes(raw_axes, keep)
+                            drive_axes = isolated_axes(one.raw_axes, keep)
                             scale_l = args.linear_scale * CONTROLS_SCALE
                             scale_a = angular_scale * CONTROLS_SCALE
                         else:
-                            drive_axes = raw_axes
+                            drive_axes = one.raw_axes
                             scale_l, scale_a = args.linear_scale, angular_scale
 
                         axes = one.axis_map.apply(drive_axes)
@@ -2540,14 +2555,14 @@ def main() -> int:  # noqa: PLR0915
                               f"rot {np.degrees(angular_scale * CONTROLS_SCALE):.0f}°/s"
                               f"{'' if rotation else ' (OFF)'}")
                     if arm.last_active_axis is None:
-                        print(f"\r[CONTROLS] push the puck …  {axes_readout(raw_axes)}  {speeds}   ",
+                        print(f"\r[CONTROLS] push the puck …  {axes_readout(arm.raw_axes)}  {speeds}   ",
                               end="", flush=True)
                     else:
                         drv = arm.axis_map.motion_driven_by(arm.last_active_axis)
                         if drv is None:
                             doing = "→ nothing (press 1-6 to assign)"
                         else:
-                            v = arm.axis_map.apply(isolated_axes(raw_axes, arm.last_active_axis))[drv]
+                            v = arm.axis_map.apply(isolated_axes(arm.raw_axes, arm.last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
                                     else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
                             doing = f"→ {motions_for(arm.frame)[drv]['short']} {unit}"
