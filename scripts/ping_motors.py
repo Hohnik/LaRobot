@@ -74,8 +74,27 @@ from yam_can import (  # noqa: E402
     do_not_clear_motor_faults,
     open_motor_interface,
 )
+from yam_robot import load_gripper_limits, reconcile_gripper_limits  # noqa: E402
 
 DEFAULT_IDS = [1, 2, 3, 4, 5, 6, 7]  # 6 arm joints + gripper
+GRIPPER_ID = 7
+
+# ⭐ The smallest non-zero value each reading can take, so a tiny number is not
+# misread as motion. `uint_to_float(k, -M, M, 12)` is `M*(2k-4095)/4095`, and
+# `2k-4095` is always odd — so there is no code for exactly zero, and a motor at
+# rest reports ±M/4095. Position is 16-bit, so its step is 25/65535.
+#
+#   DM4340 (joints 1-3):  velocity ±0.002442 rad/s   torque ±0.006838 Nm
+#   DM4310 (joints 4-7):  velocity ±0.007326 rad/s   torque ±0.002442 Nm
+#   both:                 position   0.000381 rad
+#
+# ⚠️ Note the collision: DM4340's velocity step and DM4310's torque step are the
+# same number, 0.002442, because VELOCITY_MAX is 10 on one and TORQUE_MAX is 10 on
+# the other. Do not read one for the other. FINDINGS §40.2.
+REST_STEP = {
+    "DM4340": {"vel": 10 / 4095, "trq": 28 / 4095},
+    "DM4310": {"vel": 30 / 4095, "trq": 10 / 4095},
+}
 
 
 def describe(info: object) -> str:
@@ -104,6 +123,58 @@ def describe(info: object) -> str:
         f"T_mos={g('temperature_mos', '{:.0f}'):>3}°C  T_rot={g('temperature_rotor', '{:.0f}'):>3}°C  "
         f"err={err_txt}"
     )
+
+
+def gripper_frame_report(arm: str, raw_pos: float) -> list[str]:
+    """Say whether the saved jaw limits still describe the frame the jaws are in.
+
+    ⛔⭐ WHY THIS IS PRINTED BY THE CHEAPEST HEALTH CHECK IN THE REPO.
+
+    `get_yam_robot()` applies a ±2π wrap correction at every construction, picked
+    from wherever the gripper motor happens to be sitting at that instant. The
+    saved limits were measured in whatever frame applied that day. When the two
+    disagree, the gripper is force-clipped into a range it is not in and held
+    against a mechanical stop — 43 °C to 65 °C in five seconds. **Motor 7 was
+    cooked three times before `reconcile_gripper_limits()` existed.**
+
+    ⛔ This is not hypothetical and it is not historical. On 2026-08-13 at 18:00
+    arm G's motor 7 read `-3.3343` and needed **no** shift. On 2026-08-14 at 09:45
+    it read `+3.0982` and needed **+2π**. Nothing was recalibrated in between and
+    the jaws moved about 0.15 rad. **Two documents had recorded "G needs no shift"
+    as though it were a property of arm G.** It is a property of where the jaws sat
+    when the robot was last built. See FINDINGS §40.
+
+    So the frame is reported every ping, rather than being something you find out
+    about when a motor gets hot.
+    """
+    limits = load_gripper_limits(arm)
+    if limits is None:
+        return [f"    ⚠️  no saved jaw limits for arm {arm} — run scripts/calibrate_gripper.py"]
+
+    shifted = reconcile_gripper_limits(limits, raw_pos)
+    if shifted is None:
+        return [
+            f"    ⛔ THE SAVED JAW LIMITS DO NOT BRACKET THIS POSITION, in any 2π frame.",
+            f"       saved {limits}, measured {raw_pos:+.4f} rad.",
+            "       ⛔ DO NOT START A SESSION. The gripper would be clipped into a range it is",
+            "          not in and held against a stop. Re-run scripts/calibrate_gripper.py.",
+        ]
+
+    shift = shifted[0] - limits[0]
+    name = "none" if abs(shift) < 1e-6 else ("+2π" if shift > 0 else "−2π")
+    closed, opened = shifted[0], shifted[1]  # the SDK's order is [closed, open]
+    frac = (raw_pos - closed) / (opened - closed)
+    lines = [
+        f"    ✓ jaw limits reconcile with a shift of {name}: "
+        f"closed {closed:+.4f} → open {opened:+.4f} rad",
+        f"      jaws are {frac * 100:.1f}% open (0% = closed onto themselves, 100% = fully open)",
+    ]
+    if frac < 0.10:
+        lines.append(
+            f"      ⚠️  only {frac * 100:.1f}% of closing travel left. Harmless, and it looks like a"
+            " fault if unexpected."
+        )
+    return lines
 
 
 def main() -> int:
@@ -157,6 +228,7 @@ def main() -> int:
     alive: list[int] = []
     enabled: list[int] = []
     faulted: list[tuple[int, int | None]] = []
+    at_rest: list[tuple[int, str, float]] = []
 
     def ping_one(motor_id: int) -> None:
         """Enable one motor for a frame, report what it said, disable it again."""
@@ -165,6 +237,14 @@ def main() -> int:
             enabled.append(motor_id)
             alive.append(motor_id)
             print(f"  ✓ motor {motor_id} ({types[motor_id]}): {describe(info)}")
+            vel = getattr(info, "velocity", None)
+            if vel is not None:
+                at_rest.append((motor_id, types[motor_id], float(vel)))
+            if motor_id == GRIPPER_ID:
+                pos = getattr(info, "position", None)
+                if pos is not None:
+                    for line in gripper_frame_report(args.arm, float(pos)):
+                        print(line)
         except MotorFaultNotCleared as fault:
             # ⛔ NOT a communication failure. The motor answered, and what it said
             # was "I am in a fault". This is the branch that used to be invisible:
@@ -210,6 +290,28 @@ def main() -> int:
         return 1
     if len(alive) < len(args.ids):
         print(f"missing: {[i for i in args.ids if i not in alive]}")
+
+    if at_rest:
+        # ⭐ Report motion in COUNTS, not rad/s. "0.0220 rad/s" reads like drift and is
+        # three quantisation steps from the zero code, i.e. the arm is standing still.
+        moving = []
+        for motor_id, mtype, vel in at_rest:
+            counts = abs(vel) / REST_STEP.get(mtype, REST_STEP["DM4310"])["vel"]
+            if counts > 5:
+                moving.append((motor_id, vel, counts))
+        if moving:
+            print("\n⚠️  these motors are NOT at rest:")
+            for motor_id, vel, counts in moving:
+                print(f"   motor {motor_id}: {vel:+.4f} rad/s = {counts:.0f} quantisation steps from zero")
+            print("   Something is moving or pushing the arm. Expected at rest: 1 to 3 steps.")
+        else:
+            worst = max(
+                abs(v) / REST_STEP.get(t, REST_STEP["DM4310"])["vel"] for _, t, v in at_rest
+            )
+            print(
+                f"✓ every motor is at rest — worst velocity is {worst:.0f} quantisation "
+                "step(s) from the zero code, which is the smallest number the encoder can report."
+            )
 
     if faulted:
         print(f"\n⛔ {len(faulted)} motor(s) are holding a LATCHED FAULT, and it was NOT cleared:")

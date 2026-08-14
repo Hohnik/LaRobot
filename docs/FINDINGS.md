@@ -2286,3 +2286,61 @@ if int(motor_info.error_code, 16) != MotorErrorCode.normal:
 ⭐ **Third instance of the same shape in two days.** [§36.5](FINDINGS.md): `ArmSession` carried a dead `stall_since` variable that made a missing gripper stall guard look present. [§38.3](FINDINGS.md): a verdict that reported "nothing changed" when nothing had been compared. **A guard, a variable and a message, each describing something that was not there.** The defence that has actually worked all three times is a test that asserts the guard can *fail*, rather than one that asserts it passes.
 
 **384 → 396 headless tests.**
+
+---
+
+## 40. ⛔⭐⭐ THE ±2π GRIPPER SHIFT IS NOT A PROPERTY OF AN ARM, AND ARM G FLIPPED OVERNIGHT — 2026-08-14, 09:45
+
+> Read from Julien's own ping output rather than from a new experiment. He ran `ping_motors.py` on both arms; six of the fourteen readings say something, and one of them contradicts two documents.
+
+### 40.0 ⛔⭐⭐ ARM G'S GRIPPER FRAME MOVED A FULL TURN BETWEEN TWO SESSIONS
+
+| when | arm G motor 7 raw | shift needed | jaws |
+|---|---|---|---|
+| 2026-08-13 18:00 ([§36.0](FINDINGS.md)) | `-3.3343` | **none** | 66.5% open |
+| 2026-08-14 09:45 | **`+3.0982`** | **+2π** | 63.6% open |
+
+**Nothing was recalibrated in between.** The raw reading changed by **6.4325 rad**, which is 2π of encoder frame plus about 0.15 rad of actual jaw movement. ⭐ **A 6.43 rad physical move is impossible: the whole stroke is 5.228 rad.** So the frame moved and the jaws barely did.
+
+⛔⭐ **Two documents recorded "G needs no shift" as though it described arm G.** [HANDOFF §4.5](HANDOFF.md)'s health-check table and its session-21 log row both say it. **It describes where the jaws sat when the robot was last built, and `get_yam_robot()` picks the wrap correction from exactly that.** Both are corrected, and the table now carries the command that re-derives it. **Eighth instance of the [§33.3](FINDINGS.md) staleness pattern, and the first one about a safety mechanism.**
+
+✅ **Nothing is broken and no recalibration is needed.** `reconcile_gripper_limits()` found the `+2π` frame, and it is the *only* one that brackets `+3.0982`, so the answer is unambiguous. Arm B is unchanged: `+0.0154` today against `+0.0158` yesterday, both needing `−2π`, both giving 3.5% open.
+
+⭐ **This is the mechanism that cooked motor 7 three times, demonstrating itself live and being handled correctly.** That is the best possible outcome for a guard, and it is the first time the guard has been observed doing its job on a frame that actually changed.
+
+### 40.1 ✅⭐ `ping_motors.py` NOW PRINTS THE FRAME, AND `reconcile_gripper_limits()` FINALLY HAS TESTS
+
+⛔ **The function had no tests at all.** It is the fix for the worst bug of 2026-08-10, its failure mode is a destroyed motor, and nothing checked it. **That is the fourth instance of [§39.4](FINDINGS.md)'s pattern**, a safety guard with nothing asserting it can fail. `scripts/test_gripper_frame.py`, 14 tests, now covers it, including both arms on both days as regression data.
+
+⭐⭐ **The invariant that makes the answer trustworthy, and it is not free.** The function tries shifts `0`, `+2π`, `−2π` and returns the **first** that brackets the position. That is only safe if at most one ever can. Each shifted band is `stroke + 2 × margin` wide and consecutive bands sit 2π apart, so they stay disjoint while `stroke + 2 × margin < 2π`:
+
+    5.250 + 0.6 = 5.85  <  6.283      leaving 0.43 rad of headroom
+
+⚠️ **A longer-stroke gripper, or a larger margin, would make two frames overlap and the function would silently return whichever it tried first.** A test now asserts this and fires if that day comes.
+
+⚠️ **And one thing that reads as stronger evidence than it is: "the limits reconciled" is a weak statement.** Sampling the whole circle, only about **7%** of positions fail to reconcile, because the bands cover 5.85 rad out of every 6.283. **So a successful reconciliation means the frame arithmetic worked. It does not mean the calibration is still good.** It is a frame check and nothing more. *(Found by writing a test with a "clearly stale" value that turned out to reconcile perfectly well.)*
+
+### 40.2 ⭐ EVERY RESTING READING IS A QUANTISATION STEP, WHICH IS WHY 0.0220 rad/s IS NOT DRIFT
+
+`uint_to_float(k, -M, M, 12)` is `M × (2k − 4095) / 4095`, and `2k − 4095` is **always odd**. **So there is no code for exactly zero**, and a motor at rest reports `±M/4095`:
+
+| | velocity step | torque step | position step |
+|---|---|---|---|
+| **DM4340** (joints 1-3) | 0.002442 rad/s | 0.006838 Nm | 0.000381 rad |
+| **DM4310** (joints 4-7) | 0.007326 rad/s | 0.002442 Nm | 0.000381 rad |
+
+✅ **All 28 velocity and torque readings in Julien's output are exact odd multiples of the right step for their motor type.** The largest, `0.0220 rad/s`, is **three steps** from the zero code. **Both arms were standing still.** `ping_motors.py` now says so in steps rather than in rad/s, because a number like 0.0220 reads like drift and is not.
+
+⚠️⚠️ **A collision worth knowing: DM4340's velocity step and DM4310's torque step are the same number, 0.002442**, because `VELOCITY_MAX` is 10 on one and `TORQUE_MAX` is 10 on the other. Do not read one for the other.
+
+⛔ **A tempting idea that does NOT work, recorded so nobody spends an hour on it.** It looks as though the quantisation step could probe the stored `VMAX`/`TMAX` limits that [§38.1](FINDINGS.md) says are unverifiable. **It cannot.** At rest the motor emits the integer code nearest zero *whatever* its own stored limit is, so the decoded value depends only on the constant the SDK assumes. **A near-zero reading is scale-invariant, exactly as [§38.1](FINDINGS.md) already said.** Only a known non-zero physical quantity can probe it.
+
+⚠️ **A second tempting idea, also weaker than it looks: using the step as a fingerprint to verify the motor-type map.** The torque step *does* discriminate cleanly, because 28 and 10 are not in an integer ratio, while velocity does not, because 30 and 10 are (an odd multiple of 30/4095 is also an odd multiple of 10/4095). All 14 motors are pinned to one type by torque. ⛔ **But the pinned type is simply the type the SDK used to decode, which `YAM_MOTOR_TYPES` chose — so pinning it proves nothing about the map.** The independent check on the map is the `gear_ratio` register, which `identify_arm.py` already reads. **Building a "type check" on the quantisation would be a guard describing something that is not there, which is the pattern of [§39.4](FINDINGS.md).** Not built, on purpose.
+
+### 40.3 ✅ WHAT THE PING CONFIRMED, INCLUDING THE FIX FROM AN HOUR EARLIER
+
+- **All 14 motors answer, every error code `0x1`, temperatures 29-34 °C** against a 55 °C warning. Slightly cooler than yesterday's 31-35.
+- ⭐⭐ **"No motor is holding a fault" is a trustworthy statement for the first time.** [§39.1](FINDINGS.md)'s fix landed an hour before this run, so error clearing was **off** and a latched fault would have been reported instead of erased. **Under the old code the same line would have been printed either way.**
+- ⚠️ **The LED observation was not recorded.** Julien ran the ping before reporting on the lights, so the chance to see them in their pre-ping state is gone for this occasion. **It cost nothing this time, because the ping proves there was no fault to see.** The manual's table ([§39.0](FINDINGS.md)) is still unconfirmed against this actual hardware, which is a one-glance job whenever the arms are idle and powered.
+
+**396 → 410 headless tests.**

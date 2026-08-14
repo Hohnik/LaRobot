@@ -33,6 +33,39 @@ from recording import Trajectory  # noqa: E402
 #: data, so this threshold is not delicate.
 PADDING_S = 1.0
 
+#: A recording labelled HOLD should barely move. The measured wobble floor of a held
+#: arm is 0.032-0.038 rad/s ([FINDINGS §33.1](../docs/FINDINGS.md)) and hand-guiding
+#: reaches 2.4-3.7. 0.5 sits far above the first and far below the second, so this is
+#: not a delicate threshold.
+HOLD_SPEED_S = 0.5
+
+
+def label_verdict(method: str, modes: list[str] | None, peak_speed: float) -> tuple[str, str | None]:
+    """Judge a recording's provenance label against what the recording actually did.
+
+    Returns ``(text_to_show, fault)`` where ``fault`` is ``None``, ``"mismatch"`` or
+    ``"implausible"``.
+
+    ⛔ Two different defects are being caught, and they are not the same one.
+
+    **mismatch** — the file carries several ``modes`` while ``method`` names only one.
+    That is the [FINDINGS §35.4](../docs/FINDINGS.md) fix having failed to apply.
+
+    **implausible** — ``method`` says HOLD only, and the arm moved at hand-guiding
+    speed. HOLD commands the arm to stay where it is, against a position gain of 80
+    on the shoulder, so the label describes something that did not happen. ⚠️ Called
+    implausible rather than impossible: a hard enough shove does move a held arm.
+
+    ⭐ This is a pure function so it can be tested. The rule lived inline first, and
+    inline safety logic is what this repo keeps having to re-derive.
+    """
+    text = method
+    if modes and len(modes) > 1 and "+" not in method:
+        return f"{text}  ⛔ but modes={modes}", "mismatch"
+    if method == "live:hold" and peak_speed > HOLD_SPEED_S:
+        return f"{text}  ⛔ implausible", "implausible"
+    return text, None
+
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -49,8 +82,9 @@ def main() -> int:
         return 0
 
     print(f"{'file':>9} {'commit':>9} {'recorded':>17} {'dur':>7} {'padding':>9} "
-          f"{'share':>6} {'peak p99':>9}")
-    padded = []
+          f"{'share':>6} {'peak p99':>9}  {'how it was made':<22}")
+    padded: list[str] = []
+    contradictory: list[str] = []
     for path in files:
         try:
             traj = Trajectory.load(path)
@@ -62,12 +96,41 @@ def main() -> int:
         flag = "  ⛔" if pad > PADDING_S else ""
         if pad > PADDING_S:
             padded.append(path.name)
+        # ⭐ `method` is shown because the defect in FINDINGS §35.4 was found by
+        # reading a saved file rather than the screen: a movement hand-guided in
+        # GUIDE was stamped `live:hold`, because the label was written at the
+        # keypress and the mode changed afterwards. The fix collects every mode
+        # the recording passed through, so a run started in HOLD and guided reads
+        # `live:hold+guide`. **This column is how you check that fix**, and reading
+        # it from the file is the same route that caught the original.
+        method, fault = label_verdict(
+            str(traj.meta.get("method", "?")), traj.meta.get("modes"), traj.joint_speed(99)
+        )
+        if fault:
+            contradictory.append(path.name)
         print(f"{path.name:>9} {str(traj.meta.get('commit', '?')):>9} "
               f"{str(traj.meta.get('recorded_at', '?'))[:16]:>17} "
               f"{traj.duration:6.2f}s {pad:8.2f}s {share:5.1f}% "
-              f"{traj.joint_speed(99):8.2f}{flag}")
+              f"{traj.joint_speed(99):8.2f}{flag}  {method:<22}")
 
     print()
+    if contradictory:
+        print(f"⛔ {len(contradictory)} file(s) are labelled `live:hold` yet moved faster than "
+              f"{HOLD_SPEED_S} rad/s: {', '.join(contradictory)}.")
+        print("   HOLD commands the arm to stay put, so that label and that speed disagree.")
+        print("   The known cause is the FINDINGS §35.4 defect: `method` was written when the")
+        print("   recording started and the mode was changed afterwards, so a movement guided")
+        print("   by hand came out stamped as HOLD. The data is fine; the label is not.")
+        print()
+
+    pre_fix = [p.name for p in files
+               if not (Trajectory.load(p).meta.get("modes"))]
+    if pre_fix:
+        print(f"⚠️ {len(pre_fix)} file(s) carry no `modes` field: {', '.join(pre_fix)}.")
+        print("   Those were recorded before the FINDINGS §35.4 provenance fix, so their")
+        print("   `method` names only the mode the recording STARTED in. Not a fault in the")
+        print("   data, and it does mean the label cannot be trusted for those files.")
+        print()
     if padded:
         print(f"⛔ {len(padded)} of {len(files)} carry more than {PADDING_S:.1f}s of "
               f"padding: {', '.join(padded)}")

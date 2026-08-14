@@ -19,6 +19,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
+sys.path.insert(0, str(REPO / "scripts"))
 
 from recording import (  # noqa: E402
     Sample, Trajectory, TrackingLog, replay_step, safe_time_scale,
@@ -587,6 +588,56 @@ def test_tracking_handles_a_shorter_measurement_than_the_target() -> None:
     assert log.cycles == 1
     assert log.rows()[6][1] == 0.0, "the joint with no measurement stays empty"
 
+
+
+# ── provenance labels, added 2026-08-14 (FINDINGS §40) ───────────────────────
+
+
+def test_a_label_naming_one_mode_while_modes_lists_several_is_a_mismatch() -> None:
+    """⛔ The FINDINGS §35.4 fix having failed to apply. `method` is stamped when the
+    recording starts; `modes` collects every mode it passed through."""
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    text, fault = label_verdict("live:hold", ["hold", "guide"], 2.4)
+    assert fault == "mismatch", (text, fault)
+    assert "modes=" in text
+
+
+def test_the_fixed_label_passes() -> None:
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    assert label_verdict("live:hold+guide", ["hold", "guide"], 2.4)[1] is None
+
+
+def test_hold_only_at_hand_guiding_speed_is_flagged_implausible() -> None:
+    """⭐ The cross-check that caught 3.json independently of §35.4's own account.
+    HOLD commands the arm to stay put against a position gain of 80, so a HOLD
+    recording that moved at 2.47 rad/s describes something that did not happen."""
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    assert label_verdict("live:hold", None, 2.47)[1] == "implausible"
+
+
+def test_hold_at_the_wobble_floor_is_NOT_flagged() -> None:
+    """⚠️ A held arm wobbles at 0.032-0.038 rad/s (FINDINGS §33.1). Flagging that
+    would make the check cry wolf on every legitimate HOLD recording."""
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    for speed in (0.0, 0.038, 0.4):
+        assert label_verdict("live:hold", None, speed)[1] is None, speed
+
+
+def test_guide_at_hand_guiding_speed_is_exactly_what_is_expected() -> None:
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    assert label_verdict("live:guide", None, 2.9)[1] is None
+
+
+def test_a_mismatch_is_reported_even_when_the_speed_looks_fine() -> None:
+    """The two faults are independent, and only one of them looks at speed."""
+    from check_recordings import label_verdict  # noqa: PLC0415
+
+    assert label_verdict("live:guide", ["guide", "teleop"], 0.1)[1] == "mismatch"
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())

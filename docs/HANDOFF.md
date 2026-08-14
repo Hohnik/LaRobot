@@ -73,15 +73,49 @@
 > uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
 > ```
 >
-> ⬜⬜ **4. One ordinary session on arm B. TWO things, not four, and both are genuinely unseen by any arm:**
+> ⬜⬜ **4. ONE SESSION ON ARM B — THE EXACT PROCEDURE, KEY BY KEY.** Julien asked on 2026-08-14 for this written so that nothing is unclear. **Two things are being tested and nothing else.** Desk clear, one hand near the mains plug (there is no e-stop, [§4.5](HANDOFF.md)).
 >
-> | what to do | what a pass looks like | what it proves |
+> **Start it. Note `--start-mode hold`, which is NOT the default:**
+>
+> ```bash
+> uv run scripts/teleop_session.py --yes --arm B --start-mode hold
+> ```
+>
+> ⚠️ **The default is `guide`, which makes the arm weightless the instant it starts.** `hold` is both safer and what test A needs, because the recording has to *begin* in HOLD.
+>
+> **TEST A — the provenance label. About one minute.**
+>
+> | # | press | what should happen |
 > |---|---|---|
-> | press `w` in **HOLD**, then `g`, guide the arm, `w` again, save | the saved file's `method` reads **`live:hold+guide`**, not `live:hold` | [FINDINGS §35.4](FINDINGS.md), the provenance fix. Found by reading a file rather than the screen, and fixed after the last hardware run |
-> | press `t` for TELEOP and drive until it stops | the status line shows **`box 0.28/0.30m`**, then **`⚠️ AT THE EDGE`** | [FINDINGS §37.5](FINDINGS.md) — almost certainly what stops him early, and it was invisible until last night |
-> | nothing | ⭐ **`ArmSession` is NOT wired in, so none of the 08-13 evening class work can show up on the arm.** If something feels different, it is not that | [ROADMAP §6.1](ROADMAP.md) |
+> | 1 | `w` | it prints `⏺ RECORDING — HOLD mode. Press w again to stop.` |
+> | 2 | `g` | GUIDE. **The arm goes weightless and you are now holding 4.3 kg.** |
+> | 3 | — | move the arm by hand for about five seconds |
+> | 4 | `w` | it prints `⏹ RECORDED x.xs, N samples …` then `SAVE to which slot? 0-9` |
+> | 5 | `2` | it prints `✓ recording 2 saved: …` ⭐ **Use slot 2. It is empty.** Slots 1, 3, 4, 5 and 6 all hold files, `recordings/` is gitignored, and a slot has been overwritten four times already ([§34.7](FINDINGS.md), [§35.7](FINDINGS.md)) |
+> | 6 | `h` | back to HOLD, so the arm is held while you read the screen |
 >
-> ⭐ **What the box readout settles, and it is the most useful thing this session can buy.** If it reads **`0.30/0.30m`** at the moment the arm stops, the workspace box is the answer, and the next decision is which of the three fixes in [FINDINGS §37.5](FINDINGS.md) to take. If it reads something like **`0.12/0.30m`** and the arm still refuses to move, the cause is a joint limit or the IK instead, and the `⚠️ STUCK lead` warning on the same line says which.
+> **Then quit the session (`q` then `p` then `d`) and run this:**
+>
+> ```bash
+> uv run scripts/check_recordings.py
+> ```
+>
+> ✅ **A pass is `2.json` showing `live:hold+guide` in the "how it was made" column.** ⛔ **A fail is `live:hold` on its own**, which means the fix did not apply. ⭐ The column will also flag it `⛔ implausible` if the label says HOLD while the arm moved at hand-guiding speed, which is how `3.json` was caught.
+>
+> **TEST B — where the invisible wall is. About one minute.** Start the session again the same way.
+>
+> | # | press | what should happen |
+> |---|---|---|
+> | 1 | `t` | TELEOP. ⛔ **The workspace box re-centres on wherever the arm is at this moment**, so press `t` with the arm somewhere you can then drive a long way from |
+> | 2 | — | drive with the SpaceMouse in one direction until the arm stops moving |
+> | 3 | — | **read the `box` figure on the status line and write it down** |
+>
+> ⭐ **What the reading settles, and it is the most useful thing this session can buy:**
+>
+> - **`0.30/0.30m` with `⚠️ AT THE EDGE`** → the ±0.30 m workspace box is the answer. Then pick one of the three fixes in [FINDINGS §37.5](FINDINGS.md); the cheapest is to anchor the box to the base instead of to wherever TELEOP started.
+> - **Something like `0.12/0.30m` and the arm still will not move** → the box is not the cause. A joint limit or the IK is, and the `⚠️ STUCK lead` warning on the same line says which.
+>
+> ⭐ **What NOT to look for, so nothing is over-interpreted:** `ArmSession` is still not wired in, so none of the 08-13 evening class work can show up on the arm ([ROADMAP §6.1](ROADMAP.md)). The park timer and the saved tracking file were already confirmed on 2026-08-13 ([§35.0](FINDINGS.md), [§35.1](FINDINGS.md)); they will happen anyway and need no checking.
 >
 > ✅ **Already confirmed on 2026-08-13 and NOT worth re-testing:** any park's arrival line and its per-leg arithmetic ([§35.0](FINDINGS.md)), and a playback naming its saved tracking file ([§35.1](FINDINGS.md)). Both will simply happen during the session above; no need to check them deliberately.
 >
@@ -288,7 +322,13 @@ These are not preferences, they were arrived at by things going wrong.
 - **Both arms are calibrated** (`config/gripper_limits.json` holds `B` *and* `G` since 2026-08-11).
 - ⭐ **Two separate terminal sessions, one per arm, already work simultaneously** — Julien drove both arms at once that way on 2026-08-10. That is a genuinely useful data point: it rules out CAN, USB and CPU contention as blockers for bimanual, and leaves the single-process refactor as the *only* remaining work.
 
-**Health check after the overnight power cycle (2026-08-11), all agent-safe, nothing energised beyond a register read:**
+⛔⭐ **DO NOT READ THE TABLE BELOW AS CURRENT. It is a dated snapshot, and one of its rows turned out to describe a thing that changes overnight.** Re-derive it instead, in one command:
+
+```bash
+uv run scripts/check_rig.py && uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+```
+
+**Health check after the overnight power cycle, 2026-08-11, kept for its history only:**
 
 | check | B | G |
 |---|---|---|
@@ -296,10 +336,12 @@ These are not preferences, they were arrived at by things going wrong.
 | errors | all `0x1 (normal)` | all `0x1 (normal)` |
 | temperatures | 27-30 °C | 27-30 °C |
 | joints 1-6 | ≈ 0 — the parked pose, mechanically supported | ≈ 0 |
-| saved jaw limits still valid? | ✅ yes, after the automatic −2π shift | ✅ yes, no shift needed |
+| ⛔ saved jaw limits still valid? | yes, after the automatic −2π shift | ~~yes, no shift needed~~ **WRONG AS A GENERAL CLAIM — see below** |
 | normalised jaw position | **0.034** — nearly closed, only just inside the band | 0.516 — mid-stroke |
 
-⚠️ **B's jaws sit at 0.034**, so there is very little closing travel before the clamp stops it. Harmless, but do not read "the gripper won't close further" as a fault.
+⛔⭐⭐ **THE ±2π SHIFT IS NOT A PROPERTY OF AN ARM, AND THIS TABLE MADE IT LOOK LIKE ONE.** On 2026-08-13 at 18:00 arm G's gripper read `-3.3343` and needed **no** shift. On 2026-08-14 at 09:45 it read `+3.0982` and needed **+2π**. Nothing was recalibrated in between, and the jaws had moved about 0.15 rad. **The shift depends on where the jaws happened to sit when the robot was last built, which changes every session.** [FINDINGS §40](FINDINGS.md). ⭐ **`ping_motors.py` now prints the shift and the jaw opening on every run**, so this is a measurement rather than a remembered fact.
+
+⚠️ **B's jaws sit at about 3.5% open**, so there is very little closing travel before the clamp stops it. Harmless, but do not read "the gripper won't close further" as a fault. ⭐ Confirmed again on 2026-08-14: B at 3.5% open, G at 63.6%.
 
 ## 5. The traps that will catch you first
 
@@ -499,7 +541,7 @@ The `camera` control frame (correct for the D405's modelled 25° flange cant), b
 
 ⚠️ **The agent still cannot open a camera stream.** macOS camera permission is per-application ([FINDINGS §21.1](FINDINGS.md)); enumeration via `ioreg`/`system_profiler` works, opening does not. Plan for measurements to be commands Julien runs, and put the diagnostics *inside* the program.
 
-| 21 | 2026-08-13, morning | ⭐ **Rig re-verified after the overnight unplug, then the hand-taught movement feature was wired in.** Health check, all agent-safe: both CANables by serial (`2081337C594E5018` = B, `20593383594E5018` = G), both SpaceMice, the C920, one D405 (`255323071773`); ⛔ **the second D405 is still not plugged in**. Both arms read 7/7 motors, everything near zero. ⭐ **Both arms' jaw limits reconcile** — B needs the usual −6.283 rad shift and normalises to **0.036**, G needs no shift and normalises to **0.072**, so no recalibration. ⚠️ **Both sets of jaws are nearly closed**, so there is very little closing travel; harmless, and it looks like a fault if unexpected. Then **`w` / `l` built and wired** (task 0b) with 37 headless tests. ⛔⭐ **A NameError was caught before it ever reached the arm**: `replay_step` was called and never imported, so the first playback would have raised inside the control loop with the motors live. Found by an AST scan for names used before assignment, run because no linter is installed and `py_compile` cannot see it — worth keeping as a habit for this file. 308 → 322 headless tests. |
+| 21 | 2026-08-13, morning | ⭐ **Rig re-verified after the overnight unplug, then the hand-taught movement feature was wired in.** Health check, all agent-safe: both CANables by serial (`2081337C594E5018` = B, `20593383594E5018` = G), both SpaceMice, the C920, one D405 (`255323071773`); ⛔ **the second D405 is still not plugged in**. Both arms read 7/7 motors, everything near zero. ⭐ **Both arms' jaw limits reconcile** — B needs the usual −6.283 rad shift and normalises to **0.036**, G needs no shift and normalises to **0.072**, so no recalibration. *(⛔ Corrected 2026-08-14: "G needs no shift" was true that morning and is **not** a property of arm G. It needed **+2π** the next day, with nothing recalibrated in between. [FINDINGS §40](FINDINGS.md).)* ⚠️ **Both sets of jaws are nearly closed**, so there is very little closing travel; harmless, and it looks like a fault if unexpected. Then **`w` / `l` built and wired** (task 0b) with 37 headless tests. ⛔⭐ **A NameError was caught before it ever reached the arm**: `replay_step` was called and never imported, so the first playback would have raised inside the control loop with the motors live. Found by an AST scan for names used before assignment, run because no linter is installed and `py_compile` cannot see it — worth keeping as a habit for this file. 308 → 322 headless tests. |
 
 | 22 | 2026-08-13, ~09:30-11:xx | ✅⭐ **The recording feature was confirmed on the arm, and four defects came out of one 4-session log** ([FINDINGS §30](FINDINGS.md)). The one that mattered: **pressing `w` never stopped the recording**, so every file carried 1.8 to 4.4 s of near-still padding appended while the "which slot?" prompt waited, and recording 3 was 56% padding. ⭐ **The console had printed the evidence twice and the two numbers disagreed** — the stop message reports the length at the keypress, the save message reports it again after the digit. Also fixed: **one named `MAX_PLANNED_JOINT_SPEED`** derived from the teleop clamp instead of an arbitrary 1.5, on his suggestion that *"max speed would just be limited by the actual safety things we have or the motors"*; a **percentile** joint speed, because one noisy sample was inflating the peak by 40%; and ⛔ **`ö`/`ä` now mean one thing everywhere** after `e`'s own message told him to press them for the ease ramp while they changed the gripper step, which he pushed to its ceiling by accident. ⭐ **Also fixed the camera view's one-way ratchet** ([FINDINGS §29](FINDINGS.md)) with a tested pure controller, and wrote **[ROADMAP.md](ROADMAP.md) §6.6.1** for his idea of mixing planned waypoint legs with hand-taught legs in one run, which turns the per-waypoint noise rule into a data structure. 322 → 332 headless tests. ✅ Confirmed at no cost: the session-19 display fixes hold across four sessions of log, `ö`/`ä` arrive, and `e` works outside a park prompt. |
 
