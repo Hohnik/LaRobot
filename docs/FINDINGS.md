@@ -2650,3 +2650,44 @@ A floor **+0.05 m above the base plane** stops the tip 5 cm short of anything ly
 ⭐ **Three tests now pin his requirement**, so the floor cannot creep back above the base plane: one asserts the default is ≤ 0, one asserts it still bounds the gross excursion, one asserts every park pose clears it. ⭐ The status line warns below z = 0, which is roughly desk height, so it reads as *"you are down at the desk"* rather than as an alarm.
 
 **430 → 433 headless tests.**
+
+---
+
+## 45. ✅⭐⭐ A BAD STOP NOW WRITES DOWN WHAT IT KNEW — 2026-08-14, 14:30
+
+> Built because of [§44](FINDINGS.md). The arm fell, and **everything about the moment of failure was gone.** Recovering the gravity torques took a simulation of his joint angles, when the arm had measured them and thrown them away. [§35.5](FINDINGS.md) records that the underlying fault will recur, so the next occurrence should be cheap.
+
+### 45.0 ⭐ WHAT IT RECORDS, AND WHY EACH FIELD IS THERE
+
+`src/incident.py` writes one JSON file into `recordings/incidents/` when a session stops for any reason other than `q`. It runs **after** `shutdown_robot()`, so the motors are already off.
+
+| field | why |
+|---|---|
+| `stop_reason`, `at`, `commit` | which code, when, and what it said. [§33.2](FINDINGS.md) is what happens without provenance |
+| `commanded_joints`, `measured_joints`, `ee` | the pose, and the gap between what was asked and what was achieved |
+| `reach_limit`, `floor_limit` | ⭐ so a failure at the wall is distinguishable from one anywhere else |
+| `loop_hz` | [ROADMAP §8.2](ROADMAP.md) item 14 becomes a trend rather than anecdotes |
+| `last_temperatures_c`, `hottest_seen_c` | thermal, ruled in or out immediately |
+| ⭐⭐ `last_torques_nm` | **the field whose absence cost the most on 2026-08-14.** The arm measures torque every cycle and discarded it |
+| ⭐⭐ `usb` | **every device with bus, address, ids and serial.** [§32](FINDINGS.md) has asked for this since 2026-08-13 and nobody had captured it *during* a failure. [§44.3](FINDINGS.md) had to reconstruct the topology afterwards to notice both adapters share a hub chain with a dock |
+| `chain_alive` | whether the chain was already dead when this was written |
+
+⚠️ **Every value is the LAST one the loop managed to read, not a fresh read.** A fresh read on a dead chain raises, and the last good reading is what describes the failure. `states` and `temps` survive the loop because Python keeps a function's locals.
+
+### 45.1 ⛔⭐⭐ THE ONE HARD RULE, AND WHY THE GUARDS LOOK EXCESSIVE
+
+**Nothing here may delay or prevent the motors being disabled.** A crash report that interferes with teardown is worse than no crash report on a rig with no emergency stop. Three layers, and each has a reason:
+
+1. **Every field is gathered inside its own guard** (`_safe_fact`). On a dying chain, `get_joint_pos()` raises, reading a USB string descriptor on a claimed device raises, and `states` may be unbound if the loop never completed a cycle. **A missing field becomes a note in the file.**
+2. **`write_incident()` never raises** and returns `None` if it could not write. Tested against an unwritable directory and an unserialisable value.
+3. ⛔⭐ **The whole call site is wrapped too**, and this is the interesting one. **[§42.0](FINDINGS.md) established that a dry run returns long before this part of `main()`, and no headless test can reach it either, because it needs a real robot.** So this code path's *first* execution will be on the arm, during a failure. **A path that cannot be tested must not be able to add a second traceback on top of the one the operator is already reading.**
+
+⭐ **11 tests, and the ones that matter are the ones trying to break it:** a field that raises, an unserialisable object, an unwritable directory, a same-second second incident, and a check that `recordings/` really is gitignored so an incident file cannot be committed by habit.
+
+### 45.2 ⚠️ WHAT THIS DOES NOT DO
+
+- ⛔ **It does not prevent anything.** It makes the next failure diagnosable. The fall itself is not fixable in software ([§44.4](FINDINGS.md)).
+- ⛔ **It is not a substitute for `check_rig.py --raw`** at the moment a DFU fault is noticed. It captures the bus at *shutdown*, which may be after the event.
+- ⚠️ **The file is evidence, not source.** `recordings/` is gitignored on purpose, and `describe()` tells the operator to paste it rather than commit it. An incident file carries a full pose.
+
+**433 → 444 headless tests.**

@@ -110,6 +110,7 @@ from spacemouse import (  # noqa: E402
     pick_device_by_wiggle,
 )
 from arm_session import ArmSession  # noqa: E402
+from incident import describe, write_incident  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
 from screen import StatusLine  # noqa: E402
@@ -360,6 +361,20 @@ def ease_note(profile: str, ramp: float) -> str:
     """
     tail = "off" if ramp <= 0 else f"over {ramp:.2f} rad"
     return f"ease {profile} {tail} · affects p runs and Ctrl-C only · ö/ä = how long"
+
+
+def _safe_fact(fn) -> Any:  # noqa: ANN001
+    """Read one value for the incident file, or record why it could not be read.
+
+    ⛔ Runs on the shutdown path, where half of these reads throw: the chain may be
+    dead, `teleop` may be `None` because the session never entered TELEOP, and a local
+    may be unbound if the loop never ran a cycle. **A missing field must never become
+    an exception during teardown.** See `src/incident.py` for the same rule stated once.
+    """
+    try:
+        return fn()
+    except Exception as exc:  # noqa: BLE001
+        return f"<unavailable: {type(exc).__name__}: {exc}>"
 
 
 def git_commit() -> str:
@@ -2368,6 +2383,65 @@ def main() -> int:  # noqa: PLR0915
             _SHUTTING_DOWN["yes"] = True
             disabled = shutdown_robot(robot)
             print(f"\nmotors confirmed disabled: {disabled}")
+
+            # ⭐⭐ RECORD THE MOMENT, IF SOMETHING WENT WRONG. FINDINGS §45.
+            #
+            # On 2026-08-14 the arm fell because a motor stopped answering the CAN bus,
+            # and everything about that instant was lost: no torques, no temperatures,
+            # and no record of the USB bus, which is where the leading explanation
+            # turned out to be. Recovering the gravity torques took a simulation of the
+            # joint angles the arm had already measured and discarded.
+            #
+            # ⛔ PLACED HERE ON PURPOSE: after `shutdown_robot()`, so the motors are
+            # already off before any of this is attempted. `write_incident` cannot
+            # raise, and every field it gathers is individually guarded, because half
+            # of them throw on a chain that has already died. A crash report that
+            # delays the teardown would be worse than no crash report.
+            #
+            # ⚠️ Only on a bad stop. A normal `q p d` writes nothing.
+            #
+            # ⛔⭐ THE WHOLE BLOCK IS WRAPPED, and the reason is FINDINGS §42.0: a dry run
+            # returns long before this line, and no headless test can reach it either,
+            # because it needs a real robot. So this code path's FIRST execution will be
+            # on the arm, during a failure. `src/incident.py` is unit-tested and every
+            # field is individually guarded — this outer guard exists because a path that
+            # cannot be tested should not be able to add a second traceback on top of the
+            # one the operator is already reading.
+            try:
+                bad_stop = bool(stop_reason) and "quit requested" not in (stop_reason or "")
+                # ⚠️ Every value below is the LAST one the loop managed to read, not a
+                # fresh read. A fresh read on a dead chain raises, and the last good
+                # reading is what actually describes the failure. `states` and `temps`
+                # persist past the loop because Python keeps a function's locals.
+                facts = {} if not bad_stop else {
+                    "stop_reason": stop_reason,
+                    "arm": args.arm,
+                    "mode": _safe_fact(lambda: arm.mode),
+                    "commanded_joints": _safe_fact(
+                        lambda: [round(float(v), 4) for v in arm.prev_q]),
+                    "measured_joints": _safe_fact(
+                        lambda: [round(float(getattr(s, "pos", float("nan"))), 4) for s in states]),
+                    "ee": _safe_fact(lambda: [round(float(v), 4) for v in teleop.ee_position()]),
+                    "reach_limit": args.reach,
+                    "floor_limit": args.floor,
+                    "loop_hz": _safe_fact(lambda: round(loop_hz, 1)),
+                    "hottest_seen_c": _safe_fact(lambda: thermal.max_seen),
+                    "hottest_jaw_seen_c": _safe_fact(lambda: thermal.max_jaw_seen),
+                    "last_temperatures_c": _safe_fact(
+                        lambda: [round(float(v), 1) for v in temps]),
+                    # ⭐ The field whose absence cost the most on 2026-08-14: the gravity
+                    # torques at the moment of failure had to be recovered by simulating
+                    # the joint angles, when the arm had measured them and thrown them away.
+                    "last_torques_nm": _safe_fact(
+                        lambda: [round(float(getattr(s, "eff", float("nan"))), 3) for s in states]),
+                    "chain_alive": _safe_fact(lambda: bool(arm.alive())),
+                }
+                if bad_stop:
+                    print("\n" + describe(write_incident(stop_reason or "unknown", facts)))
+            except Exception as exc:  # noqa: BLE001
+                # ⛔ Swallowed on purpose. The motors are already disabled; a traceback
+                # here would sit on top of the real failure and read like a second fault.
+                print(f"\n⚠️  could not record the incident: {type(exc).__name__}: {exc}")
 
     print(f"\nhottest motor seen this session: {thermal.max_seen:.0f}°C")
     if thermal.max_jaw_seen:
