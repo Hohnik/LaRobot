@@ -116,7 +116,12 @@ from spacemouse import (  # noqa: E402
 )
 from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
-from mirror import DEFAULT_ALIGN_SPEED, MirrorLink, pick_pair  # noqa: E402
+from mirror import (  # noqa: E402
+    DEFAULT_ALIGN_SPEED,
+    DEFAULT_MAX_GAP,
+    MirrorLink,
+    pick_pair,
+)
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import (  # noqa: E402
     Layout,
@@ -527,6 +532,9 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
             "arm": one, "tgt": tgt, "cmd": cmd, "start": cmd.copy(),
             "best": float(np.max(np.abs(tgt - cmd))),
             "last_progress": time.perf_counter(), "outcome": None,
+            # ⭐ The baseline for "how often did SafeRobot hold the command back during THIS
+            # park". A running total since the session began would say nothing about it.
+            "clipped_at": getattr(one.robot, "limited_cycles", 0),
         })
     if not runs:
         return "dead"
@@ -574,9 +582,26 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
                 run["outcome"] = "arrived"
                 continue
             if verdict == "blocked":
-                print(f"\n⛔ arm {one.name} PARK BLOCKED — {err:.3f} rad still to go and no "
-                      f"progress for {stall_seconds:.0f}s. Something is in the way, or the "
-                      "pose is unreachable.")
+                # ⛔⭐ IT REPORTS WHAT IT MEASURED, then offers the guesses. This message read
+                # *"Something is in the way, or the pose is unreachable"* and Julien's answer
+                # to the same wording in MIRROR was *"the robot was never blocked by
+                # anything."* The three numbers below distinguish the cases: how far the
+                # COMMAND ran ahead of the arm, how often `SafeRobot` held it back, and
+                # whether the arm was moving at all.
+                lag_now = float(np.max(np.abs(run["cmd"] - meas)))
+                clipped = getattr(one.robot, "limited_cycles", 0) - run["clipped_at"]
+                print(f"\n⛔ arm {one.name} PARK BLOCKED — {err:.3f} rad still to go, no "
+                      f"progress for {stall_seconds:.0f}s.")
+                print(f"     the command ran {lag_now:.3f} rad ahead of the arm; SafeRobot "
+                      f"held it back on {clipped} cycle(s) of this park")
+                if lag_now > 0.8 * getattr(one.robot, "max_lag", 0.25):
+                    print("     ⚠️ That is at SafeRobot's following-error limit, so the arm "
+                          "is being asked for more than it is delivering: something is "
+                          "resisting it, or the pose needs more torque than it has.")
+                else:
+                    print("     ⚠️ The command is NOT running ahead, so the arm is following "
+                          "and the target itself is the problem: the pose may be "
+                          "unreachable from here.")
                 run["outcome"] = "stalled"
                 continue
             if err < run["best"] - PARK_PROGRESS_EPS:
@@ -760,6 +785,22 @@ def main() -> int:  # noqa: PLR0915
                          "that reverse under reflection, for arms FACING each other. "
                          "⚠️ The mirror signs are a geometric prediction and have never "
                          "been tried on hardware")
+    ap.add_argument("--teleop-speed", type=float, default=MAX_PLANNED_JOINT_SPEED,
+                    help=f"the ceiling on a PLANNED joint speed, rad/s (default "
+                         f"{MAX_PLANNED_JOINT_SPEED}). ⛔ A SAFETY LIMIT, and a DIFFERENT one "
+                         f"from --max-speed: this clamps how far TELEOP's inverse kinematics "
+                         f"may move a joint per cycle, and it caps a playback and a park. "
+                         f"⚠️ It binds BELOW --max-speed, so raising --max-speed alone leaves "
+                         f"teleop exactly as fast as it was — which is why raising it felt "
+                         f"like nothing happened (FINDINGS §37.0). Raise both to go faster")
+    ap.add_argument("--mirror-gap", type=float, default=DEFAULT_MAX_GAP,
+                    help=f"how far the MIRROR follower may fall behind the leader before the "
+                         f"link stops, in radians (default {DEFAULT_MAX_GAP}). ⚠️ A TOLERANCE "
+                         f"rather than a speed: past a certain leader speed the follower is "
+                         f"tracking as hard as it can and still losing ground, because "
+                         f"SafeRobot clips every command to 0.25 rad from the measured "
+                         f"position. Loosening this lets the copy lag further behind rather "
+                         f"than stopping; it does not make the follower faster")
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
                          "Without this, both arms share one map and editing changes both")
@@ -830,6 +871,10 @@ def main() -> int:  # noqa: PLR0915
         else:
             screen.say(text)
 
+    # ⭐ The per-cycle joint step TELEOP is allowed, derived from the flag so there is one
+    # number rather than a constant and a flag that can disagree. `MAX_JOINT_STEP` remains as
+    # the documented default and is what the flag's own default comes from.
+    joint_step = args.teleop_speed / CONTROL_HZ
     threading.excepthook = _quiet_expected_server_exit
     rotation = not args.no_rotation
     start_frame = args.frame
@@ -939,6 +984,9 @@ def main() -> int:  # noqa: PLR0915
     # the risky part is the FIRST cycle: the two arms are never in the same pose, so
     # commanding the leader's angles straight across would make the follower jump the gap.
     mirror_link: MirrorLink | None = None
+    #: ⚠️ Declared here so the stop report can read it even if it somehow runs before a link
+    #: was ever engaged. It is a count, so 0 is the honest starting value.
+    mirror_clipped_at = 0
     mirror_leader: ArmSession | None = None
     mirror_follower: ArmSession | None = None
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
@@ -989,8 +1037,21 @@ def main() -> int:  # noqa: PLR0915
     print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
     # ⭐ The ceiling that binds every mode, printed because it was invisible for four days
     # and explained every "why is it so slow" question in that time (FINDINGS §37.0).
-    speed_note = "" if args.max_speed == SAFE_MAX_SPEED else "  ⚠️ RAISED from the default"
-    print(f"  joint speed : max {args.max_speed} rad/s, every mode{speed_note}")
+    # ⭐⭐ EVERY LAYER, BECAUSE ONLY THE LOWEST ONE BINDS. Julien raised `--max-speed` to 5
+    # and teleop felt identical, because the per-cycle IK clamp is a separate 1.5 rad/s and it
+    # sits below. Four days were lost to the same invisibility once already (FINDINGS §37.0),
+    # and the fix then was to name the number; the fix now is to show which one wins.
+    raised = []
+    if args.max_speed != SAFE_MAX_SPEED:
+        raised.append("--max-speed")
+    if args.teleop_speed != MAX_PLANNED_JOINT_SPEED:
+        raised.append("--teleop-speed")
+    note = f"  ⚠️ RAISED: {', '.join(raised)}" if raised else ""
+    print(f"  joint speed : teleop {min(args.teleop_speed, args.max_speed):.2f} · "
+          f"planned {min(args.teleop_speed, args.max_speed):.2f} · "
+          f"mirror {args.max_speed:.2f} rad/s{note}")
+    print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
+          f"the command within 0.25 rad of the measured pose)")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
 
@@ -1314,9 +1375,9 @@ def main() -> int:  # noqa: PLR0915
                 return ""
             taught = replay_pending.joint_speed(99)
             note = ""
-            if taught > MAX_PLANNED_JOINT_SPEED:
+            if taught > args.teleop_speed:
                 note = (f" ⚠️ taught {taught:.1f} rad/s exceeds the "
-                        f"{MAX_PLANNED_JOINT_SPEED:.1f} allowed, so 1.00x will lag")
+                        f"{args.teleop_speed:.1f} allowed, so 1.00x will lag")
             return (f"PLAY {replay_slot} · {replay_pending.duration:.1f}s taught at "
                     f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go")
 
@@ -1663,7 +1724,7 @@ def main() -> int:  # noqa: PLR0915
                         # why. Now the plan states both numbers and starts at a speed that
                         # will actually track.
                         trackable = safe_time_scale(replay_pending.joint_speed(99),
-                                                    MAX_PLANNED_JOINT_SPEED)
+                                                    args.teleop_speed)
                         replay_speed = min(1.0, trackable)
                         pending = "take_go"
                         hint(replay_plan_line())
@@ -1676,7 +1737,7 @@ def main() -> int:  # noqa: PLR0915
                             # taught speed there would ask for something the arm cannot do
                             # and this rig has no emergency stop.
                             ceiling = max(1.0, safe_time_scale(
-                                replay_pending.joint_speed(99), MAX_PLANNED_JOINT_SPEED))
+                                replay_pending.joint_speed(99), args.teleop_speed))
                             replay_speed = min(ceiling, replay_speed * 1.25)
                             hint(replay_plan_line()); continue
                         if k == "-":
@@ -1743,7 +1804,14 @@ def main() -> int:  # noqa: PLR0915
                             mirror_link = MirrorLink(
                                 mode=args.mirror, align_speed=MIRROR_ALIGN_SPEED,
                                 follow_speed=getattr(mirror_follower.robot, "max_speed",
-                                                     args.max_speed))
+                                                     args.max_speed),
+                                max_gap=args.mirror_gap)
+                            # ⭐ The baseline for "how often did SafeRobot hold the command
+                            # back during THIS link", which is the hardware-side half of the
+                            # diagnosis. A running total since the session began would say
+                            # nothing about the mirror run.
+                            mirror_clipped_at = getattr(mirror_follower.robot,
+                                                        "limited_cycles", 0)
                             print(f"\n▶  MIRROR engaged: arm {mirror_follower.name} is "
                                   f"following arm {mirror_leader.name}. "
                                   "Press h, t, g or i to stop it.\n")
@@ -1761,7 +1829,8 @@ def main() -> int:  # noqa: PLR0915
                         # the moment you are choosing the move.
                         if k in "+=":
                             for one in aimed:
-                                one.park_speed = min(1.5, one.park_speed * 1.25)
+                                one.park_speed = min(args.teleop_speed,
+                                                     one.park_speed * 1.25)
                             hint(park_plan_line(edit_arm)); continue
                         if k == "-":
                             for one in aimed:
@@ -2388,7 +2457,8 @@ def main() -> int:  # noqa: PLR0915
                         # look broken (FINDINGS §17.1).
                         if any(one.mode == "park" for one in aimed):
                             for one in aimed:
-                                one.park_speed = min(1.5, one.park_speed * 1.25)
+                                one.park_speed = min(args.teleop_speed,
+                                                     one.park_speed * 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale *= 1.25
@@ -2425,7 +2495,8 @@ def main() -> int:  # noqa: PLR0915
                     if one.mode == "park" or one.park_path is None:
                         continue
                     left = one.park_path.length - one.park_s
-                    if left > PARK_TOLERANCE:
+                    unfinished = left > PARK_TOLERANCE
+                    if unfinished:
                         print(f"\n  ⚠️  arm {one.name}: run abandoned with {left:.2f} rad of "
                               "path left — leaving PARK cancels the rest.\n")
                     one.park_path, one.park_marks = None, []
@@ -2433,8 +2504,24 @@ def main() -> int:  # noqa: PLR0915
                     # handover lives in the arrival branch, but this is the second gate:
                     # pressing h or t while driving to the start pose cancels the whole
                     # thing, rather than leaving a recording queued to fire later.
-                    if replay_pending is not None:
+                    #
+                    # ⛔⭐⭐ `unfinished` IS THE WHOLE FIX, and without it two-arm playback
+                    # could never start. This used to cancel whenever it found a path on an
+                    # arm that had left `park`, which includes an arm that ARRIVED. With one
+                    # arm that never showed, because the arrival handed over in the same
+                    # cycle and left nothing pending. With two arms the first arrival waits
+                    # for the second, so the pending playback was still there to cancel:
+                    # *"arm B is at the start pose; waiting for G"* and then *"playback
+                    # cancelled — it never reached the start pose"*, one line apart, in
+                    # Julien's own log. FINDINGS §57.1.
+                    #
+                    # ⭐ Deciding from the MEASURED remaining path rather than from whether
+                    # some other branch remembered to tidy up is the fix that cannot rot: a
+                    # future exit that forgets to clear the path still cannot cancel a
+                    # playback whose park actually finished.
+                    if unfinished and replay_pending is not None:
                         replay_pending = None
+                        replay_ready = set()
                         hint("")
                         print("  ⚠️  playback cancelled — it never reached the start pose.\n")
                 # ⛔ Same rule for a playback in progress: leaving the mode abandons it.
@@ -2639,7 +2726,7 @@ def main() -> int:  # noqa: PLR0915
                             )
 
                         step = q_target - one.prev_q
-                        q_target = one.prev_q + np.clip(step, -MAX_JOINT_STEP, MAX_JOINT_STEP)
+                        q_target = one.prev_q + np.clip(step, -joint_step, joint_step)
 
                         lo = np.array([YAM_JOINTS[i][1] for i in range(1, N_ARM + 1)]) + JOINT_LIMIT_MARGIN
                         hi = np.array([YAM_JOINTS[i][2] for i in range(1, N_ARM + 1)]) - JOINT_LIMIT_MARGIN
@@ -2669,16 +2756,37 @@ def main() -> int:  # noqa: PLR0915
                             # ⭐ The reason NAMES the joint and the measured leader speed, and
                             # this line adds the joint's real name plus how to start again —
                             # both were missing when Julien first hit it.
+                            # ⛔⭐ ONE FACT PER LINE. `StatusLine.say()` truncates each line
+                            # to the terminal width while the live block is on screen, and
+                            # Julien's first high-speed run lost the end of a long stop message
+                            # to an ellipsis — the half that named the cause.
                             joint_name = ""
                             if mirror_link.stop_joint is not None:
-                                joint_name = f" ({YAM_JOINTS.get(mirror_link.stop_joint + 1, ('joint',))[0]})"
+                                joint_name = YAM_JOINTS.get(
+                                    mirror_link.stop_joint + 1, ("joint",))[0]
                             print(f"\n⛔ MIRROR STOPPED — {mirror_link.stop_reason}"
-                                  f"{joint_name}")
-                            if (mirror_link.stop_leader_speed or 0) > mirror_link.follow_speed:
-                                print(f"     ⭐ That limit is `--max-speed`, currently "
-                                      f"{args.max_speed} rad/s, and it is a SOFTWARE limit: "
-                                      "hand-guided motion reaches 2.4-3.7 rad/s. Raise it one "
-                                      "step (--max-speed 1.5) if the follower should keep up.")
+                                  + (f", {joint_name}" if joint_name else ""))
+                            print(f"     {mirror_link.stop_detail}")
+                            # ⭐⭐ THE HARDWARE'S OWN EVIDENCE, which the pure class cannot
+                            # see. `SafeRobot` counts every cycle on which one of its two
+                            # limits actually bit, and one of those limits is the 0.25 rad
+                            # following-error clip. A high count during a mirror run says the
+                            # COMMAND was being held back from running ahead of the arm, which
+                            # is the mechanism behind the "the arm could not track" case.
+                            clipped = getattr(one.robot, "limited_cycles", 0) - mirror_clipped_at
+                            if clipped > 0:
+                                print(f"     ⚠️ SafeRobot held the command back on {clipped} "
+                                      f"cycle(s) (its {getattr(one.robot, 'max_lag', 0.25)} rad "
+                                      "following-error limit).")
+                            if mirror_link.stop_cause == "follow_limit":
+                                print(f"     ⭐ That allowance is `--max-speed`, now "
+                                      f"{args.max_speed} rad/s. Raise it one step.")
+                            elif mirror_link.stop_cause == "tracking":
+                                print("     ⭐ More `--max-speed` will NOT help: the arm, not "
+                                      "the software, is the limit.")
+                                print(f"     Either guide the leader more slowly, or loosen "
+                                      f"the tolerance with --mirror-gap "
+                                      f"{mirror_link.max_gap * 2:.2f}.")
                             print("     Press i then Enter to engage it again.\n")
                             one.mode = "hold"; enter_hold(one); hint("")
                             mirror_link = None
@@ -2777,6 +2885,26 @@ def main() -> int:  # noqa: PLR0915
                                         if 0.05 < settling < total - 0.05 else "")
                                 print(f"⭐ PARK reached in {total:.1f}s{tail} "
                                       f"({err:.3f} rad off{extra}) → HOLD")
+                                # ⛔⭐⭐ THE ARRIVAL CLEARS ITS OWN PATH, AND THIS IS THE FIX
+                                # FOR THE BUG THAT KILLED THE FIRST TWO-ARM PLAYBACK.
+                                #
+                                # The generic "leaving PARK abandons the run" block below runs
+                                # once a cycle and fires for any arm whose mode is no longer
+                                # `park` while `park_path` is still set. An ARRIVAL sets the
+                                # mode to `hold` and used to leave the path in place, so on
+                                # the next cycle that block treated a COMPLETED park as an
+                                # abandoned one — and cancelled `replay_pending`, the pending
+                                # playback the park existed to reach.
+                                #
+                                # ⚠️ It never showed with one arm, because the handover
+                                # happened in the same cycle as the arrival, so
+                                # `replay_pending` was already None when the block ran. With
+                                # two arms the first arrival WAITS for the second, so the
+                                # pending playback is still set and gets cancelled. Julien's
+                                # own log: *"arm B is at the start pose; waiting for G"*
+                                # immediately followed by *"playback cancelled — it never
+                                # reached the start pose"*. FINDINGS §57.1.
+                                one.park_path, one.park_marks = None, []
                                 # ⭐ The handover from "drive to the start pose" to "play the
                                 # recording". It lives HERE, in the arrival branch, so a park
                                 # that was blocked or interrupted can never roll into a
@@ -2958,7 +3086,8 @@ def main() -> int:  # noqa: PLR0915
                                     "worst_lag_rad": round(replay_worst_lag, 5),
                                     "loop_hz": round(loop_hz, 1),
                                     "max_cursor_lag": MAX_CURSOR_LAG,
-                                    "max_planned_joint_speed": MAX_PLANNED_JOINT_SPEED,
+                                    "max_planned_joint_speed": args.teleop_speed,
+                                    "safe_max_speed": args.max_speed,
                                 }
                                 TRACKING_DIR.mkdir(parents=True, exist_ok=True)
                                 stamp = dt_now().replace(":", "-")

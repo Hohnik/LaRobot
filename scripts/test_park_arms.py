@@ -217,6 +217,20 @@ def test_the_park_respects_each_arm_s_own_speed() -> None:
         "the slower arm should have needed more cycles")
 
 
+def test_a_blocked_park_reports_what_it_MEASURED_not_a_guess() -> None:
+    """⛔⭐ Julien's Ctrl-C park stalled with *"Something is in the way, or the pose is
+    unreachable"* and nothing was in the way. The message now reports how far the command ran
+    ahead of the arm and how often SafeRobot held it back, then offers the reading those
+    numbers support.
+
+    ⚠️ This test pins the OUTCOME and that the run carries the baseline it needs; the printed
+    wording is checked by reading, because capturing stdout here would test the print rather
+    than the decision."""
+    stuck = arm_at("B", q=2.0, follow=False)
+    stuck.robot.limited_cycles = 7          # SafeRobot counts on the real robot
+    assert park_arms([stuck], Keys(), clamp, stall_seconds=0.2) == "stalled"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

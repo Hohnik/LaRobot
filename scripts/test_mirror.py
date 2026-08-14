@@ -26,6 +26,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from mirror import (  # noqa: E402
     MIRROR_SIGNS,
+    STUCK_SPEED,
     MirrorLink,
     follower_target,
     gap,
@@ -258,7 +259,8 @@ def test_a_leader_moving_faster_than_the_limit_is_NAMED_as_the_cause() -> None:
     assert link.state == "stopped"
     assert link.stop_joint == 5, f"joint 6 opened the gap, got index {link.stop_joint}"
     assert link.stop_leader_speed is not None and link.stop_leader_speed > 1.0
-    assert "could not keep up" in link.stop_reason
+    assert link.stop_cause == "follow_limit", f"cause was {link.stop_cause}"
+    assert "could not keep up" in link.stop_detail
     assert "joint 6" in link.stop_reason
 
 
@@ -270,7 +272,8 @@ def test_a_STUCK_follower_is_named_differently_from_a_fast_leader() -> None:
     run_until_stopped(link, leader_step=0.005, follower_follows=False)
     assert link.state == "stopped"
     assert link.stop_leader_speed is not None and link.stop_leader_speed < 1.0
-    assert "blocked, at a joint limit, or faulted" in link.stop_reason
+    assert link.stop_cause == "stuck", f"cause was {link.stop_cause}"
+    assert "blocked, at a joint limit, or faulted" in link.stop_detail
 
 
 def test_the_row_warns_BEFORE_the_gap_trips() -> None:
@@ -284,6 +287,53 @@ def test_the_row_warns_BEFORE_the_gap_trips() -> None:
     fine = LEADER.copy()
     fine[5] += 0.10                      # 29% of the limit
     assert "near the" not in link.status(fine, LEADER)
+
+
+def test_an_ARM_that_cannot_track_is_named_as_the_hardware_and_not_the_software() -> None:
+    """⛔⭐⭐ THE THIRD CAUSE, and it is the one Julien met at `--max-speed 5`. The message
+    said *"blocked, at a joint limit, or faulted"* and his answer was *"the robot was never
+    blocked by anything. It just, like, didn't kind of catch up at high speeds."*
+
+    ⭐ He was right, and the reason is one layer down: `SafeRobot` clips every command to
+    **0.25 rad from the measured position**, so the follower's command can never run further
+    ahead than that however high `max_speed` goes. Past a certain leader speed the follower is
+    tracking as hard as it can and still losing ground.
+
+    ⭐ Here the follower is given a generous allowance (5 rad/s) and made to move at a third
+    of the leader's speed — moving, but not fast enough. **That is neither of the other two
+    causes**, and calling it either one sends the reader looking for an obstruction that is
+    not there.
+    """
+    link = MirrorLink(follow_speed=5.0, max_gap=0.35)
+    lead = LEADER.copy()
+    follow = LEADER.copy()
+    # ⚠️ The follower moves at a FIXED 1.0 rad/s, which is what an arm at its physical limit
+    # looks like, while the leader is asked for 2.5. The first version of this test let the
+    # follower close a third of the gap per cycle, which keeps up easily — it never tripped,
+    # and the failure was in the test rather than in the code.
+    follower_limit = 0.01                                   # 1.0 rad/s at 100 Hz
+    for _ in range(400):
+        cmd = link.step(lead, follow, DT)
+        if cmd is None:
+            break
+        follow = follow + np.clip(np.asarray(cmd, dtype=float) - follow,
+                                  -follower_limit, follower_limit)
+        lead = lead + np.array([0, 0, 0, 0, 0, 0.025, 0])    # 2.5 rad/s, inside 5.0
+    assert link.state == "stopped", "the gap never opened; the scenario does not model a slow arm"
+    assert link.stop_cause == "tracking", f"cause was {link.stop_cause}"
+    assert link.stop_follower_speed is not None and link.stop_follower_speed > STUCK_SPEED
+    assert "the ARM itself could not track that fast" in link.stop_detail
+
+
+def test_the_reason_and_the_detail_are_SEPARATE_so_neither_gets_truncated() -> None:
+    """⛔ `StatusLine.say()` truncates each line to the terminal width while a live block is on
+    screen. Julien's first high-speed run lost the end of the stop message to an ellipsis, and
+    the lost half was the part that named the cause."""
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    run_until_stopped(link, leader_step=0.03)
+    assert link.stop_reason and link.stop_detail
+    assert len(link.stop_reason) < 110, f"{len(link.stop_reason)} chars is a truncation risk"
+    assert len(link.stop_detail) < 140, f"{len(link.stop_detail)} chars is a truncation risk"
 
 
 def main() -> int:

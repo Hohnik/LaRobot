@@ -68,6 +68,10 @@ DEFAULT_ALIGN_SPEED = 0.30      # rad/s per joint while closing the initial gap
 DEFAULT_FOLLOW_SPEED = 1.0
 DEFAULT_ENGAGE_TOLERANCE = 0.05  # rad — below this, following starts
 DEFAULT_MAX_GAP = 0.35          # rad — above this while following, stop: something is wrong
+#: ⭐ Below this the follower is not moving at all, so a gap means it is blocked rather than
+#: slow. Same order as the gripper stall threshold, and for the same reason: a velocity this
+#: small is indistinguishable from encoder noise.
+STUCK_SPEED = 0.05              # rad/s
 
 
 def pick_pair(arm_names: list[str], selected: list[str]) -> tuple[str, str]:
@@ -157,6 +161,11 @@ class MirrorLink:
         self.state = "aligning"
         self.command: np.ndarray | None = None
         self.stop_reason: str | None = None
+        #: ⭐ The measured explanation, kept SEPARATE from `stop_reason` so the caller can put
+        #: them on two lines. One long line gets truncated by `StatusLine.say()` when a live
+        #: block is on screen, and Julien's first high-speed run lost the end of the sentence
+        #: to an ellipsis — the half that named the cause.
+        self.stop_detail: str | None = None
         # ⭐⭐ WHAT THE STOP MEASURED, so the message can name a cause instead of listing
         # three. `stop_joint` is the index of the joint that opened the gap, and
         # `stop_leader_speed` is how fast the LEADER was moving that joint when it happened.
@@ -170,8 +179,21 @@ class MirrorLink:
         self.stop_joint: int | None = None
         self.stop_gap: float = 0.0
         self.stop_leader_speed: float | None = None
+        #: ⭐⭐ THE FOLLOWER'S OWN MEASURED SPEED, and it is what turns two possible causes
+        #: into three distinguishable ones. Added 2026-08-14 after the message got it wrong a
+        #: second time: at `--max-speed 5` it said *"blocked, at a joint limit, or faulted"*
+        #: and Julien's answer was *"the robot was never blocked by anything. It just, like,
+        #: didn't kind of catch up at high speeds."* He was right, and the reason is one layer
+        #: down: `SafeRobot` clips every command to **0.25 rad from the measured position**, so
+        #: the follower's command can never run further ahead than that however high
+        #: `max_speed` goes. Past a certain leader speed the follower is tracking as hard as
+        #: it can and STILL losing ground, which is neither of the causes the message named.
+        self.stop_follower_speed: float | None = None
+        self.stop_cause: str | None = None      # "follow_limit" · "tracking" · "stuck"
         self._prev_leader: np.ndarray | None = None
+        self._prev_follower: np.ndarray | None = None
         self._leader_speed = np.zeros(N_ARM)
+        self._follower_speed = np.zeros(N_ARM)
 
     def step(self, leader_q: Any, follower_q: Any, dt: float) -> np.ndarray | None:
         """One cycle. Returns the follower's command, or None if it must not move.
@@ -195,6 +217,14 @@ class MirrorLink:
             fresh = np.abs(lead[:n_lead] - self._prev_leader[:n_lead]) / dt
             self._leader_speed[:n_lead] += 0.3 * (fresh - self._leader_speed[:n_lead])
         self._prev_leader = lead.copy()
+        # ⭐ The follower's own speed, measured the same way. A follower moving nearly as fast
+        # as the leader and still losing ground is at its PHYSICAL limit; one barely moving is
+        # blocked. Without this the two look identical from the gap alone.
+        if self._prev_follower is not None and dt > 0:
+            n_f = min(N_ARM, len(measured), len(self._prev_follower))
+            fresh_f = np.abs(measured[:n_f] - self._prev_follower[:n_f]) / dt
+            self._follower_speed[:n_f] += 0.3 * (fresh_f - self._follower_speed[:n_f])
+        self._prev_follower = measured.copy()
 
         g = gap(measured, target)
 
@@ -217,18 +247,32 @@ class MirrorLink:
             self.stop_joint = worst
             self.stop_gap = g
             self.stop_leader_speed = float(self._leader_speed[worst])
-            if self.stop_leader_speed > self.follow_speed:
-                why = (f"the leader was moving joint {worst + 1} at "
-                       f"{self.stop_leader_speed:.2f} rad/s and the follower is limited to "
-                       f"{self.follow_speed:.2f}, so it could not keep up")
-            else:
-                why = (f"the leader was only moving joint {worst + 1} at "
-                       f"{self.stop_leader_speed:.2f} rad/s, well inside the follower's "
-                       f"{self.follow_speed:.2f} limit, so the follower is blocked, at a "
+            self.stop_follower_speed = float(self._follower_speed[worst])
+            # ⭐⭐ THREE CAUSES, EACH MEASURED, and the order is the order of certainty.
+            #
+            # ⛔ A follower that is not moving is blocked whatever the leader was doing, so
+            # that check comes first. Then the software follow limit, which is a number this
+            # code owns. Only what is left over is the physical one, and calling it that is a
+            # claim about the hardware, so it is the last resort rather than the default.
+            if self.stop_follower_speed < STUCK_SPEED:
+                self.stop_cause = "stuck"
+                why = (f"the follower barely moved that joint "
+                       f"({self.stop_follower_speed:.2f} rad/s), so it is blocked, at a "
                        "joint limit, or faulted")
-            self.stop_reason = (
-                f"the follower fell {g:.3f} rad behind on joint {worst + 1} "
-                f"(limit {self.max_gap}): {why}")
+            elif self.stop_leader_speed > self.follow_speed:
+                self.stop_cause = "follow_limit"
+                why = (f"the leader moved it at {self.stop_leader_speed:.2f} rad/s and the "
+                       f"follower may only move at {self.follow_speed:.2f}, so it could not "
+                       "keep up")
+            else:
+                self.stop_cause = "tracking"
+                why = (f"the leader moved it at {self.stop_leader_speed:.2f} rad/s and the "
+                       f"follower managed {self.stop_follower_speed:.2f}, inside its "
+                       f"{self.follow_speed:.2f} allowance — so the ARM itself could not "
+                       "track that fast, not the software")
+            self.stop_reason = (f"the follower fell {g:.3f} rad behind on joint {worst + 1} "
+                                f"(limit {self.max_gap})")
+            self.stop_detail = why
             return None
 
         if self.state == "aligning" and g <= self.engage_tolerance:
