@@ -358,6 +358,29 @@ class ArmSession:
         # copies of state.
         self.reader = reader
 
+        # ⭐⭐ WHAT THE CONTROLS WIZARD REMEMBERS ABOUT *THIS* PUCK, and it is per arm for
+        # the same reason the reader is: two pucks have two "controls you just used".
+        #
+        # ⛔ `last_active_axis` has NO TIMEOUT on purpose. In CONTROLS, `f` and `1`-`6` act
+        # on "the control you just used", and that has to still be remembered after the puck
+        # has sprung back to centre and the operator's hand has left it.
+        #
+        # ⭐ `last_input_kind` exists so that ONE key means one thing: `f` reverses whichever
+        # control was last used, an axis by flipping its sign or a button by swapping
+        # open/close.
+        #
+        # ⚠️ `buttons_prev` is what makes a press an EDGE rather than a state. Without it a
+        # held button would re-fire its action every cycle at 100 Hz.
+        #
+        # ⚠️ The module docstring says key HANDLING stays in the script, and it still does:
+        # which arm a keypress is aimed at is a session question, answered by `ArmSelector`.
+        # What lives here is the state a key acts ON.
+        self.last_active_axis: int | None = None
+        self.last_active_value = 0.0
+        self.last_input_kind: str | None = None     # None | "axis" | "button"
+        self.learn_button: str | None = None        # None | "open" | "close"
+        self.buttons_prev = 0
+
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0
         self.stall_since: float | None = None

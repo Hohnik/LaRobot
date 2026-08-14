@@ -60,6 +60,10 @@ MOVED_SO_FAR = [
     # ⚠️ `base_pose` and `slots` were `park` and `slots` as locals — renamed as well as
     # moved, so the old names live in RETIRED_LOCALS too.
     "base_pose", "slots", "reader",
+    # ⭐ Step 2 plumbing 6/8: what CONTROLS remembers about THIS puck, and the button edge.
+    # Two pucks have two answers to "which control did you just use".
+    "last_active_axis", "last_active_value", "last_input_kind", "learn_button",
+    "buttons_prev",
 ]
 
 #: Still locals of `main()`. ⛔⭐ NEITHER of these is a pure substitution any more, and

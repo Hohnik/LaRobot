@@ -836,16 +836,13 @@ def main() -> int:  # noqa: PLR0915
     park_sequence: list[str] = []
     angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
-    # CONTROLS mode remembers the last puck axis that actually moved, with no
-    # timeout: f and 1-6 act on "the control you just used", and it must still be
-    # remembered after the puck has sprung back to centre and his hand has left it.
-    last_active_axis: int | None = None
-    last_active_value = 0.0
-    # "The control you just used" can be an axis OR a puck button, and `f` reverses
-    # whichever it was. One key, one meaning.
-    last_input_kind: str | None = None      # None | "axis" | "button"
-    learn_button: str | None = None         # None | "open" | "close"
-    buttons_prev = 0
+    # ⚠️ CONTROLS mode's memory of "the control you just used" — `last_active_axis`,
+    # `last_active_value` and `last_input_kind` — plus `learn_button` and `buttons_prev`
+    # were declared here. They are `ArmSession` fields now: two pucks have two answers to
+    # "which control did you just use", and the class's constructor sets exactly the values
+    # these lines did.
+    # ⛔ Not left here as `arm.last_active_axis = None`: that would run before `arm` exists,
+    # which is the fault `scripts/check_restructure.py` check 3 catches.
 
     print("=== plan ===")
     # ⭐ Named ARMS, plural, and it prints the serial of each. With one arm the line reads
@@ -1643,7 +1640,7 @@ def main() -> int:  # noqa: PLR0915
                     # Button assignment is a property of the DEVICE, not of the
                     # arm's mode, so it belongs above the mode dispatch entirely.
                     if k == "b":
-                        learn_button = "open"
+                        arm.learn_button = "open"
                         print("\n⭐ LEARNING THE GRIPPER BUTTONS.")
                         print("   Press the puck button you want for OPEN …")
                         print("   (learned by pressing, never assumed — which physical button")
@@ -1701,7 +1698,7 @@ def main() -> int:  # noqa: PLR0915
                         print(f"     controls for this frame: {arm.axis_map.one_line(arm.frame)}")
                         print("     press m to edit THESE controls; each frame has its own\n")
                         continue
-                    if k == "f" and last_input_kind == "button":
+                    if k == "f" and arm.last_input_kind == "button":
                         # Same key, same meaning everywhere: reverse the control just
                         # used. Axis -> flip its sign; button -> swap open/close.
                         arm.axis_map.swap_buttons()
@@ -1720,7 +1717,7 @@ def main() -> int:  # noqa: PLR0915
                         # ⛔ EVERY EDIT IN THIS BRANCH IS KEY-DRIVEN. Moving the puck
                         # must never change the map — see FINDINGS §11 for what
                         # happened when it did.
-                        active = last_active_axis
+                        active = arm.last_active_axis
                         driven = arm.axis_map.motion_driven_by(active) if active is not None else None
                         if k == "q":
                             stop_reason = "quit requested"
@@ -1768,7 +1765,7 @@ def main() -> int:  # noqa: PLR0915
                                     # The active control drove nothing, so there is nothing
                                     # to exchange with. The direction he was last pushing
                                     # becomes this motion's positive sense.
-                                    displaced = arm.axis_map.bind(target, active, last_active_value)
+                                    displaced = arm.axis_map.bind(target, active, arm.last_active_value)
                                     print(f"\n  ✓ puck {PUCK_AXES[active]} now drives "
                                           f"{motions_for(arm.frame)[target]['short']} → "
                                           f"{arm.axis_map.row(target, arm.frame).strip()}")
@@ -1834,7 +1831,7 @@ def main() -> int:  # noqa: PLR0915
                         # *"the actual mapping has to happen while the arm is moving so I
                         # can see what the different directions are doing."*
                         arm.mode = "map"; enter_teleop(arm)
-                        last_active_axis = None
+                        arm.last_active_axis = None
                         print("\n⭐ MODE: CONTROLS — the arm MOVES, one isolated axis, half speed.\n")
                         print(map_reference(arm.frame))
                         print(MAP_HELP)
@@ -2133,19 +2130,19 @@ def main() -> int:  # noqa: PLR0915
                 # makes button assignment work from wherever Julien happens to be.
                 raw_axes = arm.reader.read()
                 buttons = getattr(arm.reader, "buttons", 0)
-                pressed = buttons & ~buttons_prev              # rising edge only
-                buttons_prev = buttons
+                pressed = buttons & ~arm.buttons_prev              # rising edge only
+                arm.buttons_prev = buttons
 
-                if learn_button is not None and pressed:
-                    warn = arm.axis_map.learn_button(learn_button, pressed)
+                if arm.learn_button is not None and pressed:
+                    warn = arm.axis_map.learn_button(arm.learn_button, pressed)
                     if warn:
                         print(f"\n  ⚠️  {warn}\n")
-                    elif learn_button == "open":
-                        learn_button = "close"
+                    elif arm.learn_button == "open":
+                        arm.learn_button = "close"
                         print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
                         print("   Now press the button you want for CLOSE …\n")
                     else:
-                        learn_button = None
+                        arm.learn_button = None
                         print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
                         print(arm.axis_map.buttons_row())
                         print("   (f swaps them if they are the wrong way round)\n")
@@ -2153,7 +2150,7 @@ def main() -> int:  # noqa: PLR0915
                     # A press counts as "the control you just used", so f reverses it.
                     # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
                     # a button never rebinds anything.
-                    last_input_kind = "button"
+                    arm.last_input_kind = "button"
                     if arm.axis_map.button_action(pressed) is None:
                         print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
                               f"gripper buttons (works in any mode)\n")
@@ -2161,7 +2158,7 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
                               f"you are in {arm.mode.upper()}\n")
 
-                if learn_button is None and robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
+                if arm.learn_button is None and robot.num_dofs() > N_ARM and arm.mode in ("teleop", "map"):
                     action = arm.axis_map.button_action(buttons)
                     if action == "open":
                         arm.gripper_value = clamp_gripper(arm.gripper_value + GRIPPER_BUTTON_RATE * dt)
@@ -2179,10 +2176,10 @@ def main() -> int:  # noqa: PLR0915
                         # ⛔ Note what is NOT here: any call that edits the map. Deflection
                         # observes; keys edit. The mode this replaced bound on deflection
                         # and destroyed the hand-dialled map (FINDINGS §11).
-                        keep, value = isolate(raw_axes, last_active_axis)
+                        keep, value = isolate(raw_axes, arm.last_active_axis)
                         if keep is not None:
-                            last_active_axis, last_active_value = keep, value
-                            last_input_kind = "axis"
+                            arm.last_active_axis, arm.last_active_value = keep, value
+                            arm.last_input_kind = "axis"
                         drive_axes = isolated_axes(raw_axes, keep)
                         scale_l = args.linear_scale * CONTROLS_SCALE
                         scale_a = angular_scale * CONTROLS_SCALE
@@ -2504,20 +2501,20 @@ def main() -> int:  # noqa: PLR0915
                     speeds = (f"lin {args.linear_scale * CONTROLS_SCALE:.3f} m/s  "
                               f"rot {np.degrees(angular_scale * CONTROLS_SCALE):.0f}°/s"
                               f"{'' if rotation else ' (OFF)'}")
-                    if last_active_axis is None:
+                    if arm.last_active_axis is None:
                         print(f"\r[CONTROLS] push the puck …  {axes_readout(raw_axes)}  {speeds}   ",
                               end="", flush=True)
                     else:
-                        drv = arm.axis_map.motion_driven_by(last_active_axis)
+                        drv = arm.axis_map.motion_driven_by(arm.last_active_axis)
                         if drv is None:
                             doing = "→ nothing (press 1-6 to assign)"
                         else:
-                            v = arm.axis_map.apply(isolated_axes(raw_axes, last_active_axis))[drv]
+                            v = arm.axis_map.apply(isolated_axes(raw_axes, arm.last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
                                     else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
                             doing = f"→ {motions_for(arm.frame)[drv]['short']} {unit}"
-                        print(f"\r[CONTROLS] puck {PUCK_AXES[last_active_axis]:<5} "
-                              f"{last_active_value:+.2f}  {doing:<28} {speeds}"
+                        print(f"\r[CONTROLS] puck {PUCK_AXES[arm.last_active_axis]:<5} "
+                              f"{arm.last_active_value:+.2f}  {doing:<28} {speeds}"
                               f"{' ' * 6}", end="", flush=True)
                 elif t >= next_report:
                     next_report += 1.0
