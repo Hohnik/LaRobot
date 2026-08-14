@@ -371,6 +371,29 @@ def run(moved: list[str]) -> int:
     leaked = sorted({n.lineno for n in ast.walk(fn)
                      if isinstance(n, ast.Name) and n.id == "one"
                      and not any(a <= n.lineno <= b for a, b in regions)})
+
+    # ⛔⭐ AND `arm` HAS THE SAME PROBLEM ONE LEVEL UP. Since the build became
+    # `for name in arm_names:`, `arm` is created inside that loop and therefore holds the
+    # LAST arm built once it ends. Every read after the loop is about "an arm" when the code
+    # means "the session", and with one arm it is right every time.
+    build_loops = [(n.lineno, n.end_lineno or n.lineno) for n in ast.walk(fn)
+                   if isinstance(n, ast.For)
+                   and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                           and c.func.id == "ArmSession" for c in ast.walk(n))]
+    if build_loops:
+        _, built_through = build_loops[0]
+        stale_arm = sorted({n.lineno for n in ast.walk(fn)
+                            if isinstance(n, ast.Name) and n.id == "arm"
+                            and n.lineno > built_through})
+        if stale_arm:
+            faults += len(stale_arm)
+            print(f"⛔ {len(stale_arm)} use(s) of `arm` AFTER the build loop (ends line "
+                  f"{built_through}):")
+            for lineno in stale_arm:
+                print(f"     line {lineno}: that is the LAST arm built, not the session")
+        else:
+            print(f"✓ `arm` is confined to the build loop (lines up to {built_through}); "
+                  "everything after it goes through `arms`")
     if leaked:
         faults += len(leaked)
         print(f"⛔ {len(leaked)} use(s) of the loop variable `one` OUTSIDE any loop that "

@@ -628,23 +628,35 @@ def test_one_arm_still_dry_runs_under_both_spellings() -> None:
         assert "DRY RUN" in done.stdout, f"{flags} printed no dry-run line"
 
 
-def test_two_arms_are_refused_rather_than_half_driven() -> None:
-    """⛔⭐ THE SAFETY STATEMENT OF STEP 2a, pinned so it cannot be lost by accident.
+def test_two_arms_now_START_where_they_used_to_be_refused() -> None:
+    """⭐⭐ THE DELETED TEST, REPLACED RATHER THAN REMOVED — and this is the moment it was
+    written for.
 
-    The script is still single-arm below the `ArmSession`: one puck, one axis map, one
-    robot, one status row. So `--arms B,G` would drive B, never build G, and print a plan
-    naming both. **An arm that is reported as under control while nothing commands it
-    sags** if someone has raised it (FINDINGS §11), which is why this refuses instead of
-    warning and continuing (working-contract rule 4).
+    Until 2026-08-14 `--arms B,G` was refused, because the script below `ArmSession` was
+    single-arm: one puck, one axis map, one robot, one park pose. A test pinned that refusal
+    **and said in its own docstring that finishing step 2 would mean deliberately deleting
+    it**, so the refusal could neither outlive its reason nor quietly vanish before it
+    (FINDINGS §52.1).
 
-    ⚠️ When step 2 finishes, this test is the thing that has to be deliberately deleted.
-    That is the point: the refusal cannot quietly outlive its reason, and it cannot
-    quietly disappear before it.
+    ⛔ It is deleted now, and this test replaces it with the opposite claim: two arms PLAN,
+    each with its own axis map and its own park pose. ⚠️ The dry run stops before anything is
+    built, so this proves the plan and the flags, never the hardware.
     """
-    done = _dry_run("--arms", "B,G")
-    assert done.returncode != 0, "two arms were accepted; the per-arm plumbing is not built"
-    assert "cannot run yet" in done.stderr, (
-        f"the refusal no longer explains itself: {done.stderr[-400:]}")
+    done = _dry_run("--arms", "B,G", "--start-mode", "hold")
+    assert done.returncode == 0, f"two arms were refused: {done.stderr[-400:]}"
+    for expected in ("ARM         : B", "ARM         : G",
+                     "axis map B", "axis map G", "park pose B", "park pose G"):
+        assert expected in done.stdout, f"the plan is missing {expected!r}"
+
+
+def test_two_arms_may_not_START_weightless() -> None:
+    """⛔ ROADMAP §6's ruling: two arms going weightless on a first run is the worst possible
+    first run. `g` reaches the same state, but only after the operator has deliberately
+    selected BOTH and pressed a key at a rig they are watching."""
+    done = _dry_run("--arms", "B,G", "--start-mode", "guide")
+    assert done.returncode != 0, "two arms were allowed to start weightless"
+    assert "refused" in done.stderr and "falling arm" in done.stderr, (
+        f"the refusal no longer explains itself: {done.stderr[-300:]}")
 
 
 def main() -> int:

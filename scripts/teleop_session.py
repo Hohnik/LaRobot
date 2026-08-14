@@ -739,24 +739,22 @@ def main() -> int:  # noqa: PLR0915
         arm_names = parse_arms(args.arm, args.arms, ARM_SERIALS, DEFAULT_ARM)
     except ValueError as exc:
         ap.error(str(exc))
-    # ⛔⭐ REFUSED, NOT ATTEMPTED, AND THIS IS WORKING-CONTRACT RULE 4: never
-    # warn-and-continue on a hazard you have correctly identified.
+    # ⛔⭐⭐ TWO ARMS NOW RUN, AND `--start-mode guide` IS REFUSED FOR THEM.
     #
-    # Step 1 made one arm's state into an object, so the *shape* takes N arms. Everything
-    # around it is still single-arm: one SpaceMouse is opened, one axis map is loaded, one
-    # robot is built, one park pose is read, one status row is painted. So `--arms B,G`
-    # today would build and drive B, never build G, and print a plan claiming both.
+    # ROADMAP §6's ruling, and it is the one refusal that replaced the blanket one: **two
+    # arms going weightless on a first run is the worst possible first run.** `g` reaches
+    # the same state, but only after the operator has selected BOTH deliberately and
+    # pressed a key at a rig they are watching. A flag does it before anything is on screen.
     #
-    # ⚠️ The specific hazard is not "a flag that does nothing". It is a flag that reads as
-    # two arms being under control while the second is not being commanded at all — and an
-    # uncommanded arm that someone has raised sags under gravity ([FINDINGS §11](../docs/FINDINGS.md)).
-    if len(arm_names) > 1:
+    # ⚠️ The blanket "two arms cannot run yet" refusal lived here until 2026-08-14 and is
+    # gone, along with the test that pinned it. That deletion is deliberate: the refusal
+    # existed because the script below was single-arm, and it no longer is.
+    if len(arm_names) > 1 and args.start_mode == "guide":
         ap.error(
-            f"--arms {','.join(arm_names)}: two arms cannot run yet. Step 1 of the "
-            "restructure moved one arm's state onto an ArmSession, but this script still "
-            "opens one SpaceMouse, loads one axis map, builds one robot and paints one "
-            "status row. Driving one arm while reporting two is worse than refusing. "
-            "ROADMAP §6.1 steps 2-3 are the remaining work; run one arm for now.")
+            f"--arms {','.join(arm_names)} --start-mode guide: refused. That would make "
+            f"{len(arm_names)} arms weightless before anything is on screen, and GUIDE is "
+            "the mode where an error in the dynamics model becomes a falling arm rather "
+            "than a droop. Start in hold, then press g once you are watching.")
 
     # Rotation is ON by default now. Julien: "the gripper cannot be tilted
     # currently and cannot be twisted". It was off for the first hardware run
@@ -820,7 +818,7 @@ def main() -> int:  # noqa: PLR0915
     #
     # ⛔ That is a safety requirement, not a preference. Ctrl-C is the "get me out of
     # here" key: it parks and then RELEASES the motors, so the pose it chooses must be
-    # one that is safe to be let go in. A waypoint saved mid-task — arm extended over
+    # arm that is safe to be let go in. A waypoint saved mid-task — arm extended over
     # the desk, gripper holding something — is exactly what that must never be.
     #
     # So `park` (slot 0, the base) is only ever changed deliberately with `s 0`, while
@@ -831,14 +829,14 @@ def main() -> int:  # noqa: PLR0915
     # keeps the old names from coming back.
     saved_slots = {name: park_slots(load_json(PARK_FILE, {}), name) for name in arm_names}
     # ⚠️ The eleven park fields used to be initialised here. They are `ArmSession`
-    # fields now, and the class's constructor sets every one to the identical value —
+    # fields now, and the class's constructor sets every arm to the identical value —
     # `PARK_SPEED` 0.40 and `PARK_RAMP` 0.20 are the same constant in both files, which
     # was checked before the move rather than assumed.
     # ⛔ Leaving them here as `arm.park_* = …` would run BEFORE `arm` exists, which is
     # the fault `scripts/check_restructure.py`'s ordering check exists to catch. It
     # caught all eleven. FINDINGS §48.
     # The blended path being followed, the cursor along it, and where each waypoint
-    # falls so the readout can say which one it is heading for.
+    # falls so the readout can say which arm it is heading for.
     blend_idx = 1                       # "smooth" — the sensible default
     ease_idx = 3                        # "both" — see motion.EASINGS
     # ⛔⭐ TWO CLOCKS, AND CONFLATING THEM PRINTED A WRONG NUMBER FOR A DAY.
@@ -848,9 +846,9 @@ def main() -> int:  # noqa: PLR0915
     # **"PARK reached in 0.0s"** on a park that had just taken 4.4 seconds: the last leg's
     # mark is passed at the end of the path, so the reset happened moments before arrival.
     # See [FINDINGS §34.3](../docs/FINDINGS.md).
-    # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"one good idea is definitely
+    # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"arm good idea is definitely
     # recording everything in the guide mode and then replaying it. That's a smart idea,
-    # definitely."* `w` records, `l` plays one back. The reasoning for why this may beat
+    # definitely."* `w` records, `l` plays arm back. The reasoning for why this may beat
     # saved waypoints is docs/ROADMAP.md §6.6; the movement itself lives in
     # src/recording.py so every decision about it is testable without an arm.
     #
@@ -858,10 +856,10 @@ def main() -> int:  # noqa: PLR0915
     # did. Corrected 2026-08-13 after checking it against the target data format.
     # `amazon-far/abc` wants `states_actions.bin` with **14 states and 14 actions per
     # timestep — two arms in ONE timeline** ([ROADMAP.md](../docs/ROADMAP.md) §9.2). A
-    # recorder owned by an arm produces one file per arm and **cannot** produce that.
-    # ⭐ So recording and playback are **session-level and span every arm**: one recorder
-    # samples all arms each cycle, and one playback cursor drives them all. Splitting the
-    # cursor per arm would let the two arms drift apart in time, which is the one thing a
+    # recorder owned by an arm produces arm file per arm and **cannot** produce that.
+    # ⭐ So recording and playback are **session-level and span every arm**: arm recorder
+    # samples all arms each cycle, and arm playback cursor drives them all. Splitting the
+    # cursor per arm would let the two arms drift apart in time, which is the arm thing a
     # bimanual demonstration must not do. Migration map: [ROADMAP.md](../docs/ROADMAP.md)
     # §6.1.
     take: Trajectory | None = None      # being recorded right now, or None
@@ -893,7 +891,7 @@ def main() -> int:  # noqa: PLR0915
     # which is the fault `scripts/check_restructure.py` check 3 catches.
 
     print("=== plan ===")
-    # ⭐ Named ARMS, plural, and it prints the serial of each. With one arm the line reads
+    # ⭐ Named ARMS, plural, and it prints the serial of each. With arm arm the line reads
     # exactly as it did before apart from the label, so nothing he checks before pressing
     # --yes has moved.
     for name in arm_names:
@@ -910,7 +908,7 @@ def main() -> int:  # noqa: PLR0915
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
     # ⭐ One map line per arm, read from the store — the same values the arms are about to
-    # be built with. With one arm the line reads as it always did apart from the arm's name.
+    # be built with. With arm arm the line reads as it always did apart from the arm's name.
     for name in arm_names:
         plan_map = map_store.for_arm(name, start_frame)
         print(f"  axis map {name}  : {plan_map.one_line(start_frame)}   (m to change it live)")
@@ -923,7 +921,7 @@ def main() -> int:  # noqa: PLR0915
     for name in arm_names:
         base = saved_slots[name].get(BASE_SLOT)
         print(f"  park pose {name} : "
-              f"{np.round(base, 3).tolist() if base else 'none saved — press s to set one'}")
+              f"{np.round(base, 3).tolist() if base else 'none saved — press s to set arm'}")
     print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     print(HELP)
@@ -932,7 +930,7 @@ def main() -> int:  # noqa: PLR0915
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
 
-    # ⚠️ ONE PUCK, and with two arms this becomes one call per arm with `exclude=` holding
+    # ⚠️ ONE PUCK, and with two arms this becomes arm call per arm with `exclude=` holding
     # the ones already taken — `pick_device_by_wiggle` already supports that and it is
     # tested (`scripts/test_puck_assignment.py`). Not wired yet: ROADMAP §6.1 step 2.
     # ⭐⭐ ONE PUCK PER ARM, ASSIGNED BY BEING MOVED. Two SpaceMice both report an EMPTY
@@ -942,8 +940,8 @@ def main() -> int:  # noqa: PLR0915
     #
     # ⛔ `exclude` IS THE PART THAT MATTERS WITH TWO ARMS, and without it this function can
     # hand the SAME puck to both: the single-device shortcut returns it unconditionally, and
-    # nothing stops the operator moving the one they already assigned. Both failures are
-    # silent, and the symptom — two arms following one hand — reads as a control bug rather
+    # nothing stops the operator moving the arm they already assigned. Both failures are
+    # silent, and the symptom — two arms following arm hand — reads as a control bug rather
     # than a device-assignment bug (`src/spacemouse.py`, 6 tests).
     #
     # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
@@ -968,7 +966,8 @@ def main() -> int:  # noqa: PLR0915
         pucks[name] = {"path": info["path"], "handle": handle,
                        "reader": TwistReader(handle)}
 
-    robot = None
+    # ⚠️ `robot = None` was declared here. Every robot handle now lives on its own
+    # `ArmSession`, and the teardown iterates `arms`, which is empty when nothing was built.
     # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
     #
     # The closing summary at the bottom of this function reads a field off `arm`, and it
@@ -995,10 +994,10 @@ def main() -> int:  # noqa: PLR0915
     # `mode` WAS THE LAST FIELD TO MOVE. `build_robot()` below is called with
     # `zero_gravity=(start_mode == "guide")`, and it runs BEFORE the robot exists — so
     # before the `ArmSession` that would hold the mode can exist either. The name with the
-    # most references (48) was therefore the last one that could move, which is the
+    # most references (48) was therefore the last arm that could move, which is the
     # opposite of the order anyone would choose for comfort. FINDINGS §50.
     #
-    # ⚠️ It is deliberately NOT the same variable. Keeping one `mode` and assigning it
+    # ⚠️ It is deliberately NOT the same variable. Keeping arm `mode` and assigning it
     # twice would put the script and the object out of step for the lines in between,
     # which is the state neither models.
     start_mode = args.start_mode
@@ -1015,7 +1014,7 @@ def main() -> int:  # noqa: PLR0915
     # it used to be indistinguishable from 0 °C. See `ThermalGuard`.
     # ⚠️ `hottest` and `jaw_temp` were declared here. They are `ArmSession` fields now, so
     # each arm reports its OWN temperatures on its own status row — as session locals they
-    # were one arm's reading painted on whichever row was being drawn.
+    # were arm arm's reading painted on whichever row was being drawn.
     # ⛔ Not left here as `arm.hottest = None`: that would run before `arm` exists, which
     # is the ordering fault `scripts/check_restructure.py` check 3 catches.
     next_park_report = 0.0
@@ -1027,93 +1026,68 @@ def main() -> int:  # noqa: PLR0915
 
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
-        print(f"building robot — enables {n_motors} motors, starts the control loop …")
-        robot, note = build_robot(arm_names[0], zero_gravity=(start_mode == "guide"),
-                                  with_gripper=not args.no_gripper)
-        print(f"  {note}\n")
-        # ⚠️ `chain = robot.motor_chain` was here and is gone. The thermal read is per arm
-        # now and asks `one.robot.motor_chain` each cycle, which is also the honest thing to
-        # ask: a cached chain handle from one arm is meaningless to another.
+        # ⭐⭐⭐ ONE ROBOT PER ARM, BUILT IN ORDER. ROADMAP §6.1 step 3.
+        #
+        # ⛔ `build_robot()` energises motors and is the single most dangerous call in the
+        # project, so it stays here, visible, in the script — never inside `ArmSession`.
+        # With two arms it happens twice, and the second arm starts while the first is
+        # already holding its pose under power.
+        #
+        # ⚠️ If the SECOND build fails, the first arm is already energised. The `finally`
+        # block disables every arm it finds in `arms`, and the arm is appended as soon as it
+        # is constructed, so a half-built session still shuts the built half down properly.
+        for name in arm_names:
+            print(f"building arm {name} — enables {n_motors} motors, "
+                  "starts the control loop …")
+            robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
+                                      with_gripper=not args.no_gripper)
+            print(f"  {note}\n")
 
-        # ⭐⭐ STEP 1 OF THE BIMANUAL RESTRUCTURE STARTS HERE. ROADMAP §6.1.
-        #
-        # One arm's state moves out of this function's locals and onto one object, so
-        # that N of them can run in one loop and `--arms B,G` becomes the same code with
-        # N=2. **No behaviour changes.** The migration is landing as a series of commits,
-        # each one moving a group of state and each one leaving this script runnable, so
-        # that a failure can be traced to a commit instead of to 247 edit sites.
-        #
-        # ⚠️ Built HERE and not earlier, for a reason that constrains the whole plan:
-        # `ArmSession` takes an already-built robot handle, and `build_robot()` above
-        # needs `mode` to decide `zero_gravity`. So `mode` is the LAST field that can
-        # move, not the first, even though it has the most references (48).
-        #
-        # ⭐ `arm.thermal` is now THE thermal guard for this session; the script no longer
-        # keeps its own. Moving it needed the `arm = None` declaration above, because the
-        # closing summary reads it on the path where this very call failed. FINDINGS §48.3.
-        # ⛔⭐⭐ `start_frame`, AND A MECHANICAL REWRITE PUT `arm.frame` HERE FOR A MOMENT.
-        # `arm` is None on this line — it is being created by it — so that read raises
-        # AttributeError with the motors already enabled by `build_robot()` above, and the
-        # `finally` block then disables them. On a raised arm that is a sag.
-        # ⚠️ `check_restructure.py`'s ordering check said "nothing touches `arm` earlier"
-        # and was right: the read was ON the construction line, not before it. The check now
-        # covers the construction statement itself (FINDINGS §53.1).
-        arm = ArmSession(robot, name=arm_names[0], frame=start_frame,
-                         gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
-                         warn_at=TEMP_WARN, stop_at=TEMP_STOP,
-                         axis_map=map_store.for_arm(arm_names[0], start_frame),
-                         slots=saved_slots[arm_names[0]], base_slot=BASE_SLOT,
-                         reader=pucks[arm_names[0]]["reader"])
-        # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
-        #
-        # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for a
-        # class that may be built before anyone has chosen a mode. **The script has already
-        # chosen one**, from `--start-mode`, and `build_robot()` above has already acted on
-        # it by deciding `zero_gravity`.
-        #
-        # ⛔ Without this assignment, `--start-mode guide` would build a WEIGHTLESS robot
-        # and then run the loop believing it was in HOLD. **Nothing would raise.** The arm
-        # would hang from gravity compensation alone while the screen said HOLD, which is
-        # the defect class FINDINGS §0 exists for. Found by asking what the class's own
-        # default is, not by anything failing. FINDINGS §50.
-        arm.mode = start_mode
-        arm.prev_q = np.asarray(robot.get_joint_pos(), dtype=float)[:N_ARM]
+            arm = ArmSession(robot, name=name, frame=start_frame,
+                             gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
+                             warn_at=TEMP_WARN, stop_at=TEMP_STOP,
+                             axis_map=map_store.for_arm(name, start_frame),
+                             slots=saved_slots[name], base_slot=BASE_SLOT,
+                             reader=pucks[name]["reader"])
+            # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
+            #
+            # `ArmSession.__init__` sets `self.mode = "hold"`, which is the right default for
+            # a class that may be built before anyone has chosen a mode. **The script has
+            # already chosen arm**, from `--start-mode`, and `build_robot()` above has
+            # already acted on it by deciding `zero_gravity`.
+            #
+            # ⛔ Without this assignment, `--start-mode guide` would build a WEIGHTLESS robot
+            # and then run the loop believing it was in HOLD. **Nothing would raise.** The arm
+            # would hang from gravity compensation alone while the screen said HOLD, which is
+            # the defect class FINDINGS §0 exists for. Found by asking what the class's own
+            # default is, not by anything failing. FINDINGS §50.2.
+            arm.mode = start_mode
+            arm.prev_q = np.asarray(arm.robot.get_joint_pos(), dtype=float)[:N_ARM]
+            arms.append(arm)
 
-        # ⭐⭐ THE LIST THE LOOP WILL ITERATE, AND THE SELECTOR THAT AIMS THE MODE KEYS.
-        # ROADMAP §6.1 step 2.
-        #
-        # ⚠️ One entry today, built by hand rather than in a loop, because building a
-        # second robot is a hardware action and `--arms B,G` still refuses. When it stops
-        # refusing, the single build above becomes the body of `for name in arm_names:`
-        # and this line becomes the list it appends to.
-        #
-        # ⭐ `arm` stays the name for the one arm being acted on, which is what keeps the
-        # 196 `arm.<field>` sites and `scripts/check_restructure.py` meaningful.
-        arms.append(arm)
-        # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg
-        # weightless in one keypress, and GUIDE is where a dynamics-model error becomes a
-        # falling arm rather than a droop (FINDINGS §11.1). Each arm always follows its
-        # own puck. `src/arm_session.py::ArmSelector` holds the cycle and its tests.
+            # ⭐ DEFAULT PARK POSE = WHEREVER THIS ARM STARTED. Julien: *"if the standard set
+            # position for park mode is just the starting position, then I can always just
+            # press p and then d, and I don't have to do anything with my hands."*
+            #
+            # ⭐ Per arm, which removes a real dependency he flagged: the two arms do NOT have
+            # to be physically placed the same way before a session, because each arm parks
+            # back to its own measured start rather than to a pose recorded from the other.
+            #
+            # ⚠️ It is only as good as the pose you start in. Start with the arm drooped and
+            # PARK will faithfully return it to drooped, which is why the plan prints the
+            # actual numbers rather than just saying "default".
+            if arm.base_pose is None:
+                arm.base_pose = np.asarray(arm.robot.get_joint_pos(), dtype=float).tolist()
+                print(f"  park pose {name} : none saved — defaulting to the pose the arm is "
+                      f"in NOW, {np.round(np.asarray(arm.base_pose)[:N_ARM], 3).tolist()}")
+                print("                (press s to set a different arm; q then p then d "
+                      "parks and quits)")
+
+        # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg weightless
+        # in arm keypress, and GUIDE is where a dynamics-model error becomes a falling arm
+        # rather than a droop (FINDINGS §11.1). Each arm always follows its own puck.
+        # `src/arm_session.py::ArmSelector` holds the cycle and its tests.
         selection = ArmSelector(arm_names)
-
-        # ⭐ DEFAULT PARK POSE = WHEREVER THE ARM STARTED. Julien: *"if the standard
-        # set position for park mode is just the starting position, then I can always
-        # just press p and then d, and I don't have to do anything with my hands."*
-        #
-        # This also removes a real dependency he flagged: the two arms no longer have
-        # to be physically placed the same way before a session, because each one
-        # parks back to its own measured start rather than to a pose recorded from the
-        # other. `s` still overrides it, and a saved pose still wins.
-        #
-        # ⚠️ It is only as good as the pose you start in. Start with the arm drooped
-        # and PARK will faithfully return it to drooped — which is why the plan line
-        # prints the actual numbers rather than just saying "default".
-        startup_pose = np.asarray(robot.get_joint_pos(), dtype=float)
-        if arm.base_pose is None:
-            arm.base_pose = startup_pose.tolist()
-            print(f"  park pose   : none saved — defaulting to the pose the arm is in NOW, "
-                  f"{np.round(startup_pose[:N_ARM], 3).tolist()}")
-            print("                (press s to set a different one; q then p then d parks and quits)")
 
         # ⛔ DELIBERATELY NOT RE-CHECKING THE GRIPPER FRAME HERE. Do not add it back.
         #
@@ -1303,16 +1277,19 @@ def main() -> int:  # noqa: PLR0915
                   f"{one.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
                   "Press h or t to stop.\n")
 
-        if arm.mode == "teleop":
-            enter_teleop(arm)
-        elif arm.mode == "hold":
-            enter_hold(arm)
-        elif arm.mode == "guide":
-            # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
-            # by enter_guide() — so the drift reference has to be taken here too, or the
-            # readout silently shows nothing for the whole first GUIDE period. That gap
-            # is exactly the 33 seconds in which the arm sank unremarked on 2026-08-10.
-            arm.guide_ref = np.asarray(robot.get_joint_pos(), dtype=float)
+        # ⭐ Each arm enters its start mode, per arm. It used to run once, after the single
+        # build, reading the one `robot` local.
+        for one in arms:
+            if one.mode == "teleop":
+                enter_teleop(one)
+            elif one.mode == "hold":
+                enter_hold(one)
+            elif one.mode == "guide":
+                # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
+                # by enter_guide() — so the drift reference has to be taken here too, or the
+                # readout silently shows nothing for the whole first GUIDE period. That gap
+                # is exactly the 33 seconds in which the arm sank unremarked on 2026-08-10.
+                one.guide_ref = np.asarray(one.robot.get_joint_pos(), dtype=float)
 
         dt = 1.0 / CONTROL_HZ
         # ⭐⭐ THE MEASURED LENGTH OF THE LAST CYCLE, next to the nominal one. Found on
@@ -1335,7 +1312,8 @@ def main() -> int:  # noqa: PLR0915
         with KeyReader() as keys:
             if not keys.enabled:
                 print("⚠️  stdin is not a terminal — keys will not work. Ctrl-C still does.\n")
-            print(f"⭐ MODE: {arm.mode.upper()}\n")
+            print("⭐ MODE: "
+                  + " · ".join(f"{one.name} {one.mode.upper()}" for one in arms) + "\n")
 
             # ⛔⭐ CTRL-C MUST NOT RELEASE THE ARM, and it used to.
             #
@@ -1607,7 +1585,13 @@ def main() -> int:  # noqa: PLR0915
                             # pose is a jump across whatever separates them. So the
                             # existing, tested, interruptible park drives there, and only
                             # when it arrives does playback begin.
-                            begin_path(arm, [("recording start", list(replay_pending.start_pose()))],
+                            # ⚠️ `rec_arm`, the arm the recording belongs to. Playback is
+                            # session-level and single-arm today, and `l` refuses when more
+                            # than one arm is connected, so this parks the arm that will
+                            # actually follow the recording.
+                            begin_path(rec_arm,
+                                       [("recording start",
+                                         list(replay_pending.start_pose()))],
                                        "the recording's start pose")
                             print("     then it plays the recording. Press h or t to stop.\n")
                         else:
@@ -2019,6 +2003,20 @@ def main() -> int:  # noqa: PLR0915
                         # and this cannot be tested on the arm from here — so this fixes
                         # the message and changes nothing the motors see.
                         hint(f"already in {MODE_KEYS[k]}")
+                    elif k in "wl" and len(arms) > 1:
+                        # ⛔⭐ THE RECORDER IS SINGLE-ARM AND REFUSING IS THE HONEST ANSWER.
+                        # `Trajectory` holds ONE arm's joints and the playback cursor is one
+                        # session-level clock, so with two arms a recording would capture arm
+                        # B while the demonstration used both, and a playback would drive
+                        # both arms from the same slice of one arm's data.
+                        #
+                        # ⚠️ ABC wants 14 states and 14 actions per timestep — both arms in
+                        # ONE timeline (ROADMAP §9.2) — so this is not a small extension of
+                        # the current format. It is ROADMAP §8.2 item 7, and until it exists
+                        # a recording made with two arms connected would be a dataset that
+                        # lies about how it was produced.
+                        hint(f"{'recording' if k == 'w' else 'playback'} is one arm at a "
+                             "time until the two-arm recorder exists (ROADMAP §9.2)")
                     elif k == "w":
                         # ⭐ START OR STOP RECORDING. Deliberately allowed in EVERY mode,
                         # not only GUIDE. Hand-guiding is the intended use and the reason
@@ -2955,10 +2953,21 @@ def main() -> int:  # noqa: PLR0915
                 print(f"  previous contents kept in {BACKUP_FILE.relative_to(REPO)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"\n⚠️  could not save the axis map: {type(exc).__name__}: {exc}")
-        if robot is not None:
+        # ⛔⭐ EVERY ARM IS DISABLED, and each one is wrapped on its own. If the FIRST
+        # `shutdown_robot()` raised, an unwrapped loop would leave the second arm's motors
+        # ENERGISED and unattended, which is the worst possible outcome of a teardown. An
+        # arm is appended to `arms` the moment it is constructed, so a session whose second
+        # build failed still disables the first arm here.
+        if arms:
             _SHUTTING_DOWN["yes"] = True
-            disabled = shutdown_robot(robot)
-            print(f"\nmotors confirmed disabled: {disabled}")
+            for one in arms:
+                try:
+                    disabled = shutdown_robot(one.robot)
+                    print(f"\narm {one.name} motors confirmed disabled: {disabled}")
+                except Exception as exc:  # noqa: BLE001
+                    print(f"\n⛔ arm {one.name}: could not confirm the motors are disabled: "
+                          f"{type(exc).__name__}: {exc}")
+                    print("   ⚠️ TREAT THAT ARM AS LIVE. Cut the mains if it is raised.")
 
             # ⭐⭐ RECORD THE MOMENT, IF SOMETHING WENT WRONG. FINDINGS §45.
             #
@@ -3047,15 +3056,18 @@ def main() -> int:  # noqa: PLR0915
     # `hottest motor seen this session: 0°C`, which is a fabricated number for a session
     # that never ran. A thermal guard reporting a plausible zero is the exact defect
     # `ThermalGuard` was written to remove ([FINDINGS §24](../docs/FINDINGS.md)).
-    if arm is not None:
-        print(f"\nhottest motor seen this session: {arm.thermal.max_seen:.0f}°C")
-        if arm.thermal.max_jaw_seen:
+    # ⭐ One temperature report per arm, and `arms` is EMPTY when the build failed — the
+    # same guard as everywhere else in this teardown, expressed as a loop that does not run.
+    for one in arms:
+        print(f"\narm {one.name} hottest motor seen this session: "
+              f"{one.thermal.max_seen:.0f}°C")
+        if one.thermal.max_jaw_seen:
             # The number that decides whether the gripper frame fix held. A plateau near
             # idle (31-36 °C) is the pass; a steady climb is the failure, and it is
             # invisible in `hottest` because the shoulder runs hotter all session.
-            print(f"hottest the GRIPPER (motor 7) got: {arm.thermal.max_jaw_seen:.0f}°C")
-    else:
-        print("\nno temperatures to report — the robot was never built, so no motor ran.")
+            print(f"  hottest the GRIPPER (motor 7) got: {one.thermal.max_jaw_seen:.0f}°C")
+    if not arms:
+        print("\nno temperatures to report — no robot was built, so no motor ran.")
     # ⚠️ One report per arm, and `arms` is EMPTY on the failed-build path — same guard as
     # the thermal lines above, expressed as a loop that does not run rather than as an
     # `if`. That is why `arms` is declared before the `try` (FINDINGS §48.3).
