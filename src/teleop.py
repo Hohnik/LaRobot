@@ -391,28 +391,34 @@ class CartesianTeleop:
 #: like a pure improvement. Working-contract rule 4: never continue past a hazard you have
 #: correctly identified.
 #:
-#: ⛔⭐⭐ THE FLOOR IS −0.10 m AND IT WAS 0.05 FOR ABOUT AN HOUR. Julien caught it before
-#: it ever ran: *"the bottom floor five centimeter thing… sounds problematic because then I
-#: can't really pick anything up from the table anymore."* **He is right.**
+#: ⛔⭐⭐ THE FLOOR IS 0.0 — EXACTLY THE BASE PLANE — AND IT TOOK TWO CORRECTIONS FROM
+#: JULIEN TO GET THERE. Both were right and both are worth keeping, because the pair of
+#: them defines what this number is allowed to be.
 #:
-#: A floor 5 cm above the base plane stops the tip 5 cm short of anything lying on the
-#: desk, and picking objects off the desk is the whole point of the rig. A limit that
-#: forbids the task is worse than no limit, because it will simply be switched off.
+#: **It shipped at +0.05 m.** He caught it before it ran: *"the bottom floor five
+#: centimeter thing… sounds problematic because then I can't really pick anything up from
+#: the table anymore."* A floor above the desk stops the tip short of everything lying on
+#: it, and picking things up off the desk is what the rig is for.
 #:
-#: ⚠️⚠️ **So be exact about what this number is for. It bounds a GROSS downward excursion.
-#: It is NOT desk protection and it cannot be**, because where the desk sits relative to
-#: the model's origin has never been measured (ROADMAP §8.4, his own ruling that measuring
-#: the setup waits until the rig stops moving around). −0.10 m is chosen so that:
+#: **I then over-corrected to −0.10 m**, reasoning that the floor should only bound a gross
+#: plunge. He caught that too: *"ten centimeter below doesn't make any sense because then
+#: it's still gonna crash into the table. So maybe do, like, one millimeter above or
+#: something… or just do exactly on the base."*
 #:
-#:   * the tip can reach the desk even if the base plate is several cm thick,
-#:   * the tip still cannot reach the **z = −0.377 m** this arm can otherwise get to,
-#:   * every park pose (z ≥ 0.174) clears it by a wide margin.
+#: ⭐⭐ **He is right both times, and the two objections bracket the answer exactly.** Too
+#: high forbids the task. Too low permits driving into the desk. **The base plane is the
+#: only defensible value**, because the arm is bolted to the desk, so the desk is at or
+#: just below z = 0 and the tip reaching z = 0 is a tip touching the desk.
 #:
-#: ⭐ **The real fix is to measure the desk height once**, and then this becomes desk
-#: protection rather than a sanity bound. Until then the status line warns below z = 0,
-#: which is the base plane, so the operator can see it coming.
+#: ⚠️ **It is his choice and it is meant to be tried**: *"we can test around with it
+#: later."* If a flat object turns out to need a few mm below, `--floor -0.005` is one flag.
+#: ⛔ Do NOT raise it above 0 again. That is the mistake this comment exists to prevent.
+#:
+#: ⭐ What it still protects against: this arm can otherwise put its tip at **z = −0.377 m**,
+#: well below its own base. Every park pose sits at z ≥ 0.174, so the limit never
+#: interferes with `q p d`. ⚠️ Measuring the true desk height remains open (ROADMAP §8.4).
 REACH_LIMIT = 0.60          # m from the base
-FLOOR_LIMIT = -0.10         # m — a bound on a gross excursion, NOT desk protection
+FLOOR_LIMIT = 0.0           # m — the base plane, which is the desk to within a plate
 
 
 #: ⛔⭐⭐ HOW FAR PAST THE STARTING POSE TO OPEN A WIDENED LIMIT, and it must not be zero.

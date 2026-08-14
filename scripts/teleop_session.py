@@ -2298,10 +2298,41 @@ def main() -> int:  # noqa: PLR0915
             # chain dies, the arm is NOT released — it falls through to the consent
             # flow below, because "I could not reach the safe pose" is exactly when a
             # human should decide rather than a default.
+            # ⭐⭐ EXTENDED 2026-08-14 FROM CTRL-C TO EVERY UNPLANNED STOP. Julien's
+            # request, after a chain death dropped the arm: *"when the robot is being
+            # moved and stuff, and then it crashes for some reason, it should always
+            # resort to trying to do the safe crash… It should be, like, when I do
+            # control c."*
+            #
+            # ⛔⭐ BE EXACT ABOUT WHAT THIS CAN AND CANNOT DO, because the failure that
+            # prompted it is the one case it cannot help. When the CAN link dies —
+            # which is what happened, all seven motors latching `0xD loss of
+            # communication` (FINDINGS §46) — **the arm cannot be commanded at all**,
+            # so no park is possible and it sags. `chain_alive()` is the gate, and it
+            # was already false in that session.
+            #
+            # ⭐ What it DOES cover is every other way a session can end badly, and
+            # those are the majority: an exception in our own loop, a thermal stop, a
+            # guard refusing, an IK failure. In all of those the chain is still alive
+            # and the arm was previously left holding until a human answered a menu.
+            #
+            # ⚠️ A thermal stop parks too, deliberately. Holding keeps current in a hot
+            # motor indefinitely and disabling drops the arm; parking gets it to a
+            # supported pose and THEN removes current, which is better than both.
+            #
+            # ⛔ `q` is deliberately NOT auto-parked. Julien uses `q p d` and may want
+            # `g` instead, so a planned quit keeps its menu. Only unplanned stops park
+            # themselves.
+            planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
+            unplanned = not planned_quit
             auto_parked = False
-            if chain_alive(robot) and interrupted and park is not None:
+            if chain_alive(robot) and (interrupted or unplanned) and park is not None:
                 enter_hold()
-                print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
+                if interrupted:
+                    print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
+                else:
+                    print(f"\n⭐ SAFE STOP after {stop_reason!r} — the chain is still alive, so")
+                    print("   the arm is being parked to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
                 outcome = park_and_wait(robot, keys, park, clamp_gripper,
                                         ramp=park_ramp, speed=park_speed)

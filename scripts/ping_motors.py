@@ -96,6 +96,11 @@ REST_STEP = {
     "DM4310": {"vel": 30 / 4095, "trq": 10 / 4095},
 }
 
+#: Above this a motor is actually being moved. ⭐ Not chosen by feel: a HELD arm wobbles
+#: at 0.032-0.038 rad/s (docs/FINDINGS.md §33.1), and `check_recordings.py` already uses
+#: 0.05 for the same judgement. Reusing it keeps one number for one question.
+AT_REST_LIMIT = 0.05        # rad/s
+
 
 def describe(info: object) -> str:
     """Format a FeedbackFrameInfo.
@@ -294,16 +299,32 @@ def main() -> int:
     if at_rest:
         # ⭐ Report motion in COUNTS, not rad/s. "0.0220 rad/s" reads like drift and is
         # three quantisation steps from the zero code, i.e. the arm is standing still.
+        # ⛔⭐ THE THRESHOLD IS A MEASURED NUMBER NOW, AND IT WAS NOT AT FIRST.
+        #
+        # The first version warned above 5 quantisation steps, which is 0.012 rad/s on a
+        # DM4340. On 2026-08-14 that fired on a perfectly healthy freshly-powered arm —
+        # motor 2 read 0.0171 rad/s, 7 steps — and announced *"something is moving or
+        # pushing the arm"* when nothing was.
+        #
+        # ⛔ The number to use already existed and I did not look it up. FINDINGS §33.1
+        # measured a HELD arm wobbling at **0.032 to 0.038 rad/s**, and
+        # `check_recordings.py` already uses **0.05 rad/s** as its not-moving threshold
+        # for exactly that reason. So the old threshold sat a factor of three below the
+        # known floor and could only produce false alarms.
+        #
+        # ⭐ Same lesson as FINDINGS §36.3: a threshold picked by feel reads as measured
+        # because it has a number in it. Reuse the measurement that exists.
         moving = []
         for motor_id, mtype, vel in at_rest:
             counts = abs(vel) / REST_STEP.get(mtype, REST_STEP["DM4310"])["vel"]
-            if counts > 5:
+            if abs(vel) > AT_REST_LIMIT:
                 moving.append((motor_id, vel, counts))
         if moving:
-            print("\n⚠️  these motors are NOT at rest:")
+            print(f"\n⚠️  these motors are moving faster than {AT_REST_LIMIT} rad/s:")
             for motor_id, vel, counts in moving:
                 print(f"   motor {motor_id}: {vel:+.4f} rad/s = {counts:.0f} quantisation steps from zero")
-            print("   Something is moving or pushing the arm. Expected at rest: 1 to 3 steps.")
+            print("   Something is moving or pushing the arm. A HELD arm wobbles at")
+            print("   0.032-0.038 rad/s (docs/FINDINGS.md §33.1), so this is above that.")
         else:
             worst = max(
                 abs(v) / REST_STEP.get(t, REST_STEP["DM4310"])["vel"] for _, t, v in at_rest

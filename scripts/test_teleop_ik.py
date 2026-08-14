@@ -388,10 +388,17 @@ def test_the_DEFAULT_floor_still_bounds_a_gross_excursion() -> None:
     assert out[2] > -0.30
 
 
-def test_every_park_pose_clears_the_default_floor_by_a_wide_margin() -> None:
-    """The measured park poses. If a limit ever stopped a park, `q p d` would break."""
+def test_every_park_pose_clears_the_default_floor() -> None:
+    """The measured park poses. If a limit ever obstructed a park, `q p d` would break.
+
+    ⚠️ This asked for 0.20 m of clearance while the floor sat at −0.10, and it failed the
+    moment Julien moved the floor to the base plane: the lowest park pose is at z = 0.174,
+    so it clears a zero floor by 0.174 rather than 0.20. **The test was pinning the old
+    floor value through a margin, instead of pinning the property it cares about** — that
+    a park is never obstructed. 0.15 m is that property, with room to spare.
+    """
     for z in (0.174, 0.179, 0.306):
-        assert z - FLOOR_LIMIT > 0.20, f"park pose at z={z} is only {z - FLOOR_LIMIT:.2f} above the floor"
+        assert z - FLOOR_LIMIT > 0.15, f"park pose at z={z} is only {z - FLOOR_LIMIT:.2f} above the floor"
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

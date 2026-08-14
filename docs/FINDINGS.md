@@ -2691,3 +2691,94 @@ A floor **+0.05 m above the base plane** stops the tip 5 cm short of anything ly
 - ⚠️ **The file is evidence, not source.** `recordings/` is gitignored on purpose, and `describe()` tells the operator to paste it rather than commit it. An incident file carries a full pose.
 
 **433 → 444 headless tests.**
+
+---
+
+## 46. ✅⭐⭐⭐ THE FAULT CODE IS `0xD` LOSS OF COMMUNICATION, ON ALL SEVEN MOTORS — THE CAUSE IS SETTLED — 2026-08-14, 15:00
+
+> The first latched motor fault this repo has ever managed to read. [§39.1](FINDINGS.md)'s fix landed on its first real use, and the answer is unambiguous.
+
+### 46.0 ✅⭐⭐⭐ WHAT THE MOTORS SAID
+
+```
+  ⛔ motor 1 (DM4340): LATCHED FAULT, left in place
+       0xD loss of communication — LED: red, FLASHING
+  … the same on motors 2, 3, 4, 5, 6 and 7
+⛔ 7 motor(s) are holding a LATCHED FAULT, and it was NOT cleared
+```
+
+⭐⭐⭐ **All seven motors latched `0xD`, and that settles the cause.** A motor problem latches on *that* motor. **Seven motors independently reporting "I lost communication" means the bus went away from every motor's point of view**, which is the CAN adapter, not a motor. [§44.3](FINDINGS.md)'s hypothesis is now confirmed by the motors themselves.
+
+⭐ **And it explains why the console blamed motor 5.** Motor 5 was simply the one being polled at the instant the link vanished. **There was never anything wrong with motor 5**, and a reading of that log which chases the wrist would have been a wasted day.
+
+✅ **Everything my analysis in [§44](FINDINGS.md) said is confirmed, and one part of it is now over-cautious.** The 3.3x shoulder torque at the extended pose ([§44.2](FINDINGS.md)) was recorded as a *plausible unproven contributor*. **It can be demoted: a torque story predicts a fault on a loaded motor, and what happened was a communication fault on all seven simultaneously.** ⚠️ It is not fully excluded, because current draw can still couple noise onto a bus, but it is no longer the leading explanation of anything.
+
+### 46.1 ⭐⭐ THE FIX THAT MADE THIS READABLE, AND WHAT IT COST TO NOT HAVE IT
+
+⛔ **Before 2026-08-14 this information could not be obtained.** `ping_motors.py` called `motor_on()`, which loops `clean_error()` until the code reads normal, **with the root log level forced to ERROR so both messages naming the fault are suppressed** ([§39.1](FINDINGS.md)). Every attempt to look erased the answer and reported a healthy motor.
+
+⭐⭐ **So the 2026-08-13 blinking lights are now explained retroactively too.** They will have been the same `0xD`, latched when the colleague's session dropped off the bus, and the 18:00 ping erased it. [§36.0](FINDINGS.md) concluded *"the lights are not reporting a motor error"* on the strength of a reading taken after the erasure. **The lights were reporting exactly that.**
+
+⭐ **The dead `--attempt-error-clear` flag cost two days of not knowing.** That is what a guard wired to nothing is worth, stated as a number.
+
+### 46.2 ⭐ HOW THE RIG CAME BACK, AND THE PROCEDURE IS NOW KNOWN
+
+⛔ **Replugging USB was NOT enough.** Julien: *"I tried your command, which didn't work after I unplugged the USB device, but then I unplugged the arm from the power and replugged it and seems to work now."*
+
+⭐⭐ **That is exactly right and it follows from the fault being in the motors.** The CANable is powered from USB, so a USB replug clears the adapter's DFU state. **The motors are powered from the wall, so a latched motor fault survives any amount of USB replugging** ([§37.6](FINDINGS.md) established that the blinking survived being unplugged, for the same reason). **Two separate power domains, two separate resets.**
+
+**So the recovery procedure, in full:**
+
+| symptom | what to cycle |
+|---|---|
+| `DFU in FS Mode` on an adapter | **USB.** Unplug the hub from the Mac, wait ten seconds, replug |
+| motors blinking red, `0xD` latched | ⭐ **MAINS.** Unplug the arm's power and replug it. A USB replug cannot touch this |
+| both at once, which is this case | **both, USB first** so `check_rig.py` can confirm the adapters before the motors are asked anything |
+
+✅ **Confirmed working:** after the mains cycle, all seven motors read `err=0x1 (normal)`, 31-34 °C, jaws reconciling with the usual −2π shift at 3.6% open.
+
+⚠️ **Note what this means for reading a fault: a mains cycle erases it.** So the order matters — **ping first, then power-cycle.** Had he power-cycled before pinging, `0xD` would have been lost again.
+
+### 46.3 ⛔ MY AT-REST WARNING FIRED ON A HEALTHY ARM, AND THE RIGHT NUMBER ALREADY EXISTED
+
+The second ping printed *"motor 2 is NOT at rest: −0.0171 rad/s = 7 quantisation steps. Something is moving or pushing the arm."* **Nothing was moving.** 0.0171 rad/s is about 1°/s.
+
+⛔ **The threshold was 5 quantisation steps, which I picked by feel, and the measured number was already in this document.** [§33.1](FINDINGS.md) measured a **held** arm wobbling at **0.032-0.038 rad/s**, and `check_recordings.py` already uses **0.05 rad/s** for the same judgement. **Five steps on a DM4340 is 0.012 rad/s, a factor of three below the known floor, so it could only ever produce false alarms.**
+
+✅ Fixed to `AT_REST_LIMIT = 0.05`, reusing the existing measurement. ⭐ **Same shape as [§36.3](FINDINGS.md): a threshold chosen by feel reads as measured because it has a number in it.** The fix is to look for the measurement that already exists before inventing one.
+
+**444 → 450 headless tests.**
+
+---
+
+## 47. ✅⭐⭐ A CRASH NOW PARKS THE ARM INSTEAD OF DROPPING IT, AND THE FLOOR IS THE BASE PLANE — 2026-08-14, 15:30
+
+### 47.0 ✅⭐⭐ THE SAFE STOP — his request, and exactly what it can and cannot do
+
+> Julien: *"when the robot, um, is being moved and stuff, and then it crashes for some reason, it should always resort to… trying to do the safe crash if that's easy to implement for everything… so that we can go around the problem that it just deactivates as soon as it crashes. It should be, like, when I do control c."*
+
+✅ **Done.** Ctrl-C already parked the arm to the session's starting pose and then disabled. **That behaviour now applies to every unplanned stop**: an exception in the loop, a thermal stop, a guard refusing, an IK failure. Before this, those ended with the arm holding until a human answered a menu.
+
+⛔⭐⭐ **BE EXACT ABOUT THE LIMIT, BECAUSE THE FAILURE THAT PROMPTED THIS IS THE ONE CASE IT CANNOT HELP.** When the CAN link dies, the arm **cannot be commanded at all**, so no park is possible and it sags. That is precisely what happened: all seven motors latched `0xD loss of communication` ([§46.0](FINDINGS.md)), and `chain_alive()` was already false. **This feature would not have saved that session and nothing in software would have.** ⭐ It covers every *other* way a session ends badly, and those are the majority.
+
+⚠️ **A thermal stop parks too, and that is deliberate rather than an oversight.** Holding keeps current in a hot motor indefinitely; disabling drops the arm. **Parking gets it to a supported pose and then removes current, which is better than both.**
+
+⛔ **`q` deliberately still shows its menu.** Julien uses `q p d` and may want `g` instead, so a *planned* quit keeps the choice. Only unplanned stops park themselves.
+
+⭐ **Six tests pin the rule** in `scripts/test_incident.py`, including one asserting the script still spells the condition the same way. ⚠️ **The branch itself cannot be executed by any headless test**, because it lives in `main()`'s shutdown path and needs a robot — the [§42.0](FINDINGS.md) problem again. So the rule is restated in the test file and a source check keeps the two from drifting apart, which is the [§36.2](FINDINGS.md) failure mode.
+
+### 47.1 ✅ THE FLOOR IS 0.0, AFTER TWO CORRECTIONS FROM HIM THAT BRACKET THE ANSWER
+
+| version | value | his objection |
+|---|---|---|
+| first | **+0.05 m** | *"then I can't really pick anything up from the table anymore"* |
+| second | **−0.10 m** | *"ten centimeter below doesn't make any sense because then it's still gonna crash into the table"* |
+| ⭐ now | **0.0 m** | *"maybe do, like, one millimeter above… or just do exactly on the base"* |
+
+⭐⭐ **Both objections were right and together they define the answer.** Too high forbids the task. Too low permits driving into the desk. **The base plane is the only defensible value**, because the arm is bolted to the desk, so the desk is at or just below z = 0 and a tip at z = 0 is a tip touching the desk.
+
+⚠️ **He means it to be tried:** *"we can test around with it later."* `--floor -0.005` gives a few mm if a flat object needs it. ⛔ **Do not raise it above 0 again**; that is the mistake the comment in `src/teleop.py` exists to prevent.
+
+⭐ **A test that pinned the wrong thing was found by this change.** `test_every_park_pose_clears_the_default_floor` asked for 0.20 m of clearance, which passed at −0.10 and failed at 0.0, because the lowest park pose sits at z = 0.174. **The test was pinning the old floor value through a margin instead of pinning the property it cared about** — that a park is never obstructed. Now 0.15 m.
+
+**⚠️ Neither change has been on the arm.** The safe stop only shows itself during a failure, which cannot be arranged on purpose, so it will be seen the next time something goes wrong. The floor is visible immediately: the status line reports the height above it whenever the tip is within 10 cm.
