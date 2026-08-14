@@ -643,12 +643,15 @@ def main() -> int:  # noqa: PLR0915
     # `s 1`…`s 9` fill waypoints that Ctrl-C ignores completely.
     slots = park_slots(load_json(PARK_FILE, {}), args.arm)
     park = slots.get(BASE_SLOT)
-    park_speed = PARK_SPEED
+    # ⚠️ The eleven park fields used to be initialised here. They are `ArmSession`
+    # fields now, and the class's constructor sets every one to the identical value —
+    # `PARK_SPEED` 0.40 and `PARK_RAMP` 0.20 are the same constant in both files, which
+    # was checked before the move rather than assumed.
+    # ⛔ Leaving them here as `arm.park_* = …` would run BEFORE `arm` exists, which is
+    # the fault `scripts/check_restructure.py`'s ordering check exists to catch. It
+    # caught all eleven. FINDINGS §48.
     # The blended path being followed, the cursor along it, and where each waypoint
     # falls so the readout can say which one it is heading for.
-    park_path: JointPath | None = None
-    park_s = 0.0
-    park_marks: list[tuple[str, float]] = []
     blend_idx = 1                       # "smooth" — the sensible default
     ease_idx = 3                        # "both" — see motion.EASINGS
     # ⛔⭐ TWO CLOCKS, AND CONFLATING THEM PRINTED A WRONG NUMBER FOR A DAY.
@@ -658,9 +661,6 @@ def main() -> int:  # noqa: PLR0915
     # **"PARK reached in 0.0s"** on a park that had just taken 4.4 seconds: the last leg's
     # mark is passed at the end of the path, so the reset happened moments before arrival.
     # See [FINDINGS §34.3](../docs/FINDINGS.md).
-    park_leg_t = 0.0                    # when the CURRENT LEG started
-    park_start_t = 0.0                  # when the whole park started — never reset
-    park_ramp = PARK_RAMP               # how much of the move is eased
     # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"one good idea is definitely
     # recording everything in the guide mode and then replaying it. That's a smart idea,
     # definitely."* `w` records, `l` plays one back. The reasoning for why this may beat
@@ -749,7 +749,6 @@ def main() -> int:  # noqa: PLR0915
     mode = args.start_mode
     stop_reason: str | None = None
     teleop: CartesianTeleop | None = None
-    park_target = None
     # ⛔ The thermal guard is an object rather than a pair of floats, because
     # "I cannot read the temperature" is a state that has to be tracked and acted
     # on. It used to be indistinguishable from 0 °C — see ThermalGuard.
@@ -762,9 +761,6 @@ def main() -> int:  # noqa: PLR0915
     # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
     # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
     # ordering check in scripts/check_restructure.py.
-    park_cmd: np.ndarray | None = None      # the park TRAJECTORY, not the measurement
-    park_best_err = float("inf")
-    park_progress_t = 0.0
 
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
@@ -911,9 +907,9 @@ def main() -> int:  # noqa: PLR0915
             name, radius = BLEND_MODES[blend_idx]
             # ⭐ ONE line, so changing a knob repaints instead of appending. Six taps
             # on `+` should leave one line showing the final speed, not six blocks.
-            return (f"RUN {seq} · speed {park_speed:.2f} (-/+) · corners {name} "
+            return (f"RUN {seq} · speed {arm.park_speed:.2f} (-/+) · corners {name} "
                     f"{radius:.2f} (,/.) · ease {EASINGS[ease_idx].name} over "
-                    f"{park_ramp:.2f} (e, ö/ä) · Enter=go")
+                    f"{arm.park_ramp:.2f} (e, ö/ä) · Enter=go")
 
         def replay_plan_line() -> str:
             """What a playback will do, with the two numbers that decide whether it can.
@@ -948,8 +944,7 @@ def main() -> int:  # noqa: PLR0915
             clamp and the 6-vs-7-joint reconciliation that once dropped an arm apply
             to each of them, not just the first.
             """
-            nonlocal mode, park_target, park_cmd, park_path, park_s, park_marks
-            nonlocal park_best_err, park_progress_t, park_leg_t, park_start_t
+            nonlocal mode
             targets = []
             for _, pose in legs:
                 tgt, warn = park_target_from(robot.get_joint_pos(), pose,
@@ -958,21 +953,21 @@ def main() -> int:  # noqa: PLR0915
                     print(f"\n  ⚠️  {warn}.")
                 targets.append(tgt)
             start = np.asarray(robot.get_joint_pos(), dtype=float)
-            park_path = JointPath([start, *targets], blend=BLEND_MODES[blend_idx][1])
-            park_marks = list(zip([n for n, _ in legs], park_path.arrival_lengths()[1:]))
-            park_s = 0.0
-            park_target = targets[-1]
-            park_cmd = start.copy()
+            arm.park_path = JointPath([start, *targets], blend=BLEND_MODES[blend_idx][1])
+            arm.park_marks = list(zip([n for n, _ in legs], arm.park_path.arrival_lengths()[1:]))
+            arm.park_s = 0.0
+            arm.park_target = targets[-1]
+            arm.park_cmd = start.copy()
             mode = "park"
             enter_hold()
-            park_best_err = float(np.max(np.abs(park_target - start)))
-            park_progress_t = t
-            park_leg_t = t
-            park_start_t = t
+            arm.park_best_err = float(np.max(np.abs(arm.park_target - start)))
+            arm.park_progress_t = t
+            arm.park_leg_t = t
+            arm.park_start_t = t
             # The plan has become the thing happening; the progress readout replaces it.
             hint("")
-            print(f"\n⭐ MODE: PARK → {what}, {park_path.length:.2f} rad of travel at "
-                  f"{park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
+            print(f"\n⭐ MODE: PARK → {what}, {arm.park_path.length:.2f} rad of travel at "
+                  f"{arm.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
                   "Press h or t to stop.\n")
 
         if mode == "teleop":
@@ -1236,10 +1231,10 @@ def main() -> int:  # noqa: PLR0915
                         # a bit annoying."* Deciding how a move should feel belongs to
                         # the moment you are choosing the move.
                         if k in "+=":
-                            park_speed = min(1.5, park_speed * 1.25)
+                            arm.park_speed = min(1.5, arm.park_speed * 1.25)
                             hint(park_plan_line()); continue
                         if k == "-":
-                            park_speed = max(0.05, park_speed / 1.25)
+                            arm.park_speed = max(0.05, arm.park_speed / 1.25)
                             hint(park_plan_line()); continue
                         if k == ".":
                             blend_idx = min(len(BLEND_MODES) - 1, blend_idx + 1)
@@ -1254,10 +1249,10 @@ def main() -> int:  # noqa: PLR0915
                             # ö/ä (or [/]) mean gripper step elsewhere, which is
                             # meaningless while choosing a park — same
                             # context-dependence as +/-.
-                            park_ramp = min(1.0, park_ramp * 1.4)
+                            arm.park_ramp = min(1.0, arm.park_ramp * 1.4)
                             hint(park_plan_line()); continue
                         if k in KEY_STEP_DOWN:
-                            park_ramp = max(0.0, park_ramp / 1.4 if park_ramp > 0.03 else 0.0)
+                            arm.park_ramp = max(0.0, arm.park_ramp / 1.4 if arm.park_ramp > 0.03 else 0.0)
                             hint(park_plan_line()); continue
                         if k == "e":
                             # ⭐ Start/stop easing is INDEPENDENT of corner blending.
@@ -1655,11 +1650,11 @@ def main() -> int:  # noqa: PLR0915
                         # is a design admitting it is wrong. The gripper step moves to
                         # `--gripper-step`: it is a preference set once, and he said
                         # outright that it does not need a live key.
-                        park_ramp = min(1.0, park_ramp * 1.4)
-                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
+                        arm.park_ramp = min(1.0, arm.park_ramp * 1.4)
+                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
                     elif k in KEY_STEP_DOWN:
-                        park_ramp = max(0.0, park_ramp / 1.4 if park_ramp > 0.03 else 0.0)
-                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
+                        arm.park_ramp = max(0.0, arm.park_ramp / 1.4 if arm.park_ramp > 0.03 else 0.0)
+                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
                     elif k == "e":
                         # ⭐ WORKS EVERYWHERE, and the message now says WHAT IT AFFECTS.
                         # Julien, on the arm: *"the easing outside of parking, I don't
@@ -1672,7 +1667,7 @@ def main() -> int:  # noqa: PLR0915
                         # effect you cannot see has to say where its effect lives, every
                         # time it is touched.
                         ease_idx = (ease_idx + 1) % len(EASINGS)
-                        hint(ease_note(EASINGS[ease_idx].name, park_ramp))
+                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
                     elif k == "r":
                         rotation = not rotation
                         hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
@@ -1707,15 +1702,15 @@ def main() -> int:  # noqa: PLR0915
                         # does nothing where you are is the defect class that made `b`
                         # look broken (FINDINGS §17.1).
                         if mode == "park":
-                            park_speed = min(1.5, park_speed * 1.25)
-                            hint(f"park speed {park_speed:.2f} rad/s")
+                            arm.park_speed = min(1.5, arm.park_speed * 1.25)
+                            hint(f"park speed {arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale *= 1.25
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "-":
                         if mode == "park":
-                            park_speed = max(0.05, park_speed / 1.25)
-                            hint(f"park speed {park_speed:.2f} rad/s")
+                            arm.park_speed = max(0.05, arm.park_speed / 1.25)
+                            hint(f"park speed {arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale /= 1.25
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
@@ -1728,12 +1723,12 @@ def main() -> int:  # noqa: PLR0915
                 # one that gets forgotten is the one that matters: an arm resuming a
                 # planned trajectory after the operator pressed HOLD is doing something
                 # nobody asked for.
-                if mode != "park" and park_path is not None:
-                    left = park_path.length - park_s
+                if mode != "park" and arm.park_path is not None:
+                    left = arm.park_path.length - arm.park_s
                     if left > PARK_TOLERANCE:
                         print(f"\n  ⚠️  run abandoned with {left:.2f} rad of path left — "
                               "leaving PARK cancels the rest.\n")
-                    park_path, park_marks = None, []
+                    arm.park_path, arm.park_marks = None, []
                     # ⛔ A park that was interrupted must not hand over to a playback. The
                     # handover lives in the arrival branch, but this is the second gate:
                     # pressing h or t while driving to the start pose cancels the whole
@@ -2056,14 +2051,14 @@ def main() -> int:  # noqa: PLR0915
                         hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
                              f"{rs.lag:.3f} rad behind")
 
-                elif mode == "park" and park_path is not None and park_target is not None:
+                elif mode == "park" and arm.park_path is not None and arm.park_target is not None:
                     q = np.asarray(robot.get_joint_pos(), dtype=float)
                     # ⭐ Completion is judged from the MEASURED pose, never from the
                     # command — the command always arrives first, so testing it would
                     # declare success while the arm was still travelling.
-                    err = float(np.max(np.abs(park_target - q)))
-                    lag = float(np.max(np.abs(park_cmd - q))) if park_cmd is not None else 0.0
-                    at_end = park_s >= park_path.length
+                    err = float(np.max(np.abs(arm.park_target - q)))
+                    lag = float(np.max(np.abs(arm.park_cmd - q))) if arm.park_cmd is not None else 0.0
+                    at_end = arm.park_s >= arm.park_path.length
 
                     # ⛔ ARRIVAL IS GATED ON THE CURSOR REACHING THE END, not on the
                     # error alone. A run like `p 1 2 1` finishes where it started, so
@@ -2076,35 +2071,35 @@ def main() -> int:  # noqa: PLR0915
                         advanced = False
                         if lag < MAX_CURSOR_LAG:
                             ramp = easing_factor(
-                                EASINGS[ease_idx], park_s, park_path.length - park_s,
-                                0.0 if args.no_smooth else park_ramp)
-                            park_s = min(park_path.length,
-                                         park_s + park_speed * ramp * dt)
+                                EASINGS[ease_idx], arm.park_s, arm.park_path.length - arm.park_s,
+                                0.0 if args.no_smooth else arm.park_ramp)
+                            arm.park_s = min(arm.park_path.length,
+                                         arm.park_s + arm.park_speed * ramp * dt)
                             advanced = True
-                        park_cmd = park_path.point_at(park_s)
-                        robot.command_joint_pos(park_cmd)
+                        arm.park_cmd = arm.park_path.point_at(arm.park_s)
+                        robot.command_joint_pos(arm.park_cmd)
 
                         # Progress is "the cursor moved OR the arm closed the gap".
                         # Without the first half, a legitimately slow leg looks stalled;
                         # without the second, an arm pinned against something never does.
-                        if advanced or err < park_best_err - PARK_PROGRESS_EPS:
-                            park_best_err = min(park_best_err, err)
-                            park_progress_t = t
-                        if t - park_progress_t > PARK_STALL_SECONDS:
+                        if advanced or err < arm.park_best_err - PARK_PROGRESS_EPS:
+                            arm.park_best_err = min(arm.park_best_err, err)
+                            arm.park_progress_t = t
+                        if t - arm.park_progress_t > PARK_STALL_SECONDS:
                             mode = "hold"; enter_hold(); hint("")
                             print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                   f"{lag:.3f} rad behind the path, no progress for "
                                   f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                        elif park_marks and park_s >= park_marks[0][1]:
+                        elif arm.park_marks and arm.park_s >= arm.park_marks[0][1]:
                             # ⭐ Time each waypoint. Julien: *"you can't really see how
                             # long each parking section took, you can only see the park
                             # itself."* Now each leg reports its own seconds as it is
                             # passed, which is also the number to watch when tuning
                             # speed and corner radius.
-                            name, _ = park_marks.pop(0)
-                            print(f"  ⭐ slot {name} in {t - park_leg_t:.1f}s"
-                                  + (f" → next {park_marks[0][0]}" if park_marks else ""))
-                            park_leg_t = t
+                            name, _ = arm.park_marks.pop(0)
+                            print(f"  ⭐ slot {name} in {t - arm.park_leg_t:.1f}s"
+                                  + (f" → next {arm.park_marks[0][0]}" if arm.park_marks else ""))
+                            arm.park_leg_t = t
                         elif t >= next_park_report:
                             next_park_report = t + 1.0
                             # ⛔ A HINT, NOT THE STATUS ROW — same fix as the sequence
@@ -2113,12 +2108,12 @@ def main() -> int:  # noqa: PLR0915
                             # the one motion where an operator most wants to see a
                             # temperature climbing, it was the line that had been
                             # painted over.
-                            hint(f"  moving… {park_path.length - park_s:.2f} rad of path "
+                            hint(f"  moving… {arm.park_path.length - arm.park_s:.2f} rad of path "
                                  f"left, {err:.3f} to the final pose, {lag:.3f} behind")
                     else:
-                        leg = park_verdict(err, t - park_progress_t > PARK_STALL_SECONDS,
+                        leg = park_verdict(err, t - arm.park_progress_t > PARK_STALL_SECONDS,
                                            PARK_TOLERANCE, PARK_SETTLED,
-                                           stopped_briefly=t - park_progress_t
+                                           stopped_briefly=t - arm.park_progress_t
                                            > PARK_SETTLE_SECONDS)
                         if leg in ("arrived", "settled"):
                             extra = ("" if leg == "arrived" else
@@ -2134,8 +2129,8 @@ def main() -> int:  # noqa: PLR0915
                             # radius or the ease ramp is tuned, and the settling time is
                             # how long the arm took to close the last of the gap after the
                             # commanded path had already run out.
-                            total = t - park_start_t
-                            settling = t - park_leg_t
+                            total = t - arm.park_start_t
+                            settling = t - arm.park_leg_t
                             tail = (f", {settling:.1f}s of that settling"
                                     if 0.05 < settling < total - 0.05 else "")
                             print(f"⭐ PARK reached in {total:.1f}s{tail} "
@@ -2170,9 +2165,9 @@ def main() -> int:  # noqa: PLR0915
                             print("   Something is blocking it, or the pose is "
                                   "unreachable. Now HOLDING.\n")
                         else:
-                            robot.command_joint_pos(park_cmd)
-                            if err < park_best_err - PARK_PROGRESS_EPS:
-                                park_best_err, park_progress_t = err, t
+                            robot.command_joint_pos(arm.park_cmd)
+                            if err < arm.park_best_err - PARK_PROGRESS_EPS:
+                                arm.park_best_err, arm.park_progress_t = err, t
 
                 # ---- 5. report --------------------------------------------
                 # CONTROLS mode reports continuously, not once a second: he is watching
@@ -2335,7 +2330,7 @@ def main() -> int:  # noqa: PLR0915
                     print("   the arm is being parked to the pose this session started in, then")
                 print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
                 outcome = park_and_wait(robot, keys, park, clamp_gripper,
-                                        ramp=park_ramp, speed=park_speed)
+                                        ramp=arm.park_ramp, speed=arm.park_speed)
                 if outcome == "arrived":
                     auto_parked = True
                     print("\n   Disabling the motors now.\n")

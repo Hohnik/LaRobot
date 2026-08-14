@@ -2782,3 +2782,47 @@ The second ping printed *"motor 2 is NOT at rest: −0.0171 rad/s = 7 quantisati
 ⭐ **A test that pinned the wrong thing was found by this change.** `test_every_park_pose_clears_the_default_floor` asked for 0.20 m of clearance, which passed at −0.10 and failed at 0.0, because the lowest park pose sits at z = 0.174. **The test was pinning the old floor value through a margin instead of pinning the property it cared about** — that a park is never obstructed. Now 0.15 m.
 
 **⚠️ Neither change has been on the arm.** The safe stop only shows itself during a failure, which cannot be arranged on purpose, so it will be seen the next time something goes wrong. The floor is visible immediately: the status line reports the height above it whenever the tip is within 10 cm.
+
+---
+
+## 48. ✅⭐⭐ THE PARK GROUP MOVED, AND `ast.col_offset` IS A BYTE OFFSET — 2026-08-14, 16:00
+
+### 48.0 ✅ WHERE THE RESTRUCTURE STANDS
+
+**Third commit of [ROADMAP §6.1](ROADMAP.md) step 1.** The eleven park fields moved onto `ArmSession` in one unit, because the class already implements `begin_path()` and `step_path()` against exactly those fields ([§36.2](FINDINGS.md)).
+
+| commit | moved | accesses | left |
+|---|---|---|---|
+| `b52b72e` 1a | `prev_q` · `guide_ref` · `home_ee` | 15 | 191 |
+| `ca3befd` 1b | `gripper_value` · `stall_since` | 33 | 171 |
+| **1c** | ⭐ **the whole park group**, 11 fields | **118** | ⭐ **76** |
+
+**Remaining: `mode` 48 · `teleop` 20 · `thermal` 8.** ⛔ `mode` still moves last, because `build_robot()` reads it before the robot and therefore the `ArmSession` exists.
+
+✅ **The constants were compared before the move rather than assumed**: `PARK_SPEED` is 0.40 and `PARK_RAMP` is 0.20 in both `teleop_session.py` and `arm_session.py`, along with `PARK_TOLERANCE`, `PARK_SETTLED`, `PARK_STALL_SECONDS`, `PARK_PROGRESS_EPS` and `MAX_CURSOR_LAG`. **All seven match**, so moving a field cannot silently change a value.
+
+✅ **The ordering check earned its keep immediately.** All eleven park fields were initialised before `arm` is constructed, so the rewrite produced eleven `arm.park_* = …` lines that would each have raised `UnboundLocalError`. **The checker listed all eleven line numbers and refused.** ⭐ That is the [§42.0](FINDINGS.md) fault, three times over, caught mechanically instead of on the arm.
+
+### 48.1 ⛔⭐⭐ `ast.col_offset` COUNTS BYTES, AND THIS REPO'S SOURCE IS FULL OF MULTI-BYTE CHARACTERS
+
+**The rewrite is driven by the parse tree, because a text substitution would also rewrite the word inside comments** ([§36.3](FINDINGS.md)). ⛔ **But `ast` reports `col_offset` as a UTF-8 byte offset, not a character index**, and slicing a Python `str` by it is wrong on any line containing a multi-byte character.
+
+This file is full of them. `⭐`, `⛔`, `⚠️`, `…` and `→` appear in comments and in printed strings. The line that failed:
+
+```python
+hint(f"  moving… {park_path.length - park_s:.2f} rad of path ")
+```
+
+`…` is **three bytes and one character**, so the reported offset for `park_s` landed two characters late and the rewrite would have produced corrupt source.
+
+✅ **Fixed by slicing the line as bytes and decoding afterwards**, which is exactly what the offsets mean.
+
+⭐⭐ **What actually saved this was an assertion, not care.** The tool asserts that the text at the reported offset *is* the name it expects, before writing anything. It failed on `expected 'park_s', got 'rk_s:.'`, wrote nothing, and left the tree valid. **Steps 1a and 1b had worked only because their lines happened to be pure ASCII ahead of the names** — so this was live on both earlier commits and simply never fired.
+
+⚠️ **Carry this to any future offset-based edit in this repo:** the source is not ASCII, and it never will be, because the documentation conventions here use emoji deliberately. **Work in bytes or use a tokeniser.**
+
+### 48.2 ⭐ A NOTE ON WHY THIS GROUP WAS SAFE TO MOVE IN ONE PIECE
+
+The eleven fields are the state of one blended `JointPath` and its cursor. **They are read and written together by `begin_path()` and `step_path()`, which the class already implements**, so splitting them across commits would have left the script half-reading from the object and half from its own locals — a state neither the class nor the script models. ⚠️ **It is also the group that moves 4.3 kg and that `q p d` and Ctrl-C depend on**, so it got its own commit and its own reading rather than being bundled with anything else.
+
+**450 headless tests, unchanged.** ⚠️ Not on the arm. The N=1 test comes once the series is complete.

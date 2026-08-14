@@ -42,15 +42,15 @@ TARGET = REPO / "scripts" / "teleop_session.py"
 
 #: State already moved onto `ArmSession`. Add to this as each commit lands, so the
 #: check keeps proving that earlier groups have not regressed.
-MOVED_SO_FAR = ["prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since"]
+MOVED_SO_FAR = [
+    "prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since",
+    "park_path", "park_s", "park_marks", "park_target", "park_cmd", "park_best_err",
+    "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
+]
 
 #: Still locals of `main()`, in the order ROADMAP §6.1 moves them. `mode` is last
 #: because `build_robot()` reads it before the robot (and so the ArmSession) exists.
-STILL_TO_MOVE = [
-    "park_target", "park_cmd", "park_path", "park_s", "park_marks",
-    "park_leg_t", "park_start_t", "park_speed", "park_ramp", "park_best_err",
-    "park_progress_t", "thermal", "teleop", "mode",
-]
+STILL_TO_MOVE = ["thermal", "teleop", "mode"]
 
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:
