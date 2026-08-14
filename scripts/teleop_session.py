@@ -1711,6 +1711,23 @@ def main() -> int:  # noqa: PLR0915
                         continue
 
                     if pending == "mirror_go":
+                        # ⭐ `i` AT THE PROMPT SWITCHES copy ↔ mirror and re-prints the plan.
+                        # Without it, discovering that `copy` is the wrong choice for how the
+                        # arms are standing means quitting the session and restarting with
+                        # `--mirror mirror`, which costs a puck assignment and two builds.
+                        # ⚠️ The plan line says what `i` does here, so this is not one key
+                        # with two hidden meanings — it is the mirror key, inside the mirror
+                        # prompt, changing the mirror.
+                        if k == "i":
+                            args.mirror = "mirror" if args.mirror == "copy" else "copy"
+                            print(f"     ⭐ now {args.mirror.upper()}: "
+                                  + ("the follower reproduces the leader's angles unchanged, "
+                                     "for arms side by side" if args.mirror == "copy" else
+                                     "the follower negates the joints that reverse under "
+                                     "reflection, for arms FACING each other")
+                                  + "\n     Enter engages · i switches again · any other "
+                                    "key cancels\n")
+                            continue
                         pending = None
                         if k in ("\r", "\n", " ") and mirror_follower is not None:
                             # ⛔ The follower goes under POSITION control before anything is
@@ -1951,7 +1968,15 @@ def main() -> int:  # noqa: PLR0915
                               f"gap at {MIRROR_ALIGN_SPEED} rad/s, then track continuously.")
                         print(f"     ⚠️ HOLD ARM {lead_name} STILL until it says FOLLOWING, and "
                               f"keep the space around arm {follow_name} clear.")
-                        print("     Enter engages · any other key cancels · i again turns it off\n")
+                        # ⛔ SAID OUT LOUD BECAUSE NOTHING CHECKS IT. There is no collision
+                        # model anywhere in this project: no arm knows where the other one is.
+                        # MIRROR is the first mode where an arm moves with no hand on it, so
+                        # the operator is the only thing standing between two arms reaching
+                        # into the same space. ROADMAP §8.2 item 25.
+                        print("     ⛔ NOTHING CHECKS FOR THE ARMS COLLIDING. No arm knows "
+                              "where the other one is.")
+                        print("     Enter engages · i switches copy/mirror · any other key "
+                              "cancels\n")
                         continue
                     if k == "v":
                         # ⭐ Cycle which frame the puck's directions mean. Safe to do

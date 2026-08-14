@@ -3470,3 +3470,117 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
 ⛔ **What to watch for, and what each would mean:** arm G moving in the wrong direction means `copy` is wrong for how they stand, so try `--mirror mirror` · arm G stopping with `MIRROR STOPPED` means it fell more than 0.35 rad behind, which means it is blocked, at a joint limit, or faulted · arm G never reaching FOLLOWING means arm B kept moving during ALIGNING.
 
 **502 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 56. ✅⭐⭐⭐ MIRROR RAN, ITS STOP MESSAGE WAS WRONG, AND THE TWO-ARM RECORDER IS BUILT — 2026-08-14, late night
+
+> Julien, after the first mirror session: *"works really well in general … I was able to control B in teleoperate in guide mode, that worked well. G followed."* ⭐ **Two arms, one hand, on the hardware.**
+
+### 56.0 ✅ WHAT HIS MIRROR RUN PROVED, from his own output
+
+| what happened | what it proves |
+|---|---|
+| `⭐ MIRROR: arm B LEADS, arm G FOLLOWS (copy)` with a **0.08 rad** gap quoted | `pick_pair` aimed it at the selected arm, and the plan measured the real gap before he committed |
+| `▶ MIRROR engaged` then TELEOP on B, then GUIDE on B, and G tracked through both | ⭐⭐ **The leader's mode is independent of the link.** He drove B with the puck AND hand-guided it, and the follower copied both |
+| his final rows: B `q [-0.58 1.15 0.37 0.7 -0.65 -0.11]`, G `q [-0.58 1.17 0.38 0.7 -0.66 0.27]` | ⭐ **Five of six joints agreed within 0.02 rad.** The copy is accurate; only joint 6 was out, by 0.38 |
+| he engaged a second time from a **0.20 rad** gap after putting both arms in GUIDE | `enter_hold(follower)` before engaging takes the follower out of zero-gravity, so the commands reach it |
+| `q q` parked both arms to 0.020 rad and disabled both | the shutdown is unaffected by the link |
+
+⭐⭐ **He also put BOTH arms in GUIDE at once** (`⭐ MODE: GUIDE on B+G`), which is 8.6 kg weightless and is ROADMAP §6.1 **step 4**, done.
+
+### 56.1 ⛔⭐⭐⭐ THE STOP MESSAGE NAMED THREE CAUSES AND THE REAL ONE WAS A FOURTH
+
+His run stopped twice: *"follower fell 0.370 rad behind the leader (limit 0.35). It is blocked, at a joint limit, or faulted."*
+
+⛔ **None of the three was true.** The arithmetic is in his own paste: five joints agreed within 0.02 rad while **joint 6, the gripper twist, was 0.38 rad apart**. He was hand-guiding the leader's wrist, which is the easiest joint to move by hand, **faster than the follower is allowed to move**. At a 1.0 rad/s follow limit, 0.38 rad of lag is about 0.4 s of faster-than-limit motion.
+
+⚠️ **This is the same defect as [§41.2](FINDINGS.md)**, where the speed throttle blamed the reach limit at a manipulability of 0.1713 that its own docstring calls comfortable. **A message that lists possible causes without measuring any of them will name the wrong one**, and it costs the reader a hypothesis they then have to disprove.
+
+✅ **`MirrorLink` now measures the leader's per-joint speed as it goes.** On a stop it reports:
+
+- which joint opened the gap, by index and by name (`gripper_twist`)
+- how fast the leader was moving THAT joint
+- which of the two explanations the numbers support: faster than the follow limit means *"could not keep up"*; inside the limit means *"blocked, at a joint limit, or faulted"*
+
+⭐ **And two things his run showed were missing:** the row now warns past 70% of the gap limit, so there is notice before it trips, and the stop says *"press i then Enter to engage it again"*.
+
+### 56.2 ⭐⭐ HIS QUESTION: IS THE SPEED LIMIT REAL? — no, and here is the dial
+
+**It is a software limit, and the motors are nowhere near theirs.** `SafeRobot` clamps every command from every mode to **1.0 rad/s per joint**, below all control logic ([§37.0](FINDINGS.md)). Julien's own hand-guided recordings reach **2.4 to 3.7 rad/s** ([§37.2](FINDINGS.md)), so the hardware does those speeds and only this code refuses to ask for them.
+
+✅ **`--max-speed` now exposes it**, the same way `--reach` and `--floor` expose the workspace limits. The default is unchanged at 1.0, the plan line prints the value, and it flags the line when it is above the default.
+
+⛔ **Raising it stays his decision** ([§37.2](FINDINGS.md)'s standing rule), and the recommended path has not changed: **1.0 → 1.5, then 2.0, one step at a time, watching the `⚠️ STUCK lead` warning rather than temperature.** What cooks these motors is holding still against a stop, not moving; the hottest reading in a 337-second session was 43 °C against a 55 °C warning.
+
+⭐ **The mirror follow speed now READS the follower's own cap** instead of repeating `1.0`. A hardcoded copy would have silently become the binding limit the moment he passed `--max-speed 1.5`, and the mirror would have stayed slow with nothing on screen to explain it.
+
+⚠️ **One thing to expect when he does raise it:** the gap limit (0.35 rad) is unchanged, so a faster leader can still open a gap faster than the follower closes it. If mirror keeps stopping at a higher `--max-speed`, the next dial is `DEFAULT_MAX_GAP` in `src/mirror.py`, and that one trades faithfulness for tolerance.
+
+### 56.3 ✅⭐⭐ THE TWO-ARM RECORDER IS BUILT, so `w` and `l` no longer refuse
+
+**A recording is now every arm's joints concatenated in `--arms` order.** That is exactly ABC's shape — 14 states per timestep, two arms in ONE timeline ([ROADMAP §9.2](ROADMAP.md)) — so the internal format and the target format have the same layout and no conversion can silently reorder them.
+
+⭐ **`src/recording.py::Layout` owns the mapping** (which slice is which arm, which indices count towards lag) with 7 tests including a save/load round trip written to a real file.
+
+⛔ **Four decisions inside it, each with a failure it prevents:**
+
+1. **The arm order is metadata, not a convention.** A recording made with `--arms B,G` and replayed in a `--arms G,B` session would drive each arm with the other's joints. `l` refuses when an arm named in the file is absent, and the measured vector for the lag check is built in the RECORDING's order.
+2. **Old recordings still play.** `Layout.from_meta` reads files carrying a single `arm` field, which is all six of Julien's existing recordings — verified by running `check_recordings.py` over them, where they now show an `arms` column reading `B`.
+3. **Every arm must arrive before any arm plays.** Each parks a different distance to its own slice of the start pose. Starting the clock on the first arrival would leave the second arm still parking while the recording ran.
+4. **The lag check takes INDICES, not a prefix count.** With one arm the gripper was last, so "the first six joints" skipped it. With two arms arm B's gripper sits at index 6, in the middle.
+
+⭐⭐ **A free combination worth knowing: pressing `w` while mirroring records BOTH arms.** One hand produces a two-arm demonstration, and `method` records `B:guide+G:mirror` so the dataset says how it was made. ⚠️ Whether it is *good* training data is a separate question — the follower is a rate-limited copy, so it lags slightly and never shows independent two-hand coordination. Tracked as [ROADMAP §8.2](ROADMAP.md) item 26.
+
+### 56.4 ⛔⭐⭐ NOTHING IN THIS PROJECT KNOWS WHERE THE OTHER ARM IS
+
+**Every limit here is per arm and relative to that arm's own base:** the 0.60 m reach sphere, the floor, the joint margins. **No code anywhere knows a second arm exists in the same space.**
+
+⚠️ **Until MIRROR that was almost harmless**, because every motion had a hand on the arm or a puck under it. **MIRROR is the first mode where an arm moves with nobody's hand on it**, and the arms stand side by side, so a leader reaching across can drive the follower into it.
+
+⭐ **Today the only guard is the operator, and the mirror plan line now says so in as many words.** ⭐ **What a real fix looks like:** both arms are already MuJoCo models, because that is how `mink` solves the IK, so putting both in one scene and asking for the minimum distance between their bodies is a per-cycle quantity. Same shape as the workspace clamp: measure, then refuse. Logged as [ROADMAP §8.2](ROADMAP.md) item 25, and it wants his decision about how close is too close.
+
+### 56.5 ⚠️ FOUR MORE DEFECTS I INTRODUCED IN THIS BLOCK, and what caught each
+
+| defect | caught by |
+|---|---|
+| the playback moved out of the per-arm loop and broke the if/elif chain, so PARK fell outside the loop | **check 6**, with 35 leaked uses of `one` |
+| the `w` handler read a layout variable the sampler assigns LATER in the same cycle, so the first `w` of a session would raise `NameError` with motors live | **reading the diff**; no test or dry run reaches that line |
+| a comment claimed the mirror align speed came from `src/mirror.py` while the number was duplicated beside it | **reading it back** after writing it |
+| a new test asserted a constraint an existing test already covered, and my change made the existing test's docstring false | **grepping the test file before adding to it** |
+
+⭐ **The `NameError` one is worth generalising: a variable read in the KEY DISPATCH must be assigned before the dispatch, not after.** Section 3 runs before section 3.4 every cycle, including the first. It is now a function, so no ordering can bite.
+
+### 56.6 ⛔ THE GRIPPER FRAME CAN NO LONGER BE CHOSEN BY LIST ORDER
+
+His two runs an hour apart loaded arm G's jaw limits **in different frames**: `[6.425, 1.197]` (shifted +2π) and then `[0.142, −5.086]` (unshifted). ⭐ **Both were correct** — the jaws physically moved between the runs, which is [§40](FINDINGS.md)'s point that the ±2π shift is a property of the session rather than of the arm.
+
+⚠️ **Checking it properly turned up a latent hazard.** Each candidate shift accepts raw positions in a window of `travel + 2·margin`, and the candidates sit 2π apart. **If the jaws' travel ever exceeded 5.683 rad, two windows would overlap and both shifts would "fit"** — and the code took the first. Picking a jaw SCALE by list order is what commanded the gripper 2.6 rad past its stop and cooked motor 7.
+
+✅ **Both reconcilers now refuse when more than one shift fits.** Measured today: arm B's travel is **5.250 rad** and arm G's is **5.228**, so there is about **0.43 rad of headroom** and a scan of every raw position from −10 to +10 rad finds exactly one match everywhere. **The guard is dormant**, which is precisely why it had to be code rather than a comment.
+
+### 56.7 ⬜ WHAT IS NEXT
+
+1. ⬜⭐⭐ **Record and play back a two-arm demonstration on the hardware.** Everything is built and none of it has run. The procedure is [§56.8](FINDINGS.md).
+2. ⬜⭐ **`--max-speed 1.5`, one step, watching STUCK lead** — his decision, and it is what makes mirror and playback feel right.
+3. ⬜ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23).
+4. ⬜ **A collision model** ([ROADMAP §8.2](ROADMAP.md) item 25), which needs his decision on the margin.
+5. ⬜ **The throttle message that names an unmeasured cause** ([ROADMAP §8.2](ROADMAP.md) item 21) — the same defect class as §56.1, one mode over.
+
+### 56.8 ⬜⭐⭐ THE TWO-ARM RECORDING RUN — about ten minutes
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+```
+
+1. **`a` to B, `i`, Enter** — mirror engaged, arm G following.
+2. **`g`** (still aimed at B) and hand-guide arm B through a short movement.
+3. **`w`** to start recording. The banner should say **`RECORDING B GUIDE · G MIRROR (14 joints per sample)`**.
+4. Move for five to ten seconds, then **`w`** again and **`7`** to save it (slot 7 is empty; 1-6 hold one-arm files).
+5. **`h`** aimed at B to stop guiding, then **`i`** to drop the mirror.
+6. **`l` then `7`.** The plan appears. **Enter.** ⭐ Both arms should park to their own start pose, print *"waiting for …"* if one arrives first, and then play together.
+7. **`q` `q`.**
+
+⭐ **What proves it worked:** `uv run scripts/check_recordings.py` shows `7.json` with **`arms` = `B,G`**, and the playback drove both arms.
+
+**512 headless tests. Nothing pushed (working-contract rule 9).**
