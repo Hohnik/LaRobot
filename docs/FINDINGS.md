@@ -3717,3 +3717,76 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 ⭐ **Proof afterwards:** `uv run scripts/check_recordings.py` shows `7.json` with `arms` = `B,G`, and the playback printed a per-joint table naming rows `B base_yaw`, `G base_yaw` and so on.
 
 **519 headless tests. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 58. ⭐⭐⭐ THE HANDOFF AT THE END OF 2026-08-15: MIRROR WORKS, THE RECORDING PLAYBACK IS UNTESTED, AND HERE IS EVERYTHING TO DO WITHOUT HARDWARE — small hours
+
+> ⛔ **Written because the chat ran out of context, not because the work stopped.** Julien had to leave and the arms will be disconnected. **This section is the one a contextless agent should read after [HANDOFF](HANDOFF.md)'s entry block.** 519 headless tests, eight checks green, nothing pushed.
+
+### 58.0 ✅ WHAT HIS LAST SESSION PROVED — `--max-speed 2 --teleop-speed 2 --mirror-gap 0.6`
+
+**Julien: *"the mirror worked much better this time. I think the mirror gap made a big difference because it allows for a bit of adjustment and, like, fall behind and stuff."*** ⭐ **So `--mirror-gap` was the right dial, and the reasoning behind it was right: the follower's lag at speed is physics, and the tolerance is what has to move.**
+
+⭐⭐ **AND THE THREE-CAUSE DIAGNOSIS PROVED ITSELF ON HARDWARE, both ways, in one session:**
+
+| what he did | what the message said | correct? |
+|---|---|---|
+| guided the leader at 1.86 rad/s with a 2.00 allowance | *"the follower managed 1.36, inside its 2.00 allowance — so the ARM itself could not track that fast, not the software"*, plus *"SafeRobot held the command back on 58 cycles"* | ✅ and it also said *"More `--max-speed` will NOT help"* |
+| squeezed the wrist at **6.32 rad/s** | *"the leader moved it at 6.32 rad/s and the follower may only move at 2.00, so it could not keep up"*, 188 clipped cycles | ✅ the software limit really did bind there |
+
+⭐ **6.32 rad/s is a new measurement**: the fastest hand motion this rig has ever recorded, well above the 2.4-3.7 rad/s of [§37.2](FINDINGS.md). ⚠️ It was a wrist twist, which is the easiest joint to move by hand.
+
+✅ **`i` at the prompt switching copy ↔ mirror worked**, and he used it several times including engaging in `mirror` once. ✅ **`i` turning the link off worked.** ✅ Both arms parked and disabled cleanly every time. Temperatures stayed at 43-44 °C.
+
+### 58.1 ⛔ WHAT IS STILL UNTESTED, AND IT IS THE ONE THING THAT MATTERS MOST
+
+**He never got to the recording playback.** He recorded two arms successfully on 2026-08-14 (`14 joints per sample`, saved to slot 1), and the playback cancelled itself because of the bug fixed in [§57.1](FINDINGS.md). **That fix has never run.**
+
+⬜ **So the first hardware job, whenever the arms are back, is [§57.11](FINDINGS.md)'s procedure.** The single thing to watch: both arms park to their own start pose, one prints *"waiting for G"*, and **the playback then actually starts**.
+
+### 58.2 ⬜⭐⭐ THE JAW BLOCK — the fix his gripper complaint really needs
+
+**What happened:** in MIRROR the follower's jaw command is the leader's *measured* jaw position, re-sent every cycle. He squeezed the leader's jaws while the follower was already holding an object, so the follower was commanded to close further than the object allows. The stall guard released the jaws, the next cycle commanded them back, and it repeated every 0.4 s.
+
+✅ **Fixed for now: the message is rationed** (once, then at most every five seconds with a count, and the repeat explains the MIRROR case).
+
+⬜ **What it still needs, and why I did not guess at it:** remember the release point and refuse to command tighter until the leader opens past it. ⛔ **That needs the SIGN of "tighter" in raw joint terms**, and the raw jaw frame flips by ±2π between sessions ([§40](FINDINGS.md), [§56.6](FINDINGS.md)) — B loads at `[0.198, −5.052]` and G at `[0.142, −5.086]`, so "closed" is the larger number in both, but the normalised and raw directions are not the same thing and a wrong sign would command the jaws HARDER onto the object. ⭐ **Establish it with `calibrate_gripper.py`'s own output or a two-line probe before writing the clamp.** Tracked as [ROADMAP §8.2](ROADMAP.md) item 29.
+
+### 58.3 ⭐⭐ EVERY FLAG THAT CONTROLS SPEED, AND WHICH ONE BINDS WHAT
+
+⛔ **Four limits sit on top of each other and only the lowest binds.** This has cost real time twice ([§37.0](FINDINGS.md), [§57.3](FINDINGS.md)), so here is the whole set in one place:
+
+| flag | default | what it limits | who it binds |
+|---|---|---|---|
+| `--max-speed` | 1.0 | `SafeRobot`'s rate cap on the command | everything, but only when it is the lowest |
+| `--teleop-speed` | 1.5 | the per-cycle IK step, a park, a playback ceiling | ⭐ **TELEOP** and planned moves |
+| `--max-lag` | 0.25 | how far the command may lead the MEASURED pose | ⭐⭐ **tracking, and therefore MIRROR** |
+| `--mirror-gap` | 0.35 | how far the follower may fall behind before stopping | MIRROR's patience, not its speed |
+
+⭐ **The plan line prints all of them and flags the ones you raised.** ⚠️ `--max-lag` is also a torque limit, because the motor's push is `kp × (command − measured)`. Raising it makes the arm catch up harder AND hit harder. It is the one lever with no measurement behind it yet: **watch `limited_cycles` in a mirror run at 0.25 first**, which his last session put at 58 and 188 for two runs.
+
+### 58.4 ⬜⭐⭐⭐ WHAT CAN BE DONE WITH NO HARDWARE AT ALL — in the order I would do it
+
+⭐ **All of this is real work and none of it needs an arm.** Everything here is checkable with `uv run scripts/check_restructure.py`, the 519 headless tests, and `--yes`-less dry runs.
+
+1. ⬜⭐⭐ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23). `ArmSession.step_path()` and its tests describe a park that **never runs**; the live one is the `mode == "park"` branch in the script. A reader who sees those tests pass is wrong about the code that moves 4.3 kg. ⛔ The trap is written down: the script does `arm.mode = "park"` and then calls its own `enter_hold()`, which leaves the mode alone, while the class's `enter_hold()` sets it to `hold` ([§52.1](FINDINGS.md)). Needs one bench pass over all modes afterwards.
+2. ⬜⭐⭐ **A simulation harness, which is the thing that unblocks everything else.** ⭐ **The pieces already exist:** `scripts/teleop_sim.py` drives the IK with no arm, `mink` and MuJoCo are already dependencies (that is how the IK solves), and `scripts/test_park_arms.py` and `scripts/test_status_row.py` show the shape — a fake robot with `get_joint_pos` / `command_joint_pos` / `num_dofs` / `motor_chain.running`. ⛔ **What is missing is a fake that behaves like the real thing over TIME**: a first-order lag on each joint so a command is followed rather than teleported, plus `SafeRobot`'s two limits, so the loop can be run end to end without hardware. **That would have caught three of this week's defects** — the double-advanced cursor, the playback cancel, and the stale `q`. ⚠️ It cannot replace hardware for feel, gravity compensation or thermal behaviour, and saying so is part of building it.
+3. ⬜ **The throttle message that names an unmeasured cause** ([ROADMAP §8.2](ROADMAP.md) item 21) — the last of four guessing messages; three were fixed on 2026-08-14/15 and this one has the pattern to copy.
+4. ⬜ **A collision model** ([ROADMAP §8.2](ROADMAP.md) item 25). Both arms are already MuJoCo models, so the minimum distance between their bodies is computable per cycle. ⛔ Needs Julien's decision on the margin, so build the measurement first and report it before refusing anything.
+5. ⬜ **Show each arm's control frame on its status row** ([ROADMAP §8.2](ROADMAP.md) item 28). Small, and `v` aims at one arm so two arms can differ.
+6. ⬜ **A mechanical check that `COMMANDS.md`'s flag list matches the parser** ([ROADMAP §8.2](ROADMAP.md) item 24). That file has now gone stale **four** times in two days, and one stale line recommended a command that drives the jaws into both stops.
+7. ⬜ **The cameras.** Both D405s are attached and the identification problem is unsolved: two identical cameras support the same picture sizes, so the trick used elsewhere cannot tell them apart, and macOS's USB order is not OpenCV's index order ([§22](FINDINGS.md), [§34.5](FINDINGS.md)). ⭐ **The wiggle method is the answer** ([§28.6](FINDINGS.md)) and it needs no arm: open each index, ask a human which window moved, remember the serial. ⚠️ `librealsense` works only with `sudo` on macOS, so keep streaming on the OpenCV path ([§28](FINDINGS.md)).
+8. ⬜ **The MCAP export in ABC's schema** is still deferred by Julien pending his friend's spec ([ROADMAP §8.2](ROADMAP.md) item 7). ⭐ **Our own recordings are already the right SHAPE** — every arm's joints in one timeline — so that work becomes a serialisation rather than a re-collection ([§56.3](FINDINGS.md)).
+
+### 58.5 ⚠️ THE STANDING RULES A FRESH AGENT WILL BREAK FIRST
+
+1. ⛔ **The agent never runs anything that sends a setpoint.** Scripts that enable motors and send nothing are yours (`check_rig.py`, `ping_motors.py`, `identify_arm.py`, `check_arms_match.py`). Anything that commands a position is Julien's. [HANDOFF §4](HANDOFF.md) rule 1.
+2. ⛔ **Nothing is pushed until he says so.** [HANDOFF §4](HANDOFF.md) rule 9.
+3. ⭐ **Run a session until you need him, then say what you need.** [HANDOFF §4](HANDOFF.md) rule 11, and the four things that count as needing him.
+4. ⛔ **`uv run scripts/check_restructure.py` after every commit.** Eight checks, and every one of them has caught something real ([§54.6](FINDINGS.md)).
+5. ⚠️ **A mechanical rewrite needs its region and its prose checked, not just its substitutions.** Five defects this week came from region-bounded edits ([§53](FINDINGS.md), [§54.1](FINDINGS.md), [§57.2](FINDINGS.md)).
+6. ⚠️ **A test scenario built from intuition needs its trace printed once before its assertion is trusted.** Three of mine in a row proved nothing ([§57.9](FINDINGS.md)).
+7. ⛔ **"Correct at N=1 by construction" is this week's defect signature.** Three separate bugs worked perfectly with one arm and would have been wrong with two ([§54.1](FINDINGS.md), [§56.5](FINDINGS.md), [§57.1](FINDINGS.md)). **With one arm connected, a passing test proves less than it looks like.**
+
+**519 headless tests. Nothing pushed (working-contract rule 9).**
