@@ -67,6 +67,21 @@ MOVED_SO_FAR = [
 #:     therefore the ArmSession exist. The script keeps a local `mode` for that decision.
 STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 
+#: ⛔⭐ SESSION-LEVEL NAMES THAT WERE DELETED RATHER THAN MOVED, and must not come back.
+#:
+#: `MOVED_SO_FAR` models one shape of change: a local named `x` becomes `arm.x`, so the
+#: check is "no bare `x` survives AND `arm.x` is read somewhere". **A rename does not fit
+#: that model.** `control_frame` became `ArmSession.frame`, which already existed, so
+#: there is no `arm.control_frame` for check 2 to find and the old name would slip back in
+#: unnoticed.
+#:
+#: ⚠️ Why it matters more than tidiness: a second copy of live state is what
+#: [FINDINGS §52.7](../docs/FINDINGS.md) is about. `control_frame` sat beside
+#: `ArmSession.frame` for two days, only the local was updated on a frame change, and the
+#: object quietly disagreed with the session. Deleting one copy is the fix; this list is
+#: what stops it being re-created.
+RETIRED_LOCALS = ["control_frame"]
+
 
 def main_function(tree: ast.Module) -> ast.FunctionDef:
     for node in tree.body:
@@ -178,25 +193,45 @@ def run(moved: list[str]) -> int:
     # every genuine ordering fault after it would pass unnoticed. **The check would have
     # gone blind exactly when the code got more complicated**, which is the worst possible
     # moment and is why this was changed BEFORE the change it protects.
-    construction = [n.lineno for n in ast.walk(fn)
+    # ⛔⭐⭐ AND IT COVERS THE CONSTRUCTION STATEMENT ITSELF, NOT ONLY THE LINES BEFORE IT.
+    #
+    # This check said *"`arm` is built on line 948 and nothing touches it earlier"* while
+    # line 948 read `arm = ArmSession(robot, name=arm_names[0], frame=arm.frame, …)`. It was
+    # right and useless: the read was ON the construction line, so `lineno < built_at` was
+    # false. `arm` is None there, so that line raises `AttributeError` **after
+    # `build_robot()` has already enabled the motors**, and the `finally` block then
+    # disables them. On a raised arm that is a sag. A mechanical rewrite of the frame
+    # introduced it in one pass (FINDINGS §53.1).
+    #
+    # ⚠️ Bounded by the call's END line, not its start: `arm = ArmSession(\n … arm.frame …)`
+    # puts the bad read on a continuation line, where a `<= built_at` test would miss it
+    # again. The whole statement is the window.
+    construction = [n for n in ast.walk(fn)
                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                     and n.func.id == "ArmSession"]
     if not construction:
         faults += 1
         print("⛔ `ArmSession(` is never called in main() — the object is not constructed")
     else:
-        built_at = min(construction)
+        call = min(construction, key=lambda n: n.lineno)
+        built_at = call.lineno
+        built_through = call.end_lineno or built_at
         early = sorted({n.lineno for n in ast.walk(fn)
                         if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
-                        and n.value.id == "arm" and n.lineno < built_at})
+                        and n.value.id == "arm" and n.lineno <= built_through})
         if early:
             faults += len(early)
-            print(f"⛔ `arm` is built on line {built_at}, but it is touched earlier, on "
-                  f"line(s) {early}.")
-            print("   Those run before the object exists and will raise UnboundLocalError.")
+            print(f"⛔ `arm` is built on line(s) {built_at}-{built_through}, but it is read "
+                  f"through on line(s) {early}.")
+            print("   Those run before the object exists. A read BEFORE the call raises")
+            print("   UnboundLocalError; a read INSIDE the call raises AttributeError,")
+            print("   because `arm` is still the `None` declared above the try.")
+            print("   ⛔ Either way the motors are already enabled by build_robot() and the")
+            print("      finally block then disables them, which drops a raised arm.")
             print("   ⚠️ A dry run cannot catch this: it returns before this part of main().")
         else:
-            print(f"✓ `arm` is built on line {built_at} and nothing touches it earlier")
+            print(f"✓ `arm` is built on line(s) {built_at}-{built_through} and nothing "
+                  "reads it there or earlier")
 
     # 4. Nothing may be undefined. This is the scan that caught a NameError before it
     #    reached the arm on 2026-08-13 (FINDINGS, session 21): `replay_step` was called
@@ -252,7 +287,20 @@ def run(moved: list[str]) -> int:
         print(f"✓ every call to the {len(helpers)} per-arm helper(s) passes an arm: "
               f"{', '.join(sorted(helpers))}")
 
-    # 6. Progress, so the series has a visible finish line.
+    # 6. Retired session-level names stay retired.
+    back = sorted({(n.lineno, n.id) for n in ast.walk(fn)
+                   if isinstance(n, ast.Name) and n.id in RETIRED_LOCALS})
+    if back:
+        faults += len(back)
+        print(f"⛔ {len(back)} use(s) of a RETIRED session-level name:")
+        for lineno, name in back:
+            print(f"     line {lineno}: {name} — it was deleted, not moved; the state "
+                  "lives on the arm now")
+    else:
+        print(f"✓ retired session-level name(s) have not come back: "
+              f"{', '.join(RETIRED_LOCALS)}")
+
+    # 7. Progress, so the series has a visible finish line.
     remaining = {}
     for node in ast.walk(fn):
         if isinstance(node, ast.Name) and node.id in STILL_TO_MOVE:
