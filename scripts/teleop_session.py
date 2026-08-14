@@ -1416,6 +1416,29 @@ def main() -> int:  # noqa: PLR0915
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
+                    # ⭐⭐ WHICH ARMS THIS KEYPRESS IS AIMED AT. ROADMAP §6's split, and the
+                    # three names below are the whole of it:
+                    #
+                    #   `aimed`    — every selected arm. Mode changes, poses, the gripper and
+                    #                the park knobs act on all of them.
+                    #   `edit_arm` — the FIRST selected arm, and the only one a MAP edit ever
+                    #                touches. ⛔ Not a shortcut: `AxisMapStore.for_arm()`
+                    #                returns the SAME `AxisMap` object to both arms while the
+                    #                scope is SHARED (the default), so applying an edit to
+                    #                each selected arm would flip a motion TWICE, back to
+                    #                where it started, printing two confirmations
+                    #                (FINDINGS §53.5). A map edit also comes from one physical
+                    #                gesture on one puck, so one arm is the honest target.
+                    #   `wizard`   — the arm inside CONTROLS, if any. At most one can be:
+                    #                `m` refuses when two arms are selected, and `a` refuses
+                    #                while CONTROLS is open.
+                    #
+                    # ⚠️ Recomputed every keypress, because `a` changes the selection inside
+                    # this very loop.
+                    aimed = [one for one in arms if one.name in selection.names()]
+                    edit_arm = aimed[0]
+                    wizard = next((one for one in arms if one.mode == "map"), None)
+                    aimed_label = "+".join(one.name for one in aimed)
                     # ---- a pending s/p consumes the NEXT key as its argument ----
                     # ⭐ Two-key sequences, because a bare digit is already taken: 1-3
                     # flip rotation axes in the drive modes and 1-6 select motions in
@@ -1428,19 +1451,31 @@ def main() -> int:  # noqa: PLR0915
                     if pending == "save":
                         pending = None
                         if k.isdigit():
-                            q = np.asarray(arm.robot.get_joint_pos(), dtype=float)
+                            # ⭐ EVERY SELECTED ARM SAVES ITS OWN POSE into that slot. The file
+                            # is keyed by arm, so `s 1` with BOTH selected records two
+                            # different poses under one digit, which is what a two-arm
+                            # waypoint is.
+                            # ⚠️ `data` is threaded through the loop and written ONCE, because
+                            # `with_park_slot` returns a new dict rather than mutating. Saving
+                            # inside the loop would write the first arm's version and then
+                            # overwrite it with a copy that never saw it.
                             name = BASE_SLOT if k == "0" else k
-                            data = with_park_slot(load_json(PARK_FILE, {}), arm.name,
-                                                  name, q.tolist())
+                            data = load_json(PARK_FILE, {})
+                            for one in aimed:
+                                q = np.asarray(one.robot.get_joint_pos(), dtype=float)
+                                data = with_park_slot(data, one.name, name, q.tolist())
+                                if k == "0":
+                                    one.base_pose = q.tolist()
+                                    print(f"\n  ⭐ arm {one.name} BASE pose (0) saved — this is "
+                                          f"where Ctrl-C parks before disabling:"
+                                          f"\n     {np.round(q[:N_ARM], 3)}\n")
+                                else:
+                                    print(f"\n  ✓ arm {one.name} waypoint {k} saved: "
+                                          f"{np.round(q[:N_ARM], 3)}"
+                                          f"     (p {k} drives back to it; Ctrl-C ignores it)\n")
                             save_json(PARK_FILE, data)
-                            arm.slots = park_slots(data, arm.name)
-                            if k == "0":
-                                arm.base_pose = q.tolist()
-                                print(f"\n  ⭐ BASE pose (0) saved — this is where Ctrl-C "
-                                      f"parks before disabling:\n     {np.round(q[:N_ARM], 3)}\n")
-                            else:
-                                print(f"\n  ✓ waypoint {k} saved: {np.round(q[:N_ARM], 3)}"
-                                      f"     (p {k} drives back to it; Ctrl-C ignores it)\n")
+                            for one in aimed:
+                                one.slots = park_slots(data, one.name)
                         else:
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
                         continue
@@ -1540,17 +1575,19 @@ def main() -> int:  # noqa: PLR0915
                         # a bit annoying."* Deciding how a move should feel belongs to
                         # the moment you are choosing the move.
                         if k in "+=":
-                            arm.park_speed = min(1.5, arm.park_speed * 1.25)
-                            hint(park_plan_line(arm)); continue
+                            for one in aimed:
+                                one.park_speed = min(1.5, one.park_speed * 1.25)
+                            hint(park_plan_line(edit_arm)); continue
                         if k == "-":
-                            arm.park_speed = max(0.05, arm.park_speed / 1.25)
-                            hint(park_plan_line(arm)); continue
+                            for one in aimed:
+                                one.park_speed = max(0.05, one.park_speed / 1.25)
+                            hint(park_plan_line(edit_arm)); continue
                         if k == ".":
                             blend_idx = min(len(BLEND_MODES) - 1, blend_idx + 1)
-                            hint(park_plan_line(arm)); continue
+                            hint(park_plan_line(edit_arm)); continue
                         if k == ",":
                             blend_idx = max(0, blend_idx - 1)
-                            hint(park_plan_line(arm)); continue
+                            hint(park_plan_line(edit_arm)); continue
                         if k in KEY_STEP_UP:
                             # ⭐ How LONG the ease lasts, separately from its shape.
                             # Julien: *"the smoothing should maybe be adjustable at the
@@ -1558,11 +1595,14 @@ def main() -> int:  # noqa: PLR0915
                             # ö/ä (or [/]) mean gripper step elsewhere, which is
                             # meaningless while choosing a park — same
                             # context-dependence as +/-.
-                            arm.park_ramp = min(1.0, arm.park_ramp * 1.4)
-                            hint(park_plan_line(arm)); continue
+                            for one in aimed:
+                                one.park_ramp = min(1.0, one.park_ramp * 1.4)
+                            hint(park_plan_line(edit_arm)); continue
                         if k in KEY_STEP_DOWN:
-                            arm.park_ramp = max(0.0, arm.park_ramp / 1.4 if arm.park_ramp > 0.03 else 0.0)
-                            hint(park_plan_line(arm)); continue
+                            for one in aimed:
+                                one.park_ramp = max(
+                                    0.0, one.park_ramp / 1.4 if one.park_ramp > 0.03 else 0.0)
+                            hint(park_plan_line(edit_arm)); continue
                         if k == "e":
                             # ⭐ Start/stop easing is INDEPENDENT of corner blending.
                             # Julien wanted the ends toggleable without giving up the
@@ -1577,7 +1617,7 @@ def main() -> int:  # noqa: PLR0915
                             # reason. The two differ only in what they show — the whole
                             # plan while choosing, just the profile otherwise.
                             ease_idx = (ease_idx + 1) % len(EASINGS)
-                            hint(park_plan_line(arm)); continue
+                            hint(park_plan_line(edit_arm)); continue
 
                     if pending == "park":
                         if k.isdigit():
@@ -1599,19 +1639,28 @@ def main() -> int:  # noqa: PLR0915
                             # trajectory and how it moves is worth a glance first.
                             if len(park_sequence) >= 2:
                                 pending = "confirm"
-                                hint(park_plan_line(arm))
+                                hint(park_plan_line(edit_arm))
                                 continue
                             pending = None
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
-                            legs, missing = resolve_park_legs(wanted, arm.base_pose,
-                                                              arm.slots)
-                            if missing:
-                                print(f"\n  ⚠️  nothing saved in slot {', '.join(missing)}"
-                                      " — press s then that digit to record one.\n")
-                            if legs:
-                                begin_path(arm, legs, f"slot {legs[0][0]}")
-                            else:
+                            # ⭐ EACH SELECTED ARM RUNS ITS OWN SEQUENCE, resolved against
+                            # its own slots. Two arms driving to their own saved poses at the
+                            # same time is what a two-arm waypoint run means.
+                            # ⚠️ A slot empty on ONE arm is skipped for that arm only, never
+                            # substituted, and never cancels the other arm's run.
+                            ran = False
+                            for one in aimed:
+                                legs, missing = resolve_park_legs(wanted, one.base_pose,
+                                                                  one.slots)
+                                if missing:
+                                    print(f"\n  ⚠️  arm {one.name}: nothing saved in slot "
+                                          f"{', '.join(missing)} — press s then that digit "
+                                          "to record one.\n")
+                                if legs:
+                                    begin_path(one, legs, f"slot {legs[0][0]}")
+                                    ran = True
+                            if not ran:
                                 print("\n  nothing to park to.\n")
                             continue
                         pending = None
@@ -1625,13 +1674,17 @@ def main() -> int:  # noqa: PLR0915
                         if k in ("\r", "\n", " ", "p"):
                             wanted = park_sequence[:]
                             park_sequence.clear()
-                            legs, missing = resolve_park_legs(wanted, arm.base_pose,
-                                                              arm.slots)
-                            if missing:
-                                print(f"\n  ⚠️  skipping empty slot(s) {', '.join(missing)}.\n")
-                            if legs:
-                                begin_path(arm, legs, " → ".join(n for n, _ in legs))
-                            else:
+                            ran = False
+                            for one in aimed:
+                                legs, missing = resolve_park_legs(wanted, one.base_pose,
+                                                                  one.slots)
+                                if missing:
+                                    print(f"\n  ⚠️  arm {one.name}: skipping empty slot(s) "
+                                          f"{', '.join(missing)}.\n")
+                                if legs:
+                                    begin_path(one, legs, " → ".join(n for n, _ in legs))
+                                    ran = True
+                            if not ran:
                                 print("\n  nothing to park to.\n")
                         else:
                             park_sequence.clear()
@@ -1666,8 +1719,8 @@ def main() -> int:  # noqa: PLR0915
                     # Button assignment is a property of the DEVICE, not of the
                     # arm's mode, so it belongs above the mode dispatch entirely.
                     if k == "b":
-                        arm.learn_button = "open"
-                        print("\n⭐ LEARNING THE GRIPPER BUTTONS.")
+                        edit_arm.learn_button = "open"
+                        print(f"\n⭐ LEARNING THE GRIPPER BUTTONS for arm {edit_arm.name}.")
                         print("   Press the puck button you want for OPEN …")
                         print("   (learned by pressing, never assumed — which physical button")
                         print("    sets which HID bit has never been measured on this unit)\n")
@@ -1708,11 +1761,15 @@ def main() -> int:  # noqa: PLR0915
                         # into another would silently overwrite it — the same
                         # blast-radius bug as editing a shared map believing it was
                         # per-arm.
-                        map_store.set(arm.name, arm.axis_map, arm.frame)
-                        arm.frame = order[(order.index(arm.frame) + 1) % len(order)]
-                        arm.axis_map = map_store.for_arm(arm.name, arm.frame)
-                        if arm.teleop is not None:
-                            arm.teleop.frame = arm.frame
+                        # ⭐ ONE arm's frame, like every other map-scoped edit (§53.5). Two
+                        # arms may sit in different frames, which is the point: one driven in
+                        # `world` while the other follows its own wrist in `tool`.
+                        map_store.set(edit_arm.name, edit_arm.axis_map, edit_arm.frame)
+                        edit_arm.frame = order[
+                            (order.index(edit_arm.frame) + 1) % len(order)]
+                        edit_arm.axis_map = map_store.for_arm(edit_arm.name, edit_arm.frame)
+                        if edit_arm.teleop is not None:
+                            edit_arm.teleop.frame = edit_arm.frame
                         # ⛔⭐ THERE IS NOW ONE COPY OF THE FRAME, AND THAT IS THE REAL FIX
                         # FOR WHAT FINDINGS §52.7 CAUGHT. `ArmSession.frame` used to sit
                         # beside a session-level `control_frame` local, and only the local
@@ -1720,16 +1777,18 @@ def main() -> int:  # noqa: PLR0915
                         # session after the first `v`. It was patched by assigning both.
                         # ⭐ Deleting the local is better than keeping them in step: a
                         # second copy that has to be maintained will eventually not be.
-                        print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[arm.frame]}")
-                        print(f"     controls for this frame: {arm.axis_map.one_line(arm.frame)}")
+                        print(f"\n  ⭐ arm {edit_arm.name} CONTROL FRAME → "
+                              f"{CartesianTeleop.FRAME_NOTES[edit_arm.frame]}")
+                        print("     controls for this frame: "
+                              f"{edit_arm.axis_map.one_line(edit_arm.frame)}")
                         print("     press m to edit THESE controls; each frame has its own\n")
                         continue
-                    if k == "f" and arm.last_input_kind == "button":
+                    if k == "f" and edit_arm.last_input_kind == "button":
                         # Same key, same meaning everywhere: reverse the control just
                         # used. Axis -> flip its sign; button -> swap open/close.
-                        arm.axis_map.swap_buttons()
+                        edit_arm.axis_map.swap_buttons()
                         print("\n  ↔ SWAPPED the gripper buttons")
-                        print(arm.axis_map.buttons_row() + "\n")
+                        print(edit_arm.axis_map.buttons_row() + "\n")
                         continue
 
                     # ---- MAP mode owns the keyboard while it is active --------
@@ -1739,25 +1798,25 @@ def main() -> int:  # noqa: PLR0915
                     # MAP mode is entered explicitly, announces itself loudly, holds
                     # the arm still, and echoes the effect of every key. Nothing it
                     # can do moves a motor.
-                    if arm.mode == "map":
+                    if wizard is not None:
                         # ⛔ EVERY EDIT IN THIS BRANCH IS KEY-DRIVEN. Moving the puck
                         # must never change the map — see FINDINGS §11 for what
                         # happened when it did.
-                        active = arm.last_active_axis
-                        driven = arm.axis_map.motion_driven_by(active) if active is not None else None
+                        active = wizard.last_active_axis
+                        driven = wizard.axis_map.motion_driven_by(active) if active is not None else None
                         if k == "q":
                             stop_reason = "quit requested"
                         elif k in "tghm":
                             print("\n  controls now:")
-                            print(arm.axis_map.describe(arm.frame))
+                            print(wizard.axis_map.describe(wizard.frame))
                             if k == "t":
-                                arm.mode = "teleop"; enter_teleop(arm)
+                                wizard.mode = "teleop"; enter_teleop(wizard)
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
                             elif k == "g":
-                                arm.mode = "guide"; enter_guide(arm)
+                                wizard.mode = "guide"; enter_guide(wizard)
                                 print("\n⭐ MODE: GUIDE — arm is weightless\n")
                             else:
-                                arm.mode = "hold"; enter_hold(arm)
+                                wizard.mode = "hold"; enter_hold(wizard)
                                 print("\n⭐ MODE: HOLD\n")
                         elif k == "f":
                             if active is None:
@@ -1766,8 +1825,8 @@ def main() -> int:  # noqa: PLR0915
                                 print(f"\n  puck {PUCK_AXES[active]} drives nothing, so there is no "
                                       f"direction to reverse. Press 1-6 to give it a motion.\n")
                             else:
-                                arm.axis_map.flip(driven)
-                                print(f"\n  ↔ REVERSED → {arm.axis_map.row(driven, arm.frame).strip()}"
+                                wizard.axis_map.flip(driven)
+                                print(f"\n  ↔ REVERSED → {wizard.axis_map.row(driven, wizard.frame).strip()}"
                                       f"   (push {PUCK_AXES[active]} again to feel it)\n")
                         elif k in "123456":
                             if active is None:
@@ -1781,41 +1840,41 @@ def main() -> int:  # noqa: PLR0915
                                     # then had to notice and re-bind. A straight exchange
                                     # is also an involution, so pressing the same key
                                     # again undoes it. See AxisMap.swap().
-                                    arm.axis_map.swap(driven, target)
-                                    print(f"\n  ⇄ SWAPPED {motions_for(arm.frame)[driven]['short']} ↔ "
-                                          f"{motions_for(arm.frame)[target]['short']}")
-                                    print(f"      {arm.axis_map.row(target, arm.frame).strip()}")
-                                    print(f"      {arm.axis_map.row(driven, arm.frame).strip()}")
+                                    wizard.axis_map.swap(driven, target)
+                                    print(f"\n  ⇄ SWAPPED {motions_for(wizard.frame)[driven]['short']} ↔ "
+                                          f"{motions_for(wizard.frame)[target]['short']}")
+                                    print(f"      {wizard.axis_map.row(target, wizard.frame).strip()}")
+                                    print(f"      {wizard.axis_map.row(driven, wizard.frame).strip()}")
                                     print("      (press the same key again to swap back)\n")
                                 else:
                                     # The active control drove nothing, so there is nothing
                                     # to exchange with. The direction he was last pushing
                                     # becomes this motion's positive sense.
-                                    displaced = arm.axis_map.bind(target, active, arm.last_active_value)
+                                    displaced = wizard.axis_map.bind(target, active, wizard.last_active_value)
                                     print(f"\n  ✓ puck {PUCK_AXES[active]} now drives "
-                                          f"{motions_for(arm.frame)[target]['short']} → "
-                                          f"{arm.axis_map.row(target, arm.frame).strip()}")
+                                          f"{motions_for(wizard.frame)[target]['short']} → "
+                                          f"{wizard.axis_map.row(target, wizard.frame).strip()}")
                                     if displaced is not None:
-                                        print(f"  ⚠️  {motions_for(arm.frame)[displaced]['short']} was using that "
+                                        print(f"  ⚠️  {motions_for(wizard.frame)[displaced]['short']} was using that "
                                               f"control and is now UNBOUND — it will not move.")
                                     print()
                         elif k == "u":
                             if driven is None:
                                 print("\n  that control already drives nothing.\n")
                             else:
-                                arm.axis_map.unbind(driven)
-                                print(f"\n  unbound {motions_for(arm.frame)[driven]['short']} — it will not move\n")
+                                wizard.axis_map.unbind(driven)
+                                print(f"\n  unbound {motions_for(wizard.frame)[driven]['short']} — it will not move\n")
                         elif k == "0":
-                            arm.axis_map = arm.axis_map_at_start.copy()
+                            wizard.axis_map = wizard.axis_map_at_start.copy()
                             print("\n  reverted to the controls this session started with:")
-                            print(arm.axis_map.describe(arm.frame) + "\n")
+                            print(wizard.axis_map.describe(wizard.frame) + "\n")
                         elif k == "?":
-                            print(map_reference(arm.frame))
+                            print(map_reference(wizard.frame))
                             print(MAP_HELP)
-                            print(arm.axis_map.describe(arm.frame) + "\n")
+                            print(wizard.axis_map.describe(wizard.frame) + "\n")
                         # ⚠️ The rotation pair was MISSING here while the linear pair was
                         # present, so in CONTROLS mode roll/pitch/yaw could not be sped up
-                        # or slowed down at all — Julien found it on the arm. The keys were
+                        # or slowed down at all — Julien found it on the wizard. The keys were
                         # copied from the drive-mode handler and the second pair was
                         # dropped. Both scales are also printed in the status line now, so
                         # a key that silently does nothing is visible rather than inferred.
@@ -1848,7 +1907,14 @@ def main() -> int:  # noqa: PLR0915
                     # character must never be an action.
                     if k == "q":
                         stop_reason = "quit requested"
-                    elif k == "m" and arm.mode != "map":
+                    elif k == "m" and len(aimed) > 1:
+                        # ⛔ CONTROLS EDITS ONE MAP FROM ONE WIGGLE, so it cannot be aimed at
+                        # two arms. Refused rather than silently applied to the first: the
+                        # operator who selected BOTH and pressed `m` asked for something this
+                        # wizard has no meaning for.
+                        hint(f"CONTROLS is one arm at a time — press a to pick one "
+                             f"(selected: {aimed_label})")
+                    elif k == "m" and edit_arm.mode != "map":
                         # ⭐ CONTROLS mode DRIVES the arm — that is the whole point, and it
                         # is why this calls enter_teleop() rather than enter_hold(). The
                         # previous version held the arm still, which made it useless for
@@ -1856,25 +1922,42 @@ def main() -> int:  # noqa: PLR0915
                         # until you have watched the arm go that way. Julien:
                         # *"the actual mapping has to happen while the arm is moving so I
                         # can see what the different directions are doing."*
-                        arm.mode = "map"; enter_teleop(arm)
-                        arm.last_active_axis = None
-                        print("\n⭐ MODE: CONTROLS — the arm MOVES, one isolated axis, half speed.\n")
-                        print(map_reference(arm.frame))
+                        edit_arm.mode = "map"; enter_teleop(edit_arm)
+                        edit_arm.last_active_axis = None
+                        print(f"\n⭐ MODE: CONTROLS on arm {edit_arm.name} — the arm MOVES, "
+                              "one isolated axis, half speed.\n")
+                        print(map_reference(edit_arm.frame))
                         print(MAP_HELP)
-                        print(arm.axis_map.explain(arm.frame))
+                        print(edit_arm.axis_map.explain(edit_arm.frame))
                         print("\n  Push the puck one way at a time and watch the arm. If a direction is")
                         print("  wrong, press f. If a control should do something else, press 1-6.\n")
                         if not rotation:
                             print("  ⚠️  wrist rotation is OFF (r toggles) — ROLL/PITCH/YAW will not move.\n")
-                    elif k == "g" and arm.mode != "guide":
-                        arm.mode = "guide"; hint(""); enter_guide(arm)
-                        print("\n⭐ MODE: GUIDE — arm is weightless\n")
-                    elif k == "t" and arm.mode != "teleop":
-                        arm.mode = "teleop"; hint(""); enter_teleop(arm)
-                        print("\n⭐ MODE: TELEOP — SpaceMouse drives\n")
-                    elif k == "h" and arm.mode != "hold":
-                        arm.mode = "hold"; hint(""); enter_hold(arm)
-                        print("\n⭐ MODE: HOLD\n")
+                    # ⭐⭐ MODE KEYS APPLY TO EVERY SELECTED ARM, which is what `a` is for.
+                    # ⛔ `g` on two arms is 8.6 kg going weightless in one keypress, and GUIDE
+                    # is the mode where an error in the dynamics model becomes a FALLING arm
+                    # rather than a droop (FINDINGS §11.1). That is why the selector exists at
+                    # all, and why it starts on one arm rather than on BOTH.
+                    elif k == "g" and any(one.mode != "guide" for one in aimed):
+                        hint("")
+                        for one in aimed:
+                            if one.mode != "guide":
+                                one.mode = "guide"; enter_guide(one)
+                        print(f"\n⭐ MODE: GUIDE on {aimed_label} — weightless, "
+                              "you are holding it now\n")
+                    elif k == "t" and any(one.mode != "teleop" for one in aimed):
+                        hint("")
+                        for one in aimed:
+                            if one.mode != "teleop":
+                                one.mode = "teleop"; enter_teleop(one)
+                        print(f"\n⭐ MODE: TELEOP on {aimed_label} — each arm follows its "
+                              "own SpaceMouse\n")
+                    elif k == "h" and any(one.mode != "hold" for one in aimed):
+                        hint("")
+                        for one in aimed:
+                            if one.mode != "hold":
+                                one.mode = "hold"; enter_hold(one)
+                        print(f"\n⭐ MODE: HOLD on {aimed_label}\n")
                     elif k in MODE_KEYS:
                         # ⛔ ALREADY IN THAT MODE — say so, do not call it unrecognised.
                         # Julien's paste has `⭐ MODE: GUIDE` immediately followed by
@@ -1903,14 +1986,15 @@ def main() -> int:  # noqa: PLR0915
                                 # timeline (ROADMAP §9.2), so when the recorder spans N arms
                                 # this becomes the list of names in the same order as the
                                 # samples. Changing it now would write a shape nothing reads.
-                                "arm": arm.name,
-                                "method": f"live:{arm.mode}",
+                                "arm": rec_arm.name,
+                                "method": f"live:{rec_arm.mode}",
                                 "nominal_hz": CONTROL_HZ,
-                                "frame": arm.frame,
+                                "frame": rec_arm.frame,
                             })
                             take_t0 = t
-                            take_modes = [arm.mode]
-                            print(f"\n⏺  RECORDING — {arm.mode.upper()} mode. Press w again to stop.\n")
+                            take_modes = [rec_arm.mode]
+                            print(f"\n⏺  RECORDING arm {rec_arm.name} — "
+                                  f"{rec_arm.mode.upper()} mode. Press w again to stop.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
                             # ON 2026-08-13. `take` was left in place while the "which slot?"
@@ -1959,8 +2043,10 @@ def main() -> int:  # noqa: PLR0915
                         print(f"     saved: {have or 'none'}\n")
                     elif k == "s":
                         pending = "save"
-                        saved_now = ", ".join(sorted(n for n in arm.slots
-                                                     if n != BASE_SLOT))
+                        saved_now = "; ".join(
+                            f"{one.name}: " + (", ".join(sorted(n for n in one.slots
+                                                                if n != BASE_SLOT)) or "none")
+                            for one in aimed)
                         print(f"\n  SAVE this pose to which slot?  0 = the BASE pose "
                               f"(where Ctrl-C parks), 1-9 = a waypoint.")
                         print(f"     waypoints already saved: {saved_now or 'none'}"
@@ -1968,15 +2054,21 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "p":
                         pending = "park"
                         park_sequence.clear()
-                        have = ", ".join(sorted(n for n in arm.slots if n != BASE_SLOT))
+                        have = "; ".join(
+                            f"{one.name}: " + (", ".join(sorted(n for n in one.slots
+                                                                if n != BASE_SLOT)) or "none")
+                            for one in aimed)
                         print(f"\n  PARK to which?  0 = base, 1-9 = a waypoint, "
                               f"Enter = base.")
                         print(f"     Type several digits for a SEQUENCE, then Enter."
                               f"   waypoints: {have or 'none'}\n")
-                    elif k == "o" and arm.mode == "teleop":
-                        arm.gripper_value = clamp_gripper(arm.gripper_value + gripper_step)
-                    elif k == "c" and arm.mode == "teleop":
-                        arm.gripper_value = clamp_gripper(arm.gripper_value - gripper_step)
+                    elif k in "oc" and any(one.mode == "teleop" for one in aimed):
+                        # ⭐ Every selected arm's jaws. `o` and `c` are commands, and BOTH
+                        # selected means the operator asked for both grippers.
+                        jaw_step = gripper_step if k == "o" else -gripper_step
+                        for one in aimed:
+                            if one.mode == "teleop":
+                                one.gripper_value = clamp_gripper(one.gripper_value + jaw_step)
                     elif k in KEY_STEP_UP:
                         # ⭐⭐ ö AND ä MEAN THE EASE RAMP EVERYWHERE NOW. Changed
                         # 2026-08-13, after Julien hit the confusion on the arm.
@@ -1997,11 +2089,14 @@ def main() -> int:  # noqa: PLR0915
                         # is a design admitting it is wrong. The gripper step moves to
                         # `--gripper-step`: it is a preference set once, and he said
                         # outright that it does not need a live key.
-                        arm.park_ramp = min(1.0, arm.park_ramp * 1.4)
-                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
+                        for one in aimed:
+                            one.park_ramp = min(1.0, one.park_ramp * 1.4)
+                        hint(ease_note(EASINGS[ease_idx].name, edit_arm.park_ramp))
                     elif k in KEY_STEP_DOWN:
-                        arm.park_ramp = max(0.0, arm.park_ramp / 1.4 if arm.park_ramp > 0.03 else 0.0)
-                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
+                        for one in aimed:
+                            one.park_ramp = max(
+                                0.0, one.park_ramp / 1.4 if one.park_ramp > 0.03 else 0.0)
+                        hint(ease_note(EASINGS[ease_idx].name, edit_arm.park_ramp))
                     elif k == "e":
                         # ⭐ WORKS EVERYWHERE, and the message now says WHAT IT AFFECTS.
                         # Julien, on the arm: *"the easing outside of parking, I don't
@@ -2014,7 +2109,7 @@ def main() -> int:  # noqa: PLR0915
                         # effect you cannot see has to say where its effect lives, every
                         # time it is touched.
                         ease_idx = (ease_idx + 1) % len(EASINGS)
-                        hint(ease_note(EASINGS[ease_idx].name, arm.park_ramp))
+                        hint(ease_note(EASINGS[ease_idx].name, edit_arm.park_ramp))
                     elif k == "r":
                         rotation = not rotation
                         hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
@@ -2032,32 +2127,36 @@ def main() -> int:  # noqa: PLR0915
                         # Julien presses x he means "the gripper goes the wrong way",
                         # which is a statement about the arm, not about the device.
                         idx = "xyz".index(k)
-                        arm.axis_map.flip(idx)
-                        print(f"\n  {motions_for(arm.frame)[idx]['short']} flipped → "
-                              f"{arm.axis_map.row(idx, arm.frame).strip()}\n")
+                        edit_arm.axis_map.flip(idx)
+                        print(f"\n  arm {edit_arm.name}: "
+                              f"{motions_for(edit_arm.frame)[idx]['short']} flipped → "
+                              f"{edit_arm.axis_map.row(idx, edit_arm.frame).strip()}\n")
                     elif k in "123":
                         # Rotation motions: 1 roll, 2 pitch, 3 yaw. Digits because every
                         # sensible letter was taken, and because they read as an
                         # ordered triple the way x/y/z do.
                         idx = 3 + "123".index(k)
-                        arm.axis_map.flip(idx)
-                        print(f"\n  {motions_for(arm.frame)[idx]['short']} flipped → "
-                              f"{arm.axis_map.row(idx, arm.frame).strip()}\n")
+                        edit_arm.axis_map.flip(idx)
+                        print(f"\n  arm {edit_arm.name}: "
+                              f"{motions_for(edit_arm.frame)[idx]['short']} flipped → "
+                              f"{edit_arm.axis_map.row(idx, edit_arm.frame).strip()}\n")
                     elif k == "+" or k == "=":
                         # ⭐ In PARK these mean the park speed. The teleop linear scale
                         # is meaningless while the puck is not driving, and a key that
                         # does nothing where you are is the defect class that made `b`
                         # look broken (FINDINGS §17.1).
-                        if arm.mode == "park":
-                            arm.park_speed = min(1.5, arm.park_speed * 1.25)
-                            hint(f"park speed {arm.park_speed:.2f} rad/s")
+                        if any(one.mode == "park" for one in aimed):
+                            for one in aimed:
+                                one.park_speed = min(1.5, one.park_speed * 1.25)
+                            hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale *= 1.25
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "-":
-                        if arm.mode == "park":
-                            arm.park_speed = max(0.05, arm.park_speed / 1.25)
-                            hint(f"park speed {arm.park_speed:.2f} rad/s")
+                        if any(one.mode == "park" for one in aimed):
+                            for one in aimed:
+                                one.park_speed = max(0.05, one.park_speed / 1.25)
+                            hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
                             args.linear_scale /= 1.25
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
@@ -2070,12 +2169,16 @@ def main() -> int:  # noqa: PLR0915
                 # one that gets forgotten is the one that matters: an arm resuming a
                 # planned trajectory after the operator pressed HOLD is doing something
                 # nobody asked for.
-                if arm.mode != "park" and arm.park_path is not None:
-                    left = arm.park_path.length - arm.park_s
+                # ⚠️ Per arm, because one arm can be parking while the other is being
+                # driven. Each arm's run is abandoned by ITS OWN mode leaving `park`.
+                for one in arms:
+                    if one.mode == "park" or one.park_path is None:
+                        continue
+                    left = one.park_path.length - one.park_s
                     if left > PARK_TOLERANCE:
-                        print(f"\n  ⚠️  run abandoned with {left:.2f} rad of path left — "
-                              "leaving PARK cancels the rest.\n")
-                    arm.park_path, arm.park_marks = None, []
+                        print(f"\n  ⚠️  arm {one.name}: run abandoned with {left:.2f} rad of "
+                              "path left — leaving PARK cancels the rest.\n")
+                    one.park_path, one.park_marks = None, []
                     # ⛔ A park that was interrupted must not hand over to a playback. The
                     # handover lives in the arrival branch, but this is the second gate:
                     # pressing h or t while driving to the start pose cancels the whole
@@ -2087,7 +2190,10 @@ def main() -> int:  # noqa: PLR0915
                 # ⛔ Same rule for a playback in progress: leaving the mode abandons it.
                 # An arm resuming a recorded movement after the operator pressed HOLD is
                 # doing something nobody asked for.
-                if arm.mode != "replay" and replay is not None:
+                # ⚠️ Session-level, because the playback cursor is: it is abandoned when NO
+                # arm is in replay any more. `l` refuses at N>1 until the two-arm recorder
+                # exists (ROADMAP §8.2 item 7), so today that is one arm leaving the mode.
+                if replay is not None and not any(one.mode == "replay" for one in arms):
                     left = replay.duration - replay_s
                     if left > 0.05:
                         print(f"\n  ⚠️  playback abandoned with {left:.1f}s left.\n")
@@ -2547,27 +2653,36 @@ def main() -> int:  # noqa: PLR0915
                 # CONTROLS mode reports continuously, not once a second: he is watching
                 # the arm and the readout together to attribute a motion to a gesture,
                 # and a 1 Hz readout is useless for that.
-                if arm.mode == "map":
+                # ⚠️ CONTROLS owns the whole live block while it is open, so the other arm's
+                # row is not painted during it. That is a real gap at N>1 and it is deliberate
+                # for now: the wizard is a full-screen conversation with one arm, and `m`
+                # refuses when two arms are selected. Tracked in FINDINGS §54.2.
+                wizard = next((one for one in arms if one.mode == "map"), None)
+                if wizard is not None:
+                    # ⛔ NOT `arm = wizard`. Rebinding the session's own `arm` here would repoint it
+                    # at the wizard for the REST of the loop, including the incident record and
+                    # the shutdown. At N=1 it is the same object, so it would have worked and
+                    # proved nothing — the leaked-variable defect again (FINDINGS §54.1).
                     # Both scales are always shown. Julien could not tell that ,/. were
                     # doing nothing here because only the active axis's resulting speed
                     # was displayed — a missing key looked identical to a key that worked.
                     speeds = (f"lin {args.linear_scale * CONTROLS_SCALE:.3f} m/s  "
                               f"rot {np.degrees(angular_scale * CONTROLS_SCALE):.0f}°/s"
                               f"{'' if rotation else ' (OFF)'}")
-                    if arm.last_active_axis is None:
-                        print(f"\r[CONTROLS] push the puck …  {axes_readout(arm.raw_axes)}  {speeds}   ",
+                    if wizard.last_active_axis is None:
+                        print(f"\r[CONTROLS] push the puck …  {axes_readout(wizard.raw_axes)}  {speeds}   ",
                               end="", flush=True)
                     else:
-                        drv = arm.axis_map.motion_driven_by(arm.last_active_axis)
+                        drv = wizard.axis_map.motion_driven_by(wizard.last_active_axis)
                         if drv is None:
                             doing = "→ nothing (press 1-6 to assign)"
                         else:
-                            v = arm.axis_map.apply(isolated_axes(arm.raw_axes, arm.last_active_axis))[drv]
+                            v = wizard.axis_map.apply(isolated_axes(wizard.raw_axes, wizard.last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
                                     else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
-                            doing = f"→ {motions_for(arm.frame)[drv]['short']} {unit}"
-                        print(f"\r[CONTROLS] puck {PUCK_AXES[arm.last_active_axis]:<5} "
-                              f"{arm.last_active_value:+.2f}  {doing:<28} {speeds}"
+                            doing = f"→ {motions_for(wizard.frame)[drv]['short']} {unit}"
+                        print(f"\r[CONTROLS] puck {PUCK_AXES[wizard.last_active_axis]:<5} "
+                              f"{wizard.last_active_value:+.2f}  {doing:<28} {speeds}"
                               f"{' ' * 6}", end="", flush=True)
                 elif t >= next_report:
                     next_report += 1.0
