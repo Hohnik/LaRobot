@@ -16,6 +16,7 @@ mid-park, a park that stops short, a gripper clamp that must not fire on entry.
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,7 +25,11 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import ArmSession, ParkLeg  # noqa: E402
+from arm_session import ArmSession, ParkLeg, parse_arms  # noqa: E402
+
+#: The real thing, so a rename of an arm cannot leave these tests passing against a
+#: rig that no longer has that arm.
+from yam_can import ARM_SERIALS, DEFAULT_ARM  # noqa: E402
 
 N_ARM = 6
 
@@ -507,6 +512,104 @@ def test_the_script_still_hands_its_start_mode_to_the_class() -> None:
         "build_robot no longer reads start_mode; if it reads arm.mode instead it runs "
         "before the object exists"
     )
+
+def _rejected(single, spec) -> str:  # noqa: ANN001
+    """The message `parse_arms` refuses with, or a failure if it accepted the input."""
+    try:
+        got = parse_arms(single, spec, ARM_SERIALS, DEFAULT_ARM)
+    except ValueError as exc:
+        return str(exc)
+    raise AssertionError(f"parse_arms({single!r}, {spec!r}) returned {got} instead of "
+                         "refusing")
+
+
+def test_no_flags_means_the_default_arm() -> None:
+    assert parse_arms(None, None, ARM_SERIALS, DEFAULT_ARM) == [DEFAULT_ARM]
+
+
+def test_the_one_arm_spelling_still_works() -> None:
+    """⭐ `--arm G` is what every other script here takes and what Julien types. It must
+    keep working unchanged now that `--arms` exists."""
+    assert parse_arms("G", None, ARM_SERIALS, DEFAULT_ARM) == ["G"]
+
+
+def test_the_list_spelling_keeps_the_order_it_was_given() -> None:
+    """⚠️ Order is not cosmetic: it decides which arm is asked for its puck first, and
+    which one the `a` selector starts on."""
+    assert parse_arms(None, "B,G", ARM_SERIALS, DEFAULT_ARM) == ["B", "G"]
+    assert parse_arms(None, "G,B", ARM_SERIALS, DEFAULT_ARM) == ["G", "B"]
+
+
+def test_spaces_around_a_name_are_forgiven() -> None:
+    assert parse_arms(None, "B, G", ARM_SERIALS, DEFAULT_ARM) == ["B", "G"]
+
+
+def test_both_spellings_are_fine_when_they_agree() -> None:
+    assert parse_arms("G", "G", ARM_SERIALS, DEFAULT_ARM) == ["G"]
+
+
+def test_the_two_spellings_may_not_disagree() -> None:
+    """⛔ Refused rather than resolved by a precedence rule nobody would remember."""
+    assert "disagree" in _rejected("B", "G")
+
+
+def test_the_same_arm_may_not_appear_twice() -> None:
+    """⛔ Two `ArmSession` objects over one CAN bus would command the same motors twice
+    a cycle from two sets of cached state, and nothing would raise."""
+    assert "more than once" in _rejected(None, "B,B")
+
+
+def test_an_unknown_arm_is_named_in_the_refusal() -> None:
+    """⚠️ The message has to say what the rig actually has. A bare "invalid choice" sent
+    Julien to the source once already."""
+    message = _rejected(None, "B,X")
+    assert "X" in message and "B" in message and "G" in message
+
+
+def test_an_empty_entry_is_refused_rather_than_dropped() -> None:
+    """`--arms B,` is a typo, and silently reading it as one arm would hide it."""
+    assert "empty entry" in _rejected(None, "B,")
+    assert "empty entry" in _rejected(None, "")
+
+
+def _dry_run(*flags: str):  # noqa: ANN202
+    """Run the session script with no `--yes`, and return the finished process.
+
+    ⚠️ Safe by construction: without `--yes` the script prints its plan and returns
+    before it opens the SpaceMouse or builds a robot, so nothing is energised and no
+    device is touched. That is also why this is the only way to reach `main()` at all
+    from a headless test.
+    """
+    return subprocess.run(  # noqa: S603
+        [sys.executable, str(REPO / "scripts" / "teleop_session.py"), *flags],
+        capture_output=True, text=True, timeout=120, check=False)
+
+
+def test_one_arm_still_dry_runs_under_both_spellings() -> None:
+    for flags in (("--arm", "B"), ("--arms", "B"), ()):
+        done = _dry_run(*flags)
+        assert done.returncode == 0, f"{flags} exited {done.returncode}: {done.stderr[-400:]}"
+        assert "DRY RUN" in done.stdout, f"{flags} printed no dry-run line"
+
+
+def test_two_arms_are_refused_rather_than_half_driven() -> None:
+    """⛔⭐ THE SAFETY STATEMENT OF STEP 2a, pinned so it cannot be lost by accident.
+
+    The script is still single-arm below the `ArmSession`: one puck, one axis map, one
+    robot, one status row. So `--arms B,G` would drive B, never build G, and print a plan
+    naming both. **An arm that is reported as under control while nothing commands it
+    sags** if someone has raised it (FINDINGS §11), which is why this refuses instead of
+    warning and continuing (working-contract rule 4).
+
+    ⚠️ When step 2 finishes, this test is the thing that has to be deliberately deleted.
+    That is the point: the refusal cannot quietly outlive its reason, and it cannot
+    quietly disappear before it.
+    """
+    done = _dry_run("--arms", "B,G")
+    assert done.returncode != 0, "two arms were accepted; the per-arm plumbing is not built"
+    assert "cannot run yet" in done.stderr, (
+        f"the refusal no longer explains itself: {done.stderr[-400:]}")
+
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())

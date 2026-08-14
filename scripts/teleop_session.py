@@ -109,7 +109,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
-from arm_session import ArmSession  # noqa: E402
+from arm_session import ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from motion import EASINGS, JointPath, easing_factor  # noqa: E402
 from recording import TrackingLog, Trajectory, replay_step, safe_time_scale  # noqa: E402
@@ -529,7 +529,17 @@ def park_and_wait(robot, keys, park, clamp_gripper, ramp: float = PARK_RAMP,
 def main() -> int:  # noqa: PLR0915
     ap = argparse.ArgumentParser(description="Interactive YAM session: guide, teleop, park.")
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
-    ap.add_argument("--arm", default=DEFAULT_ARM, choices=sorted(ARM_SERIALS))
+    # ⭐⭐ TWO SPELLINGS OF ONE IDEA, and `--arm` is the one that must not break.
+    # Every other script here takes `--arm` (`ping_motors.py`, `identify_arm.py`,
+    # `check_arms_match.py`), it is in every document, and it is what Julien types.
+    # `--arms` is the N-arm spelling ROADMAP §6.1 step 2 asks for. They agree or the
+    # session refuses; `src/arm_session.py::parse_arms` holds the rules and the tests.
+    ap.add_argument("--arm", default=None, choices=sorted(ARM_SERIALS),
+                    help=f"the arm, when there is one (default {DEFAULT_ARM})")
+    ap.add_argument("--arms", default=None, metavar="B[,G]",
+                    help="the arms this session drives, comma separated. ⛔ Two arms is "
+                         "not runnable yet (ROADMAP §6.1 step 3) and passing two errors "
+                         "out — see the refusal for what is still missing")
     ap.add_argument("--start-mode", default="guide", choices=["guide", "hold", "teleop"])
     ap.add_argument("--no-gripper", action="store_true",
                     help="run the 6 arm joints only and leave motor 7 free — the escape hatch if the "
@@ -582,6 +592,34 @@ def main() -> int:  # noqa: PLR0915
     if args.fork_map and args.share_map:
         ap.error("--fork-map and --share-map are opposites; pass at most one")
 
+    # ⭐⭐ THE LIST OF ARMS THIS SESSION DRIVES. ROADMAP §6.1 step 2.
+    #
+    # ⚠️ `arm_names[0]` appears below wherever a line still assumes one arm, on purpose:
+    # each one marks a site step 2's remaining work has to turn into a loop, and it is
+    # greppable. Sites that run after the object exists use `arm.name` instead.
+    try:
+        arm_names = parse_arms(args.arm, args.arms, ARM_SERIALS, DEFAULT_ARM)
+    except ValueError as exc:
+        ap.error(str(exc))
+    # ⛔⭐ REFUSED, NOT ATTEMPTED, AND THIS IS WORKING-CONTRACT RULE 4: never
+    # warn-and-continue on a hazard you have correctly identified.
+    #
+    # Step 1 made one arm's state into an object, so the *shape* takes N arms. Everything
+    # around it is still single-arm: one SpaceMouse is opened, one axis map is loaded, one
+    # robot is built, one park pose is read, one status row is painted. So `--arms B,G`
+    # today would build and drive B, never build G, and print a plan claiming both.
+    #
+    # ⚠️ The specific hazard is not "a flag that does nothing". It is a flag that reads as
+    # two arms being under control while the second is not being commanded at all — and an
+    # uncommanded arm that someone has raised sags under gravity ([FINDINGS §11](../docs/FINDINGS.md)).
+    if len(arm_names) > 1:
+        ap.error(
+            f"--arms {','.join(arm_names)}: two arms cannot run yet. Step 1 of the "
+            "restructure moved one arm's state onto an ArmSession, but this script still "
+            "opens one SpaceMouse, loads one axis map, builds one robot and paints one "
+            "status row. Driving one arm while reporting two is worse than refusing. "
+            "ROADMAP §6.1 steps 2-3 are the remaining work; run one arm for now.")
+
     # Rotation is ON by default now. Julien: "the gripper cannot be tilted
     # currently and cannot be twisted". It was off for the first hardware run
     # because a wrong rotation sign swings the wrist while a wrong translation
@@ -625,10 +663,10 @@ def main() -> int:  # noqa: PLR0915
     # is printed in the plan and again at exit. Never leave that implicit.
     map_store = AxisMapStore.load(MAP_FILE)
     if args.fork_map:
-        map_store.fork(args.arm)
+        map_store.fork(arm_names[0])
     elif args.share_map:
-        map_store.unfork(args.arm)
-    axis_map = map_store.for_arm(args.arm, control_frame)
+        map_store.unfork(arm_names[0])
+    axis_map = map_store.for_arm(arm_names[0], control_frame)
     map_store_at_start = map_store.copy()
     axis_map_at_start = axis_map.copy()
     # ⭐⭐ THE BASE POSE AND THE WAYPOINTS ARE DIFFERENT THINGS. Julien's ruling,
@@ -643,7 +681,7 @@ def main() -> int:  # noqa: PLR0915
     #
     # So `park` (slot 0, the base) is only ever changed deliberately with `s 0`, while
     # `s 1`…`s 9` fill waypoints that Ctrl-C ignores completely.
-    slots = park_slots(load_json(PARK_FILE, {}), args.arm)
+    slots = park_slots(load_json(PARK_FILE, {}), arm_names[0])
     park = slots.get(BASE_SLOT)
     # ⚠️ The eleven park fields used to be initialised here. They are `ArmSession`
     # fields now, and the class's constructor sets every one to the identical value —
@@ -711,7 +749,11 @@ def main() -> int:  # noqa: PLR0915
     buttons_prev = 0
 
     print("=== plan ===")
-    print(f"  ARM         : {args.arm}  (serial {ARM_SERIALS[args.arm]})")
+    # ⭐ Named ARMS, plural, and it prints the serial of each. With one arm the line reads
+    # exactly as it did before apart from the label, so nothing he checks before pressing
+    # --yes has moved.
+    for name in arm_names:
+        print(f"  ARM         : {name}  (serial {ARM_SERIALS[name]})")
     print(f"  gripper     : {'NOT controlled — motor 7 left free' if args.no_gripper else 'controlled (o/c), frame-checked at startup'}")
     if args.no_gripper:
         # This is a safety fact and belongs in front of him BEFORE he runs it, not
@@ -724,7 +766,7 @@ def main() -> int:  # noqa: PLR0915
     print(f"  speed       : {args.linear_scale} m/s linear, "
           f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
     print(f"  axis map    : {axis_map.one_line(control_frame)}   (m to change it live)")
-    print(f"  map scope   : {map_store.scope_note(args.arm)}")
+    print(f"  map scope   : {map_store.scope_note(arm_names[0])}")
     print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[control_frame]}  (v cycles it live)")
     if axis_map.unbound():
         names = ", ".join(motions_for(control_frame)[i]["short"] for i in axis_map.unbound())
@@ -738,7 +780,10 @@ def main() -> int:  # noqa: PLR0915
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
 
-    info = pick_device_by_wiggle(label=args.arm)
+    # ⚠️ ONE PUCK, and with two arms this becomes one call per arm with `exclude=` holding
+    # the ones already taken — `pick_device_by_wiggle` already supports that and it is
+    # tested (`scripts/test_puck_assignment.py`). Not wired yet: ROADMAP §6.1 step 2.
+    info = pick_device_by_wiggle(label=arm_names[0])
     if info is None:
         print("No SpaceMouse found (or none was moved).")
         return 1
@@ -796,7 +841,7 @@ def main() -> int:  # noqa: PLR0915
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
         print(f"building robot — enables {n_motors} motors, starts the control loop …")
-        robot, note = build_robot(args.arm, zero_gravity=(start_mode == "guide"),
+        robot, note = build_robot(arm_names[0], zero_gravity=(start_mode == "guide"),
                                   with_gripper=not args.no_gripper)
         print(f"  {note}\n")
         chain = robot.motor_chain
@@ -817,7 +862,7 @@ def main() -> int:  # noqa: PLR0915
         # ⭐ `arm.thermal` is now THE thermal guard for this session; the script no longer
         # keeps its own. Moving it needed the `arm = None` declaration above, because the
         # closing summary reads it on the path where this very call failed. FINDINGS §48.3.
-        arm = ArmSession(robot, name=args.arm, frame=control_frame,
+        arm = ArmSession(robot, name=arm_names[0], frame=control_frame,
                          gripper_min=GRIPPER_MIN, gripper_max=GRIPPER_MAX,
                          warn_at=TEMP_WARN, stop_at=TEMP_STOP)
         # ⛔⭐⭐ THIS LINE IS NOT OPTIONAL, AND ITS ABSENCE WOULD HAVE BEEN SILENT.
@@ -1163,10 +1208,10 @@ def main() -> int:  # noqa: PLR0915
                         if k.isdigit():
                             q = np.asarray(robot.get_joint_pos(), dtype=float)
                             name = BASE_SLOT if k == "0" else k
-                            data = with_park_slot(load_json(PARK_FILE, {}), args.arm,
+                            data = with_park_slot(load_json(PARK_FILE, {}), arm.name,
                                                   name, q.tolist())
                             save_json(PARK_FILE, data)
-                            slots = park_slots(data, args.arm)
+                            slots = park_slots(data, arm.name)
                             if k == "0":
                                 park = q.tolist()
                                 print(f"\n  ⭐ BASE pose (0) saved — this is where Ctrl-C "
@@ -1415,9 +1460,9 @@ def main() -> int:  # noqa: PLR0915
                         # into another would silently overwrite it — the same
                         # blast-radius bug as editing a shared map believing it was
                         # per-arm.
-                        map_store.set(args.arm, axis_map, control_frame)
+                        map_store.set(arm.name, axis_map, control_frame)
                         control_frame = order[(order.index(control_frame) + 1) % len(order)]
-                        axis_map = map_store.for_arm(args.arm, control_frame)
+                        axis_map = map_store.for_arm(arm.name, control_frame)
                         if arm.teleop is not None:
                             arm.teleop.frame = control_frame
                         print(f"\n  ⭐ CONTROL FRAME → {CartesianTeleop.FRAME_NOTES[control_frame]}")
@@ -1599,7 +1644,11 @@ def main() -> int:  # noqa: PLR0915
                         # why `w` needs no confirmation while `l` does.
                         if take is None:
                             take = Trajectory(meta={
-                                "arm": args.arm,
+                                # ⚠️ ONE arm's name today. ABC's format is two arms in one
+                                # timeline (ROADMAP §9.2), so when the recorder spans N arms
+                                # this becomes the list of names in the same order as the
+                                # samples. Changing it now would write a shape nothing reads.
+                                "arm": arm.name,
                                 "method": f"live:{arm.mode}",
                                 "nominal_hz": CONTROL_HZ,
                                 "frame": control_frame,
@@ -2053,7 +2102,7 @@ def main() -> int:  # noqa: PLR0915
                                          for i in range(tracking.n_joints)]
                                 rec = tracking.to_dict(names)
                                 rec["meta"] = {
-                                    "arm": args.arm,
+                                    "arm": arm.name,
                                     "slot": replay_slot,
                                     "played_at": dt_now(),
                                     "commit": git_commit(),
@@ -2467,14 +2516,17 @@ def main() -> int:  # noqa: PLR0915
         # been produced on real hardware and were only recoverable because the file
         # happened to be committed. Two changes: nothing is written unless the map
         # actually changed, and the previous contents are kept alongside it.
-        map_store.set(args.arm, axis_map, control_frame)
+        # ⚠️ `arm_names[0]` and NOT `arm.name`: this is the `finally` block, so it runs on
+        # the path where `build_robot()` failed and `arm` is still None. That is the path
+        # Julien hits whenever the CAN adapters are in DFU (FINDINGS §48.3).
+        map_store.set(arm_names[0], axis_map, control_frame)
         if map_store != map_store_at_start:
             try:
                 if MAP_FILE.exists():
                     BACKUP_FILE.write_text(MAP_FILE.read_text())
                 map_store.save(MAP_FILE)
                 print(f"\naxis map CHANGED and saved → {MAP_FILE.relative_to(REPO)}")
-                print(f"  scope: {map_store.scope_note(args.arm)}")
+                print(f"  scope: {map_store.scope_note(arm_names[0])}")
                 print(f"  previous contents kept in {BACKUP_FILE.relative_to(REPO)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"\n⚠️  could not save the axis map: {type(exc).__name__}: {exc}")
@@ -2514,7 +2566,10 @@ def main() -> int:  # noqa: PLR0915
                 # persist past the loop because Python keeps a function's locals.
                 facts = {} if not bad_stop else {
                     "stop_reason": stop_reason,
-                    "arm": args.arm,
+                    # ⚠️ Not `arm.name`: this block also runs when the build failed and
+                    # `arm` is None. Every read of the object below is wrapped in
+                    # `_safe_fact` for the same reason.
+                    "arm": arm_names[0],
                     "mode": _safe_fact(lambda: arm.mode),
                     "commanded_joints": _safe_fact(
                         lambda: [round(float(v), 4) for v in arm.prev_q]),

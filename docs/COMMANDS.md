@@ -3,6 +3,8 @@
 > **Every script that can transmit is a dry run by default.** Leaving off `--yes` prints the full plan and sends nothing. That is the single convention to remember.
 >
 > **Everything takes `--arm B` or `--arm G`**, resolved by adapter *serial*, never by index. Default is `B`. Run them from `~/Developer/Projects/yam-robotics`.
+>
+> ⭐ **`teleop_session.py` also takes `--arms B` / `--arms B,G`** since 2026-08-14 — the N-arm spelling of the same flag ([ROADMAP §6.1](ROADMAP.md) step 2). `--arm` is unchanged and is still the one to type for one arm; the two must agree or the session refuses. ⛔ **`--arms B,G` refuses today and says why**: the script is still single-arm below the `ArmSession` (one puck, one axis map, one robot, one status row), and driving one arm while reporting two is worse than refusing.
 
 ---
 
@@ -39,7 +41,7 @@ uv run scripts/read_arm_state.py --yes --arm B
 | `s` then `0`-`9` | save this pose — **`0` is the BASE pose Ctrl-C returns to**, `1`-`9` are waypoints Ctrl-C ignores |
 | `p` then digits then `Enter` | drive to one pose, or **one blended motion through several** (`p 1 2 3 Enter` shows the plan, `Enter` again runs it) |
 | `o` / `c` | open / close the gripper |
-| `ö` / `ä` | gripper step smaller / bigger — **and how long the ease lasts while a run is being typed**. ⭐ `[` / `]` are aliases and still work; `ö`/`ä` exist because the brackets are **AltGr+8 / AltGr+9** on a German layout ([FINDINGS §27.7](FINDINGS.md)) |
+| `ö` / `ä` | **how long the ease lasts** — shorter / longer, in every mode. ⛔ **Corrected 2026-08-14: this row still said "gripper step" and that has been wrong since 2026-08-13.** The gripper step is `--gripper-step` now, because one key meaning two things is what pushed the step to its 0.200 ceiling by accident ([FINDINGS §30](FINDINGS.md)). ⭐ `[` / `]` are aliases and still work; `ö`/`ä` exist because the brackets are **AltGr+8 / AltGr+9** on a German layout ([FINDINGS §27.7](FINDINGS.md)) |
 | **`w`** | ⭐ **RECORD a movement** taught by hand. Press again to stop, then `0`-`9` to save it. Works in any mode; GUIDE is the point of it. Recording moves nothing, so a mis-press is harmless |
 | **`l`** then `0`-`9` | ⭐ **PLAY a recording back.** Shows the plan and waits for **Enter**, so a slip on `l` (which sits beside `ö`/`ä`) can never start the arm. It parks to the recording's start pose first, then follows it in real time. `-`/`+` set the speed, capped from the recording's own measured top speed |
 | `e` | cycle the **ease profile** — `none` / `in` / `out` / `both` / `s-curve`. Works in **any** mode |
@@ -55,7 +57,9 @@ uv run scripts/read_arm_state.py --yes --arm B
 
 ⭐ **`q` `p` `d` is a hands-free shutdown.** The park pose defaults to **wherever the arm was when the session started**, so unless you have saved one with `s`, pressing `p` at the quit prompt drives it back to where it began and `d` then releases it. This also means the two arms no longer have to be placed the same way before a session — each parks back to its own measured start.
 
-Useful flags: `--start-mode hold|guide|teleop` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--box 0.4`
+Useful flags: `--arms B` · `--start-mode hold|guide|teleop` · `--no-rotation` · `--no-gripper` · `--linear-scale 0.2` · `--gripper-step 0.02` · `--reach 0.60` · `--floor 0.0` · `--fork-map` / `--share-map`
+
+⛔ **`--box` is gone and this line advertised it until 2026-08-14.** It was replaced by `--reach` (how far the tip may go from the base) and `--floor` (how low it may go) when the workspace limit became a sphere plus a floor ([FINDINGS §43](FINDINGS.md)). Passing `--box` now errors, deliberately, rather than accepting a flag whose meaning had moved.
 
 ⚠️ **`x` `y` `z` `1` `2` `3` flip a ROBOT MOTION, not a puck axis.** Under the identity map that is the same arithmetic, so the hand-dialled file still means what it meant. Under a permutation it is the only reading that stays useful: pressing `x` means *"the gripper goes the wrong way"*, which is a statement about the arm.
 

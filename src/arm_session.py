@@ -72,6 +72,7 @@ must not do. Migration map: ROADMAP §6.1.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -107,6 +108,64 @@ MAX_CURSOR_LAG = 0.15       # rad — past this the cursor waits for the arm
 GRIPPER_STALL_TORQUE = 1.0    # Nm
 GRIPPER_STALL_VEL = 0.05      # rad/s
 GRIPPER_STALL_SECONDS = 0.4
+
+
+def parse_arms(single: str | None, spec: str | None,
+               known: Iterable[str], default: str) -> list[str]:
+    """Turn `--arm` and `--arms` into the ordered list of arms a session drives.
+
+        parse_arms(None, None,  ARM_SERIALS, "B")   -> ["B"]
+        parse_arms(None, "B,G", ARM_SERIALS, "B")   -> ["B", "G"]
+        parse_arms("G",  None,  ARM_SERIALS, "B")   -> ["G"]
+
+    ⭐ WHY BOTH FLAGS EXIST. `--arm` is the spelling every other script here uses
+    (`ping_motors.py`, `identify_arm.py`, `check_arms_match.py`), it is in every
+    document, and it is what Julien types. `--arms` is the N-arm spelling ROADMAP §6.1
+    step 2 asks for. **They are two spellings of one idea, not two ideas** — the same
+    relationship `ö`/`ä` have to `[`/`]`, and the reason is the same: a working command
+    must not stop working because the code grew a more general form.
+
+    ⛔ THEY MUST AGREE. `--arm B --arms G` is refused rather than resolved by a
+    precedence rule nobody would remember. This repo has already paid for the other
+    approach: `--arm arm1` was deleted rather than aliased, because a flag that keeps
+    working while its meaning has moved underneath is worse than one that fails loudly
+    (`src/yam_can.py`, and the same call again for `--box`).
+
+    ⛔ AND NO ARM MAY APPEAR TWICE. `--arms B,B` would build two `ArmSession` objects
+    over one CAN bus, each with its own cached `prev_q`, both commanding the same seven
+    motors every cycle. The last write of each cycle would win and nothing would raise,
+    so the arm would follow a blend of two controllers. That is the FINDINGS §0 defect
+    class exactly: a confident, plausible, wrong answer with no exception.
+
+    Raises `ValueError` with a message written for the person at the keyboard. The
+    caller turns it into `argparse`'s own error, so it prints like any other bad flag.
+    """
+    valid = list(known)
+    if single is not None and single not in valid:
+        raise ValueError(f"unknown arm {single!r} — this rig has {', '.join(valid)}")
+
+    if spec is None:
+        return [single or default]
+
+    names = [part.strip() for part in spec.split(",")]
+    if any(not name for name in names):
+        raise ValueError(
+            f"--arms {spec!r} has an empty entry — write it as B, G or B,G")
+    unknown = [name for name in names if name not in valid]
+    if unknown:
+        raise ValueError(f"unknown arm(s) {', '.join(unknown)} — this rig has "
+                         f"{', '.join(valid)}")
+    seen = [name for i, name in enumerate(names) if name in names[:i]]
+    if seen:
+        raise ValueError(
+            f"--arms {spec!r} names {', '.join(sorted(set(seen)))} more than once. "
+            "One arm is one CAN bus, and two sessions of it would command the same "
+            "motors twice a cycle with different cached state")
+    if single is not None and names != [single]:
+        raise ValueError(
+            f"--arm {single} and --arms {spec} disagree. Pass one of them: --arm is the "
+            "one-arm spelling, --arms takes the list")
+    return names
 
 
 @dataclass
