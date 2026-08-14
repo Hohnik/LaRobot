@@ -1,9 +1,11 @@
 """⭐ ONE ARM'S STATE AND MODE MACHINE, so that N of them can run in one loop.
 
-    from arm_session import ArmSession
-    arm = ArmSession(robot, name="B", frame="world")
-    arm.enter_teleop()
-    verdict = arm.step_park(t=1.0, dt=0.01)
+    from arm_session import ArmSession, ArmSelector, parse_arms
+    names = parse_arms(args.arm, args.arms, ARM_SERIALS, "B")   # ["B"] or ["B", "G"]
+    arm = ArmSession(robot, name=names[0], frame="world", axis_map=…, slots=…, reader=…)
+    step = arm.step_path(t=1.0, dt=0.01)        # ⚠️ step_PATH. This example said
+                                                # `step_park` until 2026-08-14, and no
+                                                # method by that name has ever existed.
 
 ⛔ WHY THIS EXISTS — the blocker for bimanual, stated exactly. `teleop_session.py`
 is single-arm all the way through: `robot`, `teleop`, `mode`, `gripper_value`,
@@ -31,21 +33,33 @@ can still prove the mode machine behaves.
 - **Building the robot.** `build_robot()` energises motors and is the single most
   dangerous call in the project; it stays visible in the script, and this class
   takes an already-built handle. That also lets every test below run against a fake.
-- **Reading the SpaceMouse.** One puck belongs to one arm, but the device layer and
-  its wiggle-assignment already exist and are shared.
+- **The SpaceMouse DEVICE layer** — enumerating, the wiggle assignment, opening and
+  closing the handle. ⚠️ **The `TwistReader` itself IS here** since 2026-08-14: with two
+  arms, "which puck" is exactly as per-arm as "which robot", and a session-level reader is
+  how both arms end up following one hand.
 - **Key handling.** Which arm a keypress applies to is a *session* question, not an
   arm question — ROADMAP step 6 decides it (`a` selects; driving always applies to
   all arms; mode changes apply to the selected one).
 - **IK stepping.** `CartesianTeleop` already owns that; this holds one and calls it.
 
-✅ **STATUS, 2026-08-14: WIRED IN, and confirmed on the arm.** All 247 references to one
-arm's state in `teleop_session.main()` now go through this class, landed as five commits
-([FINDINGS §50](../docs/FINDINGS.md)), and Julien has driven every mode on it: *"Everything
-feels great. And as before, QQ works. Uh, all of the modes work."* ([§51](../docs/FINDINGS.md)).
-⭐ Step 2 then added `--arms`, the `a` selector and one status row per arm
-([§52](../docs/FINDINGS.md)). ⚠️ **Two arms still refuse to start** — one puck, one axis
-map, one robot and one park pose are still session-level in the script — so `--arms B,G`
-errors and says what is missing.
+✅ **STATUS, 2026-08-14 (late): WIRED IN, confirmed on the arm, and this class now holds
+EVERY per-arm piece of session state — 33 fields.** The 247-reference move landed as five
+commits ([FINDINGS §50](../docs/FINDINGS.md)) and Julien drove every mode on it
+([§51](../docs/FINDINGS.md)). Step 2 added `--arms`, the `a` selector and one status row per
+arm, also confirmed on the arm ([§53.0](../docs/FINDINGS.md)). Eight further commits moved
+the rest: the control frame, the axis map and its start-of-session copy, the base pose and
+the saved slots, the puck, what CONTROLS remembers, this cycle's temperatures, and the last
+chain read ([§53](../docs/FINDINGS.md)).
+
+⚠️ **Two arms still refuse to start.** Three pieces of the script are single-arm: the key
+dispatch, the shutdown flow, and the build itself. `--arms B,G` errors and says so, and
+[§53.6](../docs/FINDINGS.md) carries the settled design for all three.
+
+⭐ **What this class deliberately does NOT hold, and each is a decision:** key DISPATCH
+(which arm a key is aimed at is a session question, answered by `ArmSelector`), the puck
+HANDLE (it must be closed even when no arm was ever built), the shared session knobs
+(linear and angular speed, corner blending, the ease profile), and the recorder — see the
+last paragraph of this docstring for why that one is not a matter of taste.
 
 ⛔ **THIS DOCSTRING SAID *"STILL NOT wired"* UNTIL 2026-08-14, which was true when written
 on 08-13 and wrong the next day.** It is the same staleness pattern as the paragraph below

@@ -3097,3 +3097,121 @@ Turning six closures into functions that take an arm created about thirty call s
 ⚠️ **The general form, and it is worth more than the one-line fix:** a field that nothing reads cannot be wrong yet, and it is not therefore harmless. **It is a loaded trap for whoever wires it up.** Unwired state has no feedback path — the same reason this whole class went stale in an hour while unwired ([§52.1](FINDINGS.md)).
 
 **486 headless tests. `check_restructure.py` green with five checks. Nothing pushed (working-contract rule 9).**
+
+---
+
+## 53. ✅⭐⭐⭐ STEP 2 IS CONFIRMED ON THE ARM, THE PER-CYCLE LOOP IS N-ARM, AND FOUR MECHANICAL REWRITES EACH INTRODUCED A DEFECT — 2026-08-14, late evening
+
+> Eight plumbing commits (`b33ff82` … `fbb6945`) after step 2's three. **486 headless tests, `check_restructure.py` green with seven checks, nothing pushed.** ⬜ **None of the eight has been on the arm** — the bench test is at the top of [HANDOFF](HANDOFF.md) and is one question.
+
+### 53.0 ✅✅ WHAT JULIEN CONFIRMED, AND IT CLOSES STEP 2's OWN TEST
+
+> *"Everything seemed to work as it should."* — driving TELEOP, a recording started and discarded, `q q` parking to 0.027 rad and disabling.
+
+⭐ **His paste carries the three things step 2 changed, all correct:**
+
+| what appeared | what it confirms |
+|---|---|
+| `[B TELEOP  ] t=  30.0s  ⚠️ 88Hz  hottest 39°C  jaw 35°C …` | the per-arm row, with the arm's name in the label |
+| `⚠️ 88Hz` sitting beside the clock rather than after the temperatures | the session facts moved into the row's lead, as designed ([§52.2](FINDINGS.md)) |
+| `⏹ RECORDED 6.1s, 532 samples … recording discarded` | the recorder is untouched by the restructure |
+
+⭐ **Also visible and worth noting: 88 Hz.** The loop-rate warning fires below 92, and this is the fourth session in a row reading 83-88 rather than 100 ([§31.1](FINDINGS.md), tracked as [ROADMAP §8.2](ROADMAP.md) item 14). It is not new and it is not from step 2.
+
+⭐⭐ **AND ARM G IS AVAILABLE.** Julien, this session: *"the g is free. You can use it. We can do both together and continue with the next features if sensible."* ⚠️ **That removes the wait, not the work** — `--arms B,G` still refuses, and three pieces have to land before it can start (§53.6).
+
+### 53.1 ⛔⭐⭐⭐ A MECHANICAL REWRITE PUT `frame=arm.frame` ON THE LINE THAT CREATES `arm`, AND THE CHECKER SAID IT WAS FINE
+
+Moving the control frame onto the arm rewrote 39 sites by region. One of them was the construction line itself:
+
+```python
+arm = ArmSession(robot, name=arm_names[0], frame=arm.frame, …)
+```
+
+⛔ **`arm` is `None` there** — it is the `None` declared above the `try` — so that line raises `AttributeError` **after `build_robot()` has already enabled the motors**, and the `finally` block then disables them. **On a raised arm that is a sag.** A dry run cannot reach it: `--yes` is required, and the build is the line before.
+
+⛔⛔ **`check_restructure.py` printed *"✓ `arm` is built on line 948 and nothing touches it earlier"* and was RIGHT.** Its ordering test was `lineno < built_at`, and the bad read was ON `built_at`. ⭐ **The check now covers the construction statement itself, bounded by the call's `end_lineno`** rather than its first line — because `arm = ArmSession(\n … arm.frame …)` puts the read on a continuation line, where a `<= built_at` test would miss it again.
+
+⭐⭐ **Falsified before being trusted, in both positions**: one patched copy with the read on the call line, one with it on a continuation line. It refused both, by line number.
+
+⚠️ **The transferable form: an off-by-one in a guard is invisible while the guard is green.** This one had been green for five commits and was never wrong before, because nothing had ever read `arm` on that exact line.
+
+### 53.2 ⛔⭐⭐ `break` STOPPED MEANING WHAT IT SAID, BECAUSE A `for` APPEARED AROUND IT
+
+The liveness check and the thermal stop both ended in `stop_reason = …; break`, breaking the **`while`**. Wrapping them in `for one in arms:` silently turned that into a break of the **`for`**.
+
+⛔ **Consequence, had it shipped: a dead chain or a thermal stop would be recorded and the cycle would carry on commanding every arm**, with the stop taking effect only when some later check happened to fire. That is [§0](FINDINGS.md)'s defect class again — no exception, a plausible-looking session, and a guard that has quietly stopped guarding.
+
+✅ Both now record into `stop_reason` inside the loop and act on it immediately after: `if stop_reason: break`, twice.
+
+⭐ **Generalise it: adding a loop around existing code changes the meaning of every `break`, `continue` and bare `return` inside it.** None of them is flagged by any checker here, and the code keeps running.
+
+### 53.3 ⛔⭐⭐ THIRTEEN COMMANDS SURVIVED A MECHANICAL `arm.` → `one.` PASS, BECAUSE THEY DID NOT SAY `arm`
+
+The mode-action block (324 lines: TELEOP, CONTROLS, playback, PARK) was converted by rewriting `arm.<field>` to `one.<field>`. **Thirteen lines still said bare `robot`**, and every one of them was a command or a read on the robot handle:
+
+```python
+one.robot.command_joint_pos(full)   # was: robot.command_joint_pos(full)
+```
+
+⛔ **With two arms, every one of those would have driven arm B while the loop believed it was acting on G.** Found by grepping the converted block for the bare name, not by the substitution and not by any test.
+
+⭐ **The rule this gives: a rename is exact about what it matches and silent about what it does not.** `arm.` and `robot` were two names for state belonging to the same arm; only one of them contained the word being rewritten.
+
+### 53.4 ⚠️⭐ THE SAME PASS REWROTE PROSE, WHICH IS TRAP 1 IN THE CHECKER'S OWN HEADER
+
+Renaming `park` → `base_pose` inside `park_and_wait` rewrote its docstring, six comments and one message the operator reads: *"park stopped."* became *"base_pose stopped."*, and *"the interleaved park (mode == 'park')"* became *"the interleaved base_pose (mode == 'base_pose')"*. **Two lines in that function name the parameter; ten were prose.**
+
+⚠️ **`check_restructure.py` would have been perfectly happy** — it parses, and prose is invisible to it. **Reading the diff caught it.** That is exactly trap 1 in the checker's own docstring, written because `mode` appears 35 times in `main()`'s comments, and it is why [§36.3](FINDINGS.md)'s published count was 35% too high.
+
+### 53.5 ⛔⭐⭐⭐ THE SHARED AXIS MAP IS ONE OBJECT FOR BOTH ARMS, SO A "PER ARM" EDIT WOULD APPLY TWICE
+
+**Checked in the source rather than assumed.** `AxisMapStore.for_arm()` ends with `m = frames[frame]; return m` — **the same `AxisMap` instance** whenever the scope is SHARED, which is the default and what the rig runs today.
+
+⛔ **So "apply this edit to every selected arm" is wrong for map edits.** With BOTH selected and a shared map, pressing `x` would flip the X motion **twice** — back to where it started — while printing two messages each claiming a flip. `f` (reverse) and the button swap have the same shape. Nothing raises, the map file ends up unchanged, and the operator has watched two confirmations go by.
+
+⭐⭐ **THE DECISION, and it is simpler than deduplicating by object identity: a map edit always applies to exactly ONE arm — the first selected — and the scope decides whether that reaches the other arm.** Two independent reasons, and either alone would settle it:
+
+1. **A map edit comes from one physical gesture on one puck.** `f` and `1`-`6` act on *"the control you just used"*, which is a memory of one hand on one device ([§52.1](FINDINGS.md)'s `last_active_axis`). There is no meaning to applying it to an arm whose puck was not touched.
+2. **The scope already answers "does this reach both arms?"** and it is printed in the plan and again at exit: *"SHARED — edits here affect BOTH arms"*. A shared map edited once IS both arms edited.
+
+⚠️ **What this does NOT change:** mode keys stay aimed at every selected arm, because `g` on two arms is a real and deliberate operation (8.6 kg weightless, which is why it is aimed at all).
+
+### 53.6 ⬜⭐⭐ WHAT IS LEFT BEFORE `--arms B,G` CAN START — three commits, and the design is settled here
+
+⭐ **The per-cycle loop is done.** Liveness, temperatures, the stall guard, the mode action and the status rows all run per arm, and every per-arm piece of state lives on `ArmSession` — **33 fields**, proven by `check_restructure.py`. What remains is the keyboard, the shutdown and the build.
+
+**1. ⬜ The key dispatch aims at the selection.** The classification, decided:
+
+| keys | apply to | why |
+|---|---|---|
+| `g` `t` `h` | every selected arm | a mode change is the thing `a` exists to aim ([§52](FINDINGS.md)) |
+| `m` CONTROLS | ⛔ **refuse when BOTH is selected** | it is a wizard that edits ONE map from ONE wiggle; ask for `a` first |
+| `x` `y` `z` `1` `2` `3` `f` `u` `0` `b` `v` | ⭐ **the FIRST selected arm only** | §53.5 — a shared map is one object, so twice is worse than once |
+| `s` `p` and their digits | every selected arm, each to its OWN slot | the poses are per arm and keyed by arm in the file |
+| `o` `c` gripper | every selected arm | a command, and with BOTH selected two grippers is what the operator asked for |
+| `-` `+` `,` `.` `ö` `ä` `e` | park speed and ease ramp: every selected arm. Linear/angular speed, corners, ease profile, `r`: session-wide | speed and ramp live on the arm; the rest are one session setting and the plan line shows one value |
+| `w` `l` `q` `?` | session | the recorder spans arms, and quitting is not per arm |
+| ⛔ `a` | the selector itself | refuses while any arm is in CONTROLS ([§52](FINDINGS.md)) |
+
+**2. ⬜ The shutdown and the consent flow over N arms.** `park_and_wait()` is single-arm and blocking. ⭐ **Extend it to a list and advance every arm per cycle** rather than parking them one after another: sequential parking doubles the shutdown and makes *"any key stops it"* stop only one arm. ⛔ **A fault on one arm still stops all** ([§53.2](FINDINGS.md) applies here too — the loop's `break`s). ⭐⭐ **And it has NO tests today**, while being the most safety-relevant path in the file: it is what Ctrl-C, `q q` and every unplanned stop run. It is importable, so a fake robot can test arrival, stall, a key press, a dead chain, and one arm arriving before the other.
+
+**3. ⬜ Build N robots and drop the refusal.** In one commit, with three refusals added in the same breath:
+
+- ⛔ **`--start-mode guide` refused when N>1.** ROADMAP §6's ruling: two arms going weightless on a first run is the worst possible first run.
+- ⛔ **`w` and `l` refused when N>1**, until the two-arm recorder exists. ⚠️ **This is not tidiness: `Trajectory` holds one arm's joints, and the playback branch reads a single session cursor** — so two arms in replay would be driven from the same slice. ABC wants 14 states in ONE timeline ([§9.2](ROADMAP.md)), which is the recorder's job ([ROADMAP §8.2](ROADMAP.md) item 7).
+- ⭐ **Delete `test_two_arms_are_refused_rather_than_half_driven`** in the same commit. It was written to be deleted deliberately ([§52.1](FINDINGS.md)); leaving it would fail, and *changing* it to expect success would quietly discard the reason it existed.
+
+⚠️ **Then step 3 is his: `--arms B,G --start-mode hold`, desk clear, gripper enabled.** Arm G is free as of this session.
+
+### 53.7 ⬜ THE BENCH TEST OWED FOR THE EIGHT PLUMBING COMMITS, and why it is worth two minutes
+
+**Nothing in them changes behaviour at N=1**, so the test is the same single question as step 2's: does one arm still feel identical? ⛔ **Ask it before the next block lands**, not after. Eight mechanical commits can be attributed to a commit if something is wrong; eleven, with the keyboard rewritten in the middle, cannot — and three of the eight introduced a real defect that was caught by reading rather than by a test ([§53.1](FINDINGS.md), [§53.3](FINDINGS.md), [§53.4](FINDINGS.md)).
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B --start-mode hold
+```
+
+⭐ **Drive it, press `m` and leave it, park with `p 0`, and quit with `q q`.** The only visible differences from the last session are three lines of wording: `axis map B  :` and `park pose B :` in the plan, and `axis map B:` in the closing summary.
+
+**486 headless tests. Nothing pushed (working-contract rule 9).**
