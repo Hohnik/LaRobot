@@ -2271,6 +2271,10 @@ if int(motor_info.error_code, 16) != MotorErrorCode.normal:
 
 ⭐ **The risk profile is unusually good and worth stating exactly: a motor reporting `0x1` takes byte-for-byte the same path as before.** The new branch can only execute on a motor that is already faulted, which is precisely the case that was being mishandled. Every run anyone has ever made was the `0x1` case.
 
+⚠️⭐ **One real consequence was checked rather than assumed, because `src/yam_can.py` is imported by the session Julien runs.** The parser wrapper sits in the **100 Hz control loop**: `DMSingleMotorCanInterface.set_control()` (`dm_driver.py:284`) parses a reply every cycle for every motor, and that method belongs to the very class being patched. **Measured 2026-08-14: 0.035 µs added per call, 0.24 µs per 7-motor cycle, 0.0024% of the 10 ms budget.** The loop's actual shortfall is 83-87 Hz against 100, which is **1500-2000 µs** — four orders of magnitude larger. ⭐ **So this cannot contribute to [ROADMAP §8.2](ROADMAP.md) item 14, and that is a measurement rather than a reassurance.**
+
+⚠️ **A design alternative was considered and rejected: install the parser wrapper only inside the context manager, for zero control-loop cost.** It is worse. `DMChainCanInterface` runs its control loop **in a thread**, so swapping a class method while that thread is parsing frames is a real race, and 0.24 µs is not worth buying one.
+
 ### 39.3 ⭐ WHAT THIS MEANS AT THE BENCH, IN ONE PARAGRAPH
 
 **Glance at the arms before running anything.** All lights **red and steady** is a healthy, powered, uncommanded rig — nothing wrong. **Any light flashing red is a real latched fault**, and `uv run scripts/ping_motors.py --arm <B|G> --yes` will now **name it and leave it in place** instead of quietly erasing it. Write the code down; it is the only record. Clear it deliberately with `--attempt-error-clear` when you are done reading it.

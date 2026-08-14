@@ -143,6 +143,14 @@ def _wrap_parse_recv_message(original: Any) -> Any:
 
     The expression is the vendor's own, from ``dm_driver.parse_recv_message``:
     the error lives in the high nibble of byte 0.
+
+    ⚠️⭐ **This runs in the 100 Hz control loop**, so the cost was measured rather
+    than waved at: ``DMSingleMotorCanInterface.set_control()`` (dm_driver.py:284)
+    parses a reply every cycle for every motor. **Measured 2026-08-14: 0.035 µs
+    added per call, 0.24 µs per 7-motor cycle, 0.0024% of the 10 ms budget.** The
+    loop's real shortfall is 83-87 Hz against 100, which is 1500-2000 µs — four
+    orders of magnitude away. **So this cannot be a contributor to ROADMAP §8.2
+    item 14**, and it is written down here so nobody has to wonder later.
     """
 
     def wrapper(self: Any, message: Any, motor_type: Any, ignore_error: bool = False) -> Any:
