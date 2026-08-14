@@ -2138,3 +2138,74 @@ With everything unplugged it printed *"the USB bus reports nothing at all, which
 ⭐ **What was checked, and it is reassuring as far as it goes.** `identify_arm.py` read seven registers on arm G at 18:00 and all match the recorded baseline: gear ratios 40/40/40/10/10/10/10, `timeout` 8000 on every motor, and joint 1's `inertia` equal to arm G's own recorded value. ⚠️ **Seven registers is not all of them.** Control mode, and the `PMAX`/`VMAX`/`TMAX` scaling limits, were **not** read, and a wrong `VMAX` would silently mis-scale every velocity reading rather than raising anything.
 
 ⭐⭐ **What to do tomorrow, and it is cheap:** run `identify_arm.py --yes` on **both** arms and diff them against each other. The two arms should agree on every register except the per-unit `inertia` values. **A difference is the signal.** [HANDOFF §5.5](HANDOFF.md) task 0 carries this.
+
+---
+
+## 38. ✅⭐⭐ THE REGISTER DIFF §37.6 ASKED FOR, RUN ON BOTH ARMS — AND THE RISK IT CANNOT COVER — 2026-08-14, 09:10
+
+> [§37.6](FINDINGS.md) ended with *"run `identify_arm.py --yes` on both arms and diff them against each other… A difference is the signal."* That was done, with three more registers than `identify_arm.py` reads, and it is now `scripts/check_arms_match.py` so it is a command rather than a claim.
+
+### 38.0 ✅ Every readable register is identical on both arms, and nothing has moved since it was first recorded
+
+**140 reads: 10 registers × 7 motors × 2 arms.** Register reads only (`0x7FF` sub-command `0x33`), nothing energised, agent-safe. Run three times across three separate bus opens; **every value identical to the last digit each time**, which is itself worth having, because the transmit-echo defect in `src/yam_can.py` produces a flawless set of zeros that looks like success.
+
+| what | result |
+|---|---|
+| motors replying | **14/14**, both arms, all 10 registers |
+| `timeout` | **8000 on every one of the 14 motors** — the safety timeout is enabled on both arms. `0` would mean disabled, which I2RT warn can produce uncontrolled torque from a failed gravity-compensation loop |
+| `gear_ratio` | 40/40/40/10/10/10/10 on both arms, unchanged |
+| registers that differ between the arms | **only `inertia` and `flux`**, and both are per-unit measured data — see [§38.2](FINDINGS.md) |
+| ⭐ `inertia` against the baseline in [§1](FINDINGS.md) | **matches to every recorded digit, four days later.** B joint 1 `1.7169109923997894e-05`, G joint 1 `1.6964389942586422e-05`. §1 recorded `1.7169109e-05` and `1.6964389e-05` on 2026-08-10 |
+
+⭐ **That last row is the one that answers the actual worry.** The concern was that the colleague's tool might have written and *saved* a register on arm G. A re-calibration would have produced fresh per-unit values, which would still *look* like per-unit scatter — so an arm-vs-arm diff alone could not have caught it. **The four-day-old recorded value matching exactly is what rules it out.**
+
+⭐ **Three registers were read here that `identify_arm.py` has never read:** `OT_value`, `flux` and `gear_eff`. The script takes its register list *from* the vendored SDK's own `register_addr_map` rather than copying it, so it cannot fall behind the driver the way a written list would.
+
+### 38.1 ⛔⭐⭐ WHAT THE DIFF CANNOT COVER, AND IT IS THE RISK §37.6 ACTUALLY NAMED
+
+§37.6 asked for *"control mode, and the `PMAX`/`VMAX`/`TMAX` scaling limits"*. **None of those four was read, and none of them can be, through this path.** Three reasons, and the third is the important one:
+
+1. The SDK's `register_addr_map` (`i2rt/motor_config_tool/utils.py`) holds exactly ten entries — `KT_value`, `OT_value`, `master_id`, `id`, `timeout`, `inertia`, `sw_ver`, `flux`, `gear_ratio`, `gear_eff`. **Not one of them is a scaling limit or a control mode**, and no address for those is published anywhere in this checkout.
+2. ⛔ **Guessing an address would be worse than not reading it.** A read of the wrong register returns four perfectly plausible bytes, and labelling them `VMAX` is the confident-plausible-wrong failure this whole document exists to catalogue ([§0](FINDINGS.md)).
+3. ⭐⭐ **And the scaling is not read from the motor in the first place.** `MotorConstants` in `i2rt/motor_drivers/utils.py` hardcodes `POSITION_MAX = 12.5`, `VELOCITY_MAX = 45` and `TORQUE_MAX = 54` in Python, per motor family, and every feedback frame is decoded with those. **If a motor's stored limits were changed, the motor would encode its feedback on one scale while the SDK decodes it on another, and every position, velocity and temperature reading would be silently wrong by a constant factor.** No register read detects that, because the register the SDK trusts is a line of Python.
+
+⭐ **What DOES bound it, from data already on record and at no cost — the gripper limit reconciliation.** `config/gripper_limits.json` holds each arm's jaw limits as *measured raw motor radians*: B `[6.4810788128480965, 1.2308308537422743]`, G `[0.1417181658655675, -5.08640421149004]`. On 2026-08-13 at 18:00, G's motor 7 read `-3.3343` and sits inside G's band; B's read `0.0158` and sits inside B's once the `+2π` wrap is applied, giving `6.2990` ([§36.0](FINDINGS.md)).
+
+- **A gross change is ruled out.** Had `POSITION_MAX` doubled from 12.5 to 25, every decoded position would double, and G's jaw would have read about `-6.67` — **outside** its `[-5.086, 0.142]` band. The reconciliation would have failed. It did not.
+- ⚠️ **A small change is not ruled out.** A 10% scaling error puts G's jaw at `-3.67`, still comfortably inside the band. So this bounds the error to roughly tens of percent, and no further.
+
+⛔⚠️ **And one thing that looks like evidence and is not: "both arms read ≈ 0 on joints 1-6 at rest".** Zero is scale-invariant. Any multiplicative change leaves zero at zero, so a parked arm reading zero **cannot** detect a scaling error on those six joints. [§36.0](FINDINGS.md) reports those near-zero readings as part of a healthy picture, which is fair, but they carry no information about this particular risk. The gripper is the only joint sitting at a large non-zero value, which is exactly why it is the only one that bounds anything.
+
+### 38.2 ⭐ `flux` DIFFERS BETWEEN THE ARMS, AND THE FALSIFYING TEST SAYS THAT MEANS NOTHING
+
+**`flux` — the permanent-magnet flux linkage — had never been read in this repo before today.** It differs between the arms on all seven motors, by 0.11% to 1.79%. The first run's verdict was therefore **7 registers differ that should not**, which is alarming and wrong.
+
+⛔ **Explaining a difference away is the exact shape of a confirmation-bias error**, so the claim was tested rather than argued. **The falsifier: a register holding *measured* per-motor data scatters even between two motors of the identical model on the identical arm. A *configured* constant does not** — every motor of that model would report one number, so a within-arm spread of exactly zero beside a non-zero between-arm difference would mean somebody wrote it.
+
+| register | widest spread WITHIN one arm, same model | widest difference BETWEEN the arms | reading |
+|---|---|---|---|
+| `inertia` | **46.29%** (G, DM4340, joints 1-3) | 2.88% (joint 5) | measured, and known to be since [§1](FINDINGS.md) |
+| `flux` | **2.51%** (B, DM4310, joints 4-7) | 1.77% (joint 2) | ⭐ measured — it scatters *more* within one arm than between them |
+
+⭐ **So `flux` joins `inertia` on the expected-to-differ list, and the evidence is recomputed on every run rather than written down here.** That is [§33.3](FINDINGS.md)'s rule applied to a judgement rather than to a number: the script prints the two percentages every time, so if `flux` ever *stops* scattering within an arm, the exemption fails on its own.
+
+⚠️ **`inertia`'s 46.29% deserves a caveat.** It is dominated by joint 2 reading `2.6e-05` against joints 1 and 3 at `1.7e-05`, which is a real physical difference between joint positions rather than unit-to-unit manufacturing scatter. It still falsifies "configured constant", since a configured constant would be identical. The tighter pairwise comparison says the same thing more cleanly: B's joints 1 and 3 differ by 1.4%, and B-vs-G on joint 1 differs by 1.2%.
+
+### 38.3 ⛔ TWO DEFECTS IN MY OWN SCRIPT, ONE FOUND BY READING ITS OUTPUT AND ONE BY A TEST
+
+1. ⛔ **The verdict printed *"nothing has moved since the baseline"* on the run where no baseline existed and nothing had been compared.** The count of moved registers was `0`, and `0` is also what "nothing moved" looks like. **Reporting "we looked and found nothing" and "we did not look" as the same sentence is this document's whole subject.** Fixed with a separate `baseline_checked` flag, and pinned by a test.
+2. ⛔ **The falsifier reported an unmeasurable spread as 0.00% and concluded "this register looks CONFIGURED".** With only one motor of a given model in the read there is no within-arm spread to compute, and `0.0` was standing in for "not measurable". On a partial read that would have manufactured a false alarm about a healthy motor. **Caught by a test written specifically to check that the falsifier can fail correctly**, which is the only kind of test that means anything about a falsifier.
+
+⭐ **The pattern in both is one thing:** a count of zero is ambiguous between *absent* and *unexamined*, and every instance of that ambiguity in this repo has been a defect.
+
+### 38.4 ⭐⭐ THE ARM-VS-ARM DIFF HAS A HOLE, AND A BASELINE CLOSES IT
+
+⛔ **A tool that wrote the same register on *both* arms leaves them agreeing with each other perfectly, and the diff §37.6 asked for reports a clean verdict.** That was still the right check on 2026-08-13, because only arm G was lent out. It is not the right check in general, and both arms will be shared eventually.
+
+⭐ **So the script asks a second, stronger question: has anything changed since we last looked?** `--save-baseline` writes all 140 values to **`config/motor_registers.json`** with the commit and the timestamp; later runs diff against it, and there **nothing** may differ, per-unit values included. A measured constant burned into a motor has no reason to move between two readings, so if one does, something wrote it. `config/` is where measured evidence lives rather than settings ([§32.3](FINDINGS.md)), and the file is committed.
+
+⚠️ **The baseline was laid down at 09:10 on 2026-08-14, which is *after* the colleague ran his code.** It therefore cannot answer anything about that event — [§38.0](FINDINGS.md)'s four-day-old `inertia` match is what does. The baseline is for the next time.
+
+⭐ **`src/provenance.py` was extracted in the same change.** `git_commit()` and `dt_now()` had lived inside `scripts/teleop_session.py`, and the register baseline is the third thing to record provenance after the recorder and the tracking log. Three call sites is where a copied helper starts to drift, and `src/spacemouse.py` exists because a device fix once landed in only one of two copies. ⚠️ `teleop_session.py` still has its own identical pair; they collapse into the module during the `ArmSession` restructure, which rewrites that file anyway. Doing it today would edit the script Julien is about to test, for no gain.
+
+**370 → 384 headless tests.**

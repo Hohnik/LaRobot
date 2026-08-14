@@ -41,31 +41,35 @@
 >
 > ⛔⭐ **THE LESSON THIS FILE KEEPS PAYING FOR, now six instances in two days.** *The rig is down* · *all five recordings are padded* · a speed table whose recording was overwritten · **the same table overwritten again three hours later** · *only one camera is on the bus* · **two headline figures from a two-run fit, moved by a third run**. **Every one was true when written.** [FINDINGS §33.3](FINDINGS.md) has the rule and [§34.7](FINDINGS.md) the proof that writing more carefully does not help: **a table of live data in a document is a cache with no invalidation.** ⭐ **The sixth instance also shows the remedy working** — slot 3 was overwritten a fourth time and cost nothing, because its measurement now lives in `recordings/tracking/` ([§35.7](FINDINGS.md)).
 >
-> ## ⭐⭐ THE TEST PLAN FOR 2026-08-14 — everything built on the evening of 08-13, in the order to check it
+> ## ⭐⭐ THE TEST PLAN FOR 2026-08-14 — steps 1-3 are DONE, and only TWO things still need the arm
 >
-> ⛔ **Nothing below has been on the arm.** Julien left at ~18:30 and the rig is unplugged; `check_rig.py` reports an empty USB bus. **Work through these in order, because 1 and 2 gather evidence that later steps would destroy.**
+> ⛔⭐ **CORRECTED 2026-08-14, 09:15, and the correction saves bench time.** The version of this plan written on 08-13 at 19:30 asked Julien to test **five** things. **Two of them were already confirmed on 2026-08-13 at 17:21** — the PARK timer fix on three parks with the arithmetic reconciling ([FINDINGS §35.0](FINDINGS.md)) and the saved tracking file ([FINDINGS §35.1](FINDINGS.md)) — and **this file said so 30 lines higher up while still asking for them here.** That is the seventh instance of the [§33.3](FINDINGS.md) staleness pattern, and the first one where the two contradicting statements were in the same document. **His hardware time is the critical path, so a plan that spends it re-confirming settled work is a real cost, not an untidiness.**
 >
-> **1. Look at the motor LEDs BEFORE running anything.** ⛔ **This matters and it is easy to lose.** The blinking started while a colleague ran unknown code against arm G, survived being unplugged, and later stopped. ⭐ **`ping_motors.py` sends an enable frame, which may itself clear a latched state**, so running it first destroys the observation ([FINDINGS §37.6](FINDINGS.md)). **Record: which arm, which motors, blinking or steady, and whether both arms look the same.**
+> ✅ **1. The motor LEDs — still Julien's, and it is the only thing that must happen BEFORE anything else runs.** Nothing an agent can do. ⭐ **`ping_motors.py` sends an enable frame which may itself clear a latched state**, so running it first destroys the observation ([FINDINGS §37.6](FINDINGS.md)). **Record: which arm, which motors, blinking or steady, and whether both arms look the same.** ⚠️ The blinking had already stopped by 08-13 evening, so there may be nothing left to see — say so if the lights are all steady, because that is also an answer.
 >
-> **2. Check the registers on BOTH arms and diff them.** A third party ran code against these motors, and DM motors have writable registers that survive a power cycle (`0x55` writes, `0xAA` saves). Nothing in this repo ever writes one, but another tool might. **The two arms should agree on every register except the per-unit `inertia`. A difference is the signal.**
+> ✅✅ **2. DONE 2026-08-14 09:10 — the register diff is clean on both arms, and there is now a script for it.** [FINDINGS §38](FINDINGS.md). **140 reads** (10 registers × 7 motors × 2 arms), run three times, identical every time. **Every register agrees on both arms except `inertia` and `flux`, and both are measured per-motor data.** `timeout` reads **8000 on all 14 motors**, so the safety timeout is enabled everywhere. ⭐ **The result that actually answers the worry: `inertia` matches the value recorded on 2026-08-10 in [§1](FINDINGS.md) to every digit**, which is what rules out a re-calibration having been saved to flash. ⛔ **What it cannot cover, and it is the risk [§37.6](FINDINGS.md) named: the `PMAX`/`VMAX`/`TMAX` scaling limits are not readable at all** — they are hardcoded Python constants in the SDK, not registers it can ask for. [FINDINGS §38.1](FINDINGS.md) has what bounds them instead, and why "both arms read zero at rest" is not the evidence it looks like.
 >
 > ```bash
-> uv run scripts/check_rig.py && uv run scripts/identify_arm.py --arm B --yes && uv run scripts/identify_arm.py --arm G --yes
+> uv run scripts/check_rig.py && uv run scripts/check_arms_match.py --yes
 > ```
 >
-> **3. Then the motor state**, which is the only way to read an error code or a temperature: `uv run scripts/ping_motors.py --arm B --yes` and the same for `G`. Every motor should read `err=0x1 (normal)`.
+> ⏸️ **3. The motor state — deliberately NOT run, and this is a decision rather than an omission.** `ping_motors.py` is the only way to read an error code or a temperature, and it is agent-safe. **It was held back because it may clear the latched state step 1 wants to observe, and it would add nothing today:** yesterday at 18:00 every motor read `err=0x1 (normal)` at 31-35 °C, and this morning's register diff shows nothing has changed since. **Run it after the LED glance:**
 >
-> **4. Then one ordinary session on arm B**, checking four things built on 08-13 that no arm has seen:
+> ```bash
+> uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+> ```
+>
+> ⬜⬜ **4. One ordinary session on arm B. TWO things, not four, and both are genuinely unseen by any arm:**
 >
 > | what to do | what a pass looks like | what it proves |
 > |---|---|---|
-> | any park, `p` then Enter | the arrival line shows a **real total**, and on a multi-waypoint run the leg times plus the settling add up to it | [FINDINGS §34.3](FINDINGS.md), the two-clock fix |
-> | press `w` in **HOLD**, then `g`, guide the arm, `w` again, save | the file's `method` reads **`live:hold+guide`**, not `live:hold` | [FINDINGS §35.4](FINDINGS.md), the provenance fix |
-> | play it back | one extra line naming the saved tracking file | [FINDINGS §34.4](FINDINGS.md) |
-> | press `t` for TELEOP and drive until it stops | the status line shows **`box 0.28/0.30m`**, then **`⚠️ AT THE EDGE`** | [FINDINGS §37.5](FINDINGS.md) — almost certainly what stops him early, and it was invisible until now |
+> | press `w` in **HOLD**, then `g`, guide the arm, `w` again, save | the saved file's `method` reads **`live:hold+guide`**, not `live:hold` | [FINDINGS §35.4](FINDINGS.md), the provenance fix. Found by reading a file rather than the screen, and fixed after the last hardware run |
+> | press `t` for TELEOP and drive until it stops | the status line shows **`box 0.28/0.30m`**, then **`⚠️ AT THE EDGE`** | [FINDINGS §37.5](FINDINGS.md) — almost certainly what stops him early, and it was invisible until last night |
 > | nothing | ⭐ **`ArmSession` is NOT wired in, so none of the 08-13 evening class work can show up on the arm.** If something feels different, it is not that | [ROADMAP §6.1](ROADMAP.md) |
 >
-> ⭐ **What the box readout settles.** If it reads **`0.30/0.30m`** at the moment the arm stops, the workspace box is the answer, and the next decision is which of the three fixes in [FINDINGS §37.5](FINDINGS.md) to take. If it reads something like **`0.12/0.30m`** and the arm still refuses to move, the cause is a joint limit or the IK instead, and the `⚠️ STUCK lead` warning on the same line says which.
+> ⭐ **What the box readout settles, and it is the most useful thing this session can buy.** If it reads **`0.30/0.30m`** at the moment the arm stops, the workspace box is the answer, and the next decision is which of the three fixes in [FINDINGS §37.5](FINDINGS.md) to take. If it reads something like **`0.12/0.30m`** and the arm still refuses to move, the cause is a joint limit or the IK instead, and the `⚠️ STUCK lead` warning on the same line says which.
+>
+> ✅ **Already confirmed on 2026-08-13 and NOT worth re-testing:** any park's arrival line and its per-leg arithmetic ([§35.0](FINDINGS.md)), and a playback naming its saved tracking file ([§35.1](FINDINGS.md)). Both will simply happen during the session above; no need to check them deliberately.
 >
 > **5. Only if he wants to go faster that day:** raise `SafeRobot(max_speed=)` from 1.0 to 1.5 in `src/yam_robot.py`, alone, and re-run one playback. ⛔ **His call, it is a safety limit, and change nothing else in the same run.** [FINDINGS §37.2](FINDINGS.md).
 >
@@ -76,16 +80,22 @@
 > 3. **[FINDINGS §0](FINDINGS.md) is the single most useful page in the repo.** This stack fails by lying, not by crashing: every defect catalogued there produced a confident, plausible, wrong answer and not one raised an exception. Check values for plausibility, never merely for the absence of an exception.
 > 4. **§5.5 is the task list** for what to do next on the arm. ⭐⭐ **For the COMPLETE list of every open piece of work, read [ROADMAP.md](ROADMAP.md) §8.2** — 17 numbered items, in build order, each pointing at the section that explains it. Julien asked on 2026-08-13 for one place where nothing is lost, and that table is it. If something is not in it, it is not tracked.
 >
-> **The four commands that check the tree and the rig, none of which touch a motor:**
+> **The four commands that check the tree and the rig, none of which can energise a motor:**
 >
 > ```bash
-> for f in scripts/test_*.py; do uv run "$f"; done   # 360 headless tests, no hardware
+> for f in scripts/test_*.py; do uv run "$f"; done   # the whole headless suite, no hardware
 > uv run scripts/check_rig.py                        # what state is every device in?
 > uv run scripts/check_recordings.py                 # what is on disk, and is any of it padded?
 > uv run scripts/check_links.py                      # 1 known break, in Setup-Plan.md, not ours
 > ```
 >
-> ⭐ **Those three `check_*` scripts exist because the same defect kept recurring**: a measurement written into a document, correct on the day, wrong a day later. A script that reads the thing it describes cannot go stale. [FINDINGS §33.3](FINDINGS.md).
+> **And the fifth, which does transmit — register reads only, so it cannot energise or command anything:**
+>
+> ```bash
+> uv run scripts/check_arms_match.py --yes           # do both arms still read identically, and has anything moved?
+> ```
+>
+> ⭐ **Those four `check_*` scripts exist because the same defect kept recurring**: a measurement written into a document, correct on the day, wrong a day later. A script that reads the thing it describes cannot go stale. [FINDINGS §33.3](FINDINGS.md). ⚠️ **Note that the test count is deliberately not written above any more** — it was `360` while the suite held 384, which is the same defect one layer up.
 >
 > ## ⭐ Where the single-arm work stands, as of 2026-08-13
 >
@@ -117,7 +127,7 @@
 > **What IS done:** `src/arm_session.py` — one arm's state and mode machine, **17 tests against a fake robot**. State, mode transitions, park stepping, per-arm thermal guard. Its rule is *the class decides, the script narrates* — no method prints — which is why it can be proven without hardware. ⚠️ **The tests pass and the design they test is out of date**, so several of them assert behaviour the script no longer has.
 >
 > ⭐ **Do it in this order. Step 0 is new and skipping it is how this produces a diff nobody can review:**
-> 0. ⏳ **MOSTLY DONE 2026-08-13 18:15, and it was declared finished once too early.** ✅ The blended `JointPath` park is in, with the arc-length cursor, waypoint marks reported rather than stopped at, the cursor waiting when the arm falls behind, arrival gated on the cursor, and the two park clocks ([FINDINGS §36.2](FINDINGS.md)). ✅ **The gripper stall guard is in, and it had been missing entirely** — a safety guard that exists because motor 7 was cooked three times, while the class carried a dead `stall_since` variable that made it look present ([FINDINGS §36.5](FINDINGS.md)). ✅ The docstring's false claim to a fifth `map` mode is corrected. **Tests 17 → 27.** No `main()` code was touched, so **there is nothing here to test on the arm.** ⬜ **One piece is left and it needs Julien's word, because it changes what gets commanded:** move the per-cycle speed clamp and the joint-limit clamp out of the teleop branch into the class's single command path, so every mode is clamped by construction rather than by remembering. Rule 7 is the argument, and PARK going around the gripper clamp ([FINDINGS §9](FINDINGS.md)) is the precedent.
+> 0. ⏳ **MOSTLY DONE 2026-08-13 18:15, and it was declared finished once too early.** ✅ The blended `JointPath` park is in, with the arc-length cursor, waypoint marks reported rather than stopped at, the cursor waiting when the arm falls behind, arrival gated on the cursor, and the two park clocks ([FINDINGS §36.2](FINDINGS.md)). ✅ **The gripper stall guard is in, and it had been missing entirely** — a safety guard that exists because motor 7 was cooked three times, while the class carried a dead `stall_since` variable that made it look present ([FINDINGS §36.5](FINDINGS.md)). ✅ The docstring's false claim to a fifth `map` mode is corrected. **Tests 17 → 27.** No `main()` code was touched, so **there is nothing here to test on the arm.** ✅⛔ **STEP 0 IS NOW FULLY CLOSED, and the last item was WITHDRAWN rather than done** ([FINDINGS §37.3](FINDINGS.md)). This row used to end by asking Julien to approve moving the per-cycle speed clamp and the joint-limit clamp into the class's single command path. **I retracted that recommendation myself the same evening, and it is wrong on both halves:** `SafeRobot` already *is* the universal clamp, sitting below all control logic, so rule 7's question already had a good answer; and applying the joint-limit margin to PARK would **refuse to return to poses the arm has physically held**, because park targets are saved *measured* poses. ⛔ **So there is nothing here for him to decide.** *(Corrected 2026-08-14: this row and [ROADMAP §6.1](ROADMAP.md) step 0 both still asked for it, which would have had a fresh agent request approval for a withdrawn change.)*
 > 1. ⬜⬜ **THE BIG ONE, AND ITS SIZE IS NOW MEASURED RATHER THAN GUESSED.** `main()` spans lines 500-2305 of `teleop_session.py`, **1806 lines**, with **338 references** to the 20 state names that must become `arm.<field>`. `mode` alone is **93 sites**. ⛔ **No behaviour change at all**, so that `--arms B` at N=1 tests exactly one thing: whether the substitutions were made correctly. ⭐ **Land it as a SERIES of small commits that each leave the script runnable** — one group of state at a time, dry run after each — rather than one enormous diff. The hardware test still happens once at the end, but a failure can then be traced to a commit instead of to 338 places. Then Julien confirms it *feels identical*. [FINDINGS §36.3](FINDINGS.md).
 > 2. Add the `a` selector (B → G → BOTH) and per-arm status rows. Still one arm connected.
 > 3. `--arms B,G`, starting in **HOLD**, gripper enabled, desk clear. ⚠️ **This is the first step that needs arm G**, which a colleague borrows and which is usually unplugged. **Ask for it here, not before step 0.**
