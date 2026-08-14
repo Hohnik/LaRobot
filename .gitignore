@@ -31,6 +31,8 @@ frames/
 
 # Local agent/editor state that is per-machine
 .claude/settings.local.json
+agents/
+
 
 # ── macOS ────────────────────────────────────────────────────────────────────
 .DS_Store
