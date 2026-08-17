@@ -203,8 +203,14 @@ def describe(saved: dict[str, Any], rejected: list[str], loose: list[str],
 #:
 #: ⚠️ Only these six. The booleans and the frame have their own keys already (`r`, `v`), and
 #: `start_mode` cannot be changed retroactively for a session that has started.
+#: ⚠️⭐ `linear_scale` IS ON THIS LIST BECAUSE HE ASKED WHY IT WAS NOT. His words, 2026-08-17:
+#: *"it seemed like the teleop speed was defined once in the settings here, but then also
+#: defined in the normal mode where I did the linear speed, which doesn't make a lot of sense
+#: because if it's limited in the linear normal mode, then why would it not allow me to change
+#: it in the control panel area?"* ⭐ He is right: it is one of the three limits in series, and
+#: leaving it off this screen made it the invisible one.
 LIVE_ORDER = ("max_speed", "teleop_speed", "max_lag", "mirror_gap", "reach", "floor",
-              "mirror_catchup")
+              "mirror_catchup", "linear_scale")
 
 #: ⛔⭐ BOUNDS FOR THE LIVE EDITOR, and every one is a backstop rather than a policy. A key
 #: that repeats when held reached `lin 19.852 m/s` on 2026-08-17 because the linear-speed
@@ -222,6 +228,7 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     #: ⭐ 0 is OFF and must stay reachable, so this is the one setting whose floor is zero and
     #: whose step has to be able to get there. `adjust` special-cases it for that reason.
     "mirror_catchup": (0.0, 20.0),
+    "linear_scale": (0.03, 15.0),
 }
 
 #: ⛔⭐⭐⭐ A LADDER OF ROUND NUMBERS, BECAUSE THE RATIO STEP PRODUCED UNUSABLE VALUES.
@@ -248,6 +255,9 @@ LADDERS: dict[str, tuple[float, ...]] = {
     "reach": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2),
     "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
     "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
+    #: ⭐ The CARTESIAN speed a full puck deflection asks for. Its default is 0.12 m/s and it
+    #: spans two orders of magnitude, so the low rungs are fine and the high ones are coarse.
+    "linear_scale": (0.03, 0.06, 0.12, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0, 12.0, 15.0),
 }
 
 
@@ -302,7 +312,7 @@ def live_lines(values: dict[str, Any], selected: str | None,
                    f"{base}{'  ⚠️ ' + edge if edge else ''}")
     out += [
         "",
-        "   1-7 pick a setting   - / +  change it   0  back to how this session started",
+        "   1-8 pick a setting   - / +  change it   0  back to how this session started",
         "   s   SAVE these to config/session_defaults.json for every later session",
         "   t / g / h  leave                                        ?  this help",
         "",

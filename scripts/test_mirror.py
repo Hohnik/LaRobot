@@ -278,15 +278,65 @@ def test_a_STUCK_follower_is_named_differently_from_a_fast_leader() -> None:
 
 def test_the_row_warns_BEFORE_the_gap_trips() -> None:
     """⭐ Julien's first run gave no notice: the row read "tracking 0.34 rad behind" one second
-    and the link was gone the next. Past 70% of the limit it says so."""
+    and the link was gone the next. Past 70% of that joint's OWN limit it says so.
+
+    ⚠️ THIS TEST USED TO USE JOINT 6 AND HAD TO CHANGE. It offset index 5 by 0.30 and called
+    that "86% of the limit", which was true when all six joints shared 0.35. Joint 6's limit is
+    now 0.35 × 4.0 = 1.4, so 0.30 is 21% of it and the row is right to stay quiet. ⭐ Using
+    joint 3, whose multiplier is 1.00, tests the warning without depending on the scaling.
+    """
     link = MirrorLink(follow_speed=1.0, max_gap=0.35)
     link.state = "following"
     near = LEADER.copy()
-    near[5] += 0.30                      # 86% of the limit
-    assert "near the 0.35 limit" in link.status(near, LEADER)
+    near[2] += 0.30                      # joint 3, limit 0.35, so 86% of it
+    assert "near its 0.35 limit" in link.status(near, LEADER)
     fine = LEADER.copy()
-    fine[5] += 0.10                      # 29% of the limit
-    assert "near the" not in link.status(fine, LEADER)
+    fine[2] += 0.10                      # 29% of it
+    assert "near its" not in link.status(fine, LEADER)
+
+
+def test_the_row_does_NOT_cry_wolf_about_a_wrist_with_rope_to_spare() -> None:
+    """⛔⭐ THE POINT OF THE PER-JOINT WARNING. The same 0.30 rad on joint 6 is a fifth of its
+    limit. Warning about it would train him to ignore the line, and then it is ignored on the
+    run where the elbow is the one in trouble."""
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    link.state = "following"
+    wrist = LEADER.copy()
+    wrist[5] += 0.30
+    assert "near its" not in link.status(wrist, LEADER)
+
+
+def test_a_STALLED_joint_stops_on_the_TIGHT_limit_not_the_scaled_one() -> None:
+    """⛔⭐⭐⭐ A SAFETY CONSEQUENCE OF THE SCALING THAT I MISSED FIRST TIME.
+
+    Julien's 2026-08-17 log: joint 4 stopped at **0.869 rad** against its scaled 0.87 limit,
+    having moved **0.01 rad/s**, with `SafeRobot` clipping the command on **1115 cycles**. That
+    is about 12 seconds of a motor pushing against something that would not move, and the
+    session's hottest readings were 45 and 46 °C, the highest recorded.
+
+    ⭐ The multiplier is right for a joint that is LAGGING and wrong for one that is STALLED.
+    So a follower that is not moving is stopped on the unscaled `max_gap`.
+    """
+    import numpy as np
+
+    link = MirrorLink(follow_speed=1.0, max_gap=0.35)
+    stuck = np.zeros(7)
+    leader = np.zeros(7)
+    leader[3] = 0.5                      # joint 4, scaled limit 0.87, unscaled 0.35
+    # Engage, then hold the follower completely still while the leader sits out there.
+    link.step(leader, stuck, 0.011)
+    link.state = "following"
+    out = None
+    for _ in range(40):
+        out = link.step(leader, stuck, 0.011)
+        if out is None:
+            break
+    assert link.state == "stopped", "a completely stalled joint 4 never stopped the mirror"
+    assert link.stop_cause == "stuck", f"cause was {link.stop_cause!r}"
+    assert link.stop_gap < 0.87, (
+        f"it waited until {link.stop_gap:.3f} rad, which is the SCALED limit. A stalled joint "
+        f"should stop at the tight {0.35} one")
+    assert "NOT MOVING" in (link.stop_reason or ""), link.stop_reason
 
 
 def test_an_ARM_that_cannot_track_is_named_as_the_hardware_and_not_the_software() -> None:

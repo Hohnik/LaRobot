@@ -240,7 +240,29 @@ BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
 #: that fast — `SafeRobot` and the reach limit still bind — but it makes the IK target jump
 #: the whole workspace in one cycle, so the arm slams to the boundary at whatever
 #: `--max-speed` allows.
-MAX_LINEAR_SCALE = 2.0
+#: ⛔⭐⭐⭐ RAISED FROM 2.0 TO 15.0 BECAUSE 2.0 WAS A REGRESSION I INTRODUCED. Julien,
+#: 2026-08-17: *"the linear limit is at two, the ceiling, and then the max speed was set way
+#: higher, but that didn't make any difference to the teleop speed. I was limited by the two
+#: before. And before, I was able to go much faster."*
+#:
+#: ⭐⭐ **He is right, and the reason is that THREE limits sit in series and the smallest one
+#: binds.** In order, from the puck to the motor:
+#:
+#: | limit | units | what it bounds |
+#: |---|---|---|
+#: | `--linear-scale` | m/s | the CARTESIAN speed a full puck deflection asks for |
+#: | `--teleop-speed` | rad/s | how far the IK answer may move any one JOINT per cycle |
+#: | `--max-speed` | rad/s | `SafeRobot`'s rate cap, below all control logic |
+#:
+#: ⛔ At 2.0 m/s with a 0.4 m lever the joints only need about 5 rad/s, so a `--teleop-speed`
+#: of 15 was never reached and raising it did nothing. **The cartesian limit was the binding
+#: one and I had just capped it at a sixth of what he had been using** (he reached 19.852 m/s
+#: before the cap existed, [FINDINGS §62.2](../docs/FINDINGS.md)).
+#:
+#: ⭐ 15.0 is chosen so it can NEVER be the binding limit: `teleop_speed`'s own ceiling is 20
+#: rad/s, which at a 0.6 m lever is about 12 m/s of tip speed. ⚠️ So this stays a backstop
+#: against a key that repeats when held, and stops being a speed limit.
+MAX_LINEAR_SCALE = 15.0
 MIN_LINEAR_SCALE = 0.005
 
 #: ⭐ The same backstop for rotation. Default is 0.6 rad/s, so 12 rad/s is 20x it and about
@@ -1286,8 +1308,27 @@ def main() -> int:  # noqa: PLR0915
         print(f"  mirror fix  : ON at {args.mirror_catchup:g}/s — corrects the follower's "
               f"standing offset while the leader is slow, clamped to 0.06 rad")
     lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
+    # ⭐⭐ THE PLAN NOW SAYS WHAT EACH LIMIT DOES, NOT JUST ITS VALUE. Julien, 2026-08-17:
+    # *"I want to understand what MaxLag exactly does. I think I understand Max speed… but then
+    # what does MaxLag mean?"* ⚠️ The line above already printed both numbers and neither
+    # meaning, which is the same fault as printing a limit's value without its flag name.
     print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
           f"the command within {args.max_lag:.2f} rad of the measured pose{lag_note})")
+    print(f"  what limits  : ⭐ FOUR limits in series, and the SMALLEST one binds:")
+    print(f"                 linear {args.linear_scale:.2f} m/s  how fast a full puck push "
+          f"asks the TIP to move  (- / + or setting 8)")
+    print(f"                 teleop {args.teleop_speed:.2f} rad/s  how far the IK answer may "
+          f"move any ONE JOINT per cycle")
+    print(f"                 max-speed {args.max_speed:.2f} rad/s  the same cap again, below "
+          f"all control logic, so nothing can reach around it")
+    print(f"                 max-lag {args.max_lag:.2f} rad  ⭐ how far the COMMAND may run "
+          f"ahead of where the arm actually IS.")
+    print(f"                   ⚠️ This is not a speed. The command is pulled back to "
+          f"measured+{args.max_lag:.2f} every cycle, so")
+    print(f"                   reaching a far target becomes a ratchet: the arm moves, the "
+          f"command advances, repeat. A")
+    print(f"                   BLOCKED joint therefore never gets there, and that is the "
+          f"point — it bounds the push.")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
     # ⭐⭐ SAY WHICH SETTINGS CAME FROM THE FILE, AND FLAG A PERMANENT LOOSENING. A flag
     # typed on the command line is visible in the shell history and on screen; a saved
@@ -2140,7 +2181,7 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  ⭐ SETTINGS closed. The values are live; press n then s "
                                   "to write them to the file.\n")
                             continue
-                        elif k in "1234567":
+                        elif k in "12345678":
                             idx = int(k) - 1
                             if idx < len(LIVE_ORDER):
                                 settings_pick = LIVE_ORDER[idx]
@@ -2182,7 +2223,7 @@ def main() -> int:  # noqa: PLR0915
                             # screen is noise; "left/right arrow" is information.
                             shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
                                 k, repr(k) if k.isprintable() else "that key")
-                            print(f"\n  ({shown} does nothing here — 1-7 or up/down to pick, "
+                            print(f"\n  ({shown} does nothing here — 1-8 or up/down to pick, "
                                   f"-/+ to change, 0 revert, s save, n or t/g/h to leave)\n")
                         if show_all or k == "0":
                             for line in live_lines(
@@ -2708,14 +2749,14 @@ def main() -> int:  # noqa: PLR0915
                         # dropped. Both scales are also printed in the status line now, so
                         # a key that silently does nothing is visible rather than inferred.
                         elif k in "+=":
-                            args.linear_scale = min(MAX_LINEAR_SCALE,
-                                                    args.linear_scale * 1.25)
+                            args.linear_scale = adjust_setting(
+                                "linear_scale", args.linear_scale, True)
                             hint(f"linear speed {args.linear_scale:.3f} m/s"
                                  + (" (ceiling)"
                                     if args.linear_scale >= MAX_LINEAR_SCALE else ""))
                         elif k == "-":
-                            args.linear_scale = max(MIN_LINEAR_SCALE,
-                                                    args.linear_scale / 1.25)
+                            args.linear_scale = adjust_setting(
+                                "linear_scale", args.linear_scale, False)
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                         elif k == ".":
                             angular_scale = min(MAX_ANGULAR_SCALE,
@@ -3037,8 +3078,8 @@ def main() -> int:  # noqa: PLR0915
                                                      one.park_speed * 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
-                            args.linear_scale = min(MAX_LINEAR_SCALE,
-                                                    args.linear_scale * 1.25)
+                            args.linear_scale = adjust_setting(
+                                "linear_scale", args.linear_scale, True)
                             hint(f"linear speed {args.linear_scale:.3f} m/s"
                                  + (" (ceiling)"
                                     if args.linear_scale >= MAX_LINEAR_SCALE else ""))
@@ -3048,8 +3089,8 @@ def main() -> int:  # noqa: PLR0915
                                 one.park_speed = max(0.05, one.park_speed / 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
-                            args.linear_scale = max(MIN_LINEAR_SCALE,
-                                                    args.linear_scale / 1.25)
+                            args.linear_scale = adjust_setting(
+                                "linear_scale", args.linear_scale, False)
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "?":
                         print(HELP)

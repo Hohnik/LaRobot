@@ -377,7 +377,27 @@ class MirrorLink:
 
         # ⭐⭐ PER-JOINT, so a flicked wrist no longer forces the shoulder's limit up with it.
         j_worst, j_gap, j_limit = worst_scaled_joint(measured, target, self.max_gap)
-        if self.state == "following" and j_gap > j_limit:
+
+        # ⛔⭐⭐⭐ A STUCK JOINT IS STOPPED ON THE **UNSCALED** LIMIT, AND THIS IS A SAFETY
+        # CONSEQUENCE OF THE PER-JOINT SCALING THAT I DID NOT THINK THROUGH FIRST TIME.
+        #
+        # The scaling exists to tolerate a joint that is LAGGING, and joint 4's 2.48x
+        # multiplier is right for that. ⛔ **But it also gave a joint that is not moving at
+        # all 2.48x longer to be pushed.** Julien's 2026-08-17 log is the evidence: joint 4
+        # stopped at 0.869 rad against its scaled 0.87 limit, having moved **0.01 rad/s**,
+        # with `SafeRobot` clipping the command on **1115 cycles** — about 12 seconds of a
+        # motor working against something that would not move. The session's hottest readings
+        # were 45 and 46 °C, the highest yet.
+        #
+        # ⭐ The two cases want opposite treatment and the code already tells them apart by
+        # the follower's measured speed. So: **lagging gets the generous scaled limit,
+        # stalled gets the tight unscaled one.** Tolerating lag was never meant to mean
+        # tolerating a stall.
+        stalled = (self.state == "following"
+                   and j_gap > self.max_gap
+                   and float(self._follower_speed[j_worst]) < STUCK_SPEED)
+
+        if self.state == "following" and (j_gap > j_limit or stalled):
             # ⛔ Stop rather than chase. A gap this large while following means the follower
             # is not keeping up, and continuing would keep commanding a position it cannot
             # reach, which is how a motor ends up held against a stop.
@@ -422,9 +442,17 @@ class MirrorLink:
             # them, which is exactly the confusion the old single-number message caused in the
             # other direction.
             mult = GAP_WEIGHTS[worst] if worst < len(GAP_WEIGHTS) else 1.0
-            scaled = f" = {self.max_gap:.2f} × {mult:.2f}" if abs(mult - 1.0) > 0.01 else ""
-            self.stop_reason = (f"the follower fell {j_gap:.3f} rad behind on joint "
-                                f"{worst + 1} (its limit is {j_limit:.2f}{scaled})")
+            if stalled and j_gap <= j_limit:
+                # ⭐ Say which limit fired, because "0.42 behind, limit 0.87" reads as a bug.
+                self.stop_reason = (
+                    f"the follower fell {j_gap:.3f} rad behind on joint {worst + 1} and is "
+                    f"NOT MOVING, so it stopped at the tight {self.max_gap:.2f} limit rather "
+                    f"than that joint's usual {j_limit:.2f}")
+            else:
+                scaled = (f" = {self.max_gap:.2f} × {mult:.2f}"
+                          if abs(mult - 1.0) > 0.01 else "")
+                self.stop_reason = (f"the follower fell {j_gap:.3f} rad behind on joint "
+                                    f"{worst + 1} (its limit is {j_limit:.2f}{scaled})")
             self.stop_detail = why
             return None
 
