@@ -1932,6 +1932,28 @@ def main() -> int:  # noqa: PLR0915
                         jaw = one.states[N_ARM] if len(one.states) > N_ARM else None
                         if jaw is None:
                             one.stall_since = None
+                        elif one.jaw_block is not None:
+                            # ⛔⭐⭐ ALREADY LATCHED, SO SAY NOTHING AND DO NOTHING. This is the
+                            # last piece of the repeated-message problem and the latch was not
+                            # the fault.
+                            #
+                            # The detector fires on **high torque and no movement**. Holding
+                            # the jaws at the block is exactly that: a position controller
+                            # sitting at its target against an object still produces torque and
+                            # still is not moving. ⚠️ So the condition stays true for as long as
+                            # the grip is held, and every cycle re-reported a stall the latch
+                            # had already dealt with.
+                            #
+                            # ⭐ His 2026-08-17 log is unambiguous. Arm B: released to 0.304,
+                            # 0.311, 0.314, 0.315, 0.315, 0.315, 0.315, 0.316 — **eight
+                            # messages, all creeping OPEN by a thousandth**, then one
+                            # "opened past the block". Arm G did the same four times. The latch
+                            # was working correctly throughout.
+                            #
+                            # ⛔ Re-latching was also wrong on its own: it moved the block to
+                            # each new measured position, so a jaw slowly relaxing dragged the
+                            # block open with it and the protection loosened by itself.
+                            one.stall_since = None
                         elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
                                 and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
                             if one.stall_since is None:
