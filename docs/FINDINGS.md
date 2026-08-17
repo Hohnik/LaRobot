@@ -4233,3 +4233,81 @@ requested                actual       codec   measured fps
 ⭐⭐ **WHAT WOULD ACTUALLY SETTLE IT: look at the PIXEL DATA rather than asking for a label.** A 16-bit depth frame packed into 8-bit channels has statistics no photograph has — one channel varying smoothly while another varies wildly, or all three channels identical. ⛔ **That needs a tool that captures one frame per size and reports per-channel statistics**, and it is [ROADMAP §8.2](ROADMAP.md) item 36. ⚠️ The agent can write it and **cannot run it**.
 
 ⭐ **The MJPG column is its own small finding:** requesting MJPG changes nothing at any size, so macOS is ignoring the codec request entirely and **resolution is the only lever**, exactly as the script's closing note says.
+
+
+## 63 ⛔⭐⭐⭐ 2026-08-17, LATE — ITEM 16 IS ANSWERED **NO**, AND THE JAW LATCH WAS BEING CLEARED BY NOISE
+
+### 63.0 ⛔⭐⭐⭐ THE D405 IS A PLAIN COLOUR CAMERA OVER UVC. [ROADMAP §8.2](ROADMAP.md) ITEM 16 IS CLOSED, ANSWERED NO
+
+⭐⭐ **A definitive negative, from Julien's 2026-08-17 run of `scripts/probe_camera_pixels.py`:**
+
+```
+     848x480 → 848x480    uint8, 3 channel(s), zeros  0.00%   → ORDINARY PHOTOGRAPH
+    1280x720 → 1280x720   uint8, 3 channel(s), zeros  0.00%   → ORDINARY PHOTOGRAPH
+     640x480 → 640x480    uint8, 3 channel(s), zeros  0.00%   → ORDINARY PHOTOGRAPH
+     424x240 → 424x240    uint8, 3 channel(s), zeros  0.00%   → ORDINARY PHOTOGRAPH
+```
+
+⭐⭐ **AND 848x480 DID EXIST AFTER ALL.** It came back at exactly 848x480, so the mode item 16 was written about is real; the old `--probe` simply never asked for it. **It is a colour photograph like the rest.**
+
+⛔ **All four signatures are absent in every mode**: no spike of exactly-zero pixels (0.00%, where depth is full of holes), three channels that differ from each other rather than being identical, and no rough-beside-smooth split. ⭐ **So there is no depth in what macOS hands us over plain UVC**, and the hope recorded since [§8](FINDINGS.md) is settled.
+
+⭐ **WHAT THIS BUYS EVEN THOUGH IT IS A NO**, and it is why negative results are worth writing down at all: **nobody needs to spend a day on `librealsense` and `sudo` on macOS** ([§28](FINDINGS.md)) hoping for a free depth stream. The D405 is a colour camera for this stack, and the depth capability needs the SDK or it needs nothing.
+
+⚠️ **The one caveat, stated because the tool states it:** these are statistics, not a format read. A frame with 0.00% zeros and three differing channels is very hard to produce from depth data, but the claim is "behaves exactly like a photograph in four independent ways", not "the buffer is 8-bit BGR".
+
+### 63.05 ⚠️⭐ I HAVE NOW BROKEN A LINK TWICE BY CITING A FILE FROM MEMORY
+
+⚠️ Writing §63.0 I referenced `[CLAUDE.md](../CLAUDE.md)` for the "log negative results with equal weight" rule. **That rule lives in the *Mind Understanding* repo and this repo has no `CLAUDE.md` at all.** Two days earlier I added `[SETUP.md](SETUP.md)` to the roadmap row that complains about broken links ([§59.1](FINDINGS.md)).
+
+⭐ **Both were caught by `check_links.py` and neither by me**, and both have the same cause: **citing a path I remember rather than one I checked.** ⚠️ The remedy is already written down in that same roadmap row — run `check_links.py` before the commit, not after — and it works. **What it does not do is stop the mistake happening**, so a third instance should be read as evidence that a cross-repo reference needs looking up every time.
+
+### 63.1 ⛔⭐⭐⭐ THE JAW LATCH WAS BEING CLEARED BY SENSOR NOISE, AND I HAD WRITTEN A TEST SAYING THAT WAS CORRECT
+
+⛔ His log, one session after the latch was built:
+
+```
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.117
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.098
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.104
+```
+
+⭐ **Three, where the latch should have held after the first.** The clearing rule released on **any** value above the block, and a jaw position read off a motor jitters by thousandths every cycle. The leader in MIRROR is a hand-held arm being squeezed, so its measured jaw never sits still. **One sample a hair above the block disarmed the whole mechanism**, the next cycle pushed again, and the stall recurred — which is exactly what the latch was built to end.
+
+⭐ There is now a **3% margin** (`JAW_CLEAR_MARGIN`). A deliberate open clears it in one press, since the gripper step is 0.02 and the puck-button rate is faster than that. Jitter never will.
+
+⛔⭐⭐ **WORSE THAN THE BUG: I WROTE A TEST ASSERTING THE WRONG BEHAVIOUR AND DEFENDED IT IN ITS OWN DOCSTRING.** `test_the_tiniest_opening_still_counts` said *"deliberately a strict inequality rather than a tolerance"*, reasoning that a tolerance would let a command a hair **below** the block through on every cycle.
+
+> ⛔⭐⭐ **That was the wrong risk to weigh.** A hair below the block is **harmless** — the jaws are still not pushing at the block. A hair **above** it disarms everything. ⚠️ **A test can encode a mistake as confidently as code can, and a docstring arguing for it makes the mistake harder to see rather than easier.**
+
+⚠️⭐ **AND I CANNOT YET PROVE WHICH FAILURE HIS LOG SHOWS.** Three deliberate squeezes onto an object and one latch cleared twice by noise produce **the same three lines**. ⭐ So the session now prints *"arm G jaws opened past the block at 0.117 — free to close again"* whenever a latch lets go. **A latch that silently comes and goes is indistinguishable from one that never worked**, and the next run will not leave that ambiguity.
+
+### 63.2 ⭐⭐ THREE SETTINGS-SCREEN FIXES, ALL FROM WATCHING HIM USE IT ONCE
+
+⭐ The screen worked on the first try. ⚠️ **Everything wrong with it was about what a person naturally presses**, which is the part no test predicts:
+
+| what he did | what happened | now |
+|---|---|---|
+| ⭐ pressed **up and down arrows**, twice | `(key '\x1b[B' does nothing here)` — a raw escape sequence echoed at him | ✅ **arrows move the selection.** Unknown escapes are NAMED, never echoed: *"a UI that prints its own escape codes looks broken even when it is not"* |
+| ⭐ pressed **`n`** inside the screen | told it does nothing | ✅ **`n` closes it**, the way `i` toggles mirror. Pressing the key that opened something is the obvious way to shut it |
+| ⚠️ pressed about **13 keys** | **13 full fifteen-line screens** | ✅ **one line per change** (`▸ max_lag 0.250 → 0.312`), the full block only on `?` and after `0`. The rest of the session already worked this way |
+
+⛔ **The reprint volume was the worst of the three, because it is not cosmetic.** He reads sessions back from the scrollback, which is how five of this week's defects were found. **Thirteen copies of a settings screen buries everything else the session did.**
+
+⭐ **What DID work first time**, from the same log: `reach` raised live from 0.600 to 0.938 and back to 0.750, and the status row then read `reach 0.36/0.75m`, so a live safety-limit change reached the running loop exactly as intended.
+
+### 63.3 ⚠️⭐ TWO PENDING PROMPTS CAN BE OPEN AT ONCE, AND NOTHING SAYS SO
+
+⚠️ His log shows the gripper-button learning (`b`) and the SETTINGS screen (`n`) **both armed at the same time**:
+
+```
+⭐ LEARNING THE GRIPPER BUTTONS for arm B.
+   Press the puck button you want for OPEN …
+  ⭐ SETTINGS — the speed and safety limits, live.       ← n pressed while b was waiting
+     ...
+  ⚠️  that is already the other button — press the OTHER one   ← b consumed a puck press
+```
+
+⭐ **They coexist because they read different devices**: `b` waits on a PUCK button while SETTINGS reads the KEYBOARD, so neither blocks the other. ⚠️ **Nothing on screen said the button-learn was still waiting**, and a puck press he made for one purpose was consumed by the other.
+
+⛔ **Not fixed, and it is [ROADMAP §8.2](ROADMAP.md) item 38.** It is genuinely harmless today — nothing moves and no setting is corrupted — but two invisible modal states is the shape that produces a "why did that do nothing?" session later. ⚠️ **The fix needs a decision about which should win**, and that is Julien's call rather than mine to guess.
