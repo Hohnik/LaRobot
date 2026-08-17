@@ -142,6 +142,15 @@ from teleop import (  # noqa: E402
     workspace_room,
 )
 from fake_arm import StillPuck, build_fake_robot  # noqa: E402
+from settings import (  # noqa: E402
+    defaults_path,
+    describe as describe_defaults,
+    effective as effective_settings,
+    load_defaults,
+    looser_than_builtin,
+    rejected_keys,
+    save_defaults,
+)
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
     SAFE_MAX_LAG,
@@ -634,6 +643,44 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
     return next(o for o in order if o in outcomes)
 
 
+def save_slot_action(key: str, has_take: bool, was_replacing: bool,
+                     replace_slot: str | None, occupied: str | None) -> tuple:
+    """What should pressing `key` at the SAVE prompt do? Pure, so it can be tested.
+
+    Returns one of:
+      `("save", slot)` · `("ask", slot, already_asking)` · `("discard", kept_slot_or_None)`
+
+    ⛔⭐⭐ THIS DECIDES WHETHER MINUTES OF JULIEN'S WORK SURVIVE, and it had no test until
+    2026-08-17. `occupied` is the description of what is already in the slot, or None if the
+    slot is free.
+
+    ⭐ THE RULES, and rule four is the one he asked for:
+
+    | keypress | outcome |
+    |---|---|
+    | a digit on a **free** slot | ✅ saves |
+    | a digit on an **occupied** slot | ⚠️ asks first |
+    | the **same** digit again | ✅ replaces |
+    | ⭐ a **different** digit while asking | **re-aims at that slot** |
+    | anything **not a digit** | ⛔ discards |
+
+    ⛔ Rule four used to be "discard". Julien, 2026-08-17: *"when I pressed save seven, then
+    the guard came up. But then when I pressed a different number, I wanted to save it on,
+    it's still discarded."* That made the guard a dead end whose only exits were overwriting
+    the take he was protecting or losing the new one. **The obvious third thing a person
+    wants, put it somewhere else, was the one thing it would not do.**
+
+    ⚠️ A recording cannot be re-taken identically, so discarding it must be a deliberate act
+    rather than the default outcome of aiming at a busy slot.
+    """
+    if not (key.isdigit() and has_take):
+        return ("discard", replace_slot if was_replacing else None)
+    confirmed = was_replacing and key == replace_slot
+    if occupied is not None and not confirmed:
+        return ("ask", key, bool(was_replacing and key != replace_slot))
+    return ("save", key)
+
+
 def flat_joint_names(arm_names: list[str], per_arm: int, total: int) -> list[str]:
     """`["B base_yaw", …, "G base_yaw", …]` for a flat multi-arm sample.
 
@@ -896,6 +943,40 @@ def main() -> int:  # noqa: PLR0915
                          "Without this, both arms share one map and editing changes both")
     ap.add_argument("--share-map", action="store_true",
                     help="drop this arm's own axis map and go back to the shared one")
+    ap.add_argument("--save-defaults", action="store_true",
+                    help="write this run's settings to config/session_defaults.json so "
+                         "they apply to every later session without the flags. A flag "
+                         "still overrides the file for one run.")
+
+    # ⭐⭐ THE THREE LAYERS, and the ORDER is the design:
+    #
+    #     built-in constant  →  config/session_defaults.json  →  command-line flag
+    #
+    # Julien, 2026-08-17: *"all of these flags should be default options that can be
+    # changed… and then should be saved so that I don't always have to run with all of
+    # the flags."*
+    #
+    # ⛔⭐ The cost of NOT having this was concrete. His working command had grown to six
+    # flags, and the one he left out of it is the one that cost him three sessions: he
+    # raised `--max-lag` three times chasing a mirror that kept stopping on
+    # `--mirror-gap`, which sat at its built-in 0.35 because it was not in the command he
+    # had been pasting. **A long command line is a place for a critical setting to go
+    # missing in silence.**
+    #
+    # ⚠️ `set_defaults` is called AFTER every `add_argument` and BEFORE `parse_args`, so a
+    # flag typed on the command line still wins. That precedence is a safety property: a
+    # deliberate flag must never be quietly overridden by a file.
+    settings_file = defaults_path(REPO)
+    # ⚠️ `ap.get_default()` rather than a second `parse_args([])`: parsing an empty list
+    # would run every validation the parser carries, and a future `required=` argument would
+    # make reading the defaults exit the program.
+    from settings import TUNABLE as _TUNABLE
+    builtin_defaults = {k: ap.get_default(k) for k in _TUNABLE}
+    saved_defaults = load_defaults(settings_file)
+    ignored_defaults = rejected_keys(settings_file)
+    if saved_defaults:
+        ap.set_defaults(**saved_defaults)
+
     args = ap.parse_args()
     if args.fork_map and args.share_map:
         ap.error("--fork-map and --share-map are opposites; pass at most one")
@@ -1144,6 +1225,24 @@ def main() -> int:  # noqa: PLR0915
     print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
           f"the command within {args.max_lag:.2f} rad of the measured pose{lag_note})")
     print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
+    # ⭐⭐ SAY WHICH SETTINGS CAME FROM THE FILE, AND FLAG A PERMANENT LOOSENING. A flag
+    # typed on the command line is visible in the shell history and on screen; a saved
+    # default is not. ⛔ Without these lines a session could run at three times the built-in
+    # speed limit with nothing on screen explaining why.
+    for line in describe_defaults(saved_defaults, ignored_defaults,
+                                  looser_than_builtin(saved_defaults, builtin_defaults),
+                                  settings_file, builtin_defaults):
+        print(line)
+    # ⭐ Saved HERE, after the plan has printed the values, so what lands in the file is
+    # exactly what was just shown. ⚠️ Before anything is energised, so a session that is
+    # about to be abandoned still records the settings that were being aimed for.
+    if args.save_defaults:
+        save_defaults(settings_file, effective_settings(args))
+        print(f"\n⭐ SAVED these settings to "
+              f"{settings_file.parent.name}/{settings_file.name}. Later sessions pick them "
+              f"up with no flags at all.\n"
+              f"   ⚠️ A flag still overrides the file for one run. Delete the file to go "
+              f"back to the built-in constants.")
     print(HELP)
 
     if not args.yes:
@@ -1844,22 +1943,54 @@ def main() -> int:  # noqa: PLR0915
                         # ⭐ Same shape as `l` and `p`: it names what is in the slot and the
                         # SAME digit confirms. Anything else discards, which is the contract
                         # the first prompt already states.
+                        # ⛔⭐⭐ A DIFFERENT DIGIT RE-AIMS AT THAT SLOT. IT DOES NOT
+                        # DISCARD. Julien, 2026-08-17: *"when I pressed save seven, then the
+                        # guard came up. But then when I pressed a different number, I
+                        # wanted to save it on, it's still discarded."*
+                        #
+                        # ⛔ He was exactly right, and the old rule was *"the SAME digit
+                        # confirms, anything else discards"*. That turned the guard into a
+                        # dead end: the only ways out were overwrite the take you were
+                        # trying to protect, or lose the new recording. **The obvious third
+                        # thing a person wants — put it somewhere else — was the one thing
+                        # it would not do.**
+                        #
+                        # ⚠️ A recording is minutes of his time and cannot be re-taken
+                        # identically, so discarding it should take a deliberate act, never
+                        # be the default outcome of aiming at a busy slot.
+                        #
+                        # ⭐ The rule now, and it is simpler than what it replaces:
+                        #   a digit on a FREE slot            → saves
+                        #   a digit on an OCCUPIED slot       → asks
+                        #   the SAME digit again              → replaces
+                        #   a DIFFERENT digit while asking    → re-aims at that slot
+                        #   anything that is not a digit      → discards
                         was_replacing = pending == "take_replace"
                         pending = None
                         take = None          # belt and braces: never resume by accident
-                        if (k.isdigit() and take_to_save is not None and not was_replacing
-                                and describe_slot(takes_dir / f"{k}.json") is not None):
-                            replace_slot = k
+                        occupied = (describe_slot(takes_dir / f"{k}.json")
+                                    if k.isdigit() else None)
+                        action = save_slot_action(k, take_to_save is not None,
+                                                  was_replacing, replace_slot, occupied)
+                        if action[0] == "ask":
+                            replace_slot = action[1]
                             pending = "take_replace"
-                            print(f"\n  ⚠️  recording {k} already holds "
-                                  f"{describe_slot(takes_dir / f'{k}.json')}.")
-                            print(f"     Press {k} again to REPLACE it. Any other key "
-                                  "discards the new recording and keeps the old one.\n")
+                            if action[2]:
+                                print(f"\n  ⭐ aiming at recording {replace_slot} instead.")
+                            print(f"\n  ⚠️  recording {replace_slot} already holds "
+                                  f"{occupied}.")
+                            print(f"     Press {replace_slot} again to REPLACE it, or "
+                                  f"another digit to aim somewhere else.")
+                            print("     Any NON-digit discards the new recording and keeps "
+                                  "what is there.\n")
                             continue
-                        if was_replacing and k != replace_slot:
+                        if action[0] == "discard":
                             take_to_save = None
-                            print(f"\n  kept recording {replace_slot}; the new one is "
-                                  "discarded.\n")
+                            if action[1] is not None:
+                                print(f"\n  kept recording {action[1]}; the new one is "
+                                      "discarded.\n")
+                            else:
+                                print("\n  recording discarded.\n")
                             continue
                         if k.isdigit() and take_to_save is not None:
                             takes_dir.mkdir(parents=True, exist_ok=True)
@@ -3021,8 +3152,41 @@ def main() -> int:  # noqa: PLR0915
                                       f"cycle(s) (its {getattr(one.robot, 'max_lag', 0.25)} rad "
                                       "following-error limit).")
                             if mirror_link.stop_cause == "follow_limit":
-                                print(f"     ⭐ That allowance is `--max-speed`, now "
-                                      f"{args.max_speed} rad/s. Raise it one step.")
+                                # ⛔⭐⭐ NAME BOTH FLAGS, AND NAME THE ONE THAT ACTUALLY
+                                # FIRED FIRST. This branch used to say only *"That
+                                # allowance is `--max-speed`. Raise it one step."*
+                                #
+                                # ⛔ On 2026-08-17 Julien raised `--max-lag` from 0.25 to
+                                # 0.4 to 1.0 across three sessions chasing this message,
+                                # and **none of it could ever have helped**: the stop is
+                                # triggered by the gap passing `--mirror-gap`, which was
+                                # sitting at its 0.35 default because he had not set it.
+                                # His own earlier run with `--mirror-gap 0.6` is the one he
+                                # described as working *"much better"*.
+                                #
+                                # ⚠️ Third time a speed-layer confusion has cost him a
+                                # session ([FINDINGS §58.3](../docs/FINDINGS.md)). The
+                                # message named the limit's VALUE ("limit 0.35") and never
+                                # named the FLAG that sets it, so the number was unusable.
+                                #
+                                # ⭐ Two independent routes out, and both are stated,
+                                # because they do different things: a wider tolerance means
+                                # it does not stop, a faster follower means the gap does not
+                                # grow.
+                                suggest = max(3.0, round(mirror_link.stop_leader_speed
+                                                         * 1.5 + 0.4, 1))
+                                print(f"     ⭐ TWO WAYS OUT, and the first is the limit "
+                                      f"that actually fired:")
+                                print(f"       1. `--mirror-gap {mirror_link.max_gap * 2:.2f}`"
+                                      f"  (now {mirror_link.max_gap:.2f}) — how far behind "
+                                      f"is TOLERATED before stopping.")
+                                print(f"       2. `--max-speed {suggest:g}`"
+                                      f"  (now {args.max_speed:g}) — how fast the follower "
+                                      f"may move. You moved the leader at "
+                                      f"{mirror_link.stop_leader_speed:.2f} rad/s.")
+                                print(f"     ⚠️ `--max-lag` does NOT affect this stop. Your "
+                                      f"hand-guided recordings have reached 2.4-3.7 rad/s, "
+                                      f"and the motors are far from their limit.")
                             elif mirror_link.stop_cause == "tracking":
                                 print("     ⭐ More `--max-speed` will NOT help: the arm, not "
                                       "the software, is the limit.")

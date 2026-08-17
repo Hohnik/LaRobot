@@ -202,4 +202,12 @@ cython_debug/
 # Hand-taught movements (scripts/teleop_session.py, key w). Data, not calibration:
 # a five-minute recording is megabytes and losing one costs a minute of re-teaching.
 # config/*.json stays tracked because it is measured calibration; these do not.
+#
+# ⛔⭐⭐ config/session_defaults.json is NOT tracked, and that is a safety decision rather
+# than a tidiness one. It holds max_speed, max_lag, reach and floor — the limits that bound
+# how fast and how far 4.3 kg may move. Tracking it would mean a `git pull` could change
+# those limits on a machine with arms attached, without anyone typing a flag or reading a
+# diff. ⚠️ The cost is that his preferred speeds do not travel to another clone, which is
+# the right way round: the settings are cheap to re-save and a surprise speed limit is not.
+config/session_defaults.json
 recordings/
