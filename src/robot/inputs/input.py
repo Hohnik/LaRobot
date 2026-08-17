@@ -1,0 +1,2 @@
+class Input:
+    raise NotImplementedError
