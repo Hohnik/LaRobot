@@ -4398,3 +4398,80 @@ requested                actual       codec   measured fps
 ⭐ **What worked first time in his log and is worth recording as confirmed:** `reach` raised live from 0.600 to 0.938 and back to 0.750, with the status row then reading `reach 0.36/0.75m`. **A live safety-limit change reached the running loop exactly as intended.** And the new linear-speed ceiling held at `linear speed 2.000 m/s (ceiling)` instead of the 19.852 m/s it reached before ([§62.2](FINDINGS.md)).
 
 ⚠️⭐ **He also ended that session with `max_speed 20`, `teleop_speed 20` and `max_lag 3.0`, all at their ceilings.** So the "deliberately generous" backstops were all reached inside one session of pressing `+`. ⛔ **They are doing their job as a backstop against a held key and they are NOT out of reach**, which is worth knowing before treating any of them as a safety margin.
+
+
+## 65 ⭐⭐⭐ 2026-08-17, LATE NIGHT — THE FOUR SPEED LIMITS EXPLAINED, AND TWO OF MY OWN CHANGES WERE WRONG
+
+### 65.0 ⭐⭐⭐ THE CANONICAL ANSWER: FOUR LIMITS IN SERIES, AND THE SMALLEST ONE BINDS
+
+⭐ **Julien asked what `max_lag` actually does**, and this table is the answer to that and to every future version of the same question. **They are four different quantities in three different units**, which is why "raise the speed" has repeatedly failed to do anything.
+
+| flag | units | what it bounds | where it acts |
+|---|---|---|---|
+| `--linear-scale` | **m/s** | how fast a full puck push asks the **TIP** to move | before the IK |
+| `--teleop-speed` | **rad/s** | how far the IK's answer may move any **ONE JOINT** per cycle | after the IK |
+| `--max-speed` | **rad/s** | the same per-joint cap again, **below all control logic** | inside `SafeRobot` |
+| `--max-lag` | **rad** | ⭐ how far the **COMMAND** may run ahead of where the arm actually **IS** | inside `SafeRobot` |
+
+⭐⭐ **`max_lag` IS NOT A SPEED, AND THAT IS THE WHOLE CONFUSION.** Every cycle, `SafeRobot` pulls the command back to `measured ± max_lag`. So:
+
+> ⭐ **Reaching a far target becomes a RATCHET.** Ask for 1.01 rad while the arm sits at 0.12 with `max_lag` 0.25, and the command sent is **0.37**. The arm moves toward it, reaches say 0.20, and the command becomes 0.45. It walks forward at whatever speed the arm can actually manage.
+>
+> ⛔ **A BLOCKED joint therefore never arrives, and that is the point.** The command can never be more than 0.25 rad past a joint that will not move, which bounds how hard the motor pushes. It is a torque limit expressed as a distance.
+
+⚠️ **Which is why raising `max_lag` did nothing for his mirror stops** ([§62.0](FINDINGS.md)): those stops are triggered by `--mirror-gap`, a different limit in a different file.
+
+### 65.1 ⛔⭐⭐⭐ MY 2.0 m/s LINEAR CEILING WAS A REGRESSION, AND HE CAUGHT IT
+
+⭐ **Julien, 2026-08-17:** *"the linear limit is at two, the ceiling, and then the max speed was set way higher, but that didn't make any difference to the teleop speed. I was limited by the two before. And before, I was able to go much faster."*
+
+⛔ **He is exactly right and the arithmetic is simple.** At 2.0 m/s of tip demand with a 0.4 m lever, the joints only need about **5 rad/s**. So `--teleop-speed 15` and `--max-speed 20` were never reached and raising them could not do anything. **The cartesian limit was the binding one, and I had capped it at a sixth of what he had been using** — he reached 19.852 m/s before my cap existed ([§62.2](FINDINGS.md)).
+
+⚠️⭐ **THE LESSON ABOUT MY OWN REASONING.** I justified 2.0 as *"~17x the default and far past anything useful for hand-scale work, so it can never get in his way"*. ⛔ **I compared it to the DEFAULT instead of to what he had actually been running**, which was in the very log I was reading. **A backstop sized against the default value rather than against observed use is a limit dressed as a backstop.**
+
+✅ Raised to **15.0 m/s**, chosen so it can never bind: `teleop_speed`'s own ceiling is 20 rad/s, which at a 0.6 m lever is about **12 m/s** of tip speed. So it stops a held key running away and stops being a speed limit.
+
+⭐ **And `linear_scale` is setting 8 on the `n` screen now**, because he asked why it was not there: *"if it's limited in the linear normal mode, then why would it not allow me to change it in the control panel area?"* **It is one of the four limits in series, and leaving it off that screen made it the invisible one.** Both the screen and the main-loop `-`/`+` keys now go through one function, so the two paths cannot step differently.
+
+### 65.2 ⛔⭐⭐⭐ THE PER-JOINT GAP SCALING GAVE A **STALLED** JOINT 2.48× LONGER TO BE PUSHED
+
+⛔ **A safety consequence of yesterday's change that I did not think through.** His log:
+
+```
+⛔ MIRROR STOPPED — the follower fell 0.869 rad behind on joint 4
+   (its limit is 0.87 = 0.35 × 2.48), forearm_pitch
+     the follower barely moved that joint (0.01 rad/s), so it is blocked…
+     ⚠️ SafeRobot held the command back on 1115 cycle(s)
+```
+
+⭐ **1115 clipped cycles is about twelve seconds** of a motor pushing at its full `max_lag` allowance against a joint moving **0.01 rad/s**. The session's hottest readings were **45 and 46 °C**, the highest this project has recorded.
+
+⛔⭐⭐ **THE SCALING IS RIGHT FOR LAGGING AND WRONG FOR STALLED, AND THOSE ARE OPPOSITE CASES.** Multiplying joint 4's tolerance by 2.48 is correct when it is merely behind. It also gave a joint that was **not moving at all** 2.48× longer before anything stopped it. ⭐ **The code already told the two apart** by the follower's measured speed, which is what made the fix small: **lagging keeps the generous scaled limit, stalled stops on the tight unscaled one.**
+
+⚠️ **Tolerating lag was never meant to mean tolerating a stall**, and the message now says which limit fired, because *"0.42 behind, limit 0.87"* reads as a bug.
+
+⚠️⭐ **A SIDE EFFECT: `--mirror-catchup` NEVER GOT A FAIR TEST.** That session had a genuinely stuck joint 4 the whole time, so the correction had no chance to show itself. ⬜ **It is still unproven** ([ROADMAP §8.2](ROADMAP.md) item 39).
+
+### 65.3 ⛔⭐⭐ THE REPEATED GRIPPER MESSAGE WAS THE **DETECTOR**, AND THE LATCH WAS WORKING ALL ALONG
+
+⭐ His log settles it, and the direction of the numbers is the proof:
+
+```
+ARM B GRIPPER STALLED — released to 0.304, 0.311, 0.314, 0.315, 0.315, 0.315, 0.315, 0.316
+  ⭐ arm B jaws opened past the block at 0.316 — free to close again.
+```
+
+⭐⭐ **Eight messages, every value creeping OPEN by a thousandth.** Arm G did the same four times. **The latch was doing its job throughout.**
+
+⛔ **The detector fires on high torque with no movement, and holding the jaws at the block is exactly that.** A position controller sitting at its target against an object still produces torque and still is not moving. So the condition stayed true for as long as the grip was held, and every cycle re-reported a stall that had already been handled.
+
+⛔⭐ **AND RE-LATCHING WAS INDEPENDENTLY WRONG.** Each detection moved the block to the new measured position, so **a jaw slowly relaxing dragged the block open with it** and the protection loosened by itself. That is the mechanism behind the creeping numbers.
+
+✅ **While a block is latched, the detector now says nothing and does nothing.** The latch is the response; re-detecting it is noise that also weakens it.
+
+⭐ **Three passes were needed to get this right, and each found a different layer:** the release was undone every cycle ([§62.3](FINDINGS.md)), then the latch was cleared by sensor noise ([§63.1](FINDINGS.md)), and now the detector was re-firing against a working latch. ⚠️ **All three looked identical from the log** — a repeating stall message — which is why each one needed his numbers rather than reasoning.
+
+### 65.4 ⚠️ TWO SMALLER THINGS HIS LOG SHOWS
+
+1. ⚠️ **He pressed `-`/`+` on `mirror_catchup` about 33 times, hunting.** 3 → 5 → 8 → 12 → 8 → 5 → 3 → 2 → 1 → 0 → 1 → … up to the ceiling and back down twice. ⛔ **The `n` screen covers the status row, so the one thing that would tell him whether it was working was hidden while he tuned it.** ⬜ Not fixed; it is [ROADMAP §8.2](ROADMAP.md) item 43.
+2. ⚠️ **`i` inside the SETTINGS screen says it does nothing.** He pressed it wanting to re-engage the mirror. ⭐ Reasonable as written, and worth reconsidering alongside item 43.

@@ -211,6 +211,19 @@ uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --te
 
 ⚠️ **The plan names any saved value that is LOOSER than the built-in limit**, because a flag is visible in your shell history and a saved default is not. Delete `config/session_defaults.json` to go back to the built-in values, or edit it by hand. ⛔ It is gitignored, so it does not travel to another clone: a `git pull` must never change how fast the arm may move. [FINDINGS §61.1](FINDINGS.md).
 
+### ⭐⭐⭐ THE FOUR SPEED LIMITS, and the smallest one always wins
+
+| flag | units | what it bounds |
+|---|---|---|
+| `--linear-scale` | **m/s** | how fast a full puck push asks the **TIP** to move |
+| `--teleop-speed` | **rad/s** | how far the IK answer may move **one joint** per cycle |
+| `--max-speed` | **rad/s** | the same cap again, **below all control logic** |
+| `--max-lag` | **rad** | ⭐ how far the **command** may run ahead of where the arm **IS** |
+
+⛔⭐⭐ **`--max-lag` IS NOT A SPEED.** Every cycle the command is pulled back to `measured ± max-lag`. So reaching a far target is a **ratchet**: ask for 1.01 rad while the arm sits at 0.12 with a 0.25 lag, and the command sent is 0.37. The arm moves, the command advances, repeat. ⭐ **A blocked joint therefore never arrives, and that is the point** — it bounds how hard the motor pushes, expressed as a distance rather than a force.
+
+⚠️⭐ **IF RAISING A SPEED CHANGES NOTHING, YOU ARE RAISING THE WRONG ONE.** At 2.0 m/s of tip demand with a 0.4 m lever the joints only need ~5 rad/s, so a `--teleop-speed` of 15 is never reached. ⭐ **Check `linear` first** — the session's plan now prints all four with what each one does. [FINDINGS §65.0](FINDINGS.md).
+
 ### ⭐⭐ `n` — the SETTINGS screen, live
 
 Press `n` in any session. It lists the six limits with their current values:
