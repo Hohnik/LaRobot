@@ -149,6 +149,7 @@ Two terminals. Neither the camera process nor the frame setting can move a motor
 
 ```bash
 uv run scripts/camera_view.py --list                  # names, indices, and the checks
+uv run scripts/probe_camera_pixels.py --index 0       # ⭐ depth or photograph? from the PIXELS
 uv run scripts/camera_view.py --camera c920 --term    # ⭐ by NAME, drawn in this terminal
 uv run scripts/camera_view.py --camera c920 --big     # by name, in a window
 ```
