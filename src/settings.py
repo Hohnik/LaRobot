@@ -271,3 +271,25 @@ def live_lines(values: dict[str, Any], selected: str | None,
         "",
     ]
     return out
+
+
+def one_line(name: str, value: float, before: float | None = None,
+             builtin: dict[str, Any] | None = None) -> str:
+    """One line for a single setting, for use after the screen has already been shown.
+
+    ⛔⭐⭐ WHY THIS EXISTS. The first version reprinted the whole fifteen-line screen after
+    **every** keypress. Julien's first use of it produced **thirteen copies** in one session,
+    which buries everything else that happened and makes the scrollback useless for the very
+    thing he uses it for: reading back what a session did.
+
+    ⭐ The rest of the session already works this way — a transient one-liner for a change, the
+    full block only when asked. This makes the settings screen match.
+    """
+    edge = at_bound(name, value)
+    base = ""
+    if builtin is not None and name in builtin and value != builtin[name]:
+        base = f"  (built-in {builtin[name]:g})"
+    if before is None or before == value:
+        return f"   ▸ {name} {value:.3f}{base}{'  ⚠️ ' + edge if edge else ''}"
+    return (f"   ▸ {name} {before:.3f} → {value:.3f}{base}"
+            f"{'  ⚠️ at the ' + edge if edge else ''}")

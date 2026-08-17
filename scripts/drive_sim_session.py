@@ -44,6 +44,8 @@ SCRIPT = [
     (1.0, "1"),         # pick max_speed
     (0.8, "+"),         # raise it
     (0.8, "+"),
+    (0.8, "\x1b[B"),    # down arrow — the key a person reaches for at a list
+    (0.8, "\x1b[A"),    # and back up
     (0.8, "3"),         # pick max_lag
     (0.8, "+"),         # raise it
     (0.8, "0"),         # back to how the session started
@@ -128,7 +130,10 @@ def main() -> int:
     checks = [
         ("simulated pucks announced", r"SIMULATED PUCKS"),
         ("the SETTINGS screen opens", r"SETTINGS — the speed and safety limits"),
-        ("a setting can be raised live", r"max_speed\s+1\.5"),
+        ("a setting can be raised live", r"max_speed 1\.000 → 1\.250"),
+        ("a change shows as ONE line, not the whole screen",
+         r"▸ max_speed 1\.250 → 1\.562"),
+        ("up/down arrows move the selection", r"▸ max_lag 0\.250"),
         ("0 reverts to the session start", r"back to the values this session started"),
         ("leaving says nothing was written", r"nothing was written to the file"),
         ("both arms built as SIMULATED", r"SIMULATED arm B"),

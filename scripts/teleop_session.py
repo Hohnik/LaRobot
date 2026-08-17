@@ -146,6 +146,7 @@ from settings import (  # noqa: E402
     LIVE_ORDER,
     adjust as adjust_setting,
     live_lines,
+    one_line as setting_line,
     defaults_path,
     describe as describe_defaults,
     effective as effective_settings,
@@ -1862,6 +1863,16 @@ def main() -> int:  # noqa: PLR0915
                         # the shared try — which worked, but meant the "no gripper" path and
                         # the "read failed" path were the same code path. Now it is just an
                         # if, because there is nothing left to jump out of.
+                        # ⭐⭐ SAY IT ONCE WHEN THE LATCH LETS GO. His 2026-08-17 log showed
+                        # three stalls at 0.117, 0.098 and 0.104 and there was **no way to
+                        # tell** whether those were three deliberate squeezes or one latch
+                        # being cleared twice by a jittering measurement. A latch that
+                        # silently comes and goes is indistinguishable from one that never
+                        # worked, so the next run must not leave the same ambiguity.
+                        if one.jaw_unblocked_from is not None:
+                            print(f"\n  ⭐ arm {one.name} jaws opened past the block at "
+                                  f"{one.jaw_unblocked_from:.3f} — free to close again.\n")
+                            one.jaw_unblocked_from = None
                         jaw = one.states[N_ARM] if len(one.states) > N_ARM else None
                         if jaw is None:
                             one.stall_since = None
@@ -2082,14 +2093,49 @@ def main() -> int:  # noqa: PLR0915
                             if name == "mirror_gap" and mirror_link is not None:
                                 mirror_link.max_gap = value
 
-                        if k in "123456":
+                        # ⭐⭐ ARROW KEYS MOVE THE SELECTION, because that is what a person
+                        # presses at a list. Julien's first ever use of this screen produced
+                        # `(key '\x1b[B' does nothing here)` twice: he reached for up and
+                        # down, got a raw escape sequence echoed back, and a UI that prints
+                        # its own escape codes at you looks broken even when it is not.
+                        # ⭐⭐ A ONE-LINER FOR A CHANGE, THE FULL SCREEN ONLY WHEN ASKED.
+                        # Reprinting all fifteen lines after every keypress gave him THIRTEEN
+                        # copies in one session, which buries everything else the session did
+                        # and makes the scrollback useless for reading back what happened.
+                        # The rest of this file already works this way.
+                        show_all = k == "?"
+                        if k in ("\x1b[A", "\x1b[B"):
+                            step = -1 if k == "\x1b[A" else 1
+                            here = LIVE_ORDER.index(settings_pick)
+                            settings_pick = LIVE_ORDER[(here + step) % len(LIVE_ORDER)]
+                            print(setting_line(settings_pick,
+                                               float(getattr(args, settings_pick)),
+                                               builtin=builtin_defaults))
+                            continue
+                        elif k == "n":
+                            # ⭐ `n` CLOSES it, the way `i` toggles mirror. He pressed n inside
+                            # the screen and was told it does nothing; toggling is the obvious
+                            # meaning of pressing the key that opened something.
+                            pending = None
+                            print("\n  ⭐ SETTINGS closed. The values are live; press n then s "
+                                  "to write them to the file.\n")
+                            continue
+                        elif k in "123456":
                             idx = int(k) - 1
                             if idx < len(LIVE_ORDER):
                                 settings_pick = LIVE_ORDER[idx]
+                            print(setting_line(settings_pick,
+                                               float(getattr(args, settings_pick)),
+                                               builtin=builtin_defaults))
+                            continue
                         elif k in "+=" or k == "-":
-                            was = getattr(args, settings_pick)
+                            was = float(getattr(args, settings_pick))
                             apply_live(settings_pick,
-                                       adjust_setting(settings_pick, float(was), k != "-"))
+                                       adjust_setting(settings_pick, was, k != "-"))
+                            print(setting_line(settings_pick,
+                                               float(getattr(args, settings_pick)),
+                                               before=was, builtin=builtin_defaults))
+                            continue
                         elif k == "0":
                             for name, value in settings_at_start.items():
                                 apply_live(name, value)
@@ -2112,12 +2158,17 @@ def main() -> int:  # noqa: PLR0915
                                   "permanent. Press the mode key again to change mode.\n")
                             continue
                         elif k != "?":
-                            print(f"\n  (key {k!r} does nothing here — 1-6, -/+, 0, s, "
-                                  f"t/g/h)\n")
-                        for line in live_lines(
-                                {kk: getattr(args, kk) for kk in LIVE_ORDER},
-                                settings_pick, builtin_defaults):
-                            print(line)
+                            # ⚠️ Escape sequences are NAMED rather than echoed. `\x1b[C` on
+                            # screen is noise; "left/right arrow" is information.
+                            shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
+                                k, repr(k) if k.isprintable() else "that key")
+                            print(f"\n  ({shown} does nothing here — 1-6 or up/down to pick, "
+                                  f"-/+ to change, 0 revert, s save, n or t/g/h to leave)\n")
+                        if show_all or k == "0":
+                            for line in live_lines(
+                                    {kk: getattr(args, kk) for kk in LIVE_ORDER},
+                                    settings_pick, builtin_defaults):
+                                print(line)
                         continue
 
                     if pending == "take_play":

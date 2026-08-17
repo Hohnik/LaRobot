@@ -36,7 +36,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import ArmSession  # noqa: E402
+from arm_session import JAW_CLEAR_MARGIN, ArmSession  # noqa: E402
 
 
 class FakeRobot:
@@ -134,17 +134,64 @@ def test_a_second_stall_can_latch_again_at_a_new_place() -> None:
     assert one.hold_jaw(0.1) == 0.44
 
 
-def test_the_tiniest_opening_still_counts() -> None:
-    """⚠️ Deliberately a strict inequality rather than a tolerance. A tolerance here would
-    let a command a hair below the block through on every cycle, which is the nibbling this
-    latch exists to stop."""
+def test_the_tiniest_opening_does_NOT_clear_the_latch() -> None:
+    """⛔⭐⭐ THIS TEST USED TO ASSERT THE OPPOSITE, AND ARGUED FOR IT. It said *"deliberately
+    a strict inequality rather than a tolerance"*, reasoning that a tolerance would let a
+    command a hair below the block through.
+
+    ⚠️ **That was the wrong risk to weigh.** A hair BELOW the block is harmless: the jaws are
+    still not pushing. A hair ABOVE it disarms the whole mechanism, and a jaw position read
+    off a motor jitters by thousandths every cycle — the leader in MIRROR is a hand-held arm
+    being squeezed, so its measured jaw never sits still.
+
+    ⛔ His 2026-08-17 log is what exposed it: three stalls at 0.117, 0.098 and 0.104, where
+    the latch should have held after the first. ⭐ **A test can encode a mistake as
+    confidently as code can, and a docstring defending it makes the mistake harder to see.**
+    """
     one = arm()
     one.block_jaw_at(0.152)
-    assert one.hold_jaw(0.1520001) == 0.1520001
+    assert one.hold_jaw(0.1520001) == 0.152, "sensor noise cleared the latch"
+    assert one.jaw_block == 0.152
+    assert one.hold_jaw(0.152 + JAW_CLEAR_MARGIN * 0.9) == 0.152, "still inside the margin"
+    assert one.jaw_block == 0.152
+
+
+def test_JITTER_AROUND_the_block_never_clears_it() -> None:
+    """⛔⭐⭐ HIS SCENARIO, AS NOISE RATHER THAN AS INTENT. A measured jaw wandering a few
+    thousandths either side of the block must leave the latch alone for as long as it takes.
+    Nine hundred cycles is ten seconds at his loop rate."""
+    one = arm()
+    one.block_jaw_at(0.117)
+    rng = np.random.default_rng(17)
+    for _ in range(900):
+        jitter = float(rng.normal(0.0, 0.004))       # a few thousandths, both directions
+        one.hold_jaw(0.117 + jitter)
+    assert one.jaw_block == 0.117, (
+        "the latch was cleared by noise, which is what made the stall recur on hardware")
+
+
+def test_a_DELIBERATE_open_still_clears_it_in_one_press() -> None:
+    """⭐ The margin must not make the latch sticky. One gripper-step press is 0.02 and the
+    puck-button rate moves faster, so a real open has to clear it immediately."""
+    one = arm()
+    one.block_jaw_at(0.152)
+    assert one.hold_jaw(0.152 + JAW_CLEAR_MARGIN + 0.01) > 0.152
     assert one.jaw_block is None
 
 
+def test_clearing_RECORDS_where_it_cleared_from() -> None:
+    """⭐ So the session can say it once. A latch that silently comes and goes is
+    indistinguishable from a latch that never worked, and that ambiguity is exactly what his
+    log left behind."""
+    one = arm()
+    one.block_jaw_at(0.152)
+    assert one.jaw_unblocked_from is None
+    one.hold_jaw(0.6)
+    assert one.jaw_unblocked_from == 0.152
+
+
 def test_a_hair_MORE_closed_does_NOT_count_as_opening() -> None:
+    """⚠️ Held at the block, which is harmless: the jaws are not pushing at the block."""
     one = arm()
     one.block_jaw_at(0.152)
     assert one.hold_jaw(0.1519999) == 0.152

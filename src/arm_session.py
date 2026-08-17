@@ -97,6 +97,14 @@ must not do. Migration map: ROADMAP §6.1.
 
 from __future__ import annotations
 
+#: ⛔⭐⭐ HOW FAR THE JAWS MUST OPEN BEFORE A LATCHED BLOCK IS RELEASED, in normalised jaw
+#: units where 0 is closed and 1 is fully open. **3% of full travel.**
+#:
+#: ⚠️ Chosen to sit far above sensor jitter and far below any deliberate movement. His
+#: gripper-step default is 0.02 per keypress and the puck-button rate moves faster than that,
+#: so one intentional open press already clears it while a wandering measurement never will.
+JAW_CLEAR_MARGIN = 0.03
+
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -492,6 +500,12 @@ class ArmSession:
         #: every 0.4 s indefinitely"* — so the diagnosis was written down and the fix was
         #: never built. It is docs/ROADMAP.md §8.2 item 29.
         self.jaw_block: float | None = None
+        #: ⭐ Set to the block value when the latch CLEARS, so the loop can say so once. A
+        #: latch that silently comes and goes is impossible to tell apart from a latch that
+        #: never worked, which is precisely the ambiguity his 2026-08-17 log left behind:
+        #: three stalls at 0.117, 0.098 and 0.104, and no way to know whether they were three
+        #: deliberate squeezes or one latch being cleared twice by noise.
+        self.jaw_unblocked_from: float | None = None
 
     # ------------------------------------------------------------- jaws ----
 
@@ -504,7 +518,7 @@ class ArmSession:
         |---|---|
         | nothing latched | ✅ obeyed |
         | **further CLOSED** than the block | ⛔ held at the block, so it stops pushing |
-        | **more OPEN** than the block | ✅ obeyed, **and the latch clears** |
+        | **more OPEN** than the block by more than `JAW_CLEAR_MARGIN` | ✅ obeyed, **and the latch clears** |
 
         ⭐ Bigger is more open: `o` adds to `gripper_value` and `c` subtracts, and the jaws
         normalise to 0 closed and 1 open. So "further closed" is a smaller number.
@@ -518,10 +532,26 @@ class ArmSession:
         ⛔ It does NOT stop the jaws holding what they have. The block value IS the measured
         position where they stalled, so commanding it keeps the grip and stops the pushing.
         Releasing entirely would drop whatever is being held.
+
+        ⛔⭐⭐ THE MARGIN EXISTS BECAUSE THE FIRST VERSION CLEARED ON ANY VALUE ABOVE THE
+        BLOCK, AND THAT IS TOO EAGER. A jaw position read off a motor jitters, and the leader
+        in MIRROR is a hand-held arm whose jaws are being squeezed, so its measured jaw wanders
+        by a few thousandths every cycle. **One sample a hair above the block would unlatch
+        it**, the next cycle would push again, and the stall would recur — which is the exact
+        failure the latch was built to end.
+
+        ⚠️⚠️ I ALSO WROTE A TEST ASSERTING THE WRONG BEHAVIOUR AND ARGUED FOR IT. The old
+        `test_the_tiniest_opening_still_counts` said *"deliberately a strict inequality rather
+        than a tolerance"*, reasoning that a tolerance would let commands a hair below the
+        block through. **That was the wrong risk to weigh.** A hair below the block is
+        harmless — it is still not pushing. A hair above it disarms the whole mechanism. ⭐ A
+        test can encode a mistake as confidently as code can, and a docstring defending it
+        makes the mistake harder to see rather than easier.
         """
         if self.jaw_block is None:
             return wanted
-        if wanted > self.jaw_block:
+        if wanted > self.jaw_block + JAW_CLEAR_MARGIN:
+            self.jaw_unblocked_from = self.jaw_block
             self.jaw_block = None
             return wanted
         return self.jaw_block
