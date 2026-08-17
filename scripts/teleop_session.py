@@ -630,6 +630,56 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
     return next(o for o in order if o in outcomes)
 
 
+def flat_joint_names(arm_names: list[str], per_arm: int, total: int) -> list[str]:
+    """`["B base_yaw", …, "G base_yaw", …]` for a flat multi-arm sample.
+
+    ⛔⭐⭐ WHY THIS IS A FUNCTION RATHER THAN AN EXPRESSION IN TWO PLACES. It WAS an
+    expression in two places, and the two drifted. The saved tracking JSON labelled every
+    row with its arm; the printed table used `YAM_JOINTS.get(i + 1)` on the **flat** index,
+    so with two arms it named arm B's joints correctly and called every one of arm G's
+    "joint" — flat indices 7-13 become keys 8-14, and `YAM_JOINTS` only holds 1-7.
+
+    ⛔ Julien's 2026-08-17 playback log is the evidence: six named rows, six anonymous
+    ones, and nothing saying which arm any row belonged to, so the six named ones read as
+    "the arm" when they were only arm B. ⚠️ Same family as the `label_verdict` defect —
+    code written for one arm producing confident, plausible, wrong output with two, raising
+    nothing.
+
+    `total` clips the list to however many joints were actually tracked.
+    """
+    return [f"{arm} {YAM_JOINTS.get(j + 1, ('joint',))[0]}"
+            for arm in arm_names
+            for j in range(per_arm)][:total]
+
+
+def tracking_table(rows: list, names: list[str], hold_rad: float,
+                   quiet: float = 0.01) -> list[str]:
+    """The per-joint tracking table as lines. Pure, so it can be tested.
+
+    `rows` is `TrackingLog.rows()`: `(index, worst lag, speed then, top speed, lag then)`.
+
+    ⚠️⭐ A JOINT THAT BARELY MOVED IS NAMED, NOT SILENTLY DROPPED. Leaving it out of the
+    table is right, because a joint that never moved says nothing about tracking. But a
+    table that quietly omits rows reads as complete: his 2026-08-17 log printed **12 rows
+    for a 14-joint recording** and nothing said so. The two missing ones were the grippers,
+    which he had not touched, and a reader counting rows would reasonably conclude the
+    recorder had lost two joints.
+    """
+    out, unmoved = [], []
+    for i, worst, at_speed, top, lag_top in rows:
+        label = names[i] if i < len(names) else f"joint {i}"
+        if top < quiet:
+            unmoved.append(label)
+            continue
+        out.append(f"       {label:<18} worst lag {worst:.3f} rad at "
+                   f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
+                   f"with {lag_top:.3f} rad of lag")
+    if unmoved:
+        out.append(f"       ⚠️ {len(unmoved)} of {len(rows)} joints moved slower than "
+                   f"{quiet} rad/s and have no row: {', '.join(unmoved)}")
+    return out
+
+
 def status_row(one: ArmSession, lead: str, reach: float, floor: float,
                note: str = "") -> str:
     """ONE arm's heartbeat row: its mode, its temperatures, its pose, its warnings.
@@ -3136,15 +3186,33 @@ def main() -> int:  # noqa: PLR0915
                             # sweep, and load changes with the arm's pose. It is the cheap
                             # first answer; ROADMAP §7.5 has the active sweep if this is
                             # ambiguous.
+                            # ⭐⭐ ONE list of names for BOTH the printed table and the
+                            # saved file, and they DISAGREED until 2026-08-17. The saved
+                            # JSON below already labelled every row with its arm, and its
+                            # comment says exactly why that is necessary — while this
+                            # print used `YAM_JOINTS.get(i + 1)` on a **flat** index. With
+                            # two arms that names arm B's seven joints correctly and then
+                            # labels every one of arm G's simply "joint", because the flat
+                            # indices 7-13 become keys 8-14 and `YAM_JOINTS` only holds
+                            # 1-7.
+                            #
+                            # ⛔ Julien's 2026-08-17 playback log is the evidence: six
+                            # named rows, six anonymous ones, and **nothing saying which
+                            # arm any row belonged to**. The six named rows read as "the
+                            # arm" when they were only arm B.
+                            #
+                            # ⚠️ Same family as the `label_verdict` defect: code written
+                            # for one arm that produces confident, plausible, wrong output
+                            # with two, and raises nothing. Building the list once is the
+                            # actual fix, because two copies is what let them drift.
+                            names = flat_joint_names(
+                                [a.name for a in replay_arms],
+                                replay_layout.per_arm, tracking.n_joints)
                             print("     how well each joint kept up "
                                   f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
-                            for i, worst, at_speed, top, lag_top in tracking.rows():
-                                if top < 0.01:
-                                    continue
-                                name = YAM_JOINTS.get(i + 1, ("joint",))[0]
-                                print(f"       {name:<14} worst lag {worst:.3f} rad at "
-                                      f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
-                                      f"with {lag_top:.3f} rad of lag")
+                            for line in tracking_table(tracking.rows(), names,
+                                                       MAX_CURSOR_LAG):
+                                print(line)
                             # ⭐⭐ AND KEEP IT. This table is the only measurement anyone has
                             # of what the arm can physically follow, and on 2026-08-13 the
                             # only copy of it was a paste into a chat window. Saved per
@@ -3153,15 +3221,13 @@ def main() -> int:  # noqa: PLR0915
                             # at this point and a missing diagnostic file is not worth a
                             # traceback. FINDINGS §34.4.
                             try:
-                                # ⭐ Names per ARM, because with two arms the table is 14 rows
-                                # and `YAM_JOINTS` only names seven. A table with "base_yaw"
-                                # twice and no way to tell which arm is a measurement nobody
-                                # can act on.
-                                names = [
-                                    f"{a.name} {YAM_JOINTS.get(j + 1, ('joint',))[0]}"
-                                    for a in replay_arms
-                                    for j in range(replay_layout.per_arm)
-                                ][:tracking.n_joints]
+                                # ⭐ `names` is built ONCE above and shared with the printed
+                                # table. It used to be computed here as well, and the two
+                                # copies drifted: this one labelled every row with its arm
+                                # and the printed one did not. Names per ARM matter because
+                                # with two arms the table is 14 rows while `YAM_JOINTS` only
+                                # names seven, and "base_yaw" appearing twice with no way to
+                                # tell which arm is a measurement nobody can act on.
                                 rec = tracking.to_dict(names)
                                 rec["meta"] = {
                                     "arms": [a.name for a in replay_arms],
