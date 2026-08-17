@@ -220,6 +220,30 @@ BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
 # ⛔ These are non-ASCII, so they only arrive at all because `KeyReader` now decodes
 # UTF-8 across reads — `ö` is two bytes and the old one-byte reader turned it into two
 # replacement characters. See `src/keyboard.py::_refill`.
+#: ⛔⭐⭐ A CEILING ON THE LIVE SPEED KEY, BECAUSE THERE WAS NONE. `+` did
+#: `linear_scale *= 1.25` with nothing above it, at two separate call sites. On 2026-08-17
+#: Julien's CONTROLS readout showed **`lin 19.852 m/s`**, which is 165x the 0.12 m/s default
+#: and about 23 presses of a key that repeats when held.
+#:
+#: ⚠️ Every other live adjustment in this file already had a bound — park speed clamps to
+#: `min(teleop_speed, …)` and `max(0.05, …)`, and the gripper step has a 0.200 ceiling. The
+#: two linear-speed sites were the exception, and the decrease direction had no floor either.
+#:
+#: ⭐ Set DELIBERATELY GENEROUS at 2.0 m/s, which is ~17x the default and far past anything
+#: useful for hand-scale work, so it can never get in his way. **It is a backstop against a
+#: held key, not a new restriction.** ⛔ A commanded speed this high does not move the arm
+#: that fast — `SafeRobot` and the reach limit still bind — but it makes the IK target jump
+#: the whole workspace in one cycle, so the arm slams to the boundary at whatever
+#: `--max-speed` allows.
+MAX_LINEAR_SCALE = 2.0
+MIN_LINEAR_SCALE = 0.005
+
+#: ⭐ The same backstop for rotation. Default is 0.6 rad/s, so 12 rad/s is 20x it and about
+#: 690°/s — well past useful and nowhere near reachable, which is what a backstop should be.
+#: ⚠️ His 2026-08-17 readout showed `rot 954°/s`, so this direction was being pushed too.
+MAX_ANGULAR_SCALE = 12.0
+MIN_ANGULAR_SCALE = 0.02
+
 KEY_STEP_DOWN = ("[", "ö")          # shorter ease ramp · smaller gripper step
 KEY_STEP_UP = ("]", "ä")            # longer ease ramp  · bigger gripper step
 # ⚠️ `m` is absent on purpose: CONTROLS owns the keyboard while it is active, so `m`
@@ -1127,6 +1151,21 @@ def main() -> int:  # noqa: PLR0915
     replay_speed = 1.0
     replay_progress_t = 0.0             # last cycle in which the clock actually moved
     replay_slot = "?"                   # which saved recording is being played
+    # ⛔⭐⭐ INITIALISED HERE BECAUSE IT WAS NOT, AND THAT CRASHED A SESSION. `replace_slot`
+    # is assigned only inside the overwrite-guard branch, and the save handler reads it on
+    # EVERY keypress at the save prompt. So the very first save of a session — the guard
+    # never having fired — raised `UnboundLocalError: cannot access local variable
+    # 'replace_slot'` and took the whole session down.
+    #
+    # ⭐⭐ FOUND BY A SIMULATED RUN, AND UNIT TESTS COULD NOT HAVE FOUND IT. The 12 tests in
+    # `scripts/test_save_slot.py` all pass, because they call `save_slot_action` directly and
+    # hand it a `replace_slot` argument. **The defect was in the CALL SITE, not the function.**
+    # Extracting a decision into a pure function and testing it does not test the code that
+    # calls it — which is precisely the gap `--sim` was built to close.
+    #
+    # ⚠️ The safe stop did its job: both arms parked and all 14 motors were confirmed
+    # disabled after the traceback. But the recording would have been lost.
+    replace_slot: str | None = None     # the occupied slot the guard is asking about
     replay_held_s = 0.0                 # seconds spent waiting for the arm to catch up
     replay_worst_lag = 0.0              # furthest behind the arm ever got, radians
     replay_prev_target: list[float] | None = None
@@ -1825,6 +1864,13 @@ def main() -> int:  # noqa: PLR0915
                                 measured_jaw = float(np.asarray(
                                     one.robot.get_joint_pos(), dtype=float)[N_ARM])
                                 one.gripper_value = measured_jaw
+                                # ⛔⭐⭐ LATCH IT. Setting `gripper_value` alone was undone on
+                                # the very next cycle by whatever is commanding the jaws —
+                                # in MIRROR that is the leader's jaw, re-sent at 90 Hz. His
+                                # 2026-08-17 log: released to 0.152, 0.151, 0.150, 0.147 and
+                                # "(14 times now)". The latch is what makes the release stick
+                                # ([ROADMAP §8.2](../docs/ROADMAP.md) item 29).
+                                one.block_jaw_at(measured_jaw)
                                 one.stall_since = None
                                 one.stall_count += 1
                                 # ⛔⭐ SAID ONCE, THEN AT MOST EVERY FIVE SECONDS WITH A COUNT.
@@ -2513,17 +2559,23 @@ def main() -> int:  # noqa: PLR0915
                         # dropped. Both scales are also printed in the status line now, so
                         # a key that silently does nothing is visible rather than inferred.
                         elif k in "+=":
-                            args.linear_scale *= 1.25
-                            hint(f"linear speed {args.linear_scale:.3f} m/s")
+                            args.linear_scale = min(MAX_LINEAR_SCALE,
+                                                    args.linear_scale * 1.25)
+                            hint(f"linear speed {args.linear_scale:.3f} m/s"
+                                 + (" (ceiling)"
+                                    if args.linear_scale >= MAX_LINEAR_SCALE else ""))
                         elif k == "-":
-                            args.linear_scale /= 1.25
+                            args.linear_scale = max(MIN_LINEAR_SCALE,
+                                                    args.linear_scale / 1.25)
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                         elif k == ".":
-                            angular_scale *= 1.25
+                            angular_scale = min(MAX_ANGULAR_SCALE,
+                                                angular_scale * 1.25)
                             print(f"\n  rotation speed → {angular_scale:.2f} rad/s "
                                   f"({np.degrees(angular_scale):.0f}°/s)\n")
                         elif k == ",":
-                            angular_scale /= 1.25
+                            angular_scale = max(MIN_ANGULAR_SCALE,
+                                                angular_scale / 1.25)
                             print(f"\n  rotation speed → {angular_scale:.2f} rad/s "
                                   f"({np.degrees(angular_scale):.0f}°/s)\n")
                         elif k == "r":
@@ -2797,10 +2849,12 @@ def main() -> int:  # noqa: PLR0915
                         rotation = not rotation
                         hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
                     elif k == ".":
-                        angular_scale *= 1.25
+                        angular_scale = min(MAX_ANGULAR_SCALE,
+                                            angular_scale * 1.25)
                         hint(f"rotation speed {angular_scale:.2f} rad/s")
                     elif k == ",":
-                        angular_scale /= 1.25
+                        angular_scale = max(MIN_ANGULAR_SCALE,
+                                            angular_scale / 1.25)
                         hint(f"rotation speed {angular_scale:.2f} rad/s")
                     elif k in "xyz":
                         # ⚠️ These now flip a ROBOT MOTION, not a puck axis. Under the
@@ -2834,15 +2888,19 @@ def main() -> int:  # noqa: PLR0915
                                                      one.park_speed * 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
-                            args.linear_scale *= 1.25
-                            hint(f"linear speed {args.linear_scale:.3f} m/s")
+                            args.linear_scale = min(MAX_LINEAR_SCALE,
+                                                    args.linear_scale * 1.25)
+                            hint(f"linear speed {args.linear_scale:.3f} m/s"
+                                 + (" (ceiling)"
+                                    if args.linear_scale >= MAX_LINEAR_SCALE else ""))
                     elif k == "-":
                         if any(one.mode == "park" for one in aimed):
                             for one in aimed:
                                 one.park_speed = max(0.05, one.park_speed / 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
                         else:
-                            args.linear_scale /= 1.25
+                            args.linear_scale = max(MIN_LINEAR_SCALE,
+                                                    args.linear_scale / 1.25)
                             hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "?":
                         print(HELP)
@@ -3108,7 +3166,10 @@ def main() -> int:  # noqa: PLR0915
                         full = np.zeros(one.robot.num_dofs())
                         full[:N_ARM] = q_target
                         if one.robot.num_dofs() > N_ARM:
-                            full[N_ARM] = clamp_gripper(one.gripper_value)
+                            # ⛔ Same latch in TELEOP. His log shows the stall firing four
+                            # more times there, because holding a puck button re-commands
+                            # the jaws every cycle exactly as MIRROR does.
+                            full[N_ARM] = clamp_gripper(one.hold_jaw(one.gripper_value))
                         one.robot.command_joint_pos(full)
                         one.prev_q = q_target.copy()
 
@@ -3184,9 +3245,18 @@ def main() -> int:  # noqa: PLR0915
                                       f"  (now {args.max_speed:g}) — how fast the follower "
                                       f"may move. You moved the leader at "
                                       f"{mirror_link.stop_leader_speed:.2f} rad/s.")
-                                print(f"     ⚠️ `--max-lag` does NOT affect this stop. Your "
-                                      f"hand-guided recordings have reached 2.4-3.7 rad/s, "
-                                      f"and the motors are far from their limit.")
+                                # ⛔⭐ THIS LINE USED TO CITE "2.4-3.7 rad/s" AS WHAT A HAND
+                                # CAN DO, and on 2026-08-17 it printed that **in the same
+                                # message as a measured leader speed of 5.66 rad/s**. The
+                                # range came from [FINDINGS §37.2](../docs/FINDINGS.md),
+                                # measured from three playbacks in August, and his hand has
+                                # since been measured at 5.66 and 6.83 rad/s.
+                                #
+                                # ⚠️ A hardcoded range in a message that also prints a live
+                                # measurement will eventually contradict itself, and the
+                                # contradiction discredits the whole message. **Quote the
+                                # measurement, not the memory.**
+                                print(f"     ⚠️ `--max-lag` does NOT affect this stop.")
                             elif mirror_link.stop_cause == "tracking":
                                 print("     ⭐ More `--max-speed` will NOT help: the arm, not "
                                       "the software, is the limit.")
@@ -3203,7 +3273,12 @@ def main() -> int:  # noqa: PLR0915
                             # follower's onto its own stop and HOLD there, which is stall
                             # torque and is how motor 7 was cooked three times (FINDINGS §4).
                             if one.robot.num_dofs() > N_ARM and len(full) > N_ARM:
-                                full[N_ARM] = clamp_gripper(float(full[N_ARM]))
+                                # ⛔⭐ THROUGH THE LATCH, so a stalled follower stops being
+                                # pushed further closed by the leader every cycle. Opening
+                                # clears it, so letting go of the leader's jaws frees the
+                                # follower's immediately.
+                                full[N_ARM] = clamp_gripper(
+                                    one.hold_jaw(float(full[N_ARM])))
                             one.robot.command_joint_pos(full)
                             one.prev_q = full[:N_ARM].copy()
 

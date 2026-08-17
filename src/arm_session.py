@@ -477,6 +477,59 @@ class ArmSession:
         self.states: Any = None
         self.temps: Any = None
 
+        #: ⛔⭐⭐ WHERE THE JAWS GOT STUCK, LATCHED. `None` means nothing is blocking them.
+        #:
+        #: This exists because the stall RELEASE was being undone on the very next cycle.
+        #: Julien's 2026-08-17 log shows it plainly: released to 0.152, then 0.151, then
+        #: 0.150, then 0.147, and the message *"ARM G GRIPPER STALLED (14 times now)"*.
+        #: Each release backed the command off to the measured jaw position, and each next
+        #: cycle MIRROR copied the leader's jaw straight back over it. **A one-cycle
+        #: correction against a source that re-commands every cycle can only ever nibble.**
+        #:
+        #: ⚠️ `teleop_session.py` already carried a comment describing exactly this — *"in
+        #: MIRROR the follower's jaw command is the leader's measured jaw, re-sent every
+        #: cycle, so squeezing the leader while the follower holds an object fires this
+        #: every 0.4 s indefinitely"* — so the diagnosis was written down and the fix was
+        #: never built. It is docs/ROADMAP.md §8.2 item 29.
+        self.jaw_block: float | None = None
+
+    # ------------------------------------------------------------- jaws ----
+
+    def hold_jaw(self, wanted: float) -> float:
+        """The jaw value to actually command, honouring a latched block.
+
+        ⭐ THE RULE, and the asymmetry is the whole point:
+
+        | asked for | result |
+        |---|---|
+        | nothing latched | ✅ obeyed |
+        | **further CLOSED** than the block | ⛔ held at the block, so it stops pushing |
+        | **more OPEN** than the block | ✅ obeyed, **and the latch clears** |
+
+        ⭐ Bigger is more open: `o` adds to `gripper_value` and `c` subtracts, and the jaws
+        normalise to 0 closed and 1 open. So "further closed" is a smaller number.
+
+        ⚠️ **Opening always clears the latch**, which matters more than it looks. The object
+        may have been put down, the operator may have let go, or the leader's hand may have
+        opened. Anything that moves away from the obstruction is evidence the obstruction is
+        no longer being pushed into, and a latch that needed an explicit reset would
+        eventually be the reason the jaws refused to work for a reason nobody could see.
+
+        ⛔ It does NOT stop the jaws holding what they have. The block value IS the measured
+        position where they stalled, so commanding it keeps the grip and stops the pushing.
+        Releasing entirely would drop whatever is being held.
+        """
+        if self.jaw_block is None:
+            return wanted
+        if wanted > self.jaw_block:
+            self.jaw_block = None
+            return wanted
+        return self.jaw_block
+
+    def block_jaw_at(self, where: float) -> None:
+        """Latch a jaw block at the measured position where the stall happened."""
+        self.jaw_block = float(where)
+
     # ---------------------------------------------------------- liveness ----
 
     def alive(self) -> bool:
