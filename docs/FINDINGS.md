@@ -3879,6 +3879,31 @@ Both halves are modelled as the different physical things they are, and the cons
 
 ⭐ **The falsification count is the instrument**: it went 7 → 6 on that last one, and nothing else would have shown it.
 
+### 59.3 ✅⭐⭐ THE TWO-ARM DISTANCE IS MEASURABLE NOW, AND ONE TAPE READING MAY CLOSE THE WHOLE QUESTION — [ROADMAP §8.2](ROADMAP.md) item 25
+
+⭐⭐ **THE CHEAP ANSWER FIRST, BECAUSE IT MAY END THE DISCUSSION.** Each arm is already confined to a sphere of `REACH_LIMIT` = **0.60 m** about its own base, by a limit Julien chose on 2026-08-14. **Two spheres of radius 0.60 m cannot intersect if their centres are more than 1.20 m apart.** So:
+
+> ⭐ **If the two bases are more than 1.20 m apart, a collision is geometrically impossible while the reach limit is enforced, and no new limit is needed at all.**
+
+⛔ **With one exception that matters: GUIDE mode.** Hand-guiding is not subject to the reach limit, because nothing in software can stop a hand. So the clearance above covers TELEOP, MIRROR's follower and playback — **not** two arms being hand-guided toward each other.
+
+⛔⭐⭐ **AND THE ONE NUMBER NEEDED IS NOT IN THIS REPO.** Nothing records where the two bases are relative to each other: not a document, not a config file, not a model. It cannot be computed, derived or inferred from anything the software can see — **it is a tape-measure reading**, which is why `collision.BasePose` has no default and every function requires one. ⚠️ A plausible default would be an unmeasured number quietly deciding whether two 4.3 kg arms may occupy the same space.
+
+⭐ **The per-pose measurement** takes link positions from the same MuJoCo model and the same `mink.Configuration` the IK already uses, then gives each body the bounding-sphere radius **the model itself declares** (`geom_rbound`). ⚠️ **Bounding spheres are bigger than the parts inside them, so every figure UNDER-reports clearance** — read it as "at least this much", never as "the gap". For a safety measurement that is the correct direction to be wrong in.
+
+⛔ **Four things it cannot see, all of which make it optimistic:** the jaws are posed shut whatever they really are; **anything the arms are HOLDING does not exist**, and a two-arm handover is exactly when they are closest; the desk, mounts and camera cables are absent; and it is a **snapshot**, so two arms 5 cm apart and closing fast read identically to two arms 5 cm apart and stopped.
+
+⛔ **It refuses nothing, on purpose** — [§58.4](FINDINGS.md) item 4's ruling. This repo already carries one limit Julien never chose: the ±0.30 m cube that stopped him at 71% of the arm's reach for days ([§41.1](FINDINGS.md)).
+
+⭐⭐ **AND THE ARM IS NOT SHAPED THE WAY I ASSUMED, which a red test taught me.** Three of the 14 tests failed on the first run and **all three were my assumptions, not the code**:
+
+| what I assumed | what the model measures |
+|---|---|
+| joint index 1 is a shoulder that reaches sideways | it lifts the tip **163 mm vertically** and moves it **3 mm** horizontally. Index 0 is the base yaw; **index 2 is the elbow and the biggest horizontal mover, 260 mm at 1 rad** |
+| two arms facing AWAY have more room than two facing each other | ⛔ **the opposite**, 0.265 m against 0.377 m. At rest, **`link3` sits 24 cm out the BACK of the arm with a 197 mm bounding radius**, so turning an arm around swings that rear link toward its neighbour |
+
+⚠️ **The lesson is about testing rather than geometry:** I asserted an intuition about a machine I had not measured, and a red test briefly looked like a defect in the code. The tests now pin what actually matters — that the joint angles and the yaw are not ignored — and leave *which* arrangement is roomier to be measured per bench.
+
 ### 59.2 ⚠️ WHAT THE RIG READ AT THE START OF THIS SESSION, so the next agent can compare
 
 ✅ **Both arms healthy and cold**, 2026-08-15: all 14 motors answered register reads, `ping_motors` reported **no latched fault on either arm** with error clearing OFF (so a real reading, not an erased one), and every motor sat at **27-30 °C**. Every joint at rest within 3 quantisation steps of the zero code.

@@ -196,13 +196,39 @@ uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, stil
 
 `teleop_sim.py` now applies `config/spacemouse_map.json`, so **a mapping can be verified in simulation before the arm is involved**. Until 2026-08-10 it ignored the map entirely — which made the one place an axis convention is free to get wrong the one place it could not be tested.
 
+## ⭐ The checkers — no hardware, and they answer real questions
+
+```bash
+uv run scripts/check_rig.py                          # what is on the USB bus. Never transmits
+uv run scripts/check_flags.py                        # do the commands in docs/ actually work?
+uv run scripts/check_links.py                        # every relative link and § reference
+uv run scripts/check_recordings.py                   # what is in each recording slot
+uv run scripts/check_restructure.py                  # the N-arm restructure is still coherent
+uv run scripts/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
+```
+
+⭐ **`check_collision.py` needs ONE tape-measure reading** — the metres between the two arm bases — because nothing in the repo records it and no software can derive it. Add `--yaw-b 180` if they face each other. ⭐⭐ **It may close the whole collision question in one line:** each arm is already held inside a 0.60 m sphere around its own base, so **beyond 1.20 m of base separation a collision is geometrically impossible** while that limit is enforced. ⛔ Except in GUIDE mode, where nothing can stop a hand. [ROADMAP §8.2](ROADMAP.md) item 25, [FINDINGS §59.3](FINDINGS.md).
+
+⭐ **`check_flags.py` reads every `uv run` line in `docs/` and validates it against the real parser** — a flag that does not exist, a value outside `choices`, a value that will not parse as its type. `COMMANDS.md` had gone stale four times in two days before it existed, and one stale line recommended a command that drives the jaws into both stops ([FINDINGS §59.1](FINDINGS.md)).
+
+### ⭐ Proving the checkers are not just green
+
+```bash
+uv run scripts/falsify_fake_arm.py       # break the simulated arm 5 ways; each must be caught
+uv run scripts/falsify_check_flags.py    # 7 broken commands must be reported, 3 good ones not
+```
+
+⛔⭐⭐ **A checker that has never caught anything is indistinguishable from one that cannot.** Both of these were green on their first real run, and both were then found to have a blind spot by exactly these scripts. `falsify_check_flags.py` caught a rule that removed a false positive and silently created a false negative in the same edit — visible only because the catch count dropped from 7 to 6 ([FINDINGS §59.1](FINDINGS.md)).
+
 ## Tests — no hardware, no device, no simulation
 
 ```bash
 uv run scripts/test_axis_map.py && uv run scripts/test_park_target.py
 ```
 
-34 checks. The two that matter most: the hand-dialled `spacemouse_map.json` is compared against the **old** formula over 500 random inputs, so this refactor cannot have silently thrown away the bench time that produced it; and a 7-joint park pose against a 6-DoF `--no-gripper` robot no longer raises.
+⚠️ **Those two are 34 checks of the 549 that exist.** Everything matching `scripts/test_*.py` is headless and passes as of 2026-08-15; run them all with a loop rather than naming two. ⭐ **`scripts/test_fake_arm.py` is the newest and the one to read first** — it drives a simulated arm that *lags* at four speeds and asserts each lands inside the following-error band measured on the real hardware ([FINDINGS §59.0](FINDINGS.md)).
+
+Of the original two, the ones that matter most: the hand-dialled `spacemouse_map.json` is compared against the **old** formula over 500 random inputs, so this refactor cannot have silently thrown away the bench time that produced it; and a 7-joint park pose against a 6-DoF `--no-gripper` robot no longer raises.
 
 ### The MuJoCo viewer — needs an env var on this machine
 
