@@ -196,6 +196,20 @@ uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, stil
 
 `teleop_sim.py` now applies `config/spacemouse_map.json`, so **a mapping can be verified in simulation before the arm is involved**. Until 2026-08-10 it ignored the map entirely — which made the one place an axis convention is free to get wrong the one place it could not be tested.
 
+## ⭐⭐⭐ Stop typing the flags — save them once
+
+```bash
+uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --teleop-speed 4 --mirror-gap 0.6 --max-lag 0.4 --save-defaults
+```
+
+⭐ **That is a DRY RUN (no `--yes`), so nothing is energised and the settings are still written.** Afterwards `uv run scripts/teleop_session.py --yes --arms B,G` runs with all of it.
+
+⭐ **Three layers, and a flag always wins:** built-in constant → `config/session_defaults.json` → the flag you type. So a saved default replaces the constant, and a flag still overrides the file for one run.
+
+⛔ **`--yes`, `--arms` and `--sim` are never saved.** Energising the motors must be a conscious act every time.
+
+⚠️ **The plan names any saved value that is LOOSER than the built-in limit**, because a flag is visible in your shell history and a saved default is not. Delete `config/session_defaults.json` to go back to the built-in values, or edit it by hand. ⛔ It is gitignored, so it does not travel to another clone: a `git pull` must never change how fast the arm may move. [FINDINGS §61.1](FINDINGS.md).
+
 ## ⭐⭐ `--sim` — run the WHOLE session with nothing attached
 
 ```bash

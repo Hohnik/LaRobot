@@ -4025,3 +4025,107 @@ Both halves are modelled as the different physical things they are, and the cons
 | **5** telling two identical D405s apart | ⛔ **YES, both attached** | the entire problem is distinguishing two identical devices; with one there is nothing to distinguish |
 | **16** reading 848x480 as 16-bit depth | ✅ **no, one is enough** | ⭐⭐ **the most valuable camera item.** If that mode is the depth stream, **depth works with plain OpenCV and no SDK** — an open goal since [§8](FINDINGS.md). ⛔ **CHECK THE PIXEL FORMAT FIRST**: forcing it into an 8-bit photograph throws the depth away ([§31.2](FINDINGS.md)) |
 | **6** several cameras with timestamps | ⚠️ **partly** | the machinery can be built and tested with one, but *"they line up"* cannot be proven with one. **Images must line up with joint data or the dataset is unusable** |
+
+
+## 61 ⭐⭐⭐ 2026-08-17, LATE — THE FLAGS BECOME SAVED DEFAULTS, AND THE MIRROR MESSAGE WAS SENDING HIM AFTER THE WRONG FLAG
+
+### 61.0 ⛔⭐⭐⭐ THE MIRROR STOP MESSAGE NAMED THE WRONG FLAG, AND IT COST HIM THREE SESSIONS
+
+⛔⭐⭐ **This is the most expensive defect of the day and it was pure wording.** The `follow_limit` branch of the MIRROR stop message said, in full:
+
+> `⭐ That allowance is --max-speed, now 2.0 rad/s. Raise it one step.`
+
+⛔ **The stop is not triggered by `--max-speed`. It is triggered by the gap passing `--mirror-gap`**, which sits at a built-in **0.35** and which he had not set in either of those two runs. The message even printed the number — *"the follower fell 0.350 rad behind on joint 5 (limit 0.35)"* — **and never said which flag sets it.** A limit's value without its flag name is unusable.
+
+⭐ **What he actually did, across three sessions on 2026-08-17**, chasing that advice:
+
+| run | `--max-lag` | outcome |
+|---|---|---|
+| 1 | 0.25 (default) | mirror stopped at 0.350 rad on joint 5 |
+| 2 | **0.4** | mirror stopped at **0.350** rad on joint 5 |
+| 3 | **1.0** | mirror stopped at **0.362** rad on joint 5 |
+
+⛔⭐⭐ **Raising `--max-lag` fourfold changed the stopping point by 12 thousandths of a radian, because it was never the binding limit.** ⭐ **And he had already found the answer himself two days earlier**: the 2026-08-15 run that he described as working *"much better"* used `--mirror-gap 0.6`.
+
+⭐ **The message now names both routes, tolerance first**, with a concrete `--max-speed` computed from the leader speed it measured, and states plainly that `--max-lag` does not affect this stop. ⚠️ **Third time a speed-layer confusion has cost him a session** ([§58.3](FINDINGS.md) is the table that exists because of the first two).
+
+⭐⭐ **AND THE REAL ANSWER TO HIS QUESTION** — *"I still don't know how to increase the max speed to a point where it's just really fast"*. He was moving the leader arm **by hand at 2.21 and 2.59 rad/s** while the follower was capped at 2.00. ⭐ **A follower cannot track a hand unless its cap exceeds what a hand does**, and [§37.2](FINDINGS.md) measured his own hand-guided recordings at **2.4 to 3.7 rad/s**. ⛔ **So `--max-speed 2` was always going to lose.** The value to try is **4**, with `--mirror-gap 0.6`. ⚠️ Both are safety limits and both are his to set.
+
+### 61.1 ✅⭐⭐⭐ THE FLAGS ARE SAVED DEFAULTS NOW — `src/settings.py`, `--save-defaults`
+
+⭐ **His request:** *"all of these flags should be default options that can be changed in some controls mode and then should be saved so that I don't always have to run with all of the flags, and I can change the default mode."*
+
+⭐⭐ **Three layers, and the ORDER is the whole design:**
+
+> built-in constant  →  `config/session_defaults.json`  →  command-line flag
+
+⛔ **A deliberately typed flag always wins over the file.** That is a safety property rather than a convenience: a setting someone chose for one run must never be silently overridden by something on disk.
+
+⭐ **To write them, run once with the flags wanted and add `--save-defaults`.** It saves the **effective** values, so what lands in the file is what the session just ran with. ⚠️ It works on a dry run too, which is the safest way to use it: nothing is energised and the file is still written.
+
+⛔⭐⭐ **THREE SETTINGS CAN NEVER BE SAVED, and each absence is a decision:**
+
+| flag | why not |
+|---|---|
+| `--yes` | ⛔ **energising the motors must be a conscious act on every single run.** A saved `yes: true` turns a dry run into a live one for anyone who has forgotten the file exists, and the dry run is this project's main safety habit |
+| `--arms` | ⚠️ which arms are plugged in changes between sessions, and arm G is shared with a colleague. A stale value would try to build an arm that is not there |
+| `--sim` | ⛔ a saved `sim: true` means either a session that looks normal and drives nothing, or somebody believing a simulated run was real |
+
+⭐⭐ **FOUR OF THE SAVEABLE SETTINGS ARE SAFETY LIMITS** (`max_speed`, `max_lag`, `reach`, `floor`), so the plan prints which values came from the file **and flags any that are LOOSER than the built-in constant**. ⛔ **A flag is visible in the shell history and on screen; a saved default is not.** Without that line a session could run at four times the built-in speed limit with nothing explaining why.
+
+⚠️ **The floor is the one limit where SMALLER is looser** — it is how far down the tip may go — so the direction is declared per setting rather than assumed. A rule that only understood "bigger is looser" would miss the one setting that lets the arm drive into the desk.
+
+⛔ **Wrong types are refused, never coerced.** `float("fast")` raises and **`bool("false")` is `True`**, so a string `"false"` coerced to a bool would switch a setting ON while reading as off. Unknown keys are dropped **and reported**, because a misspelled setting that looks saved and does nothing is the silent failure this file could otherwise introduce.
+
+⛔⭐ **THE FILE IS GITIGNORED, AND THAT IS A SAFETY DECISION.** Tracking it would let a `git pull` change how fast the arm may move on a machine with arms attached, with nobody typing a flag or reading a diff. ⚠️ The cost is that his preferred speeds do not travel to another clone. **That is the right way round: the settings are cheap to re-save and a surprise speed limit is not.**
+
+⚠️⭐ **I created a `config/session_defaults.json` while testing and then DELETED it.** It held `max_speed: 4.0`, which is **my** number derived from [§37.2](FINDINGS.md) rather than his choice. ⛔ **Safety limits are Julien's to set**, so leaving a file behind that quietly quadrupled one would have broken the rule the whole feature is built to respect.
+
+### 61.2 ✅⭐⭐ THE SAVE PROMPT WAS A DEAD END, AND HE FOUND IT THE FIRST TIME THE GUARD EVER FIRED
+
+⭐ **Julien:** *"when I pressed save seven, then the guard came up. But then when I pressed a different number, I wanted to save it on, it's still discarded. So we should maybe find a way to save something that was accidentally saved on somewhere where we don't wanna overwrite."*
+
+⛔ **He was exactly right.** The rule was *"the SAME digit confirms, anything else discards"*, so once the guard fired the only two exits were:
+
+1. ⛔ **overwrite the take you were trying to protect**, or
+2. ⛔ **lose the recording you just made.**
+
+⭐⭐ **The obvious third thing a person wants — put it somewhere else — was the one thing it would not do.** ⚠️ And the asymmetry matters: an overwrite destroys old work, a discard destroys new work, and **a hand-guided recording cannot be re-taken identically**. Both outcomes must be deliberate acts.
+
+⭐ **The rule now, in `save_slot_action`:**
+
+| keypress | outcome |
+|---|---|
+| a digit on a **free** slot | ✅ saves |
+| a digit on an **occupied** slot | ⚠️ asks |
+| the **same** digit again | ✅ replaces |
+| ⭐ a **different** digit while asking | **re-aims at that slot** (and asks again if it is also busy) |
+| anything **not a digit** | ⛔ discards, naming what was kept |
+
+⚠️ **Enter and space DISCARD here, and that is deliberate but worth knowing:** they CONFIRM in the `l` and `p` prompts, so a hand trained on those will reach for Enter. Here it must destroy the new take rather than the old one, because the old one is the thing already on disk.
+
+⭐ It was extracted from `main()` into a pure function purely so it could be tested at all. **12 tests, and three of them fail against the old rule** — which is what makes them worth having.
+
+### 61.3 ⛔⭐⭐ THE CAMERAS WORK FOR HIM AND CANNOT WORK FOR THE AGENT. THIS IS PERMANENT
+
+✅ **Camera access is granted and the identification works.** His 2026-08-17 run:
+
+```
+    0  RealSense D405 (depth)        1280x720       99    0.1s  colour
+    1  MacBook Air Camera            1920x1080       3    0.0s  colour
+    2  Julien's iPhone Camera        1920x1080       1    0.2s  colour
+```
+
+⭐ All three identified **by measurement**, each asked for a mode only it offers.
+
+⛔⭐⭐ **AND THE SAME COMMAND RUN BY THE AGENT FAILS: `OpenCV: not authorized to capture video (status 0)` on every index.** macOS grants camera access **per parent application**, and an agent's shell has a different TCC identity from his terminal. ⛔ **The agent cannot grant it**: it is a system privacy setting, it needs a dialog nobody can click on its behalf, and changing system settings is outside what an agent may do.
+
+⭐⭐ **SO THE DIVISION OF LABOUR ON CAMERAS IS FIXED FROM NOW ON: the agent writes camera tooling and Julien runs it.** ⚠️ A fresh agent should not spend time diagnosing this as a bug in the code, and should not ask him to "just re-run it" expecting a different result.
+
+⭐ **[ROADMAP §8.2](ROADMAP.md) item 16's tooling ALREADY EXISTS** and nobody had noticed: `camera_view.py --probe` sweeps resolutions and codecs and reports the real FOURCC pixel format for each. So the depth question needs one command from him rather than new code:
+
+```bash
+uv run scripts/camera_view.py --camera d405 --probe
+```
+
+⚠️⭐ **AND THERE IS A CONTRADICTION WORTH SETTLING WITH IT.** The device names itself *"Depth Camera 405"* and `camera_view.py` warns that *"macOS exposes only this camera's DEPTH stream over plain UVC, so expect a depth/infrared picture rather than colour"*. ⛔ **But his measurement says `colour` at 1280x720.** Either the warning is stale, or a depth frame delivered as three channels reads as colour to the brightness check. **The probe's FOURCC is what settles it, and the answer decides whether depth is available with no SDK at all** ([§8](FINDINGS.md), [§31.2](FINDINGS.md)).
