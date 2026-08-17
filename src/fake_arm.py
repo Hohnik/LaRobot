@@ -112,6 +112,21 @@ class FakeMotorState:
     temp_rotor: float = AMBIENT_C
 
 
+class FakeMotorInterface:
+    """The one method the shutdown path calls on a chain's motor interface.
+
+    ⚠️ `motor_off` is recorded rather than acted on, because a simulated motor has no
+    torque to remove. What matters is that it was CALLED for every motor, since that is
+    the difference between an arm released deliberately and an arm dropped.
+    """
+
+    def __init__(self, chain: FakeChain) -> None:
+        self._chain = chain
+
+    def motor_off(self, motor_id: int) -> None:
+        self._chain.disabled.append(int(motor_id))
+
+
 class FakeChain:
     """Stands in for `robot.motor_chain`.
 
@@ -128,6 +143,22 @@ class FakeChain:
         #: otherwise unreachable without unplugging hardware mid-session.
         self.blind = False
         self.closed = False
+        #: ⭐⭐ THE TEARDOWN PATH NEEDS THESE, AND IT IS THE MOST SAFETY-CRITICAL CODE IN
+        #: THE PROJECT. `yam_robot.shutdown_robot()` walks `motor_list` and calls
+        #: `motor_interface.motor_off(id)` on each, then reports which ones genuinely
+        #: succeeded. ⛔ Every one of those calls sits inside `except Exception: pass`, so
+        #: a fake lacking these attributes does not raise — it silently reports **zero
+        #: motors disabled**, and "confirmed disabled: []" would be read as a fake being
+        #: a fake rather than as the shutdown having failed.
+        #:
+        #: ⚠️ Providing them means the park-then-disable sequence can be exercised end to
+        #: end with no hardware. Until now it had only ever been tested by Julien pressing
+        #: Ctrl-C on a live arm, which is a poor way to test the code that decides whether
+        #: 4.3 kg is released.
+        self.motor_list = [(i, "DM4340" if i <= 3 else "DM4310") for i in range(1, 8)]
+        self.motor_interface = FakeMotorInterface(self)
+        #: Which motor IDs were actually told to switch off, in order.
+        self.disabled: list[int] = []
 
     def read_states(self) -> list[FakeMotorState]:
         if self.blind:
@@ -337,3 +368,22 @@ def build_fake_robot(
             f"deadband={deadband:.2f} rad. No gravity, no dynamics, "
             f"thermal model uncalibrated.")
     return robot, note
+
+
+class StillPuck:
+    """A SpaceMouse that is never touched. The reader interface and nothing more.
+
+    ⭐ `scripts/teleop_session.py` asks a puck for exactly two things: `read()`, which
+    returns six axis values, and a `buttons` attribute. That surface was taken by grepping
+    every attribute reached through a reader handle, so it is the real one.
+
+    ⚠️ Reporting zero is the honest simulation of nobody's hand on the puck: TELEOP holds
+    still. ⛔ So a simulated session can say nothing about driving feel, about the axis map,
+    or about whether a speed is comfortable. Those need a real hand on a real device.
+    """
+
+    def __init__(self) -> None:
+        self.buttons = 0
+
+    def read(self) -> list[float]:
+        return [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

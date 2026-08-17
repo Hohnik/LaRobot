@@ -141,6 +141,7 @@ from teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
+from fake_arm import StillPuck, build_fake_robot  # noqa: E402
 from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
     SAFE_MAX_LAG,
@@ -297,7 +298,10 @@ TAKES_DIR = REPO / "recordings"
 # ⭐ One file per playback, named with a timestamp so nothing is ever overwritten. The
 # recordings themselves are saved by slot digit and DO overwrite, which lost the two files
 # an earlier measurement was taken from ([FINDINGS §33.2](../docs/FINDINGS.md)).
-TRACKING_DIR = TAKES_DIR / "tracking"
+# ⚠️ Built as a LOCAL inside main() now, from `takes_dir`, so that a --sim session's
+# tracking files follow its recordings into `recordings/sim/` instead of landing among the
+# real measurements. There is deliberately no module-level constant for it any more: one
+# would be shadowed by the local and read as though it were still in use.
 # ⭐⭐ ONE CEILING FOR EVERY PLANNED MOTION, in radians per second for a single joint.
 # Julien asked for this on 2026-08-13: *"max speed would just be limited by the actual
 # safety things we have or the motors. Maybe we need an extra system for max speeds in
@@ -675,8 +679,27 @@ def tracking_table(rows: list, names: list[str], hold_rad: float,
                    f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
                    f"with {lag_top:.3f} rad of lag")
     if unmoved:
-        out.append(f"       ⚠️ {len(unmoved)} of {len(rows)} joints moved slower than "
-                   f"{quiet} rad/s and have no row: {', '.join(unmoved)}")
+        # ⛔⭐⭐ THE LINE MUST STAY SHORT, AND ONLY RUNNING IT SHOWED WHY. The first version
+        # listed every unmoved joint. In a simulated playback where nothing moved that was
+        # all fourteen names on one line, and `src/screen.py`'s painter **truncated it with
+        # an ellipsis** — the reader saw "B base_yaw, B shoulder_pit…" and nothing more. A
+        # note whose whole job is to say WHICH joints are missing, cut off before it says
+        # so, is worse than no note, because it looks answered.
+        #
+        # ⚠️ Reading the code could not have found this. The note was correct; the terminal
+        # ate it. It took an actual `--sim` run.
+        if len(unmoved) == len(rows):
+            out.append(f"       ⚠️ ALL {len(rows)} joints moved slower than {quiet} rad/s, "
+                       f"so there is no table — nothing actually moved.")
+        else:
+            # ⚠️ TWO names, and the wording is short on purpose. Measured against the
+            # painter: four names plus the old longer phrasing came to 145 characters and
+            # was still being cut. His real case is two still grippers out of fourteen,
+            # which fits in full.
+            shown = ", ".join(unmoved[:2])
+            more = f" +{len(unmoved) - 2} more" if len(unmoved) > 2 else ""
+            out.append(f"       ⚠️ {len(unmoved)} of {len(rows)} joints too slow to rate "
+                       f"(<{quiet} rad/s): {shown}{more}")
     return out
 
 
@@ -767,6 +790,10 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
 def main() -> int:  # noqa: PLR0915
     ap = argparse.ArgumentParser(description="Interactive YAM session: guide, teleop, park.")
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
+    ap.add_argument("--sim", action="store_true",
+                    help="run the WHOLE loop against simulated arms — no hardware, no CAN "
+                         "adapter, no SpaceMouse needed. See src/fake_arm.py for what it "
+                         "can and cannot tell you.")
     # ⭐⭐ TWO SPELLINGS OF ONE IDEA, and `--arm` is the one that must not break.
     # Every other script here takes `--arm` (`ping_motors.py`, `identify_arm.py`,
     # `check_arms_match.py`), it is in every document, and it is what Julien types.
@@ -1140,7 +1167,23 @@ def main() -> int:  # noqa: PLR0915
     # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
     # returns here, with nothing energised.
     pucks: dict[str, Any] = {}
-    for name in arm_names:
+    if args.sim:
+        # ⭐⭐ NO SPACEMOUSE IN SIMULATION, and a still puck rather than a random one.
+        # The whole point of --sim is running on a machine with nothing attached, and the
+        # wiggle assignment below cannot work without a device to wiggle.
+        #
+        # ⚠️ A puck reporting ZERO deflection is the honest stand-in: nobody's hand is on
+        # it, so TELEOP holds still. That is not a limitation to work around — the parts
+        # of the loop worth testing without hardware are the mode transitions, the
+        # cursors, the playback sequencing and the teardown, and every one of those is
+        # driven by KEYS. ⛔ It does mean --sim can say nothing about driving feel or about
+        # the axis map, which needs a real hand on a real puck.
+        for name in arm_names:
+            pucks[name] = {"path": f"sim:{name}", "handle": None,
+                           "reader": StillPuck()}
+        print("⭐ SIMULATED PUCKS — both report zero deflection, so TELEOP holds still.\n"
+              "   Drive the loop with the KEYS: modes, p, w, l, a, i, q.\n")
+    for name in arm_names if not args.sim else []:
         info = pick_device_by_wiggle(label=name,
                                      exclude=[h["path"] for h in pucks.values()])
         if info is None:
@@ -1217,6 +1260,30 @@ def main() -> int:  # noqa: PLR0915
     # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
     # ordering check in scripts/check_restructure.py.
 
+    # ⭐⭐ SIMULATED RECORDINGS GO SOMEWHERE ELSE. Defence in depth alongside the
+    # metadata stamp: `recordings/sim/` never contains a real demonstration, so a glob
+    # over `recordings/*.json` cannot pick one up by accident.
+    takes_dir = (TAKES_DIR / "sim") if args.sim else TAKES_DIR
+    tracking_dir = takes_dir / "tracking"
+
+    def slot_for_reading(digit: str) -> Path:
+        """Where to LOOK for a recording. Writes always go to `takes_dir`.
+
+        ⭐⭐ A --sim SESSION CAN STILL PLAY A REAL RECORDING, and that is deliberate. When
+        the folder split was first written it applied to reads as well, which quietly
+        removed one of the best uses of a simulator: **replaying a real take against
+        simulated arms to check the playback before committing it to 4.3 kg of hardware.**
+        Sim recordings win when both exist, so a sim session never silently reaches past
+        its own work.
+        """
+        mine = takes_dir / f"{digit}.json"
+        if mine.is_file() or takes_dir == TAKES_DIR:
+            return mine
+        return TAKES_DIR / f"{digit}.json"
+    if args.sim:
+        print(f"⭐ SIMULATED recordings go to {takes_dir.relative_to(REPO)}/, never "
+              f"alongside the real ones, and each is stamped simulated=true.\n")
+
     try:
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
         # ⭐⭐⭐ ONE ROBOT PER ARM, BUILT IN ORDER. ROADMAP §6.1 step 3.
@@ -1232,9 +1299,18 @@ def main() -> int:  # noqa: PLR0915
         for name in arm_names:
             print(f"building arm {name} — enables {n_motors} motors, "
                   "starts the control loop …")
-            robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
-                                      with_gripper=not args.no_gripper,
-                                      max_speed=args.max_speed, max_lag=args.max_lag)
+            if args.sim:
+                # ⭐⭐ THE WHOLE POINT OF --sim, AND IT IS ONE BRANCH ON PURPOSE. Everything
+                # below this line is the same code in both modes, so a simulated session
+                # exercises the real loop rather than a parallel one. `build_fake_robot`
+                # returns the same `(robot, note)` tuple for exactly that reason.
+                robot, note = build_fake_robot(
+                    name, n_joints=n_motors,
+                    max_speed=args.max_speed, max_lag=args.max_lag)
+            else:
+                robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
+                                          with_gripper=not args.no_gripper,
+                                          max_speed=args.max_speed, max_lag=args.max_lag)
             print(f"  {note}\n")
 
             arm = ArmSession(robot, name=name, frame=start_frame,
@@ -1772,11 +1848,11 @@ def main() -> int:  # noqa: PLR0915
                         pending = None
                         take = None          # belt and braces: never resume by accident
                         if (k.isdigit() and take_to_save is not None and not was_replacing
-                                and describe_slot(TAKES_DIR / f"{k}.json") is not None):
+                                and describe_slot(takes_dir / f"{k}.json") is not None):
                             replace_slot = k
                             pending = "take_replace"
                             print(f"\n  ⚠️  recording {k} already holds "
-                                  f"{describe_slot(TAKES_DIR / f'{k}.json')}.")
+                                  f"{describe_slot(takes_dir / f'{k}.json')}.")
                             print(f"     Press {k} again to REPLACE it. Any other key "
                                   "discards the new recording and keeps the old one.\n")
                             continue
@@ -1786,8 +1862,8 @@ def main() -> int:  # noqa: PLR0915
                                   "discarded.\n")
                             continue
                         if k.isdigit() and take_to_save is not None:
-                            TAKES_DIR.mkdir(exist_ok=True)
-                            path = TAKES_DIR / f"{k}.json"
+                            takes_dir.mkdir(parents=True, exist_ok=True)
+                            path = takes_dir / f"{k}.json"
                             # ⭐ The commit goes in at SAVE time, not at load time. Julien
                             # on provenance: he wants *"being able to reproduce everything
                             # and connect it to other research papers."* Which version of
@@ -1810,7 +1886,7 @@ def main() -> int:  # noqa: PLR0915
                         if not k.isdigit():
                             print("\n  play cancelled.\n")
                             continue
-                        path = TAKES_DIR / f"{k}.json"
+                        path = slot_for_reading(k)
                         if not path.is_file():
                             print(f"\n  ⚠️  nothing saved in recording {k} — "
                                   "press w to record one.\n")
@@ -2423,8 +2499,20 @@ def main() -> int:  # noqa: PLR0915
                                 # playback uses. `Layout.from_meta` reads either.
                                 "arm": arms[0].name,
                                 **sample_layout().to_meta(),
-                                "method": "live:" + "+".join(
+                                # ⛔⭐⭐ "sim:" NOT "live:" WHEN SIMULATED, AND THIS IS A
+                                # DATA-INTEGRITY GUARD RATHER THAN A LABEL. The first
+                                # `--sim` run I drove wrote `recordings/9.json` with
+                                # `"method": "live:B:teleop+G:teleop"` — a recording of a
+                                # FAKE arm, in the same folder as Julien's six real
+                                # demonstrations, claiming to be live. ⚠️ These files are
+                                # destined to become training data (ROADMAP §9.2), so a
+                                # simulated take that reads as real is the worst possible
+                                # thing to leave lying about. Stamped in TWO independent
+                                # ways, because a file can be moved out of its folder but
+                                # not out of its own metadata.
+                                "method": ("sim:" if args.sim else "live:") + "+".join(
                                     f"{one.name}:{one.mode}" for one in arms),
+                                "simulated": bool(args.sim),
                                 "nominal_hz": CONTROL_HZ,
                                 # ⚠️ Per arm, because `v` aims at one arm: two arms can be
                                 # driven in different frames, and a single value would record
@@ -2460,8 +2548,22 @@ def main() -> int:  # noqa: PLR0915
                             # anything already reading it, and `modes` is the truth.
                             take_to_save.meta["modes"] = list(take_modes)
                             if len(take_modes) > 1:
-                                take_to_save.meta["method"] = \
-                                    "live:" + "+".join(take_modes)
+                                # ⛔⭐⭐ THE PREFIX IS COMPUTED IN TWO PLACES AND THIS ONE
+                                # HARDCODED "live:", WHICH SILENTLY UNDID THE `sim:` STAMP.
+                                # `method` is written once at the record keypress and
+                                # REWRITTEN here at the stop keypress, so patching only the
+                                # first left a simulated take reading
+                                # `live:B:teleop+G:teleop` — exactly the mislabelling the
+                                # stamp was added to prevent, in the fix for it.
+                                #
+                                # ⚠️ Third time this session that two copies of one
+                                # expression drifted (the tracking-table names, the flag
+                                # checker's choices, this). `simulated` is a separate field
+                                # for the same reason: two independent marks, so one being
+                                # overwritten cannot make a fake take look real.
+                                take_to_save.meta["method"] = (
+                                    ("sim:" if args.sim else "live:")
+                                    + "+".join(take_modes))
                             n, secs = len(take_to_save), take_to_save.duration
                             if n < 2:
                                 take_to_save = None
@@ -2480,8 +2582,15 @@ def main() -> int:  # noqa: PLR0915
                         # moving. Showing the plan and waiting for Enter means a stray `l`
                         # can never move the arm. Same shape as `p 1 2 3 Enter`.
                         pending = "take_play"
-                        have = ", ".join(sorted(p.stem for p in TAKES_DIR.glob("*.json"))) \
-                            if TAKES_DIR.is_dir() else ""
+                        # ⭐ Both folders in a --sim session, with the simulated ones
+                        # marked, because "saved: 1, 2, 7" that silently mixes real
+                        # demonstrations with simulated ones is the confusion the folder
+                        # split exists to prevent.
+                        real = sorted(q.stem for q in TAKES_DIR.glob("*.json"))
+                        mine = (sorted(q.stem for q in takes_dir.glob("*.json"))
+                                if takes_dir != TAKES_DIR and takes_dir.is_dir() else [])
+                        have = ", ".join([*[f"{n}(sim)" for n in mine],
+                                          *[n for n in real if n not in mine]])
                         print("\n  PLAY which recording?  0-9, any other key cancels.")
                         print(f"     saved: {have or 'none'}\n")
                     elif k == "s":
@@ -3247,9 +3356,9 @@ def main() -> int:  # noqa: PLR0915
                                     "max_planned_joint_speed": args.teleop_speed,
                                     "safe_max_speed": args.max_speed,
                                 }
-                                TRACKING_DIR.mkdir(parents=True, exist_ok=True)
+                                tracking_dir.mkdir(parents=True, exist_ok=True)
                                 stamp = dt_now().replace(":", "-")
-                                out = TRACKING_DIR / f"{replay_slot}_{stamp}.json"
+                                out = tracking_dir / f"{replay_slot}_{stamp}.json"
                                 out.write_text(json.dumps(rec, indent=1) + "\n")
                                 print(f"     ⭐ saved this table → "
                                       f"{out.relative_to(REPO)}")

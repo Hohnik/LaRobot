@@ -98,7 +98,7 @@ def test_HIS_LOG_reproduced__12_rows_shown_and_the_2_missing_ones_are_NAMED() ->
     shown = [ln for ln in lines if "worst lag" in ln]
     assert len(shown) == 12, f"expected 12 rows of data, got {len(shown)}"
 
-    note = [ln for ln in lines if "no row" in ln]
+    note = [ln for ln in lines if "too slow to rate" in ln]
     assert len(note) == 1, f"the missing joints are not reported: {lines[-1]!r}"
     assert "2 of 14" in note[0], f"the note miscounts: {note[0]!r}"
     assert "B gripper_jaws" in note[0] and "G gripper_jaws" in note[0], (
@@ -119,7 +119,7 @@ def test_no_note_when_every_joint_moved() -> None:
     that gets skipped, and then it will be skipped on the run where it matters."""
     lines = tracking_table(rows_from([0.5] * 14),
                            flat_joint_names(["B", "G"], 7, 14), 0.15)
-    assert not [ln for ln in lines if "no row" in ln]
+    assert not [ln for ln in lines if "too slow to rate" in ln]
 
 
 def test_all_joints_still_gives_a_readable_answer_rather_than_an_empty_table() -> None:
@@ -127,7 +127,47 @@ def test_all_joints_still_gives_a_readable_answer_rather_than_an_empty_table() -
     lines = tracking_table(rows_from([0.0] * 14),
                            flat_joint_names(["B", "G"], 7, 14), 0.15)
     assert not [ln for ln in lines if "worst lag" in ln]
-    assert "14 of 14" in lines[-1], lines[-1]
+    assert "ALL 14 joints" in lines[-1], lines[-1]
+    assert "nothing actually moved" in lines[-1], lines[-1]
+
+
+def test_the_note_STAYS_SHORT_because_the_screen_painter_truncates_it() -> None:
+    """⛔⭐⭐ FOUND BY ACTUALLY RUNNING A `--sim` SESSION, and unfindable by reading.
+
+    The first version listed every unmoved joint. In a simulated playback where nothing
+    moved, that was all fourteen names on one line, and `src/screen.py`'s painter cut it off
+    with an ellipsis: the log shows `B base_yaw, B shoulder_pit…` and nothing more. **A note
+    whose entire job is to say which joints are missing, truncated before it says so, is
+    worse than no note, because it looks answered.**
+
+    ⚠️ So the length is now part of the contract, not an accident of how many joints
+    happened to be still.
+    """
+    # The all-still case says so instead of listing anything.
+    everything = tracking_table(rows_from([0.0] * 14),
+                                flat_joint_names(["B", "G"], 7, 14), 0.15)
+    assert len(everything[-1]) < 110, f"{len(everything[-1])} chars: {everything[-1]!r}"
+    assert "base_yaw" not in everything[-1], "it is still listing names"
+
+    # A middling case caps the list and counts the rest.
+    speeds = [0.5, 0.5, 0.5] + [0.0] * 11
+    partial = tracking_table(rows_from(speeds),
+                             flat_joint_names(["B", "G"], 7, 14), 0.15)
+    note = partial[-1]
+    assert len(note) < 110, f"{len(note)} chars, still too long: {note!r}"
+    assert "+9 more" in note, note
+    assert "11 of 14" in note, note
+
+
+def test_a_short_list_of_missing_joints_is_shown_IN_FULL() -> None:
+    """⭐ His real case: two grippers still out of fourteen. Both must be named, because
+    capping is a defence against length, not a reason to withhold a two-item list."""
+    speeds = [0.5] * 6 + [0.0] + [0.5] * 6 + [0.0]
+    note = tracking_table(rows_from(speeds),
+                          flat_joint_names(["B", "G"], 7, 14), 0.15)[-1]
+    assert "B gripper_jaws" in note and "G gripper_jaws" in note, note
+    assert "more" not in note, f"a 2-item list should not be capped: {note!r}"
+    assert len(note) < 110, f"{len(note)} chars: {note!r}"
 
 
 def test_a_short_name_list_does_not_crash_the_table() -> None:

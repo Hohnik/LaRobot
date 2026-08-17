@@ -335,6 +335,68 @@ def test_resync_re_anchors_the_limiter_the_way_a_mode_change_needs() -> None:
         "resync did not re-anchor the command to the measured position")
 
 
+def test_the_REAL_shutdown_path_disables_every_simulated_motor() -> None:
+    """⭐⭐ THE MOST SAFETY-CRITICAL CODE IN THE PROJECT, TESTABLE WITHOUT HARDWARE AT LAST.
+
+    `yam_robot.shutdown_robot()` stops the chain, then walks `motor_list` calling
+    `motor_interface.motor_off(id)`, then closes — in that order, because `close()` does not
+    disable despite announcing that it has. It returns the IDs whose `motor_off` genuinely
+    succeeded.
+
+    ⛔ Every one of those calls sits inside `except Exception: pass`. So a fake lacking these
+    attributes does not raise: it silently reports **zero motors disabled**, and
+    "confirmed disabled: []" reads as a fake being a fake rather than as a shutdown having
+    failed. That is why the fake provides them.
+
+    ⚠️ Until now this path had only ever been exercised by Julien pressing Ctrl-C on a live
+    arm, which is a poor way to test the code that decides whether 4.3 kg is released.
+    """
+    from yam_robot import shutdown_robot
+
+    robot, _ = build_fake_robot("B")
+    fake = robot._robot                          # noqa: SLF001
+    disabled = shutdown_robot(robot)
+    assert disabled == [1, 2, 3, 4, 5, 6, 7], (
+        f"shutdown_robot reported {disabled}, not all seven motors")
+    assert fake.motor_chain.disabled == [1, 2, 3, 4, 5, 6, 7], (
+        "motor_off was not actually called for every motor")
+    assert fake.motor_chain.running is False, "the chain was left running"
+    assert fake.motor_chain.closed is True, "the chain was never closed"
+
+
+def test_the_chain_is_STOPPED_BEFORE_the_motors_are_disabled() -> None:
+    """⛔ Order is the whole point of `shutdown_robot`, and its docstring says why: the
+    control thread runs at 250 Hz and will otherwise be mid-`set_control` when the bus
+    closes underneath it, which produced a thread-death traceback on the first real run."""
+    from yam_robot import shutdown_robot
+
+    robot, _ = build_fake_robot("B")
+    fake = robot._robot                          # noqa: SLF001
+    seen = []
+    original = fake.motor_chain.motor_interface.motor_off
+
+    def watched(motor_id, original=original):  # noqa: ANN001, ANN202
+        seen.append(("motor_off", bool(fake.motor_chain.running)))
+        original(motor_id)
+
+    fake.motor_chain.motor_interface.motor_off = watched
+    shutdown_robot(robot)
+    assert seen, "motor_off was never called"
+    assert all(running is False for _, running in seen), (
+        "a motor was disabled while the chain was still running — the 250 Hz control "
+        "thread would have been mid-command when the bus went away")
+
+
+def test_a_still_puck_reports_no_deflection_and_the_button_field_exists() -> None:
+    """⚠️ The session reads `read()` and a `buttons` attribute. A missing `buttons` would be
+    read through `getattr(..., 0)` and so would not raise, which is why it is asserted."""
+    from fake_arm import StillPuck
+
+    puck = StillPuck()
+    assert puck.read() == [0.0] * 6
+    assert puck.buttons == 0
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]
