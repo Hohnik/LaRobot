@@ -3771,11 +3771,11 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 ⭐ **All of this is real work and none of it needs an arm.** Everything here is checkable with `uv run scripts/check_restructure.py`, the 519 headless tests, and `--yes`-less dry runs.
 
 1. ⬜⭐⭐ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23). `ArmSession.step_path()` and its tests describe a park that **never runs**; the live one is the `mode == "park"` branch in the script. A reader who sees those tests pass is wrong about the code that moves 4.3 kg. ⛔ The trap is written down: the script does `arm.mode = "park"` and then calls its own `enter_hold()`, which leaves the mode alone, while the class's `enter_hold()` sets it to `hold` ([§52.1](FINDINGS.md)). Needs one bench pass over all modes afterwards.
-2. ⬜⭐⭐ **A simulation harness, which is the thing that unblocks everything else.** ⭐ **The pieces already exist:** `scripts/teleop_sim.py` drives the IK with no arm, `mink` and MuJoCo are already dependencies (that is how the IK solves), and `scripts/test_park_arms.py` and `scripts/test_status_row.py` show the shape — a fake robot with `get_joint_pos` / `command_joint_pos` / `num_dofs` / `motor_chain.running`. ⛔ **What is missing is a fake that behaves like the real thing over TIME**: a first-order lag on each joint so a command is followed rather than teleported, plus `SafeRobot`'s two limits, so the loop can be run end to end without hardware. **That would have caught three of this week's defects** — the double-advanced cursor, the playback cancel, and the stale `q`. ⚠️ It cannot replace hardware for feel, gravity compensation or thermal behaviour, and saying so is part of building it.
+2. ⏳⭐⭐ **A simulation harness — HALF BUILT 2026-08-15, see [§59.0](FINDINGS.md). `src/fake_arm.py` exists; the session cannot yet be told to use it.** ⭐ **The pieces already exist:** `scripts/teleop_sim.py` drives the IK with no arm, `mink` and MuJoCo are already dependencies (that is how the IK solves), and `scripts/test_park_arms.py` and `scripts/test_status_row.py` show the shape — a fake robot with `get_joint_pos` / `command_joint_pos` / `num_dofs` / `motor_chain.running`. ⛔ **What is missing is a fake that behaves like the real thing over TIME**: a first-order lag on each joint so a command is followed rather than teleported, plus `SafeRobot`'s two limits, so the loop can be run end to end without hardware. **That would have caught three of this week's defects** — the double-advanced cursor, the playback cancel, and the stale `q`. ⚠️ It cannot replace hardware for feel, gravity compensation or thermal behaviour, and saying so is part of building it.
 3. ⬜ **The throttle message that names an unmeasured cause** ([ROADMAP §8.2](ROADMAP.md) item 21) — the last of four guessing messages; three were fixed on 2026-08-14/15 and this one has the pattern to copy.
 4. ⬜ **A collision model** ([ROADMAP §8.2](ROADMAP.md) item 25). Both arms are already MuJoCo models, so the minimum distance between their bodies is computable per cycle. ⛔ Needs Julien's decision on the margin, so build the measurement first and report it before refusing anything.
 5. ⬜ **Show each arm's control frame on its status row** ([ROADMAP §8.2](ROADMAP.md) item 28). Small, and `v` aims at one arm so two arms can differ.
-6. ⬜ **A mechanical check that `COMMANDS.md`'s flag list matches the parser** ([ROADMAP §8.2](ROADMAP.md) item 24). That file has now gone stale **four** times in two days, and one stale line recommended a command that drives the jaws into both stops.
+6. ✅ **A mechanical check that `COMMANDS.md`'s flag list matches the parser — DONE 2026-08-15, `scripts/check_flags.py`, see [§59.1](FINDINGS.md)** ([ROADMAP §8.2](ROADMAP.md) item 24). That file has now gone stale **four** times in two days, and one stale line recommended a command that drives the jaws into both stops.
 7. ⬜ **The cameras.** Both D405s are attached and the identification problem is unsolved: two identical cameras support the same picture sizes, so the trick used elsewhere cannot tell them apart, and macOS's USB order is not OpenCV's index order ([§22](FINDINGS.md), [§34.5](FINDINGS.md)). ⭐ **The wiggle method is the answer** ([§28.6](FINDINGS.md)) and it needs no arm: open each index, ask a human which window moved, remember the serial. ⚠️ `librealsense` works only with `sudo` on macOS, so keep streaming on the OpenCV path ([§28](FINDINGS.md)).
 8. ⬜ **The MCAP export in ABC's schema** is still deferred by Julien pending his friend's spec ([ROADMAP §8.2](ROADMAP.md) item 7). ⭐ **Our own recordings are already the right SHAPE** — every arm's joints in one timeline — so that work becomes a serialisation rather than a re-collection ([§56.3](FINDINGS.md)).
 
@@ -3836,3 +3836,53 @@ for f in "--arms B" "--arms B,G"; do uv run scripts/teleop_session.py $f; echo $
 7. ⛔ **"Correct at N=1 by construction" is this week's defect signature.** Three separate bugs worked perfectly with one arm and would have been wrong with two ([§54.1](FINDINGS.md), [§56.5](FINDINGS.md), [§57.1](FINDINGS.md)). **With one arm connected, a passing test proves less than it looks like.**
 
 **519 headless tests. Nothing pushed (working-contract rule 9).**
+
+
+## 59 ⭐⭐ 2026-08-15, SECOND SESSION — THE SIMULATOR EXISTS, AND THE DOCS ARE NOW CHECKED BY MACHINE
+
+⭐ **Both items were built with the arms connected and untouched**, on purpose: Julien was running the owed two-arm playback on hardware, so everything here is new files only. Nothing in `scripts/teleop_session.py` was edited.
+
+### 59.0 ✅⭐⭐⭐ A SIMULATED ARM THAT LAGS — `src/fake_arm.py`, [ROADMAP §8.2](ROADMAP.md) item 30
+
+⛔⭐⭐ **THE POINT IS THE LAG, AND IT IS WHY THE EXISTING FAKES COULD NOT HAVE CAUGHT THIS WEEK'S BUGS.** `scripts/test_park_arms.py` and `scripts/test_status_row.py` carry a fake robot whose `command_joint_pos` **sets the measured position**. That is the right fake for what they test, and it is a fake in which **following error cannot exist** — so every defect living in the gap between *commanded* and *measured* is unreachable by construction. Three defects reached the hardware this week for that reason: the double-advanced cursor, the playback that cancelled itself, and the stale `q` feeding 7 elements against 14 targets.
+
+⭐⭐ **THE LAG IS MEASURED, NOT INVENTED, AND THAT IS THE WHOLE CLAIM TO TRUST.** [ROADMAP §8.2](ROADMAP.md) item 11 closed on 2026-08-13 with a law fitted on three playbacks and then tested on held-out data:
+
+> following error ≈ **0.04 to 0.10 rad + 0.033 s × speed**
+
+Both halves are modelled as the different physical things they are, and the constants then fall out rather than being tuned:
+
+| the law's term | what it physically is | in `fake_arm.py` |
+|---|---|---|
+| `0.033 s × speed` | a first-order lag, the joint chasing its target | `tau = 0.033` s |
+| `0.04 to 0.10 rad` | static friction, a joint not moving for a small error | `deadband = 0.05` rad |
+
+⭐ **Why that combination reproduces the law exactly.** Following a ramp at speed `v` the joint settles where its movement per step equals `v·dt`, so `(|gap| − deadband)·(1 − e^(−dt/tau)) = v·dt`, which for a small step is `|gap| = deadband + v·tau`. **A constant plus a term proportional to speed** — the shape the measurement found. `scripts/test_fake_arm.py` drives it at four speeds and asserts every one lands inside the measured band.
+
+⭐ **It wraps the REAL `SafeRobot`**, not a reimplementation of its two limits, because a copy of a safety limit tests the copy. It can also **block a joint**, **kill the CAN chain** and **make the thermal read fail** — three failure paths that until now needed hardware, an obstruction, or an unplugged cable.
+
+⛔⭐⭐ **WHAT IT CANNOT DO, and this belongs in every summary of it.** No gravity, so the real arm's droop under its own 4.3 kg and every gravity-compensation question are outside it. No dynamics, so no inertia and no coupling between joints. The thermal model is a **shape** with an uncalibrated constant, never a number to compare with a motor. And nothing about **feel** — whether teleop is pleasant, whether mirror tracks well enough to be useful, whether a speed is safe in the room. ⭐ **A simulator nobody has compared against reality is worse than none**, because the bugs it "clears" get shipped.
+
+⬜⭐ **WHAT IS STILL MISSING, AND IT IS THE HALF THAT PAYS OFF:** `scripts/teleop_session.py` cannot yet be told to use it. A `--sim` flag that swaps `build_robot` for `build_fake_robot` is what turns this from a tested module into the thing that runs the whole loop with no arm. ⛔ **Deliberately not done in this session** — it edits the session script, and Julien was driving the real arms with it at the time.
+
+### 59.1 ✅⭐⭐ THE DOCUMENTED COMMANDS ARE NOW CHECKED BY MACHINE — `scripts/check_flags.py`, [ROADMAP §8.2](ROADMAP.md) item 24
+
+⭐ It reads every `uv run scripts/X.py …` line in `docs/` — **79 of them across five files** — pulls `X.py`'s real `argparse` declarations out with the `ast` module, and reports a flag the parser does not have, a value outside its `choices`, a value that will not parse as the declared `type`, and a value handed to an on/off flag. It also lists flags **no document mentions at all**, which is how `--max-lag` stayed invisible while Julien was asking why the arm could not keep up.
+
+⛔⭐⭐ **THE THREE DEFECTS IT FOUND IN ITSELF ARE MORE INSTRUCTIVE THAN THE TOOL.** It came up green on the real docs the first time it ran, and `scripts/falsify_check_flags.py` — ten cases, seven breaks that must be reported and three correct commands that must be left alone — is what stopped that green being believed.
+
+| what went wrong | why | the general lesson |
+|---|---|---|
+| **nine FALSE positives** | the pattern read `A && B --arm B --yes` as one command and blamed B's flags on A | ⚠️ **noise gets a checker ignored, which leaves the repo worse than no checker** — a green-looking thing nobody reads |
+| **two silent MISSES** (`--arm Q`, `--arms B,Q`) | `choices=sorted(ARM_SERIALS)` and `ARM_SERIALS` is a dict literal in `src/yam_can.py`, so the choices never resolved and the check was **skipped without saying so** | ⛔⭐ **a check that cannot resolve its data must not pass quietly** — the same shape as a thermal guard treating an unreadable temperature as a safe one |
+| **a regression I created while fixing a real false positive** | `--arm <B\|G>` is a legitimate placeholder; the rule added to allow it also counted any ALL-CAPS word as one, and **arm names are single capitals**, so `--arm Q` silently stopped being checked | ⛔⭐⭐ **a rule added to remove a false positive can quietly create a false negative, and only a falsification run makes it visible — before and after both look green** |
+
+⭐ **The falsification count is the instrument**: it went 7 → 6 on that last one, and nothing else would have shown it.
+
+### 59.2 ⚠️ WHAT THE RIG READ AT THE START OF THIS SESSION, so the next agent can compare
+
+✅ **Both arms healthy and cold**, 2026-08-15: all 14 motors answered register reads, `ping_motors` reported **no latched fault on either arm** with error clearing OFF (so a real reading, not an erased one), and every motor sat at **27-30 °C**. Every joint at rest within 3 quantisation steps of the zero code.
+
+⚠️ **Only ONE D405 camera was attached**, serial `255323071773`, where 2026-08-14 night had two. ⭐ **This is the fourth different camera count in three days.** Ask `check_rig.py`, never a document — including this paragraph.
+
+⭐ **The jaw frames differed between the arms in the same session**: B reconciled with a **−2π** shift and G with **none**. Both are correct; the shift is a property of the session, not the arm ([§33](FINDINGS.md)).
