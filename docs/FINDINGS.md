@@ -3787,7 +3787,24 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 uv run scripts/teleop_session.py --arms B,G --start-mode hold
 ```
 
-printed the full plan, the per-arm build, the CONTROLS block and `DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.`, then exited **2**. ⚠️ **Exit 2 here is the dry-run code, NOT a failure** — a cold agent will otherwise read it as "the script is broken without hardware" and go looking for a bug that does not exist.
+printed the full plan, the per-arm build, the CONTROLS block and `DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.`, then exited **0**.
+
+⛔⭐⭐ **THIS SECTION SAID "exit 2 is the dry-run code, NOT a failure" AND THAT WAS WRONG. Corrected 2026-08-15, an hour after writing it.** The exit codes are:
+
+| exit | means |
+|---|---|
+| **0** | ✅ a dry run that ran to the end |
+| **2** | ⛔ **argparse rejected the arguments.** `--arms Z` (no such arm) and `--nonsense` both give 2 |
+
+⛔⭐⭐ **HOW THE WRONG VERSION GOT WRITTEN, because the mechanism will catch the next agent too.** The evidence was a **zsh** loop:
+
+```zsh
+for f in "--arms B" "--arms B,G"; do uv run scripts/teleop_session.py $f; echo $?; done
+```
+
+⛔ **zsh does NOT word-split an unquoted parameter expansion, unlike bash.** So `$f` arrived as **one** argument containing a space, argparse said `unrecognized arguments: --arms B`, and every iteration exited 2. **I then read that 2 off a run whose output I had discarded with `>/dev/null`, and explained it as a feature.** ⚠️ Use `${=f}` in zsh, or pass real words, or check the output rather than only the code.
+
+⛔⭐ **This is [§0](FINDINGS.md)'s pattern applied to a TEST HARNESS rather than to the stack**: a plausible, confident, wrong answer with no exception raised. **The harness that checks the code needs the same distrust as the code.**
 
 ⭐ **What this buys, and it is more than it looks:** every flag combination, `parse_arms`, the `ArmSelector`, the mirror pairing, the recording-slot layout, the park plan and every printed line can be exercised **on any machine, with no arms, no CAN adapter and no cameras**. ⛔ **What it does NOT touch is the 100 Hz loop itself** — no cycle ever runs, so nothing about tracking, `SafeRobot` clipping, mirror engagement or playback timing is tested by it. Those need [§58.4](FINDINGS.md)'s simulation harness or the real rig.
 
