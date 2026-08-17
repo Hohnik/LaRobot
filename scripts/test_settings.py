@@ -25,7 +25,12 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from settings import (  # noqa: E402
+    LIVE_BOUNDS,
+    LIVE_ORDER,
     TUNABLE,
+    adjust,
+    at_bound,
+    live_lines,
     describe,
     load_defaults,
     looser_than_builtin,
@@ -235,6 +240,99 @@ def test_a_file_whose_values_all_match_the_builtins_still_says_it_was_read() -> 
     lines = describe({"frame": "world"}, [], [], Path("config/session_defaults.json"),
                      BUILTIN)
     assert lines and "session_defaults.json" in lines[0]
+
+
+# ------------------------------------------------------------- the live editor
+
+
+def test_a_press_moves_a_speed_by_a_RATIO_not_a_fixed_amount() -> None:
+    """⭐ 0.1 → 0.125 and 8 → 10 are the same FELT step. A fixed increment cannot be both,
+    and a setting that spans two orders of magnitude needs the ratio."""
+    assert adjust("max_speed", 4.0, True) == 5.0
+    assert adjust("max_speed", 4.0, False) == 3.2
+    assert adjust("max_speed", 0.4, True) == 0.5
+
+
+def test_the_FLOOR_steps_additively_because_it_crosses_zero() -> None:
+    """⛔ A ratio cannot move 0.0 at all, and the floor's default IS 0.0. It would have been
+    the one setting the editor silently could not change."""
+    assert adjust("floor", 0.0, False) == -0.005
+    assert adjust("floor", 0.0, True) == 0.005
+
+
+def test_the_floor_may_go_BELOW_zero() -> None:
+    """⚠️ Julien uses `--floor -0.005` to pick a flat object off the desk, so a lower bound of
+    zero would have removed a case he actually uses."""
+    assert adjust("floor", -0.01, False) < 0.0
+    assert LIVE_BOUNDS["floor"][0] < 0.0
+
+
+def test_every_setting_STOPS_at_its_ceiling() -> None:
+    """⛔⭐ THE REASON BOUNDS EXIST AT ALL. The linear-speed key had none and a held press
+    reached 19.852 m/s, 165x its default. A repeating key must not be able to run away."""
+    for name, (low, high) in LIVE_BOUNDS.items():
+        value = high
+        for _ in range(50):
+            value = adjust(name, value, True)
+        assert value == high, f"{name} climbed past its ceiling to {value}"
+
+
+def test_every_setting_STOPS_at_its_floor() -> None:
+    for name, (low, high) in LIVE_BOUNDS.items():
+        value = low
+        for _ in range(50):
+            value = adjust(name, value, False)
+        assert value == low, f"{name} fell below its floor to {value}"
+
+
+def test_being_AT_a_bound_is_reported_so_a_dead_press_is_visible() -> None:
+    """⚠️ Otherwise a key that does nothing reads as a key that is broken."""
+    assert at_bound("max_speed", LIVE_BOUNDS["max_speed"][1]) == "ceiling"
+    assert at_bound("max_speed", LIVE_BOUNDS["max_speed"][0]) == "floor"
+    assert at_bound("max_speed", 4.0) == ""
+
+
+def test_the_bounds_are_GENEROUS_enough_not_to_get_in_his_way() -> None:
+    """⭐ These are backstops, never policy. Every value he has actually run must sit inside
+    them: max_speed 10, max_lag 1.0, mirror_gap 2.0 are all from his 2026-08-17 sessions."""
+    for name, used in (("max_speed", 10.0), ("teleop_speed", 10.0),
+                       ("max_lag", 1.0), ("mirror_gap", 2.0), ("reach", 0.6)):
+        low, high = LIVE_BOUNDS[name]
+        assert low <= used <= high, f"{name}={used} is outside the editor's bounds"
+
+
+def test_every_live_setting_is_also_SAVEABLE() -> None:
+    """⛔ A setting he can change live but not save would be the exact complaint he raised,
+    reintroduced one level down."""
+    for name in LIVE_ORDER:
+        assert name in TUNABLE, f"{name} is editable live but cannot be saved"
+
+
+def test_every_live_setting_has_a_bound() -> None:
+    for name in LIVE_ORDER:
+        assert name in LIVE_BOUNDS, f"{name} is editable with no bound"
+
+
+def test_the_screen_marks_which_setting_the_keys_will_MOVE() -> None:
+    """⚠️ Six numbers and two keys is ambiguous without it."""
+    lines = live_lines({k: 1.0 for k in LIVE_ORDER}, "max_lag")
+    picked = [ln for ln in lines if "▸" in ln]
+    assert len(picked) == 1 and "max_lag" in picked[0]
+
+
+def test_the_screen_shows_the_BUILT_IN_value_when_it_differs() -> None:
+    """⭐ So he can see how far from the shipped default he has pushed a safety limit."""
+    lines = live_lines({"max_speed": 4.0}, "max_speed", {"max_speed": 1.0})
+    assert any("built-in 1" in ln for ln in lines)
+    same = live_lines({"max_speed": 1.0}, "max_speed", {"max_speed": 1.0})
+    assert not any("built-in" in ln for ln in same), "it should stay quiet when unchanged"
+
+
+def test_the_screen_WARNS_that_two_of_them_are_live_limits() -> None:
+    """⛔ max_speed and max_lag take effect on the next cycle. A screen that let him change
+    those without saying so would be the worst kind of convenience."""
+    text = "\n".join(live_lines({k: 1.0 for k in LIVE_ORDER}, None))
+    assert "IMMEDIATELY" in text and "4.3 kg" in text
 
 
 def main() -> int:

@@ -143,6 +143,9 @@ from teleop import (  # noqa: E402
 )
 from fake_arm import StillPuck, build_fake_robot  # noqa: E402
 from settings import (  # noqa: E402
+    LIVE_ORDER,
+    adjust as adjust_setting,
+    live_lines,
     defaults_path,
     describe as describe_defaults,
     effective as effective_settings,
@@ -371,6 +374,7 @@ HELP = """
   SPEED     - / +  linear             , / .  rotation
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
+  SETTINGS  n  the speed and safety limits, LIVE — then s saves them for every session
   ARMS      a  which arm the MODE keys aim at (B → G → BOTH). Driving always drives
                every arm; only mode changes and edits are aimed
   MIRROR    i  the SELECTED arm leads, the other follows it joint for joint. Shows the
@@ -1166,6 +1170,11 @@ def main() -> int:  # noqa: PLR0915
     # ⚠️ The safe stop did its job: both arms parked and all 14 motors were confirmed
     # disabled after the traceback. But the recording would have been lost.
     replace_slot: str | None = None     # the occupied slot the guard is asking about
+    # ⭐ Where the six live-editable settings stood when the session began, so `0` in the
+    # SETTINGS screen can put them back. ⚠️ Taken AFTER the file and the flags have been
+    # layered, so "how this session started" means what the plan printed, not the built-ins.
+    settings_at_start = {k: getattr(args, k) for k in LIVE_ORDER if hasattr(args, k)}
+    settings_pick: str = LIVE_ORDER[0]  # which setting -/+ moves in the SETTINGS screen
     replay_held_s = 0.0                 # seconds spent waiting for the arm to catch up
     replay_worst_lag = 0.0              # furthest behind the arm ever got, radians
     replay_prev_target: list[float] | None = None
@@ -2058,6 +2067,59 @@ def main() -> int:  # noqa: PLR0915
                         take_to_save = None
                         continue
 
+                    if pending == "settings":
+                        # ⛔⭐⭐ max_speed AND max_lag ARE PUSHED ONTO THE LIVE ROBOTS. They
+                        # are `SafeRobot` attributes read on every command, so assigning them
+                        # here changes what bounds 4.3 kg **on the next cycle**. That is the
+                        # point of a live editor, and it is also why this screen says so.
+                        def apply_live(name: str, value: float) -> None:
+                            setattr(args, name, value)
+                            for one_arm in arms:
+                                if name == "max_speed":
+                                    one_arm.robot.max_speed = value
+                                elif name == "max_lag":
+                                    one_arm.robot.max_lag = value
+                            if name == "mirror_gap" and mirror_link is not None:
+                                mirror_link.max_gap = value
+
+                        if k in "123456":
+                            idx = int(k) - 1
+                            if idx < len(LIVE_ORDER):
+                                settings_pick = LIVE_ORDER[idx]
+                        elif k in "+=" or k == "-":
+                            was = getattr(args, settings_pick)
+                            apply_live(settings_pick,
+                                       adjust_setting(settings_pick, float(was), k != "-"))
+                        elif k == "0":
+                            for name, value in settings_at_start.items():
+                                apply_live(name, value)
+                            print("\n  ⭐ back to the values this session started with.\n")
+                        elif k == "s":
+                            save_defaults(settings_file, effective_settings(args))
+                            print(f"\n  ⭐ SAVED to {settings_file.parent.name}/"
+                                  f"{settings_file.name}. Every later session starts with "
+                                  f"these.\n")
+                            pending = None
+                            continue
+                        elif k in MODE_KEYS or k in ("\r", "\n", " "):
+                            pending = None
+                            # ⚠️ A mode key LEAVES rather than also switching mode. Pushing
+                            # it back onto the reader would need a queue the key reader does
+                            # not have, and silently changing mode on the way out of a
+                            # settings screen is the kind of surprise that moves an arm.
+                            print("\n  ⭐ leaving SETTINGS. The values are live; nothing was "
+                                  "written to the file.\n     Press n then s to make them "
+                                  "permanent. Press the mode key again to change mode.\n")
+                            continue
+                        elif k != "?":
+                            print(f"\n  (key {k!r} does nothing here — 1-6, -/+, 0, s, "
+                                  f"t/g/h)\n")
+                        for line in live_lines(
+                                {kk: getattr(args, kk) for kk in LIVE_ORDER},
+                                settings_pick, builtin_defaults):
+                            print(line)
+                        continue
+
                     if pending == "take_play":
                         pending = None
                         if not k.isdigit():
@@ -2429,6 +2491,21 @@ def main() -> int:  # noqa: PLR0915
                         print("     Enter engages · i switches copy/mirror · any other key "
                               "cancels\n")
                         continue
+                    if k == "n":
+                        # ⭐⭐ THE SETTINGS SCREEN. His request, 2026-08-17: *"all of these
+                        # flags should be default options that can be changed in some
+                        # controls mode and then should be saved."* The axis map is the
+                        # precedent — edited live with keys, written to a config file.
+                        #
+                        # ⚠️ `n` because s, m, e, v, b and i are all taken. It shows the
+                        # screen and waits; nothing changes until a key is pressed.
+                        pending = "settings"
+                        for line in live_lines(
+                                {kk: getattr(args, kk) for kk in LIVE_ORDER},
+                                settings_pick, builtin_defaults):
+                            print(line)
+                        continue
+
                     if k == "v":
                         # ⭐ Cycle which frame the puck's directions mean. Safe to do
                         # live: the twist is a VELOCITY, so a frame change alters the

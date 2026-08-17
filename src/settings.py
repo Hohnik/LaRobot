@@ -184,3 +184,90 @@ def describe(saved: dict[str, Any], rejected: list[str], loose: list[str],
         out.append("                ⛔ IGNORED (unknown or wrong type): "
                    + ", ".join(rejected))
     return out
+
+
+# ---------------------------------------------------------------- the live editor
+
+#: ⭐⭐ THE SIX SETTINGS THE `n` KEY EDITS, in the order the digits 1-6 select them.
+#:
+#: Julien, 2026-08-17, on why a live editor is the right shape: *"How would the live key
+#: change be one that I didn't type myself? That does not make any sense to me if I'm in a
+#: control mode changing the key. And mainly, this is for saving which default value I wanna
+#: change, because if I change controls, normally they always save in the live program."*
+#:
+#: ⭐ He is right, and the axis map is the precedent: it is edited live with keys and written
+#: to `config/spacemouse_map.json`. A keypress he makes IS him typing the value.
+#:
+#: ⚠️ Only these six. The booleans and the frame have their own keys already (`r`, `v`), and
+#: `start_mode` cannot be changed retroactively for a session that has started.
+LIVE_ORDER = ("max_speed", "teleop_speed", "max_lag", "mirror_gap", "reach", "floor")
+
+#: ⛔⭐ BOUNDS FOR THE LIVE EDITOR, and every one is a backstop rather than a policy. A key
+#: that repeats when held reached `lin 19.852 m/s` on 2026-08-17 because the linear-speed
+#: keys had no ceiling at all. ⚠️ Generous on purpose: these must never be the reason a
+#: setting will not go where he wants it, only the reason a stuck key cannot run away.
+LIVE_BOUNDS: dict[str, tuple[float, float]] = {
+    "max_speed": (0.1, 20.0),
+    "teleop_speed": (0.1, 20.0),
+    "max_lag": (0.05, 3.0),
+    "mirror_gap": (0.05, 6.0),
+    "reach": (0.15, 1.2),
+    #: ⚠️ The floor may legitimately go BELOW zero — Julien uses `--floor -0.005` for a flat
+    #: object on the desk — so its lower bound is negative rather than a small positive.
+    "floor": (-0.15, 0.5),
+}
+
+#: How much one press moves a setting. ⭐ A ratio for the speeds, because 0.1 → 0.125 and
+#: 8 → 10 are the same *felt* step, and a fixed increment cannot be both.
+LIVE_STEP = 1.25
+
+
+def adjust(name: str, value: float, up: bool) -> float:
+    """One press of `+` or `-` on setting `name`. Clamped to its bound.
+
+    ⚠️ `floor` steps ADDITIVELY, because it is a position that crosses zero and a ratio
+    cannot move a value of 0.0 at all. Everything else is a ratio.
+    """
+    low, high = LIVE_BOUNDS[name]
+    if name == "floor":
+        nxt = value + (0.005 if up else -0.005)
+    else:
+        nxt = value * LIVE_STEP if up else value / LIVE_STEP
+    return float(min(high, max(low, nxt)))
+
+
+def at_bound(name: str, value: float) -> str:
+    """`"ceiling"`, `"floor"` or `""` — so the operator is told a press did nothing."""
+    low, high = LIVE_BOUNDS[name]
+    if value >= high:
+        return "ceiling"
+    if value <= low:
+        return "floor"
+    return ""
+
+
+def live_lines(values: dict[str, Any], selected: str | None,
+               builtin: dict[str, Any] | None = None) -> list[str]:
+    """The settings screen. `selected` is the one the `-`/`+` keys will move."""
+    out = ["", "  ⭐ SETTINGS — the speed and safety limits, live.", ""]
+    for i, name in enumerate(LIVE_ORDER, start=1):
+        value = values.get(name)
+        if value is None:
+            continue
+        mark = "▸" if name == selected else " "
+        base = "" if builtin is None or name not in builtin else \
+            ("" if value == builtin[name] else f"  (built-in {builtin[name]:g})")
+        edge = at_bound(name, float(value))
+        out.append(f"   {mark} {i}  {name:<14} {float(value):7.3f}"
+                   f"{base}{'  ⚠️ ' + edge if edge else ''}")
+    out += [
+        "",
+        "   1-6 pick a setting   - / +  change it   0  back to how this session started",
+        "   s   SAVE these to config/session_defaults.json for every later session",
+        "   t / g / h  leave                                        ?  this help",
+        "",
+        "  ⚠️ max_speed and max_lag take effect on the arms IMMEDIATELY. They are the two",
+        "     limits that bound how fast 4.3 kg may move, so a change here is a real change.",
+        "",
+    ]
+    return out

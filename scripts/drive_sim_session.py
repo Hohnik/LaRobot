@@ -40,6 +40,14 @@ REPO = str(pathlib.Path(__file__).resolve().parent.parent)
 # steps wait for the simulated arm to settle.
 SCRIPT = [
     (4.0, ""),          # let both arms build
+    (1.5, "n"),         # the SETTINGS screen
+    (1.0, "1"),         # pick max_speed
+    (0.8, "+"),         # raise it
+    (0.8, "+"),
+    (0.8, "3"),         # pick max_lag
+    (0.8, "+"),         # raise it
+    (0.8, "0"),         # back to how the session started
+    (1.0, "h"),         # leave SETTINGS
     (1.0, "a"),         # B -> G
     (0.5, "a"),         # G -> BOTH
     (1.0, "t"),         # TELEOP on both
@@ -119,6 +127,10 @@ def main() -> int:
     # The claims a working --sim must support, in the order they should happen.
     checks = [
         ("simulated pucks announced", r"SIMULATED PUCKS"),
+        ("the SETTINGS screen opens", r"SETTINGS — the speed and safety limits"),
+        ("a setting can be raised live", r"max_speed\s+1\.5"),
+        ("0 reverts to the session start", r"back to the values this session started"),
+        ("leaving says nothing was written", r"nothing was written to the file"),
         ("both arms built as SIMULATED", r"SIMULATED arm B"),
         ("arm G built too", r"SIMULATED arm G"),
         ("says it has no gravity", r"No gravity"),
