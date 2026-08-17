@@ -64,6 +64,9 @@ TUNABLE: dict[str, tuple[type, bool, str | None]] = {
     "no_rotation": (bool, False, None),
     "no_smooth": (bool, False, None),
     "no_gripper": (bool, False, None),
+    #: ⭐ Not a bound but a control gain, so `is_a_safety_limit` is False. ⚠️ It still changes
+    #: what the arm does, which is why it defaults to OFF rather than to a value.
+    "mirror_catchup": (float, False, None),
 }
 
 
@@ -200,7 +203,8 @@ def describe(saved: dict[str, Any], rejected: list[str], loose: list[str],
 #:
 #: ⚠️ Only these six. The booleans and the frame have their own keys already (`r`, `v`), and
 #: `start_mode` cannot be changed retroactively for a session that has started.
-LIVE_ORDER = ("max_speed", "teleop_speed", "max_lag", "mirror_gap", "reach", "floor")
+LIVE_ORDER = ("max_speed", "teleop_speed", "max_lag", "mirror_gap", "reach", "floor",
+              "mirror_catchup")
 
 #: ⛔⭐ BOUNDS FOR THE LIVE EDITOR, and every one is a backstop rather than a policy. A key
 #: that repeats when held reached `lin 19.852 m/s` on 2026-08-17 because the linear-speed
@@ -215,33 +219,69 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     #: ⚠️ The floor may legitimately go BELOW zero — Julien uses `--floor -0.005` for a flat
     #: object on the desk — so its lower bound is negative rather than a small positive.
     "floor": (-0.15, 0.5),
+    #: ⭐ 0 is OFF and must stay reachable, so this is the one setting whose floor is zero and
+    #: whose step has to be able to get there. `adjust` special-cases it for that reason.
+    "mirror_catchup": (0.0, 20.0),
 }
 
-#: How much one press moves a setting. ⭐ A ratio for the speeds, because 0.1 → 0.125 and
-#: 8 → 10 are the same *felt* step, and a fixed increment cannot be both.
-LIVE_STEP = 1.25
+#: ⛔⭐⭐⭐ A LADDER OF ROUND NUMBERS, BECAUSE THE RATIO STEP PRODUCED UNUSABLE VALUES.
+#:
+#: The first version multiplied by 1.25 per press, on the reasoning that 0.1 → 0.125 and
+#: 8 → 10 are the same *felt* step. That reasoning is fine and the result was not. Julien's
+#: 2026-08-17 session shows what he actually got by holding `+`:
+#:
+#:     1.000 → 1.250 → 1.562 → 1.953 → 2.441 → 3.052 → 3.815 → 4.768 → 5.960 → 7.451 → 9.313
+#:
+#: ⛔ **He can never get back to 2, or 4, or 10.** Every value he had been running by flag was
+#: unreachable by key, and the numbers then leaked into messages as
+#: `limit 1.33514404296875` and `--max-speed 16 (now 7.45058)`.
+#:
+#: ⭐ So the keys walk a ladder instead. Each press moves one rung, every rung is a number a
+#: person would choose, and the flag values he has actually used (1, 1.5, 2, 4, 10) are all on
+#: it. ⚠️ A value set by flag that is BETWEEN rungs still works: the first press moves to the
+#: nearest rung in the direction pressed, so nothing is ever stuck.
+LADDERS: dict[str, tuple[float, ...]] = {
+    "max_speed": (0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0),
+    "teleop_speed": (0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 10.0, 15.0, 20.0),
+    "max_lag": (0.1, 0.15, 0.25, 0.4, 0.6, 0.8, 1.0, 1.5, 2.0, 3.0),
+    "mirror_gap": (0.1, 0.2, 0.35, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0),
+    "reach": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2),
+    "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
+    "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
+}
 
 
 def adjust(name: str, value: float, up: bool) -> float:
-    """One press of `+` or `-` on setting `name`. Clamped to its bound.
+    """One press of `+` or `-` on setting `name`: the next rung of its ladder.
 
-    ⚠️ `floor` steps ADDITIVELY, because it is a position that crosses zero and a ratio
-    cannot move a value of 0.0 at all. Everything else is a ratio.
+    ⭐ A value that sits BETWEEN rungs — because it came from a flag — moves to the nearest
+    rung in the direction pressed rather than jumping past it. ⚠️ Without that, a flag value
+    of 7 would step to 8 on `+` and to 6 on `-`, which is fine, but a flag value of 0.9 with a
+    naive "first rung greater than this" rule would step DOWN to 0.5 on `-` and skip 0.8
+    entirely.
     """
+    rungs = LADDERS[name]
     low, high = LIVE_BOUNDS[name]
-    if name == "floor":
-        nxt = value + (0.005 if up else -0.005)
+    eps = 1e-9
+    if up:
+        nxt = next((r for r in rungs if r > value + eps), rungs[-1])
     else:
-        nxt = value * LIVE_STEP if up else value / LIVE_STEP
+        nxt = next((r for r in reversed(rungs) if r < value - eps), rungs[0])
     return float(min(high, max(low, nxt)))
 
 
 def at_bound(name: str, value: float) -> str:
-    """`"ceiling"`, `"floor"` or `""` — so the operator is told a press did nothing."""
+    """`"ceiling"`, `"floor"` or `""` — so the operator is told a press did nothing.
+
+    ⚠️ Judged against the LADDER's ends as well as the numeric bound, because the top rung is
+    what a press can actually reach. A value between the top rung and the hard bound would
+    otherwise report nothing while `+` did nothing.
+    """
+    rungs = LADDERS[name]
     low, high = LIVE_BOUNDS[name]
-    if value >= high:
+    if value >= min(high, rungs[-1]) - 1e-9:
         return "ceiling"
-    if value <= low:
+    if value <= max(low, rungs[0]) + 1e-9:
         return "floor"
     return ""
 
@@ -262,7 +302,7 @@ def live_lines(values: dict[str, Any], selected: str | None,
                    f"{base}{'  ⚠️ ' + edge if edge else ''}")
     out += [
         "",
-        "   1-6 pick a setting   - / +  change it   0  back to how this session started",
+        "   1-7 pick a setting   - / +  change it   0  back to how this session started",
         "   s   SAVE these to config/session_defaults.json for every later session",
         "   t / g / h  leave                                        ?  this help",
         "",

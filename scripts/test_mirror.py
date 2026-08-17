@@ -380,6 +380,281 @@ def test_ALIGNING_still_converges_when_the_leader_is_held_still() -> None:
     assert link.state == "following"
 
 
+
+# ============================================================ the catch-up correction
+#
+# ⭐⭐ WHY THESE EXIST. Julien, 2026-08-17: *"I can move the mirrored robot about in a maybe
+# two centimetre diameter sphere around the position it should actually be at… when I try to
+# pick up something from the table, sometimes my guiding robot is already moving into the
+# table whilst my mirror robot isn't even far enough down."*
+#
+# ⭐ Measured on his hardware: 0.024 rad of joint error is 11 mm at the tip in the extended
+# pose his log shows, so the 2 cm sphere is what those numbers predict.
+
+
+DROOP = 0.024          # rad — the standing error his status row reported
+
+
+def _drooping_follower(link, leader, cycles=400, dt=0.011, droop=DROOP):
+    """Run `cycles` of mirroring against a follower that always sits `droop` short.
+
+    ⭐ THIS IS THE WHOLE POINT OF THE FIXTURE. A position-controlled arm settles where its
+    motor force balances gravity and friction, which is always short of the command. So the
+    fake follower reports `command − droop`, never the command. **A fake that reports the
+    command exactly cannot show this problem at all**, which is the same trap the old fake
+    robots had (docs/FINDINGS.md §59.0).
+
+    Returns the final measured follower pose.
+    """
+    import numpy as np
+
+    measured = np.zeros(7)
+    for _ in range(cycles):
+        cmd = link.step(leader, measured, dt)
+        if cmd is None:
+            continue
+        measured = np.asarray(cmd, dtype=float).copy()
+        measured[:6] -= droop          # the arm sits short of whatever it was told
+    return measured
+
+
+def test_WITHOUT_catchup_the_follower_stays_short_forever() -> None:
+    """⛔⭐⭐ THE DEFECT, AS A TEST. The command converges to the leader's angles exactly, so
+    the follower sits at `leader − droop` and no part of the loop ever reads that back."""
+    import numpy as np
+
+    leader = np.full(7, 0.5)
+    link = MirrorLink(follow_speed=2.0, catchup=0.0)
+    measured = _drooping_follower(link, leader)
+    err = float(np.max(np.abs(leader[:6] - measured[:6])))
+    assert err > DROOP * 0.9, (
+        f"expected the droop to persist at about {DROOP} rad; got {err:.4f}")
+
+
+def test_WITH_catchup_the_follower_ACTUALLY_ARRIVES() -> None:
+    """✅⭐⭐ THE FIX. The bias grows until the follower reaches the leader, and the residual
+    should be a small fraction of the droop rather than the whole of it."""
+    import numpy as np
+
+    leader = np.full(7, 0.5)
+    link = MirrorLink(follow_speed=2.0, catchup=3.0)
+    measured = _drooping_follower(link, leader)
+    err = float(np.max(np.abs(leader[:6] - measured[:6])))
+    assert err < DROOP * 0.2, (
+        f"the follower is still {err:.4f} rad short, which is {err / DROOP:.0%} of the "
+        f"original droop. The correction is not closing it")
+
+
+def test_the_bias_NEVER_exceeds_its_clamp_even_against_a_blocked_follower() -> None:
+    """⛔⭐⭐ THE SAFETY PROPERTY. A blocked follower never closes its error, so an unclamped
+    integral grows forever and the arm lurches when the block clears. This runs a follower
+    that cannot move at all for twenty seconds."""
+    import numpy as np
+
+    leader = np.full(7, 1.0)
+    link = MirrorLink(follow_speed=2.0, catchup=5.0, max_bias=0.06, max_gap=99.0)
+    stuck = np.zeros(7)
+    for _ in range(2000):
+        link.step(leader, stuck, 0.011)      # the follower never moves
+    assert link.worst_bias() <= 0.06 + 1e-9, (
+        f"the bias wound up to {link.worst_bias():.4f} rad against its 0.06 clamp")
+
+
+def test_the_clamp_stays_well_under_SafeRobot_s_lag_limit() -> None:
+    """⚠️ The bias makes the command sit further from the measured pose, which is exactly what
+    `SafeRobot.max_lag` limits. If the clamp approached that, the correction would simply be
+    clipped away and the feature would silently do nothing."""
+    from mirror import DEFAULT_MAX_BIAS
+    from yam_robot import SAFE_MAX_LAG
+
+    assert DEFAULT_MAX_BIAS < SAFE_MAX_LAG * 0.5, (
+        f"a {DEFAULT_MAX_BIAS} rad bias against a {SAFE_MAX_LAG} rad lag clip leaves too "
+        f"little room")
+
+
+def test_a_FAST_leader_does_not_accumulate_any_bias() -> None:
+    """⛔⭐ While the leader moves, part of the error is honest lag that disappears by itself.
+    Integrating it would push the follower PAST the leader every time it stopped."""
+    import numpy as np
+
+    link = MirrorLink(follow_speed=5.0, catchup=5.0, catchup_below=0.25, max_gap=99.0)
+    measured = np.zeros(7)
+    leader = np.zeros(7)
+    for _ in range(300):
+        leader = leader + 0.02              # ~1.8 rad/s, far above catchup_below
+        cmd = link.step(leader, measured, 0.011)
+        if cmd is not None:
+            measured = np.asarray(cmd, dtype=float).copy()
+            measured[:6] -= DROOP
+    # ⚠️ Not exactly zero, and the reason is worth knowing. The leader's speed estimate is
+    # smoothed, so for the first few cycles of a fast motion it still reads slow and a sliver
+    # of bias accumulates. Measured at 0.0011 rad, which is about 0.5 mm at the tip.
+    # ⭐ What matters is that a fast leader DECAYS it rather than freezing it, so the sliver
+    # bleeds away instead of one being added at every slow-to-fast transition.
+    assert link.worst_bias() < 0.002, (
+        f"a fast leader accumulated {link.worst_bias():.4f} rad of bias, which is more than "
+        f"the smoothing lag can explain")
+
+
+def test_a_bias_accumulated_while_SLOW_decays_once_the_leader_moves_fast() -> None:
+    """⛔⭐⭐ THE LEAK, AND A TEST FOUND WHY IT IS NEEDED. Without it a fast leader freezes the
+    bias, so every slow-to-fast transition adds a sliver and a long session of reaching and
+    sweeping could creep to the clamp for a reason nobody chose."""
+    import numpy as np
+
+    leader = np.full(7, 0.5)
+    link = MirrorLink(follow_speed=2.0, catchup=3.0, max_gap=99.0)
+    _drooping_follower(link, leader)                 # build a real bias while slow
+    settled = link.worst_bias()
+    assert settled > 0.005, f"no bias to decay ({settled:.4f}); the test proves nothing"
+
+    measured = np.full(7, 0.5)
+    fast = leader.copy()
+    for _ in range(400):
+        fast = fast + 0.02                           # ~1.8 rad/s, far above catchup_below
+        cmd = link.step(fast, measured, 0.011)
+        if cmd is not None:
+            measured = np.asarray(cmd, dtype=float).copy()
+    assert link.worst_bias() < settled * 0.2, (
+        f"the bias only fell from {settled:.4f} to {link.worst_bias():.4f}; it is being "
+        f"frozen rather than decayed")
+
+
+def test_catchup_is_OFF_by_default() -> None:
+    """⛔⭐ It changes what a 4.3 kg arm does, so it is opt-in. Julien raises limits and enables
+    control changes; the agent adds the flag and recommends."""
+    from mirror import DEFAULT_CATCHUP
+
+    assert DEFAULT_CATCHUP == 0.0
+    assert MirrorLink().catchup == 0.0
+
+
+def test_the_bias_is_RESET_when_the_link_re_engages() -> None:
+    """⛔ Carrying control state across an engagement is the same class of bug as the stale
+    `prev_q` that snapped this arm on 2026-08-10."""
+    import numpy as np
+
+    leader = np.full(7, 0.5)
+    link = MirrorLink(follow_speed=2.0, catchup=3.0)
+    _drooping_follower(link, leader)
+    assert link.worst_bias() > 0.0, "no bias accumulated, so this test proves nothing"
+
+    fresh = MirrorLink(follow_speed=2.0, catchup=3.0)
+    fresh.step(leader, np.zeros(7), 0.011)
+    assert fresh.worst_bias() == 0.0, "a new link started with a bias already in place"
+
+
+
+# ==================================================== the per-joint gap scaling
+#
+# ⭐⭐ WHY. Every mirror stop in Julien's 2026-08-17 logs was on joint 5 (`wrist_roll`) or
+# joint 6 (`gripper_twist`), the two joints that barely move the tip. The only way to tolerate
+# a flicked wrist was to raise the threshold for the SHOULDER as well, and he reached
+# `--mirror-gap 1.335` doing it. At the elbow's measured 0.418 m/rad that allows 56 cm of tip
+# error on a limit whose purpose is noticing that the arm has gone somewhere wrong.
+
+
+def test_a_WRIST_gap_that_used_to_stop_it_now_does_not() -> None:
+    """⛔⭐⭐ HIS EXACT STOP. Joint 5 fell 0.364 rad behind against a 0.35 threshold. Joint 5's
+    own limit is 0.35 x 4.0 = 1.4, so that flick should no longer interrupt him."""
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    follower = np.zeros(7)
+    target = np.zeros(7)
+    target[4] = 0.364                      # joint 5 is index 4
+    j, g, limit = worst_scaled_joint(follower, target, 0.35)
+    assert j == 4 and abs(g - 0.364) < 1e-9
+    assert limit > 1.3, f"joint 5's limit is only {limit:.2f}"
+    assert g < limit, "his 0.364 rad wrist flick would still stop the mirror"
+
+
+def test_the_SAME_gap_on_the_ELBOW_still_stops_it() -> None:
+    """⛔⭐⭐ THE OTHER HALF, AND THE ONE THAT MATTERS FOR SAFETY. The elbow moves the tip
+    0.418 m per radian, so it gets no extra rope at all."""
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    follower = np.zeros(7)
+    target = np.zeros(7)
+    target[2] = 0.364                      # joint 3, the elbow
+    j, g, limit = worst_scaled_joint(follower, target, 0.35)
+    assert j == 2
+    assert limit <= 0.36, f"the elbow was given {limit:.2f}, which is extra rope"
+    assert g > limit, "a 0.364 rad ELBOW error must still stop the mirror"
+
+
+def test_it_names_the_joint_CLOSEST_TO_ITS_OWN_LIMIT_not_the_biggest_gap() -> None:
+    """⭐ Those are different questions once the thresholds differ. A 0.9 rad wrist error
+    against a 1.4 rad wrist limit is further from stopping than a 0.4 rad elbow error against
+    0.35. Reporting the largest raw gap would name the wrist and send him after the wrong
+    flag."""
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    follower = np.zeros(7)
+    target = np.zeros(7)
+    target[4] = 0.9                        # big, but well inside the wrist's limit
+    target[2] = 0.4                        # smaller, but over the elbow's limit
+    j, g, limit = worst_scaled_joint(follower, target, 0.35)
+    assert j == 2, f"it named joint {j + 1}; the elbow is the one in trouble"
+    assert g > limit
+
+
+def test_the_weights_put_the_SHOULDER_JOINTS_at_about_1x() -> None:
+    """⚠️ Joints 1-3 carry the arm through space, so their thresholds must be essentially
+    unchanged from what he has been running. A silent loosening there would be the opposite of
+    what this change is for."""
+    from mirror import GAP_WEIGHTS
+
+    for j in range(3):
+        assert GAP_WEIGHTS[j] <= 1.3, f"joint {j + 1} got {GAP_WEIGHTS[j]}x, which is a real loosening"
+
+
+def test_the_wrist_multiplier_is_CAPPED_rather_than_following_the_measurement() -> None:
+    """⚠️⚠️ Pure tip-displacement scaling would give joint 6 about 6.6x, and tip position is
+    the wrong basis for task accuracy even though it is the right one for danger. 1.4 rad on
+    the gripper twist is the gripper rotated 80° from where it should be, which ruins a grasp
+    while barely moving the tip. So the cap is deliberate."""
+    from mirror import GAP_WEIGHTS
+
+    assert max(GAP_WEIGHTS) <= 4.0, f"a multiplier of {max(GAP_WEIGHTS)}x is too much rope"
+    assert GAP_WEIGHTS[5] == 4.0, "the gripper twist should be at the cap"
+
+
+def test_an_all_zero_gap_stops_nothing() -> None:
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    j, g, limit = worst_scaled_joint(np.zeros(7), np.zeros(7), 0.35)
+    assert g == 0.0 and g < limit
+
+
+def test_a_SHORT_pose_vector_does_not_crash_the_check() -> None:
+    """⚠️ A 6-DoF follower tracking a 7-DoF leader has bitten this file before."""
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    j, g, limit = worst_scaled_joint(np.zeros(3), np.zeros(3), 0.35)
+    assert 0 <= j < 3 and limit > 0
+
+
+def test_his_gripper_twist_stop_would_now_pass_at_the_DEFAULT_gap() -> None:
+    """⭐⭐ THE PRACTICAL POINT. He reached `--mirror-gap 1.335` chasing joint 6, and joint 6
+    then fell 1.369 behind anyway. At the DEFAULT 0.35 the wrist's own limit is 1.4, so the
+    same flick passes without the elbow's threshold being touched at all."""
+    import numpy as np
+    from mirror import worst_scaled_joint
+
+    follower = np.zeros(7)
+    target = np.zeros(7)
+    target[5] = 1.369                      # joint 6
+    j, g, limit = worst_scaled_joint(follower, target, 0.35)
+    assert j == 5
+    assert g < limit, (
+        f"joint 6 at {g:.3f} still exceeds its {limit:.2f} limit at the default gap")
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []

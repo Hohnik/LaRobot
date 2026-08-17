@@ -118,6 +118,7 @@ from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from mirror import (  # noqa: E402
     DEFAULT_ALIGN_SPEED,
+    DEFAULT_CATCHUP,
     DEFAULT_MAX_GAP,
     MirrorLink,
     pick_pair,
@@ -959,6 +960,15 @@ def main() -> int:  # noqa: PLR0915
                          f"to catch up. That is how you get faster tracking AND how you get a "
                          f"harder hit. Raise it in small steps (0.25 → 0.35) and watch what the "
                          f"arm does when it meets something")
+    ap.add_argument("--mirror-catchup", type=float, default=DEFAULT_CATCHUP,
+                    metavar="PER_SECOND",
+                    help="⭐ how fast MIRROR corrects the follower's STANDING offset. 0 = off "
+                         "(the default). Try 3. The follower is position-controlled, so it "
+                         "settles short of its command by 0.012-0.024 rad, which is 5-11 mm "
+                         "at the tip and is why the mirrored arm sits in a ~2 cm sphere "
+                         "instead of on the spot. This aims slightly past the leader until "
+                         "the follower actually arrives, only while the leader is moving "
+                         "slowly, clamped to 0.06 rad.")
     ap.add_argument("--mirror-gap", type=float, default=DEFAULT_MAX_GAP,
                     help=f"how far the MIRROR follower may fall behind the leader before the "
                          f"link stops, in radians (default {DEFAULT_MAX_GAP}). ⚠️ A TOLERANCE "
@@ -1270,6 +1280,11 @@ def main() -> int:  # noqa: PLR0915
     print(f"  joint speed : teleop {min(args.teleop_speed, args.max_speed):.2f} · "
           f"planned {min(args.teleop_speed, args.max_speed):.2f} · "
           f"mirror {args.max_speed:.2f} rad/s{note}")
+    if args.mirror_catchup > 0.0:
+        # ⭐ Say it in the plan, because it changes what the follower does and a control term
+        # nobody can see on startup is one nobody can rule out later.
+        print(f"  mirror fix  : ON at {args.mirror_catchup:g}/s — corrects the follower's "
+              f"standing offset while the leader is slow, clamped to 0.06 rad")
     lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
     print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
           f"the command within {args.max_lag:.2f} rad of the measured pose{lag_note})")
@@ -2092,6 +2107,11 @@ def main() -> int:  # noqa: PLR0915
                                     one_arm.robot.max_lag = value
                             if name == "mirror_gap" and mirror_link is not None:
                                 mirror_link.max_gap = value
+                            if name == "mirror_catchup" and mirror_link is not None:
+                                # ⭐ Reaches a RUNNING mirror, so he can watch the follower
+                                # close onto the leader while holding it still. That is the
+                                # whole reason this belongs on the live screen.
+                                mirror_link.catchup = value
 
                         # ⭐⭐ ARROW KEYS MOVE THE SELECTION, because that is what a person
                         # presses at a list. Julien's first ever use of this screen produced
@@ -2120,7 +2140,7 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  ⭐ SETTINGS closed. The values are live; press n then s "
                                   "to write them to the file.\n")
                             continue
-                        elif k in "123456":
+                        elif k in "1234567":
                             idx = int(k) - 1
                             if idx < len(LIVE_ORDER):
                                 settings_pick = LIVE_ORDER[idx]
@@ -2162,7 +2182,7 @@ def main() -> int:  # noqa: PLR0915
                             # screen is noise; "left/right arrow" is information.
                             shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
                                 k, repr(k) if k.isprintable() else "that key")
-                            print(f"\n  ({shown} does nothing here — 1-6 or up/down to pick, "
+                            print(f"\n  ({shown} does nothing here — 1-7 or up/down to pick, "
                                   f"-/+ to change, 0 revert, s save, n or t/g/h to leave)\n")
                         if show_all or k == "0":
                             for line in live_lines(
@@ -2298,6 +2318,7 @@ def main() -> int:  # noqa: PLR0915
                             # the mirror would stay slow for no visible reason.
                             mirror_link = MirrorLink(
                                 mode=args.mirror, align_speed=MIRROR_ALIGN_SPEED,
+                                catchup=args.mirror_catchup,
                                 follow_speed=getattr(mirror_follower.robot, "max_speed",
                                                      args.max_speed),
                                 max_gap=args.mirror_gap)
@@ -3338,7 +3359,8 @@ def main() -> int:  # noqa: PLR0915
                             clipped = getattr(one.robot, "limited_cycles", 0) - mirror_clipped_at
                             if clipped > 0:
                                 print(f"     ⚠️ SafeRobot held the command back on {clipped} "
-                                      f"cycle(s) (its {getattr(one.robot, 'max_lag', 0.25)} rad "
+                                      f"cycle(s) (its "
+                                      f"{getattr(one.robot, 'max_lag', 0.25):.2f} rad "
                                       "following-error limit).")
                             if mirror_link.stop_cause == "follow_limit":
                                 # ⛔⭐⭐ NAME BOTH FLAGS, AND NAME THE ONE THAT ACTUALLY
@@ -3370,7 +3392,7 @@ def main() -> int:  # noqa: PLR0915
                                       f"  (now {mirror_link.max_gap:.2f}) — how far behind "
                                       f"is TOLERATED before stopping.")
                                 print(f"       2. `--max-speed {suggest:g}`"
-                                      f"  (now {args.max_speed:g}) — how fast the follower "
+                                      f"  (now {args.max_speed:.2f}) — how fast the follower "
                                       f"may move. You moved the leader at "
                                       f"{mirror_link.stop_leader_speed:.2f} rad/s.")
                                 # ⛔⭐ THIS LINE USED TO CITE "2.4-3.7 rad/s" AS WHAT A HAND
