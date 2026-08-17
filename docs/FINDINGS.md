@@ -3911,3 +3911,117 @@ Both halves are modelled as the different physical things they are, and the cons
 ⚠️ **Only ONE D405 camera was attached**, serial `255323071773`, where 2026-08-14 night had two. ⭐ **This is the fourth different camera count in three days.** Ask `check_rig.py`, never a document — including this paragraph.
 
 ⭐ **The jaw frames differed between the arms in the same session**: B reconciled with a **−2π** shift and G with **none**. Both are correct; the shift is a property of the session, not the arm ([§33](FINDINGS.md)).
+
+
+## 60 ⭐⭐⭐ 2026-08-17 — THE TWO-ARM PLAYBACK IS CONFIRMED ON HARDWARE, AND `--sim` NOW RUNS THE LOOP WITHOUT ANY
+
+### 60.0 ✅✅✅⭐⭐⭐ THE OWED RUN IS DONE. THE LAST UNCONFIRMED FEATURE IN THE PROJECT WORKS
+
+⭐⭐ **Julien ran it on 2026-08-17 at ~12:12 and it worked end to end.** This closes the item that had sat open since 2026-08-14, when the playback cancelled itself because one arm reached its start pose before the other ([§57.1](FINDINGS.md)). **The fix had never run until now.**
+
+⭐ **The exact sequence from his log, because this is the evidence:**
+
+```
+⭐ MODE: PARK → arm B's start pose in recording 7, 0.22 rad of travel at 0.40 rad/s
+⭐ MODE: PARK → arm G's start pose in recording 7, 0.16 rad of travel at 0.40 rad/s
+⭐ PARK reached in 1.2s (0.019 rad off) → HOLD
+     arm G is at the start pose; waiting for B.          ← ⭐⭐ THE FIX, WORKING
+⭐ PARK reached in 1.8s, 0.4s of that settling (0.020 rad off) → HOLD
+▶  PLAYING 5.2s of recorded movement on B+G at 1.00x
+⭐ PLAYBACK finished in 5.2s → HOLD
+```
+
+⭐ **G had less distance to cover (0.16 rad against 0.22) so it arrived first, waited, and the playback then started.** That is precisely the case that used to abort.
+
+✅ **Everything else in that session, checked line by line:**
+
+| what | reading | verdict |
+|---|---|---|
+| two-arm recording | 5.2 s, **468 samples**, 14 joints per sample | ✅ and 468 appears in **both** the stop and the save message, so the [§34.0](FINDINGS.md) double-count fix is still holding |
+| loop rate | **90 Hz** (468 ÷ 5.2), with the `⚠️ 90Hz` warning showing | ⚠️ still under 100, but **up from the 83-84 Hz of 2026-08-13**. [ROADMAP §8.2](ROADMAP.md) item 14 stays open |
+| playback tracking | worst lag **0.076 rad**, against a 0.15 hold threshold and a 0.25 `max_lag` | ✅ comfortable. **0.0 s spent waiting for the arm to catch up**, so the replay was faithful |
+| `q q` shutdown | both arms parked (0.020 and 0.022 rad off), **all 14 motors confirmed disabled** | ✅ |
+| temperature | B peaked 36 °C, G 38 °C, jaws 33 and 32 | ✅ far below the 55 °C warning |
+| jaw frames | B reconciled **−2π**, G with **none**, in the same session | ✅ expected; the shift is a property of the session ([§33](FINDINGS.md)) |
+| speed flags | `--max-speed 2 --teleop-speed 2` raised, `--max-lag` left at **0.25** | ⚠️ so [ROADMAP §8.2](ROADMAP.md) item 27, raising the real ceiling, is **still untried** |
+
+⚠️ **What that run did NOT test:** the overwrite guard (slot 7 was empty, so it never fired), MIRROR (not used), and `--max-lag` above 0.25.
+
+### 60.1 ⛔⭐⭐ AND READING THAT LOG FOUND A DEFECT: THE TRACKING TABLE WAS LYING ABOUT WHICH ARM EACH ROW WAS
+
+⛔ **His table printed six named rows and six rows labelled just `joint`, for a recording of fourteen joints.** Two rows were absent and nothing said so.
+
+| fault | cause | why nothing caught it |
+|---|---|---|
+| ⛔ **arm G's rows had no name** | the print did `YAM_JOINTS.get(flat_index + 1)`, and `YAM_JOINTS` holds keys **1-7**. Arm G's flat indices 7-13 became keys 8-14, missed, and fell back to `"joint"` | ⭐ **at N=1 the flat index and the per-arm index are the same number.** The "correct at N=1 by construction" signature again |
+| ⛔ **no row said which arm it was** | there was no arm prefix at all, so the six named rows read as *"the arm"* when they were only arm B | a plausible-looking table nobody had reason to distrust |
+| ⚠️ **12 rows for 14 joints, silently** | rows with a top speed under 0.01 rad/s are skipped, which is right — a joint that never moved says nothing about tracking | ⚠️ **but saying nothing about skipping them is not.** Both absent rows were the grippers, which he never touched. A reader counting rows would conclude the recorder had lost two joints |
+
+⛔⭐ **THE CORRECT CODE ALREADY EXISTED EIGHT LINES BELOW THE WRONG CODE.** The saved tracking JSON built per-arm names, with a comment explaining exactly why that was necessary. **So the printed table and the saved file had been disagreeing.** Two copies of one expression is what let them drift, so it is now one function, `flat_joint_names`, with `tracking_table` for the rows — both module-level and pure, the same reason `status_row` and `park_arms` were extracted.
+
+### 60.2 ✅⭐⭐⭐ `--sim` RUNS THE ENTIRE LOOP WITH NOTHING ATTACHED, AND DRIVING IT FOUND FOUR MORE DEFECTS
+
+⭐ **Proven by running it through a pseudo-terminal, not by reasoning about it.** A simulated two-arm session built both arms, entered TELEOP, recorded 14 joints, saved, parked both arms with *"waiting for B"*, **replayed his REAL recording 7**, printed a full tracking table with every row naming its arm, then parked and disabled all seven motors on each arm. **18 of 18 checks.**
+
+⭐⭐ **THAT RUN IS ALSO A CROSS-CHECK OF THE SIMULATOR AGAINST HARDWARE, on the same recording:**
+
+| | worst lag range |
+|---|---|
+| the **real** arms, his 12:12 run | **0.029 to 0.076 rad** |
+| the **simulated** arms, same recording 7 | **0.056 to 0.069 rad** |
+
+⭐ Same ballpark, from constants fitted four days earlier on different data ([§59.0](FINDINGS.md)). ⚠️ The sim's range is **narrower** because it has no gravity and no per-pose load, so it cannot produce the very low lags a lightly-loaded real joint achieves. **That is the expected shape of the difference, which is worth more than agreement would be.**
+
+⛔⭐⭐ **THE FOUR DEFECTS, AND NOT ONE WAS FINDABLE BY READING:**
+
+1. ⛔ **The missing-joints note was TRUNCATED by the screen painter.** It listed every unmoved joint; in a playback where nothing moved that was fourteen names on one line, cut off as `B base_yaw, B shoulder_pit…`. **A note whose entire job is to say which joints are missing, cut off before it says so, is worse than no note, because it looks answered.** Now two names plus a count, and the length is asserted in a test.
+2. ⛔⭐⭐ **A SIMULATED RECORDING LANDED IN `recordings/` CLAIMING TO BE REAL** — `"method": "live:B:teleop+G:teleop"` — beside his six real demonstrations, which are destined to become training data ([ROADMAP §9.2](ROADMAP.md)). **A fake take that reads as real is the worst thing this project could leave lying about.** Now stamped **two independent ways** (a `sim:` prefix and `simulated: true`) and written to `recordings/sim/`, which is gitignored. ⚠️ The offending file was deleted.
+3. ⛔ **The prefix is computed in TWO places and the second hardcoded `"live:"`**, silently undoing the stamp inside the very fix for it. ⭐ **Third time in one session that two copies of one expression drifted** (the tracking-table names, the flag checker's choices, this). **The separate `simulated` field exists for exactly this reason: two independent marks, so one being overwritten cannot make a fake take look real.**
+4. ⛔ **The folder split first applied to READS as well**, which quietly removed one of the best uses of a simulator: **replaying a real take against simulated arms before committing it to 4.3 kg.** Sim recordings win when both exist; real ones stay playable.
+
+⭐ **The fake also grew `motor_list` and `motor_interface`, so `shutdown_robot`'s park-then-disable runs end to end without hardware.** ⚠️ That is the most safety-critical code in the project and had only ever been tested by Julien pressing Ctrl-C on a live arm. One of the two new tests pins that **no motor is disabled while the chain is still running**, which is the ordering its docstring exists to defend.
+
+### 60.3 ⛔⭐⭐ HIS COLLISION RULING: THE BASES ARE ~0.70 m APART, SO THE ARMS **CAN** REACH EACH OTHER, AND HE IS AVOIDING IT BY HAND
+
+⭐ **Julien, 2026-08-17:** *"maybe the arms are, like, seventy centimeters apart. One arm can easily touch the other arm when it's, like, standing still. But that's not a huge problem because I can just, like, make sure when I do the features and stuff that I avoid collisions manually… we'll most likely move them closer together rather than further away."*
+
+⛔⭐⭐ **SO THE CHEAP ESCAPE DOES NOT APPLY.** [§59.3](FINDINGS.md) showed that beyond **1.20 m** of base separation the existing 0.60 m reach limit makes a collision geometrically impossible. **0.70 m is well inside that, and he intends to move them CLOSER.** So:
+
+| | |
+|---|---|
+| ⛔ **the reach limit does not protect the arms from each other** | and it never will at this spacing |
+| ⭐ **his decision: manual avoidance**, by choosing what the features do | recorded as a decision, not a gap |
+| ⛔ **therefore no automatic refusal is added** | which is what [§58.4](FINDINGS.md) item 4 already ruled: the margin is his |
+| ⬜⭐ **what IS worth offering: a WARNING, not a refusal** | the distance is computable every cycle, so the status row could show it and go loud when it closes. **A warning constrains nothing and removes the "I forgot" failure**, which is the one manual avoidance is exposed to |
+
+⚠️⭐⭐ **THE MEASUREMENT AT HIS SPACING, AND I GOT IT WRONG THE FIRST TIME.** I wrote "about 21 cm" here, having read the wrong row of my own tool's output. `uv run scripts/check_collision.py --separation 0.70` actually says:
+
+| pose | conservative clearance | closest parts |
+|---|---|---|
+| ⛔ **both at rest, all joints zero** | **2.5 cm** | `tip_left` ↔ `link3` |
+| both elbows out | 6.9 cm | `link2` ↔ `link3` |
+| one elbow out, one at rest | 6.9 cm | `link2` ↔ `link3` |
+| both yawed toward each other | 9.6 cm | `tip_left` ↔ `link3` |
+| both yawed AND elbows out | 21.2 cm | `link2` ↔ `link3` ← **the row I misread** |
+
+⭐ **The worst case is the arms doing NOTHING**, which confirms his own words exactly: *"one arm can easily touch the other arm when it's standing still."*
+
+⚠️⚠️ **BUT DO NOT PANIC AT 2.5 cm, AND THIS IS WHERE THE ESTIMATE'S LOOSENESS MATTERS.** The closest pair is a gripper tip against `link3`, and `link3`'s declared bounding sphere is **0.197 m** around a link that is nowhere near 40 cm thick. So those two spheres nearly touching means their *centres* are about 30 cm apart, and **the real metal gap is much larger than 2.5 cm.** ⛔ The number is a floor, never the gap ([§59.3](FINDINGS.md)).
+
+⭐⭐ **THE ACTIONABLE CONSEQUENCE IS UNCHANGED AND STRONGER: bounding spheres are too coarse to give him a usable margin at 0.70 m.** A warning built on this figure would cry wolf constantly at rest. ⬜ **So a status-row warning needs the finer geometry first** — MuJoCo's own `mj_geomDistance` against the actual meshes rather than one sphere per body. That is the real prerequisite, and it is hardware-free work.
+
+### 60.4 ⚠️⭐ THE CAMERAS ARE BLOCKED ON A macOS PERMISSION DIALOG, WHICH IS HIS TO CLICK
+
+⛔ **`camera_view.py --list` on 2026-08-17 could not open a single camera:** `OpenCV: not authorized to capture video (status 0)`. macOS lists three devices (MacBook Air, **one** D405, Julien's iPhone) and OpenCV opened none of them.
+
+⭐ **So step zero for all camera work is Julien granting camera access to whichever terminal runs it, then re-running the command.** Nothing in software can do this, and no camera item can proceed until it is done.
+
+⚠️ **Only ONE D405 is attached** (`255323071773`). **The fifth different camera count in four days.** ⛔ **Ask `check_rig.py`, never a document, including this one.**
+
+⭐ **What each camera item needs, so the second camera is only fetched when it is actually required:**
+
+| [ROADMAP §8.2](ROADMAP.md) item | needs the second D405? | notes |
+|---|---|---|
+| **5** telling two identical D405s apart | ⛔ **YES, both attached** | the entire problem is distinguishing two identical devices; with one there is nothing to distinguish |
+| **16** reading 848x480 as 16-bit depth | ✅ **no, one is enough** | ⭐⭐ **the most valuable camera item.** If that mode is the depth stream, **depth works with plain OpenCV and no SDK** — an open goal since [§8](FINDINGS.md). ⛔ **CHECK THE PIXEL FORMAT FIRST**: forcing it into an 8-bit photograph throws the depth away ([§31.2](FINDINGS.md)) |
+| **6** several cameras with timestamps | ⚠️ **partly** | the machinery can be built and tested with one, but *"they line up"* cannot be proven with one. **Images must line up with joint data or the dataset is unusable** |

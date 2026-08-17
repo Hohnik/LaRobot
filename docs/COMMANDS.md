@@ -196,6 +196,20 @@ uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, stil
 
 `teleop_sim.py` now applies `config/spacemouse_map.json`, so **a mapping can be verified in simulation before the arm is involved**. Until 2026-08-10 it ignored the map entirely — which made the one place an axis convention is free to get wrong the one place it could not be tested.
 
+## ⭐⭐ `--sim` — run the WHOLE session with nothing attached
+
+```bash
+uv run scripts/teleop_session.py --sim --yes --arms B,G --start-mode hold
+```
+
+⭐ **No arms, no CAN adapter, no SpaceMouse.** It builds simulated arms that **lag** the way the real ones were measured to, wraps them in the **real** `SafeRobot`, and runs the same loop. Drive it with the keys: `a` `t` `g` `h` `w` `l` `p` `i` `q`. ⚠️ `--yes` is still required, because the loop really runs; nothing can move because nothing is attached.
+
+⭐ **The pucks report zero deflection**, so TELEOP holds still. That is the honest stand-in for nobody's hand on the mouse. ⭐⭐ **A `--sim` session CAN replay a real recording** (`l` then `7`), which is the best use of it: check a playback before committing it to 4.3 kg.
+
+⛔⭐ **Simulated recordings go to `recordings/sim/` and are stamped `simulated: true` with a `sim:` method prefix.** They must never be confused with real demonstrations, which are destined to become training data.
+
+⛔ **What `--sim` cannot tell you:** anything about feel, gravity compensation, thermal behaviour, or the axis map. It catches sequencing, state-machine, cursor and following-error bugs, which is where this week's defects lived. Full limits: [FINDINGS §59.0](FINDINGS.md), what it found: [FINDINGS §60.2](FINDINGS.md).
+
 ## ⭐ The checkers — no hardware, and they answer real questions
 
 ```bash
