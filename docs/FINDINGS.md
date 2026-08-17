@@ -4311,3 +4311,90 @@ requested                actual       codec   measured fps
 ⭐ **They coexist because they read different devices**: `b` waits on a PUCK button while SETTINGS reads the KEYBOARD, so neither blocks the other. ⚠️ **Nothing on screen said the button-learn was still waiting**, and a puck press he made for one purpose was consumed by the other.
 
 ⛔ **Not fixed, and it is [ROADMAP §8.2](ROADMAP.md) item 38.** It is genuinely harmless today — nothing moves and no setting is corrupted — but two invisible modal states is the shape that produces a "why did that do nothing?" session later. ⚠️ **The fix needs a decision about which should win**, and that is Julien's call rather than mine to guess.
+
+
+## 64 ⭐⭐⭐ 2026-08-17, NIGHT — WHY THE MIRRORED ARM SITS IN A 2 cm SPHERE, AND WHY IT KEEPS STOPPING ON THE WRIST
+
+### 64.0 ⭐⭐⭐ HIS QUESTION ANSWERED: THE FOLLOWER IS SHORT BECAUSE A POSITION-CONTROLLED ARM ALWAYS IS, AND NOTHING WAS READING IT BACK
+
+⭐ **Julien, 2026-08-17:** *"I can move the mirrored robot about in a maybe two centimetre diameter sphere around the position it should actually be at… when I try to pick up something from the table, sometimes my guiding robot is already moving into the table whilst my mirror robot isn't even far enough down to pick up the object. Why is it not millimetre perfect? Is that a software problem or a limitation from the motors?"*
+
+⭐⭐ **BOTH, AND THE SPLIT IS EXACT.**
+
+⛔ **The motor half.** The follower is position-controlled: each motor pushes toward its commanded angle with a force proportional to how far away it is. So it settles where that force balances gravity and friction, which is **always short of the command**. That residual is the constant term in this repo's own measured law ([ROADMAP §8.2](ROADMAP.md) item 11): **0.04 to 0.10 rad of error even at zero speed**. Stiffness is a motor and gain property, and no command changes it.
+
+⛔⭐⭐ **The software half, and it is the fixable one: NOTHING EVER NOTICED.** `mirror.follower_target()` copies the leader's measured angles, and the command converges to exactly that. So the follower ends up at `leader − droop` **forever**, and no part of the loop ever read the difference back. ⭐ **But the difference is measured every single cycle.** That is what makes it correctable above the SDK.
+
+⭐⭐ **HIS 2 cm IS EXACTLY WHAT THE NUMBERS PREDICT.** His status row reported `tracking 0.012 rad behind` and `0.024 rad behind`. Measured on the shipped model at the extended pose his log shows him reaching with:
+
+| joint error | worst tip displacement |
+|---|---|
+| 0.012 rad | **5.6 mm** |
+| 0.024 rad | **11.3 mm** |
+
+⭐ So a ±1 cm sphere, which is the 2 cm diameter he described. **His impression was a measurement.**
+
+✅ **THE FIX: `--mirror-catchup`.** Accumulate the remaining error into a small bias and aim slightly past the leader until the follower actually arrives. That is integral action, and a standing offset under constant load is precisely what integral action is for.
+
+⛔⭐⭐ **FOUR GUARDS, and each one prevents a specific way this could misbehave:**
+
+| guard | what it prevents |
+|---|---|
+| ⭐ **`following` state only** | during ALIGNING the gap is large by design and the bias would wind to its clamp instantly |
+| ⭐ **only while the leader is SLOW** (under 0.25 rad/s) | a moving leader's error is partly honest lag; integrating that would push the follower **past** the leader every time it stopped. ⭐ And lining a gripper up with something on the table is slow by nature, so it helps exactly when it matters |
+| ⛔⛔ **a hard 0.06 rad clamp** | a BLOCKED follower never closes its error, so an unclamped integral grows forever and the arm **lurches** when the block clears. Same family as the stale cached variable that snapped this arm on 2026-08-10 |
+| ⛔ **reset on every (re)engage** | carrying control state across an engagement is that same class of bug |
+
+⭐ **A fifth guard came from a test.** The leader's speed estimate is smoothed, so at the *start* of a fast motion it still reads slow and a sliver of bias accumulates (measured: 0.0011 rad, about 0.5 mm). ⛔ **A frozen bias never gives that back**, so every slow-to-fast transition would add a little more and a long session could creep to the clamp for a reason nobody chose. **So a fast leader now DECAYS the bias rather than freezing it**, which makes the term self-correcting.
+
+⛔ **DEFAULT OFF.** It changes what a 4.3 kg arm does, so it is opt-in: `--mirror-catchup 3`, or setting 7 on the `n` screen where it reaches a **running** mirror so he can watch the follower close onto the leader while holding it still.
+
+⚠️ **I made a unit error writing its status line** and caught it before committing: it read `worst_bias() * 1000` and called the result "mm-equivalent", which is wrong because 0.024 rad is 11 mm rather than 24, and the radians-to-millimetres conversion depends on the joint and the pose. **A fabricated unit in a status row is worse than no figure**, because it reads as a measurement. It reports radians.
+
+### 64.1 ⛔⭐⭐⭐ THE MIRROR GAP WAS ONE THRESHOLD FOR SIX VERY DIFFERENT JOINTS, AND THAT IS WHY HE KEPT RAISING IT
+
+⭐ **Every mirror stop in his logs was on joint 5 (`wrist_roll`) or joint 6 (`gripper_twist`)** — the two joints that barely move the tip. Measured on the shipped model across **four poses taken from his own logs**:
+
+| joint | | tip metres per radian | danger |
+|---|---|---|---|
+| 1 | `base_yaw` | 0.333 | ⛔ high |
+| 2 | `shoulder_pitch` | 0.390 | ⛔ high |
+| 3 | `elbow_pitch` | **0.418** | ⛔ **the worst** |
+| 4 | `forearm_pitch` | 0.169 | ⚠️ half |
+| 5 | `wrist_roll` | 0.100 | ⭐ a quarter |
+| 6 | `gripper_twist` | **0.051** | ⭐ **an eighth** |
+
+⛔⭐⭐ **THE GRIPPER TWIST IS 6.6× LESS DANGEROUS THAN THE ELBOW AND WAS HELD TO THE SAME NUMBER.** So the only way to tolerate a flicked wrist was to raise the threshold for the shoulder too. **He reached `--mirror-gap 1.335` doing exactly that, and at the elbow's 0.418 m/rad that allows 56 cm of tip error** — on a limit whose entire purpose is noticing that the arm has gone somewhere wrong.
+
+✅ **The threshold is per joint now**, scaled as `1 / sensitivity` normalised to the worst joint and **capped at 4×**: `(1.26, 1.07, 1.00, 2.48, 4.00, 4.00)`.
+
+⭐ **The effect on his actual stops:** joint 5 falling 0.364 rad behind now passes **at the default 0.35 gap**, and joint 6 falling 1.369 behind passes too. ⛔ **The same 0.364 rad on the elbow still stops it.**
+
+⚠️⚠️ **THE CAP IS DELIBERATE AND THE MEASUREMENT DOES NOT JUSTIFY IT.** Pure tip-displacement scaling would give joint 6 about 6.6×. **Tip position is the right basis for a DANGER limit and the wrong basis for task accuracy**: 1.4 rad on the gripper twist is the gripper rotated **80° from where it should be**, which ruins a grasp while barely moving the tip. So the wrist gets more rope than the shoulder, and less than the arithmetic alone would allow.
+
+⭐ **The stop message names the joint closest to its OWN limit** rather than the one with the largest raw gap. Those differ once the thresholds differ, and naming the wrong joint sends him after the wrong flag. It also prints the multiplier, so `its limit is 1.40 = 0.35 × 4.00` can be reconciled with what `--mirror-gap` says.
+
+### 64.2 ⛔⭐⭐ THE SETTINGS KEYS PRODUCED NUMBERS NOBODY WOULD CHOOSE
+
+⛔ Multiplying by 1.25 per press was defensible reasoning (0.1 → 0.125 and 8 → 10 are the same *felt* step) and the result was unusable. Holding `+` gave him:
+
+```
+1.000 → 1.250 → 1.562 → 1.953 → 2.441 → 3.052 → 3.815 → 4.768 → 5.960 → 7.451 → 9.313
+```
+
+⛔ **He can never get back to 2, or 4, or 10.** Every value he had been running by flag was unreachable by key. ⚠️ And those numbers **leaked into messages**: `limit 1.33514404296875`, `its 1.4901161193847656 rad following-error limit`, `--max-speed 16 (now 7.45058)`.
+
+✅ **The keys walk a ladder of round numbers now** — `1, 1.5, 2, 3, 4, 6, 8, 10, 15, 20` for the speeds, with its own ladder per setting. A value set by flag that sits between rungs moves to the nearest rung in the direction pressed, so nothing is ever stuck.
+
+⭐ **The seventeen-digit floats were a symptom rather than a second bug**, and every limit printed to a person is formatted now as well, because a flag can still set any value.
+
+### 64.3 ✅ WHAT HIS LOG SHOWS THAT IS ALREADY FIXED
+
+⚠️ **His session predates two commits**, so a fresh reader should not chase these:
+
+1. ⚠️ **The settings screen reprinted all fifteen lines on every keypress** — thirteen copies in one session. ✅ Fixed in the same session as [§63.2](FINDINGS.md): one line per change, the full screen only on `?` and after `0`.
+2. ⚠️ **Arrow keys printed `(key '\x1b[B' does nothing here)`**. ✅ They move the selection now.
+
+⭐ **What worked first time in his log and is worth recording as confirmed:** `reach` raised live from 0.600 to 0.938 and back to 0.750, with the status row then reading `reach 0.36/0.75m`. **A live safety-limit change reached the running loop exactly as intended.** And the new linear-speed ceiling held at `linear speed 2.000 m/s (ceiling)` instead of the 19.852 m/s it reached before ([§62.2](FINDINGS.md)).
+
+⚠️⭐ **He also ended that session with `max_speed 20`, `teleop_speed 20` and `max_lag 3.0`, all at their ceilings.** So the "deliberately generous" backstops were all reached inside one session of pressing `+`. ⛔ **They are doing their job as a backstop against a held key and they are NOT out of reach**, which is worth knowing before treating any of them as a safety margin.
