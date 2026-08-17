@@ -210,6 +210,14 @@ uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --te
 
 ⚠️ **The plan names any saved value that is LOOSER than the built-in limit**, because a flag is visible in your shell history and a saved default is not. Delete `config/session_defaults.json` to go back to the built-in values, or edit it by hand. ⛔ It is gitignored, so it does not travel to another clone: a `git pull` must never change how fast the arm may move. [FINDINGS §61.1](FINDINGS.md).
 
+### ⭐⭐ `n` — the SETTINGS screen, live
+
+Press `n` in any session. It lists the six limits with their current values:
+
+`1-6` pick one · `-` / `+` change it · `0` back to the session's start · `s` SAVE for every later session · `t` / `g` / `h` leave
+
+⛔ **`max_speed` and `max_lag` take effect on the arms immediately**, because they are the two limits that bound how fast 4.3 kg may move. ⭐ The screen shows the built-in value beside anything you have changed, so a pushed safety limit is always visible. [FINDINGS §62.4](FINDINGS.md).
+
 ## ⭐⭐ `--sim` — run the WHOLE session with nothing attached
 
 ```bash
@@ -233,6 +241,7 @@ uv run scripts/check_links.py                        # every relative link and �
 uv run scripts/check_recordings.py                   # what is in each recording slot
 uv run scripts/check_restructure.py                  # the N-arm restructure is still coherent
 uv run scripts/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
+uv run scripts/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
 ```
 
 ⭐ **`check_collision.py` needs ONE tape-measure reading** — the metres between the two arm bases — because nothing in the repo records it and no software can derive it. Add `--yaw-b 180` if they face each other. ⭐⭐ **It may close the whole collision question in one line:** each arm is already held inside a 0.60 m sphere around its own base, so **beyond 1.20 m of base separation a collision is geometrically impossible** while that limit is enforced. ⛔ Except in GUIDE mode, where nothing can stop a hand. [ROADMAP §8.2](ROADMAP.md) item 25, [FINDINGS §59.3](FINDINGS.md).
@@ -245,6 +254,8 @@ uv run scripts/check_collision.py --separation 0.9   # ⭐ how close can the two
 uv run scripts/falsify_fake_arm.py       # break the simulated arm 5 ways; each must be caught
 uv run scripts/falsify_check_flags.py    # 7 broken commands must be reported, 3 good ones not
 ```
+
+⭐⭐ **`drive_sim_session.py` is the only thing that runs the 3000-line loop end to end**, and it earned its place: it caught a crash that **616 unit tests missed**. The save handler read a local assigned only inside the overwrite-guard branch, so the first save of any session raised `UnboundLocalError`. The 12 tests of that exact decision all passed, because they call the pure function directly and the defect was in the CALL SITE. ⚠️ **Extracting a decision into a testable function does not test the code that calls it** ([FINDINGS §62.1](FINDINGS.md)).
 
 ⛔⭐⭐ **A checker that has never caught anything is indistinguishable from one that cannot.** Both of these were green on their first real run, and both were then found to have a blind spot by exactly these scripts. `falsify_check_flags.py` caught a rule that removed a false positive and silently created a false negative in the same edit — visible only because the catch count dropped from 7 to 6 ([FINDINGS §59.1](FINDINGS.md)).
 

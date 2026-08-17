@@ -4129,3 +4129,107 @@ uv run scripts/camera_view.py --camera d405 --probe
 ```
 
 ⚠️⭐ **AND THERE IS A CONTRADICTION WORTH SETTLING WITH IT.** The device names itself *"Depth Camera 405"* and `camera_view.py` warns that *"macOS exposes only this camera's DEPTH stream over plain UVC, so expect a depth/infrared picture rather than colour"*. ⛔ **But his measurement says `colour` at 1280x720.** Either the warning is stale, or a depth frame delivered as three channels reads as colour to the brightness check. **The probe's FOURCC is what settles it, and the answer decides whether depth is available with no SDK at all** ([§8](FINDINGS.md), [§31.2](FINDINGS.md)).
+
+
+## 62 ⭐⭐⭐ 2026-08-17, EVENING — HIS SPEED SESSIONS ANSWERED FOUR QUESTIONS, AND THE SIMULATOR CAUGHT A CRASH 616 TESTS MISSED
+
+### 62.0 ✅⭐⭐⭐ MIRROR WORKS AT SPEED, AND THE ANSWER WAS `--mirror-gap 2`
+
+⭐⭐ **Four runs on 2026-08-17, and the fourth worked.** The sequence is the finding:
+
+| run | flags | result |
+|---|---|---|
+| 1 | `--max-speed 4 --mirror-gap 0.6 --max-lag 0.4` | ⛔ stopped, gap **0.636** on joint 6, leader at **5.66 rad/s** |
+| 2 | `--max-speed 10 --mirror-gap 0.6 --max-lag 1` | ⛔ stopped, gap **0.640** on joint 6, leader at **6.83**, follower **managed 2.64** |
+| 3 | `--max-speed 10 --mirror-gap 2 --max-lag 1` | ✅ **`FOLLOWING (copy) — tracking 0.012 rad behind`**, through 83.8° of hand-guided drift |
+| 4 | same, plus `--teleop-speed 10` | ✅ used for CONTROLS and PARK work |
+
+⭐⭐ **THE PHYSICAL LIMIT IS JOINT 6, `gripper_twist`, AT ABOUT 2.6 rad/s.** Run 2 is the measurement: the follower was *allowed* 10 rad/s and **managed 2.64**, so the message correctly switched from *"the software is the limit"* to *"the ARM itself could not track that fast"*. ⛔ **More `--max-speed` cannot help past that**, and the three-cause diagnosis said so on the run where it became true.
+
+⭐ **So the working recipe for hand-guided mirror is a WIDE TOLERANCE, not more speed:** `--mirror-gap 2`. The follower runs ~0.012 rad behind in normal tracking and only needs the headroom for the moments a hand outruns joint 6.
+
+⚠️⭐ **AND HIS HAND IS FASTER THAN THIS REPO BELIEVED.** [§37.2](FINDINGS.md) put hand-guided motion at **2.4-3.7 rad/s**, measured in August from three playbacks. On 2026-08-17 he was measured at **5.66 and 6.83 rad/s**. ⛔ **My own mirror message printed the stale 2.4-3.7 range in the same breath as a live 5.66 reading**, which is how a message discredits itself. **It quotes the measurement now and cites no remembered range.**
+
+### 62.1 ⛔⭐⭐⭐ THE SIMULATOR CAUGHT A CRASH THAT 616 UNIT TESTS COULD NOT
+
+⛔ **My own save-prompt change read `replace_slot`, a local assigned ONLY inside the overwrite-guard branch.** So the **first save of any session**, with the guard never having fired, raised `UnboundLocalError` and took the session down.
+
+⭐⭐ **`scripts/test_save_slot.py` has 12 tests of that exact decision and every one passed.** They call the pure function directly and hand it that argument. **The defect was in the CALL SITE.**
+
+> ⛔⭐⭐ **THE LESSON, and it generalises past this repo: extracting a decision into a pure function and testing it does not test the code that calls it.** The extraction was right — it made the rules testable at all — and it moved the risk rather than removing it.
+
+⭐ A `--sim` run found it in seconds, which is exactly the gap `--sim` was built to close. **So the driver is now `scripts/drive_sim_session.py` rather than a scratch file**, and it is the only thing in the repo that runs the 3000-line loop end to end: two arms built, the selector, TELEOP on both, a 14-joint recording, the save prompt, replaying a REAL recording on simulated arms, the staged park with one arm waiting, the tracking table, and `q q` disabling all 14 motors. **22 checks.**
+
+⚠️ **The safe stop did its job**: both arms parked and all 14 motors were confirmed disabled after the traceback. The recording would have been lost.
+
+### 62.2 ⛔⭐⭐ THE LIVE SPEED KEYS HAD NO CEILING AT ALL
+
+⛔ His CONTROLS readout on 2026-08-17: **`lin 19.852 m/s  rot 954°/s`**. The default is 0.12 m/s, so that is **165x**, reachable in about 23 presses of a key that repeats when held.
+
+⭐ `+` did `linear_scale *= 1.25` with nothing above it, at **three** sites, and both angular sites were the same. ⚠️ **Every other live adjustment in the file already had a bound** — park speed clamps both ways, the gripper step has a 0.200 ceiling — so these were the exception rather than the rule.
+
+⭐ Backstops now at **2.0 m/s** and **12 rad/s**, deliberately generous so they can never be the reason a setting will not go where he wants. ⛔ A commanded speed that high does not move the arm that fast, because `SafeRobot` and the reach limit still bind. **What it does is make the IK target jump the whole workspace in one cycle, so the arm slams to the boundary at whatever `--max-speed` allows.**
+
+### 62.3 ✅⭐⭐⭐ THE GRIPPER STALL NOW LATCHES — [ROADMAP §8.2](ROADMAP.md) item 29, CLOSED
+
+⛔ **The release always worked and was undone on the next cycle.** His log, and the numbers are the whole diagnosis:
+
+```
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.152
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.151
+⚠️  ARM G GRIPPER STALLED (14 times now) (+1.03 Nm, not moving) — released to 0.150
+⚠️  ARM G GRIPPER STALLED (+1.03 Nm, not moving) — released to 0.147
+```
+
+⭐ Each release backed the command off to the measured jaw position. Each next cycle MIRROR copied the leader's jaw straight back over it. **A one-cycle correction against a source that re-commands at 90 Hz can only nibble.** ⛔ Pushing hard while not moving is the worst thermal case there is — full current, no motion, no cooling — and **motor 7 has been cooked three times** by this shape of problem.
+
+⭐ **`ArmSession.hold_jaw` latches at the stalled position:**
+
+| asked for | result |
+|---|---|
+| nothing latched | ✅ obeyed |
+| **further CLOSED** than the block | ⛔ held at the block, so it stops pushing **but keeps the grip** |
+| **more OPEN** than the block | ✅ obeyed, **and the latch clears** |
+
+⚠️ **Opening always clears it**, which matters more than it looks: the object may have been put down, or the leader's hand may have opened. Anything moving away from the obstruction is evidence it is no longer being pushed into, and a latch needing an explicit reset would eventually be why the jaws refused to work for a reason nobody could see.
+
+⛔ Wired into **both** MIRROR and TELEOP, because his log shows the stall firing four more times in TELEOP — holding a puck button re-commands the jaws every cycle exactly as MIRROR does.
+
+⚠️⭐ **`teleop_session.py` ALREADY CARRIED A COMMENT DESCRIBING THIS EXACTLY** — *"in MIRROR the follower's jaw command is the leader's measured jaw, re-sent every cycle, so squeezing the leader while the follower holds an object fires this every 0.4 s indefinitely"*. **So the diagnosis existed for days and the fix did not.** Same pattern as the tracking-table names in [§60.1](FINDINGS.md): the right answer written down beside the wrong behaviour.
+
+### 62.4 ✅⭐⭐⭐ A LIVE SETTINGS SCREEN ON `n`, AND HIS OBJECTION TO MY WORRY WAS CORRECT
+
+⭐ I built the saving half in [§61.1](FINDINGS.md) and **asked** whether a live editor was wise, worrying that a value written to disk could be one he never typed. His answer:
+
+> *"How would the live key change be one that I didn't type myself? That does not seem to make any sense to me if I'm in a control mode changing the key. And mainly, this is for saving which default value I wanna change, because if I change controls, normally, they always save in the live program."*
+
+⭐⭐ **He is right on both counts and my worry was confused.** A keypress he makes IS him typing the value, and **the axis map is the precedent**: edited live with keys, written to `config/spacemouse_map.json`. ⚠️ Worth recording as a judgement error on my side: I invented a risk from the mechanism (a key rather than a flag) instead of from the outcome (who chose the number).
+
+⭐ `n` shows the six limits, marks which one `-`/`+` moves, and prints the **built-in value beside any that differ** so a pushed safety limit is visible. `1-6` picks · `-`/`+` changes · `0` reverts to the session's start · `s` saves · `t`/`g`/`h` leaves.
+
+⛔⭐ **`max_speed` and `max_lag` are pushed onto the live `SafeRobot` objects, so a change binds 4.3 kg on the very next cycle**, and the screen says that in those words.
+
+⭐ **Speeds step by a RATIO** (0.1 → 0.125 and 8 → 10 are the same felt step; a fixed increment cannot be both). ⚠️ **The floor steps ADDITIVELY and its lower bound is negative** — it crosses zero, its default *is* zero so a ratio could never move it, and he uses `--floor -0.005` for a flat object on the desk.
+
+### 62.5 ⛔⭐⭐ THE CAMERA DEPTH QUESTION CANNOT BE ANSWERED THIS WAY. `--probe` RETURNS NO PIXEL FORMAT AT ALL
+
+⭐ He ran it, which is the right division of labour now ([§61.3](FINDINGS.md)). The result:
+
+```
+requested                actual       codec   measured fps
+1920x1080 MJPG           1280x720     ÿÿÿÿ    30.0
+1280x720  as-is          1280x720     ÿÿÿÿ    30.0
+640x480   MJPG           640x480      ÿÿÿÿ    30.0
+424x240   as-is          424x240      ÿÿÿÿ    30.0
+```
+
+⛔⭐⭐ **`ÿÿÿÿ` IN EVERY ROW MEANS THE PIXEL FORMAT IS UNREADABLE.** It is `CAP_PROP_FOURCC` returning **-1**, and `scripts/camera_view.py` already carries a comment saying that property is not readable through macOS's AVFoundation backend. **So [ROADMAP §8.2](ROADMAP.md) item 16 cannot be answered by asking OpenCV**, and no amount of re-running will change it.
+
+⚠️⭐ **TWO MORE THINGS THAT CORRECT ITEM 16'S OWN PREMISE:**
+
+1. ⛔ **848x480 was never swept.** The probe's resolution list is a fixed set in the script (1920x1080, 1280x720, 960x540, 640x480, 424x240). **The mode item 16 is about was not among them**, so nothing has tested it.
+2. ⚠️ **Every larger request collapses to 1280x720**, and only 640x480 and 424x240 come back as asked. So the camera exposes three real sizes through this path, and `424x240` is the one unique to the D405.
+
+⭐⭐ **WHAT WOULD ACTUALLY SETTLE IT: look at the PIXEL DATA rather than asking for a label.** A 16-bit depth frame packed into 8-bit channels has statistics no photograph has — one channel varying smoothly while another varies wildly, or all three channels identical. ⛔ **That needs a tool that captures one frame per size and reports per-channel statistics**, and it is [ROADMAP §8.2](ROADMAP.md) item 36. ⚠️ The agent can write it and **cannot run it**.
+
+⭐ **The MJPG column is its own small finding:** requesting MJPG changes nothing at any size, so macOS is ignoring the codec request entirely and **resolution is the only lever**, exactly as the script's closing note says.
