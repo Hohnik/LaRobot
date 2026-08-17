@@ -231,6 +231,33 @@ def test_a_blocked_park_reports_what_it_MEASURED_not_a_guess() -> None:
     assert park_arms([stuck], Keys(), clamp, stall_seconds=0.2) == "stalled"
 
 
+def test_the_command_history_is_FORGOTTEN_before_the_first_command() -> None:
+    """⛔⭐⭐ THE SPASM. Julien: quit menu, `g` weightless, moved an arm by hand, then `p` —
+    and the arm *"quickly spasmed for a tenth of a second, for seemingly no reason"*.
+
+    `SafeRobot` is stateful: its rate limiter walks from `_last_cmd`, which still held the
+    pose from BEFORE the hand-guiding, because GUIDE commands no positions. So the first park
+    command jerked toward the stale pose. `resync()` exists precisely for this, its docstring
+    says "call on EVERY mode transition", and this function is a mode transition that lives
+    outside the mode system — which is why it was the one place that missed it.
+    """
+    calls = []
+
+    class ResyncingRobot(FakeRobot):
+        def resync(self) -> None:
+            calls.append(len(self.commands))     # how many commands had been sent already
+
+    robot = ResyncingRobot(q=[0.5] * 7)
+    one = ArmSession(robot, name="B")
+    one.base_pose = [0.0] * 7
+    one.park_speed, one.park_ramp = 4.0, 0.0
+    assert park_arms([one], Keys(), clamp) == "arrived"
+    assert calls, "resync was never called — the stale-command spasm is back"
+    assert calls[0] == 0, (
+        f"resync came after {calls[0]} command(s); it must come BEFORE the first one, "
+        f"or the spasm has already happened")
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

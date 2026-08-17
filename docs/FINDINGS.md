@@ -4475,3 +4475,71 @@ ARM B GRIPPER STALLED — released to 0.304, 0.311, 0.314, 0.315, 0.315, 0.315, 
 
 1. ⚠️ **He pressed `-`/`+` on `mirror_catchup` about 33 times, hunting.** 3 → 5 → 8 → 12 → 8 → 5 → 3 → 2 → 1 → 0 → 1 → … up to the ceiling and back down twice. ⛔ **The `n` screen covers the status row, so the one thing that would tell him whether it was working was hidden while he tuned it.** ⬜ Not fixed; it is [ROADMAP §8.2](ROADMAP.md) item 43.
 2. ⚠️ **`i` inside the SETTINGS screen says it does nothing.** He pressed it wanting to re-engage the mirror. ⭐ Reasonable as written, and worth reconsidering alongside item 43.
+
+
+## 66 ⭐⭐⭐ 2026-08-17, FINAL SESSION OF THE DAY — THE PARK SPASM, THE LATENCY ANSWER, AND A FALSE ALARM IN THE EXIT SUMMARY
+
+### 66.0 ✅⛔⭐⭐⭐ THE PARK SPASM: `park_arms` NEVER RESYNCED `SafeRobot`, SO THE FIRST COMMAND JERKED TOWARD THE ARM'S OLD POSE
+
+⭐ **Julien:** *"in quit mode I put the arms in guide mode and moved an arm a bit further. Then I wanted to park it with p, and it quickly spasmed for, like, a tenth of a second, for seemingly no reason."*
+
+⛔⭐⭐ **THE REASON, and it is the 2026-08-10 snap in miniature.** `SafeRobot` is stateful: its rate limiter walks from `_last_cmd`, the last position it ever sent. GUIDE commands **no positions** (kp = 0), so after hand-guiding, `_last_cmd` still holds the pose from BEFORE his hand moved the arm. The first park command was then pulled toward that stale pose and clipped to `measured ± max_lag` — **a jerk of up to 0.25 rad toward where the arm USED to be**, lasting the few cycles `_last_cmd` needs to converge. A tenth of a second, exactly as he described.
+
+⭐ **`SafeRobot.resync()` exists precisely for this** and its docstring says *"call this on EVERY mode transition."* Every in-session transition does. ⛔ **`park_arms` is a mode transition that lives OUTSIDE the mode system** — it runs from the quit menu and from Ctrl-C — which is why it was the one place that missed it. Same root shape as the two park implementations diverging ([ROADMAP §8.2](ROADMAP.md) item 23): motion code outside the mode system does not inherit the mode system's hygiene.
+
+✅ Fixed: `park_arms` resyncs each arm before its first command, with a test pinning that the resync comes **before** command zero. ⬜ Unconfirmed on hardware; the reproduction is exactly his sequence (`q` · `g` · move an arm by hand · `p`).
+
+### 66.1 ⭐⭐⭐ THE LATENCY ANSWER: THE SOFTWARE ADDS ~20 ms, THE PHYSICS ADDS THE REST, AND "NEAR-ZERO AT MAX SPEED" NEEDS A DIFFERENT CONTROL MODE
+
+⭐ **His question:** *"the signal is a hundred hertz, so why is it lagging behind so badly at high speeds? Shouldn't it be instant, with incredibly low latency? Is that a limit of how slow our system is? Is there a way to have near-zero latency at max speeds, or is that not possible?"*
+
+⭐⭐ **THE CHAIN, WITH MEASURED NUMBERS.** From his hand to the arm's motion:
+
+| stage | adds | measured or known |
+|---|---|---|
+| SpaceMouse USB report | ≤ ~8 ms | HID report rate |
+| our loop picks it up | ≤ ~11 ms | loop measured at **89-90 Hz** |
+| IK solve + command | < 1 ms | inside the same cycle |
+| I2RT's 250 Hz control thread | ≤ ~4 ms | its own rate |
+| CAN frame to the motor | ~1 ms | 1 Mbit/s bus |
+| **software total** | **~15-25 ms** | ⭐ **this is NOT what he is feeling** |
+| ⛔ **the arm physically tracking** | **~33 ms × speed, PLUS 0.04-0.10 rad droop** | [ROADMAP §8.2](ROADMAP.md) item 11, fitted then verified on held-out data |
+
+⛔⭐⭐ **THE DOMINANT LAG IS PHYSICS, AND IT IS STRUCTURAL TO POSITION CONTROL.** The motors run a PD position controller: torque is produced **in proportion to position error**. An arm that is moving therefore MUST be lagging — no error, no torque, no motion. That is where the measured `0.033 s × speed` comes from, and no flag in this repo touches it. ⚠️ On top of it, `max_lag` caps the command at 0.25 rad ahead, so at high demanded speed the command rides that clip and the arm moves at whatever its torque can deliver.
+
+⭐ **MIRROR adds one more loop hop** (~11 ms: the leader's measured pose becomes the follower's command next cycle) **plus a second copy of the physical lag**, because the follower is itself a PD-controlled arm. So leader-to-follower is roughly: leader physics + 11 ms + follower physics. At 2 rad/s that is ~0.07 rad per arm of speed-proportional lag alone, which matches every FOLLOWING reading he has seen.
+
+⭐⭐ **CAN IT BE MADE NEAR-INSTANT? Partly, and the honest ranking is:**
+
+1. ⭐⭐ **Velocity feedforward — the real one.** The DM motors' MIT-mode command carries `(kp, kd, position, velocity, torque)` and we send **velocity = 0** today, so the motor must generate all its torque from position error. Sending the target's velocity too lets torque flow **before** error builds. This attacks the 33 ms term itself. ⬜ [ROADMAP §8.2](ROADMAP.md) item 44 — needs I2RT-interface work and careful bring-up.
+2. ⚠️ **Higher kp (stiffness)** — shrinks both the droop and the speed lag, risks oscillation, and item 17's original premise was refuted. Hardware experiment, his call.
+3. ⭐ **Loop rate 90 → 200 Hz** — saves ~5 ms of the ~20 software ms. Real but small ([ROADMAP §8.2](ROADMAP.md) item 14 is the open "why 90 not 100" question).
+4. ⛔ **What cannot work:** any amount of raising `--max-speed`/`--teleop-speed` past where the physics binds. The four-limit table ([§65.0](FINDINGS.md)) says which limit binds; once it is the arm itself, flags are exhausted.
+
+⚠️ **Set the expectation honestly: a 4.3 kg arm with finite torque can never track a hand with literally zero lag.** What is achievable with feedforward and tuning is lag that stops being *felt* — tens of milliseconds and a droop too small to see — which is also what the teleoperation rigs this project imitates settle for.
+
+### 66.2 ⚠️⭐ THE SCARY EXIT LINE WAS A FALSE ALARM, AND THE COMPARISON IT PRINTS IS APPLES TO ORANGES
+
+⚠️ His session ended with `axis map G: DOWN←z+ LEFT←x− FWD←y− PAN←yaw+ TILT←roll− ROLL←pitch−` / `was: X←y+ Y←x+ …`, which reads as G's map having been scrambled and saved.
+
+✅ **Verified safe on disk, two ways.** The saved world map is byte-identical to what the session started with, and a fresh dry run loads **identical shared world maps for both arms**. ⛔ Nothing needs restoring.
+
+⭐ **What the line actually was:** G was left in the **camera** frame, so the exit summary printed G's camera-frame row (`DOWN/LEFT/FWD/PAN/TILT` are the camera frame's motion names) while its `was:` line prints the start-of-session copy **in world labels**. **Different frames of the same store, shown as before/after.** The `.prev` diff confirms the only world change on disk predates this session. ⬜ The summary comparing across frames is [ROADMAP §8.2](ROADMAP.md) item 45 — cosmetic, but it cost real verification time tonight and will cost it again.
+
+### 66.3 ⭐ WHERE THE WHOLE PROJECT STANDS — the completion list, in one place
+
+✅ **Confirmed working on hardware:** two arms from one script · GUIDE/TELEOP/HOLD per arm · saved poses and sequences · two-arm recording AND playback · MIRROR at speed (`--mirror-gap 2`, 0.012 rad tracking) · the gripper stall latch · live settings (`n`) with save · the four-limit chain explained in the plan · `q q` shutdown parking both arms and disabling all 14 motors.
+
+⬜⭐ **Built and still needing ONE hardware confirmation each:** `--mirror-catchup` (never had a fair test, [§65.2](FINDINGS.md)) · the park-spasm resync ([§66.0](FINDINGS.md)) · the stalled-joint tight limit · the latched-gripper silence.
+
+⬜⭐⭐ **The real remaining work, in rough order of value:**
+1. **Cameras**: identify two D405s (needs the second one attached, wiggle method) · timestamped multi-camera capture aligned with joint data ([ROADMAP §8.2](ROADMAP.md) items 5, 6). ⛔ Agent writes, Julien runs — permanent ([§61.3](FINDINGS.md)).
+2. **The MCAP export** in ABC's schema, deferred pending his friend's spec (item 7). Our recordings are already the right shape.
+3. **Velocity feedforward** for real latency (item 44, new).
+4. **Labels while driving, noise per waypoint, mixed runs** (items 8, 9, 12) — the data-collection features.
+5. **Finer collision geometry** before any proximity warning (item 35).
+6. Housekeeping: `chain_alive` in incidents (31), the loop-rate question (14), the two-prompt overlap (38), the settings-screen visibility (43), the exit-summary frames (45).
+
+### 66.4 ⭐⭐ THE TEAM-HANDOVER PLAN LIVES IN [ROADMAP §10](ROADMAP.md)
+
+⭐ His ask: *"we need to fully clean up the repo and have a clear plan of what the repo should look like when my team wants to recreate it."* The plan is written as a proposal for his ratification, **not executed** — a restructure is exactly the kind of consequential, hard-to-reverse change that gets ratified first, and doing it at the end of a nearly-full context would be doing it carelessly.

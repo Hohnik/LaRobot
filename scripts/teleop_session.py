@@ -594,6 +594,26 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
                                      gripper_index=N_ARM, clamp=clamp_gripper)
         if warn:
             print(f"\n  ⚠️  arm {one.name}: {warn}.")
+        # ⛔⭐⭐⭐ FORGET THE COMMAND HISTORY BEFORE THE FIRST COMMAND, AND THE ABSENCE OF
+        # THIS LINE WAS A VISIBLE SPASM ON THE ARM. Julien, 2026-08-17: in the quit menu he
+        # pressed `g` (weightless), moved an arm by hand, then `p` — and the arm *"quickly
+        # spasmed for, like, a tenth of a second, for seemingly no reason"*.
+        #
+        # ⭐ The reason: `SafeRobot` is stateful. Its rate limiter walks from `_last_cmd`,
+        # which still held the pose from BEFORE the hand-guiding, because GUIDE commands no
+        # positions (kp = 0). The first park command was therefore pulled toward that stale
+        # pose and clipped to measured ± max_lag — so the arm jerked up to 0.25 rad toward
+        # where it USED to be, for the few cycles it took `_last_cmd` to converge. Exactly a
+        # tenth of a second.
+        #
+        # ⛔ `SafeRobot.resync()`'s own docstring says "call this on EVERY mode transition",
+        # and the in-session transitions all do. **This function is a mode transition that
+        # lives outside the mode system**, which is why it was missed — the same reason the
+        # two park implementations diverged (docs/ROADMAP.md §8.2 item 23).
+        # ⚠️ `getattr`, because the test fakes are not SafeRobot-wrapped.
+        resync = getattr(one.robot, "resync", None)
+        if resync is not None:
+            resync()
         cmd = np.asarray(one.robot.get_joint_pos(), dtype=float)
         runs.append({
             "arm": one, "tgt": tgt, "cmd": cmd, "start": cmd.copy(),

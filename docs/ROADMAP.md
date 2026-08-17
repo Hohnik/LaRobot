@@ -841,6 +841,8 @@ From the photograph and from `ioreg`, both on 2026-08-12:
 | 41 | ✅⭐⭐ **The settings keys walk a LADDER of round numbers, 2026-08-17** | ⛔ The 1.25 ratio gave him `1.000 → 1.250 → 1.562 → 1.953 → 2.441 → 3.052 → 3.815 → 4.768 → 5.960 → 7.451`, so **2, 4 and 10 were unreachable by key** and the values leaked into messages as `limit 1.33514404296875`. ✅ Ladders per setting, a between-rungs value moves to the nearest rung in the direction pressed, and every limit printed to a person is formatted ([FINDINGS §64.2](FINDINGS.md)) |
 | 42 | ⚠️⭐ **Every live ceiling was REACHED in one session, so none of them is a safety margin** | ⚠️ **New 2026-08-17.** He ended a session at `max_speed 20`, `teleop_speed 20`, `max_lag 3.0` and `linear_scale 2.0` — all four at their ceilings, from pressing `+`. ⭐ They are doing their job as a backstop against a held key. ⛔ **They are NOT out of reach**, so nothing should be treated as a margin just because a ceiling exists. ⬜ Worth asking him whether any of them should be lower |
 | 43 | ⬜⭐ **The `n` screen hides the status row, so a setting cannot be judged while it is tuned** | ⚠️ **New 2026-08-17.** He pressed `-`/`+` on `mirror_catchup` **33 times** — 3, 5, 8, 12, 8, 5, 3, 2, 1, 0, 1, up to the ceiling and back down twice — because the row showing the correction was covered by the screen he was tuning it on. ⭐ **A live editor whose effect is invisible while editing is half a feature.** ⬜ Options: keep one status line visible under the screen, or make the settings block shorter than the terminal so both fit. ⚠️ Also reconsider `i` inside the screen, which he pressed wanting to re-engage mirror ([FINDINGS §65.4](FINDINGS.md)) |
+| 44 | ⬜⭐⭐⭐ **Velocity feedforward — the real answer to teleop latency** | ⭐ **New 2026-08-17, from his latency question.** The DM motors' MIT-mode command carries `(kp, kd, position, velocity, torque)` and we send **velocity = 0**, so all torque must come from position error — which is exactly the measured `0.033 s × speed` lag ([FINDINGS §66.1](FINDINGS.md)). Sending the target's velocity lets torque flow before error builds. ⛔ Needs work in the I2RT interface layer and a careful bring-up (a wrong feedforward oscillates); **his ratification before it touches the arm** |
+| 45 | ⚠️ **The exit summary compares a map across FRAMES and cries wolf** | ⚠️ **New 2026-08-17.** G ended the session in the camera frame, so the exit printed G's camera-frame row against a `was:` line in world labels — reading as a scrambled, saved map. **Disk was verified untouched, twice.** Print both lines in the same frame, or say which frame each is in ([FINDINGS §66.2](FINDINGS.md)) |
 | 31 | ⛔⭐ **`chain_alive` in every incident file is always `false`, so it says nothing** | ⛔ **New 2026-08-15, found by opening an incident file for the first time** ([FINDINGS §58.45](FINDINGS.md)). The incident block runs AFTER `shutdown_robot()` on purpose, so the motors are off before anything is attempted — and the chain is therefore already stopped when the field is read. **A field with the same value in every file is not a measurement**, and this one reads as *"the chain was dead when it stopped"*, which is the exact distinction that decided whether a park was possible on 2026-08-14 ([§46.0](FINDINGS.md)). ⭐ **Fix: capture each arm's liveness into a local BEFORE the shutdown call and record that.** Two lines, no hardware needed. ⚠️ The rest of the file is verified good: modes, joints, torques, per-joint temperatures, EE, limits, loop rate, commit and the whole USB bus, for both arms |
 | 27 | ✅⚠️ **`SafeRobot`'s following-error clip — RAISED AND TESTED 2026-08-17, and it is NOT what limits MIRROR** | ✅ Julien ran `--max-lag` at **0.4** and **1.0**. His verdict: *"max lag seems to work when I have a high lag. It seems to be able to work for longer, and then it can just catch up."* ⛔⭐⭐ **But it made no difference to MIRROR, because MIRROR stops on `--mirror-gap` (built-in 0.35), not on `max_lag`.** Fourfold on `max_lag` moved the stopping point by 0.012 rad. The stop message was naming the wrong flag and has been fixed ([FINDINGS §61.0](FINDINGS.md)). ⬜ Still open: whether a high `max_lag` helps **playback and teleop** tracking, which is a separate measurement from mirror | ⛔ **New 2026-08-15.** `SafeRobot` applies TWO limits and only the rate one was ever discussed: the command may also never be more than **`max_lag` = 0.25 rad** from the measured position ([FINDINGS §57.3](FINDINGS.md)). ⭐ **That is what stops a MIRROR follower from being pulled closer by more speed**: the gap is `(leader − command) + (command − measured)`, and the second term is clipped, so the leader only has to get 0.10 rad ahead of the command to trip a 0.35 rad limit. ⚠️ **Raising it is the one lever nobody has pulled**, and it is a genuine safety limit: the clip is also a torque limit, because the PD term is `kp · (command − measured)`. Loosening it makes the motor push harder, which is how you get faster tracking AND how you get a hard hit. ⛔ **His decision, and it wants a measurement first:** watch `limited_cycles` during a mirror run at `--max-speed 2` and see how often it actually bites |
 | 28 | ⭐ **Show each arm's control frame on its status row** | ⚠️ New 2026-08-15, small. `v` aims at ONE arm, so two arms can be driven in different frames — one in `world` while the other follows its own wrist in `tool`. **Nothing on screen says which is which.** The recording metadata records both since tonight; the live row does not. Cheap, and it only matters once he actually uses two frames at once |
@@ -966,6 +968,57 @@ What we have: `scripts/teleop_session.py`, an interactive terminal program with 
 ⚠️ **What is still needed before the consolidation task in [ROADMAP §8.5](#85--the-consolidation-task-he-asked-for-and-when-it-should-happen) can be done properly:** the chosen task · whether fine-tuning an ABC checkpoint is possible · a machine with GPUs · and one complete end-to-end run, even a bad one, so the plan is written against measured behaviour rather than against this document.
 
 ---
+
+## 10. ⭐⭐⭐ Team handover: the cleanup and target architecture — PROPOSED 2026-08-17, awaiting Julien's ratification
+
+⭐ **His ask:** *"fully clean up the repo and have a clear plan of what the repo should look like when my team wants to recreate it… structure it in a really well designed architectural way."* ⛔ **This section is the plan, deliberately not yet executed** — a restructure is consequential and hard to reverse, so it gets ratified first (working-contract rule 11).
+
+### 10.1 What a team member needs on day one
+
+1. ⭐ **One entry document** that says what this is, what runs, and the three commands that prove the rig works (`check_rig` → `ping_motors` → a dry-run session). Today that is [HANDOFF.md](HANDOFF.md), which has grown into a session log; the entry role should split out.
+2. **`uv sync` and it runs** — already true, and the strongest thing about this repo.
+3. **The safety rules in one place**: no `--yes` without intent, the four-limit chain, arm G is shared, no e-stop so wall power is the cut-off.
+
+### 10.2 The target layout
+
+```
+yam-robotics/
+├── README.md            ← the day-one door: what, safety, three proof commands, map
+├── pyproject.toml
+├── src/yam/             ← ⭐ a real package, importable as `yam.*`
+│   ├── robot.py         (yam_robot.py: SafeRobot, build_robot, thermal, grippers)
+│   ├── can.py           (yam_can.py)  · teleop.py · session.py (arm_session.py)
+│   ├── mirror.py · recording.py · motion.py · settings.py · collision.py
+│   ├── fake/            (fake_arm.py — the simulator)
+│   └── ui/              (screen.py, keyboard.py, spacemouse.py)
+├── apps/                ← things you RUN: teleop_session.py, camera_view.py, map_axes.py …
+├── checks/              ← check_*.py + falsify_*.py  (read-only diagnostics)
+├── tests/               ← test_*.py, runnable as one suite
+├── config/              ← measured calibration (tracked) + session_defaults.json (ignored)
+├── docs/                ← HANDOFF (live state) · FINDINGS (evidence) · ROADMAP · COMMANDS
+└── third_party/i2rt/    ← untouched vendor code
+```
+
+⭐ **The main real change is `src/ → src/yam/` as an installed package**, killing every `sys.path.insert` header, plus sorting `scripts/` (41 files today) into `apps/`, `checks/`, `tests/`. ⚠️ Each `git mv` batch must keep the suite green — the checkers (`check_restructure`, `check_flags`, `check_links`) exist exactly to make such a move safe.
+
+### 10.3 Cruft to remove or relocate (verify, then delete — never blind)
+
+- `scripts/temp.py`-style leftovers and `__pycache__` (gitignore covers it) · superseded probes if any duplicate a checker.
+- `docs/Setup-Plan.md`'s broken link (item 32 — **his decision**) and its German/English split: decide ONE language for team docs.
+- `recordings/` stays gitignored; `incidents/` policy: keep last N.
+
+### 10.4 What "recreate it" must include that code cannot carry
+
+⭐ The hardware bring-up facts live in [FINDINGS](FINDINGS.md) but a team needs them distilled into the README: the CANable DFU recovery ritual (USB vs mains, [HANDOFF](HANDOFF.md)), the gripper ±2π frame shift, the SpaceMouse empty-serial wiggle assignment, macOS camera permission being per-app, and the LED table. **A checklist, one page, written once the restructure lands.**
+
+### 10.5 Order of work (each step green before the next)
+
+1. His ratification of this section, and answers: one language? keep German docs? package name `yam`?
+2. `tests/` + one runner (pytest already available) — no moves yet, just collection.
+3. `src/yam/` package + import fixes, suite green.
+4. `apps/` + `checks/` split, `check_flags` updated for new paths, docs updated the same commit.
+5. README rewrite as the day-one door; HANDOFF slims back to live-state.
+6. The one-page hardware bring-up checklist (§10.4).
 
 ## Deliberately NOT doing, and why
 
