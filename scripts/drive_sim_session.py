@@ -48,6 +48,8 @@ SCRIPT = [
     (0.8, "\x1b[A"),    # and back up
     (0.8, "3"),         # pick max_lag
     (0.8, "+"),         # raise it
+    (0.8, "9"),         # pick vel_ff — the live feedforward path (item 44)
+    (0.8, "+"),         # 0 -> 0.25, pushed onto the live SafeRobots
     (0.8, "0"),         # back to how the session started
     (1.0, "h"),         # leave SETTINGS
     (1.0, "a"),         # B -> G

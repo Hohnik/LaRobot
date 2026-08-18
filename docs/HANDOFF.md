@@ -25,7 +25,9 @@
 >
 > ⭐⭐ **Second 2026-08-18 layer ([FINDINGS §67.7](FINDINGS.md), [§67.8](FINDINGS.md)):** the [ROADMAP §10](ROADMAP.md) restructure is **ratified** (the colleagues' `Hohnik/LaRobot` branches are explored — [ROADMAP §10.6](ROADMAP.md)) · **build-in-prototype is the standing default** for hesitant features · item 32 closed — **Marius's [Setup-Anleitung.md](Setup-Anleitung.md) is in the repo and every link resolves** · ⛔ new working-contract **rule 12 in §4**: his messages arrive through speech-to-text he never sees; quote garbled phrases back with context, never guess-and-act.
 >
-> ✅⭐⭐⭐ **VELOCITY FEEDFORWARD IS BUILT — [FINDINGS §67.9](FINDINGS.md), unrun on hardware.** `--vel-ff` / setting 9 on the `n` screen, OFF by default. The motors finally receive a velocity setpoint (this stack always sent zero, which IS the `0.033 s × speed` lag). Bounded by construction, jaw excluded, 8 new tests, the sim loop passes 25/25 with it on. ⬜ **Owes one gentle run: `--vel-ff 0.25`**, back off live with `n` `9` `-` if the arm buzzes.
+> ✅⭐⭐⭐ **VELOCITY FEEDFORWARD IS BUILT AND RAN ON HARDWARE — [FINDINGS §67.9](FINDINGS.md), [§67.10](FINDINGS.md).** `--vel-ff` / setting 9 on the `n` screen, OFF by default. The motors finally receive a velocity setpoint (this stack always sent zero, which IS the `0.033 s × speed` lag). His 0.25 verdict: *"feels different… more direct"*, so the **ceiling is 3 now at his ask** — 1 = exact command speed, above = labelled exaggeration, overshoot expected. ⬜ Owes a visible verdict: the same movement at 0 and at 2-3.
+>
+> ✅⭐⭐ **Third 2026-08-18 layer, from his evening bench session ([FINDINGS §67.10](FINDINGS.md)):** the **park spasm is CONFIRMED fixed** (the last unconfirmed motion fix) · the settings ladder proved itself on hardware · **item 43 closed** — every `-`/`+` press prints the live status rows, so tuning is no longer blind · `q` inside the settings screen now quits · the C920 comes later, camera capture queued behind it.
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >

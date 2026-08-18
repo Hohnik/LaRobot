@@ -4635,4 +4635,24 @@ His explanation, 2026-08-18, after being asked about an unparseable phrase: *"I'
 
 ✅ **Verified:** `scripts/test_vel_ff.py`, 8 tests (off-is-identical · exact first-cycle setpoint · jaw exclusion · limiter bound over 50 runaway cycles · gain clamp above 1 · fallback warns once · the setting's ladder reaches both ends · positions identical with ff on/off). Full sweep 694/694 across 27 files, and `drive_sim_session.py --vel-ff 0.5` runs the whole loop **25/25 with feedforward on** (the driver now passes extra flags through to the session). ⭐ Mirror benefits twice, since leader-to-follower stacks two copies of the physical lag ([§66.1](FINDINGS.md)).
 
-⬜ **The hardware run it owes, low speed first:** `--vel-ff 0.25`, drive TELEOP gently, watch for buzz or overshoot (`n` · `9` · `-` backs it off live), then raise toward 1.0 and compare the FOLLOWING readings against the `0.033 s × speed` law — the speed-proportional term should visibly shrink while the 0.04-0.10 rad droop stays.
+⬜ **The hardware run it owes, low speed first:** `--vel-ff 0.25`, drive TELEOP gently, watch for buzz or overshoot (`n` · `9` · `-` backs it off live), then raise toward 1.0 and compare the FOLLOWING readings against the `0.033 s × speed` law — the speed-proportional term should visibly shrink while the 0.04-0.10 rad droop stays. ✅ **Ran the same evening — [§67.10](FINDINGS.md).**
+
+### 67.10 ✅⭐⭐⭐ HIS EVENING BENCH SESSION, 2026-08-18: THE PARK SPASM IS CONFIRMED FIXED, FEEDFORWARD RAN AND "FEELS DIFFERENT", AND HE WANTS IT EXAGGERATED
+
+✅⭐ **The park-spasm fix is CONFIRMED ON HARDWARE.** His words: *"I also did the park test, and that worked smoothly."* His pasted log shows the exact reproduction from [§66.0](FINDINGS.md): quit menu → `g` (both arms weightless, parked by hand) → `p` — and both arms parked cleanly, twice, 0.010-0.020 rad off. **That was the last unconfirmed motion fix.**
+
+⭐⭐ **Feedforward ran on both arms at 0.25, TELEOP, 161 s, and his first verdict is real-but-unclear:** *"The feedforward feels different. I don't know if it feels great yet… it kind of seems like the controls sometimes are not moving together, but maybe that's just because now they're actually more direct, and so they're less smooth. If so, then that's great."*
+
+⭐ **A mechanism that fits his "not moving together", recorded as a hypothesis and NOT as fact:** with feedforward each joint's lag shrinks in proportion to its own commanded speed, so joints on different speed profiles stop sharing the uniform lag that used to smooth a blended motion. If that is what he felt, it is the feature working. ⚠️ Unconfirmed; the tracking data of a with/without comparison at the same task would settle it.
+
+✅⭐⭐ **His ask, implemented the same evening: *"exaggerate the numbers so that I can actually see what's happening… increase the numbers so that I can have a higher max value."*** The ceiling rose 1.0 → **3.0** (`yam_robot.VEL_FF_CEILING`, synced to the editor's bounds by a test): **1.0 stays the physically-motivated rung** (exactly the command's own speed), everything above is **labelled exaggeration** — the motor is told the target moves faster than it does, so overshoot is expected, and the plan line says so whenever the gain is above 1. The ladder is now 0 · 0.25 · 0.5 · 0.75 · 1 · 1.5 · 2 · 3. The position command stays rate-limited and lag-clipped underneath at any gain.
+
+✅⭐ **The settings ladder proved itself on hardware in the same log**: he walked `vel_ff` 0.25 → 1.0 → 0 → 1.0 by key, every step a round rung, with "at the ceiling" / "at the floor" said at the ends — and the wrong-direction regression fixed in [§67.5](FINDINGS.md) never fired.
+
+✅⭐⭐ **Two frictions visible in his paste, both fixed the same evening:**
+1. ⛔ **He pressed `q` INSIDE the settings screen twice, wanting to quit, and got "(does nothing here)" both times.** Now `q` closes the screen and hands over to the session's own quit flow (which holds every arm and asks — nothing is released by the keypress). Item 38's ruling pattern applied: his intent was unambiguous.
+2. ⭐ **He tuned `vel_ff` blind** — the screen covered the status row, the exact item 43 complaint from the 33-press `mirror_catchup` night ([§65.4](FINDINGS.md)). **Now every `-`/`+` press prints each arm's live status row under the change**, mirror note included, so the effect of a setting is visible per press. **Item 43 is closed.**
+
+⚠️ **Also in his message: the C920 comes later** — *"I'll plug in the Logitech later so that you can have access to that when you need it."* Camera capture stays queued behind that.
+
+⬜ **What feedforward still owes: a verdict he can see.** Next bench run: same gentle movement at `--vel-ff 0` and then at 2 or 3, watching the FOLLOWING numbers — exaggeration exists precisely so the difference stops being subtle.

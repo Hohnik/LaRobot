@@ -74,6 +74,15 @@ SAFE_MAX_SPEED = 1.0
 #: overcome its own friction, and loosen it and the arm hits harder when it meets something.
 SAFE_MAX_LAG = 0.25
 
+#: ⭐ The hard cap on the velocity-feedforward gain (item 44). 1.0 sends exactly the
+#: rate-limited command's own speed, which is the physically-motivated value. ⚠️ Above 1.0
+#: the motor is told the target moves FASTER than it does — exaggeration Julien asked for
+#: on 2026-08-18 (*"exaggerate the numbers so that I can actually see what's happening"*)
+#: after 0.25 felt real but subtle ([FINDINGS §67.10](../docs/FINDINGS.md)). Expect
+#: overshoot up there; the position command stays rate-limited and lag-clipped throughout.
+#: ⛔ Kept in mechanical sync with `settings.LIVE_BOUNDS["vel_ff"]` by a test.
+VEL_FF_CEILING = 3.0
+
 
 # 0.5 Nm is I2RT's default and is what Julien watched slam the stops. 0.3 is
 # ~60% of it: still enough to reach both ends of a 6.57 rad stroke, noticeably
@@ -901,7 +910,7 @@ class SafeRobot:
         # structurally (FINDINGS §66.1). ⭐ The derivative of the LIMITED command is used,
         # never the caller's raw target, so the feedforward can never ask for a speed the
         # rate limiter above just refused: |vel| ≤ max_speed × vel_ff by construction.
-        ff = min(float(self.vel_ff), 1.0)
+        ff = min(float(self.vel_ff), VEL_FF_CEILING)
         if ff <= 0.0:
             self._robot.command_joint_pos(limited)
             return

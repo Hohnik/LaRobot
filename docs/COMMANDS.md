@@ -230,9 +230,9 @@ uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --te
 uv run scripts/teleop_session.py --yes --arms B,G --vel-ff 0.25
 ```
 
-⭐ **What it is:** the motors' MIT-mode frame carries a velocity setpoint, and this stack always sent zero — so all torque came from position error, which is the measured `0.033 s × speed` lag ([FINDINGS §66.1](FINDINGS.md)). With `--vel-ff` each motor also receives that fraction of the rate-limited command's own speed, so torque starts flowing before error builds. **0 = off (the default) · start at 0.25 and raise slowly · 1 = the full command speed.** Live: setting 9 on the `n` screen.
+⭐ **What it is:** the motors' MIT-mode frame carries a velocity setpoint, and this stack always sent zero — so all torque came from position error, which is the measured `0.033 s × speed` lag ([FINDINGS §66.1](FINDINGS.md)). With `--vel-ff` each motor also receives that fraction of the rate-limited command's own speed, so torque starts flowing before error builds. **0 = off (the default) · 1 = exactly the command's speed, the physically-motivated value · up to 3 = EXAGGERATED**, headroom he asked for on 2026-08-18 to make the effect feelable — up there the motor is told the target moves faster than it does, so expect overshoot ([FINDINGS §67.10](FINDINGS.md)). Live: setting 9 on the `n` screen.
 
-⛔ **Bounded by construction:** the setpoint is the derivative of the command the rate limiter itself produced, so it can never ask for speed past `--max-speed`. ⛔ **The jaw never gets feedforward** — extra torque on a squeezing jaw pushes into the object, which is how motor 7 was cooked. ⚠️ A too-eager feedforward oscillates; if the arm buzzes or overshoots, press `n`, `9`, `-`.
+⛔ **Still bounded:** the setpoint is `gain ×` the derivative of the command the rate limiter itself produced, hard-capped at gain 3, and the position command stays rate-limited and lag-clipped underneath. ⛔ **The jaw never gets feedforward** — extra torque on a squeezing jaw pushes into the object, which is how motor 7 was cooked. ⚠️ If the arm buzzes or overshoots, press `n`, `9`, `-`.
 
 ### ⭐⭐ `n` — the SETTINGS screen, live
 

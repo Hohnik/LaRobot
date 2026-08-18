@@ -233,10 +233,13 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     #: whose step has to be able to get there. `adjust` special-cases it for that reason.
     "mirror_catchup": (0.0, 20.0),
     "linear_scale": (0.03, 15.0),
-    #: ⭐ Capped at 1.0 BY DESIGN, not generosity: 1.0 sends exactly the command's own
-    #: derivative, and anything above would ask for more speed than the rate limiter
-    #: allows — feedforward overshoot is how a wrong gain oscillates ([FINDINGS §66.1]).
-    "vel_ff": (0.0, 1.0),
+    #: ⭐ 1.0 sends exactly the command's own derivative, the physically-motivated value.
+    #: ⚠️ The headroom above 1.0 is EXAGGERATION, added at Julien's ask on 2026-08-18
+    #: (*"exaggerate the numbers so that I can actually see what's happening"*) after 0.25
+    #: felt real but subtle. Up there the motor is told the target moves faster than it
+    #: does — expect overshoot; the position command stays rate-limited underneath.
+    #: ⛔ Must equal `yam_robot.VEL_FF_CEILING`; a test pins the sync.
+    "vel_ff": (0.0, 3.0),
 }
 
 #: ⛔⭐⭐⭐ A LADDER OF ROUND NUMBERS, BECAUSE THE RATIO STEP PRODUCED UNUSABLE VALUES.
@@ -263,7 +266,7 @@ LADDERS: dict[str, tuple[float, ...]] = {
     "reach": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2),
     "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
     "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
-    "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0),
+    "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0),
     #: ⭐ The CARTESIAN speed a full puck deflection asks for. Its default is 0.12 m/s and it
     #: spans two orders of magnitude, so the low rungs are fine and the high ones are coarse.
     "linear_scale": (0.03, 0.06, 0.12, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0, 12.0, 15.0),
@@ -333,7 +336,7 @@ def live_lines(values: dict[str, Any], selected: str | None,
         "",
         "   1-9 pick a setting   - / +  change it   0  back to how this session started",
         "   s   SAVE these to config/session_defaults.json for every later session",
-        "   t / g / h  leave                                        ?  this help",
+        "   t / g / h  leave        q  leave and quit the session   ?  this help",
         "",
         "  ⚠️ max_speed and max_lag take effect on the arms IMMEDIATELY. They are the two",
         "     limits that bound how fast 4.3 kg may move, so a change here is a real change.",

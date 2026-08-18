@@ -38,7 +38,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from fake_arm import FakeArm  # noqa: E402
 from settings import LADDERS, LIVE_BOUNDS, LIVE_ORDER, TUNABLE, adjust  # noqa: E402
-from yam_robot import SafeRobot  # noqa: E402
+from yam_robot import VEL_FF_CEILING, SafeRobot  # noqa: E402
 
 N = 7  # 6 arm joints + the jaw, this stack's only real shape
 
@@ -93,12 +93,24 @@ def test_feedforward_is_bounded_by_the_rate_limiter() -> None:
     assert worst <= 2.0 + 1e-6, f"feedforward asked for {worst} rad/s past the limiter"
 
 
-def test_a_gain_above_one_is_clamped() -> None:
-    """⚠️ The ladder tops out at 1.0, but a flag can type anything. Above 1.0 the
-    feedforward would ask for speed the limiter refused, so it clamps."""
-    safe, fake = _pair(vel_ff=5.0, max_speed=1.0)
+def test_a_gain_above_the_ceiling_is_clamped() -> None:
+    """⚠️ A flag can type anything. Above VEL_FF_CEILING the setpoint clamps, so a typo
+    like `--vel-ff 50` cannot ask for fifty times the command speed."""
+    safe, fake = _pair(vel_ff=50.0, max_speed=1.0)
     safe.command_joint_pos(np.full(N, 10.0))
-    assert float(np.max(np.abs(fake.commanded_vels[0][:6]))) <= 1.0 + 1e-9
+    worst = float(np.max(np.abs(fake.commanded_vels[0][:6])))
+    assert worst <= VEL_FF_CEILING * 1.0 + 1e-9, \
+        f"a runaway gain sent {worst} rad/s past the ceiling"
+
+
+def test_the_ceiling_is_one_number_in_two_files_and_they_agree() -> None:
+    """⛔ `yam_robot.VEL_FF_CEILING` clamps the code; `settings.LIVE_BOUNDS` bounds the
+    editor and the ladder tops out there. If they drift, the screen shows a value the
+    arm silently refuses — the exact silent-disagreement this repo keeps paying for."""
+    assert VEL_FF_CEILING == LIVE_BOUNDS["vel_ff"][1], \
+        "yam_robot.VEL_FF_CEILING and settings.LIVE_BOUNDS['vel_ff'] disagree"
+    assert LADDERS["vel_ff"][-1] == VEL_FF_CEILING, \
+        "the ladder's top rung is not the ceiling, so the max is unreachable by key"
 
 
 def test_a_robot_without_command_joint_state_falls_back_and_says_so_once() -> None:
@@ -129,19 +141,21 @@ def test_a_robot_without_command_joint_state_falls_back_and_says_so_once() -> No
 
 
 def test_the_live_setting_exists_and_its_ladder_reaches_both_ends() -> None:
-    """⭐ vel_ff is setting 9 on the `n` screen: tunable, saved, bounded 0..1, and both
-    OFF (0) and full (1) must be reachable by key."""
+    """⭐ vel_ff is setting 9 on the `n` screen: tunable, saved, bounded 0..3, and both
+    OFF (0) and the ceiling must be reachable by key. 1.0 (the physically-motivated
+    value) must be a rung; above it is exaggeration, his 2026-08-18 ask."""
     assert "vel_ff" in TUNABLE and "vel_ff" in LIVE_ORDER
     assert LIVE_ORDER.index("vel_ff") == 8, "the help text says setting 9"
-    assert LIVE_BOUNDS["vel_ff"] == (0.0, 1.0)
+    assert LIVE_BOUNDS["vel_ff"] == (0.0, VEL_FF_CEILING)
+    assert 1.0 in LADDERS["vel_ff"], "1.0 = exact command speed must stay a rung"
     value = LIVE_BOUNDS["vel_ff"][1]
-    for _ in range(10):
+    for _ in range(15):
         value = adjust("vel_ff", value, False)
     assert value == 0.0, "OFF must be reachable by pressing -"
-    for _ in range(10):
+    for _ in range(15):
         value = adjust("vel_ff", value, True)
-    assert value == 1.0, "full feedforward must be reachable by pressing +"
-    assert LADDERS["vel_ff"][0] == 0.0 and LADDERS["vel_ff"][-1] == 1.0
+    assert value == VEL_FF_CEILING, "the ceiling must be reachable by pressing +"
+    assert LADDERS["vel_ff"][0] == 0.0
 
 
 def test_the_fake_records_what_the_real_motor_would_be_sent() -> None:

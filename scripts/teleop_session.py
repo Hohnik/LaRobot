@@ -160,6 +160,7 @@ from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
 from yam_robot import (  # noqa: E402
     SAFE_MAX_LAG,
     SAFE_MAX_SPEED,
+    VEL_FF_CEILING,
     ThermalGuard,
     advance_park_command,
     build_robot,
@@ -1003,15 +1004,16 @@ def main() -> int:  # noqa: PLR0915
                          f"harder hit. Raise it in small steps (0.25 → 0.35) and watch what the "
                          f"arm does when it meets something")
     ap.add_argument("--vel-ff", type=float, default=0.0, metavar="GAIN",
-                    help="⭐ velocity feedforward gain, 0..1 (default 0 = off, item 44). "
+                    help="⭐ velocity feedforward gain, 0..3 (default 0 = off, item 44). "
                          "The motors' MIT-mode frame carries a velocity setpoint and this "
                          "stack always sent zero, so all torque came from position error — "
                          "the measured 0.033 s × speed lag is that (FINDINGS §66.1). At "
                          "GAIN > 0 each motor also receives GAIN × the rate-limited "
                          "command's own derivative, so torque flows before error builds. "
-                         "Start at 0.25 and raise slowly; a too-eager feedforward "
-                         "oscillates. The jaw never gets feedforward. Live: setting 9 on "
-                         "the n screen.")
+                         "1 = exactly the command's speed, the physically-motivated value. "
+                         "⚠️ Above 1 = EXAGGERATED (his 2026-08-18 ask, to make the effect "
+                         "feelable) — expect overshoot. The jaw never gets feedforward. "
+                         "Live: setting 9 on the n screen.")
     ap.add_argument("--mirror-catchup", type=float, default=DEFAULT_CATCHUP,
                     metavar="PER_SECOND",
                     help="⭐ how fast MIRROR corrects the follower's STANDING offset. 0 = off "
@@ -1340,9 +1342,13 @@ def main() -> int:  # noqa: PLR0915
     if args.vel_ff > 0.0:
         # ⭐ Same rule as mirror-catchup: a control term that changes what the arm does is
         # named in the plan, so it can be ruled out (or blamed) later.
-        print(f"  feedforward : ON at {min(args.vel_ff, 1.0):g} — motors also receive that "
+        shown_ff = min(args.vel_ff, VEL_FF_CEILING)
+        over = "" if shown_ff <= 1.0 else \
+            "  ⚠️ ABOVE 1 = EXAGGERATED — the motors are told the target moves faster " \
+            "than it does; expect overshoot"
+        print(f"  feedforward : ON at {shown_ff:g} — motors also receive that "
               f"fraction of the command's own speed, so torque starts before error builds "
-              f"(item 44; jaw excluded)")
+              f"(item 44; jaw excluded){over}")
     lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
     # ⭐⭐ THE PLAN NOW SAYS WHAT EACH LIMIT DOES, NOT JUST ITS VALUE. Julien, 2026-08-17:
     # *"I want to understand what MaxLag exactly does. I think I understand Max speed… but then
@@ -2259,6 +2265,19 @@ def main() -> int:  # noqa: PLR0915
                             print(setting_line(settings_pick,
                                                float(getattr(args, settings_pick)),
                                                before=was, builtin=builtin_defaults))
+                            # ⭐⭐ THE ARM'S LIVE ROW PRINTS UNDER EVERY CHANGE (item 43).
+                            # He tuned mirror_catchup with 33 presses and vel_ff blind on
+                            # 2026-08-18, because this screen covered the one row showing
+                            # the effect. A live editor whose effect is invisible while
+                            # editing is half a feature (FINDINGS §65.4).
+                            for one_arm in arms:
+                                print("     " + status_row(
+                                    one_arm, "", args.reach, args.floor,
+                                    note=(mirror_link.status(
+                                        mirror_leader.robot.get_joint_pos(),
+                                        one_arm.robot.get_joint_pos())
+                                        if mirror_link is not None
+                                        and one_arm.mode == "mirror" else "")))
                             continue
                         elif k == "0":
                             for name, value in settings_at_start.items():
@@ -2281,13 +2300,25 @@ def main() -> int:  # noqa: PLR0915
                                   "written to the file.\n     Press n then s to make them "
                                   "permanent. Press the mode key again to change mode.\n")
                             continue
+                        elif k == "q":
+                            # ⭐ He pressed q HERE twice on 2026-08-18, wanting to quit, and
+                            # got "(does nothing here)" both times (FINDINGS §67.10). The
+                            # intent is unambiguous: close the screen and hand the key's
+                            # meaning to the session's own quit flow, which holds every arm
+                            # and asks before anything is released.
+                            pending = None
+                            print("\n  ⭐ SETTINGS closed — over to the quit menu. The values "
+                                  "stay live; they were not saved.\n")
+                            stop_reason = "quit requested"
+                            continue
                         elif k != "?":
                             # ⚠️ Escape sequences are NAMED rather than echoed. `\x1b[C` on
                             # screen is noise; "left/right arrow" is information.
                             shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
                                 k, repr(k) if k.isprintable() else "that key")
                             print(f"\n  ({shown} does nothing here — 1-9 or up/down to pick, "
-                                  f"-/+ to change, 0 revert, s save, n or t/g/h to leave)\n")
+                                  f"-/+ to change, 0 revert, s save, q quit, "
+                                  f"n or t/g/h to leave)\n")
                         if show_all or k == "0":
                             for line in live_lines(
                                     {kk: getattr(args, kk) for kk in LIVE_ORDER},
