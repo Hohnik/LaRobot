@@ -1739,10 +1739,10 @@ def main() -> int:  # noqa: PLR0915
             one.teleop.reset(q[:N_ARM])
             one.home_ee = one.teleop.ee_position().copy()
 
-        def enter_hold(one: ArmSession) -> None:
-            resync(one)
-            one.robot.command_joint_pos(
-                np.asarray(one.robot.get_joint_pos(), dtype=float))
+        # ⭐ enter_hold lives on ArmSession now (item 23 group ①, 2026-08-18): the class
+        # method resyncs, commands the measured pose AND sets mode="hold" — so the two
+        # sites that want a DIFFERENT mode afterwards (the park seed, the mirror engage)
+        # write their mode AFTER the call. The script's own copy is gone.
 
         def enter_guide(one: ArmSession) -> None:
             """Return to weightless after PD control.
@@ -1873,13 +1873,12 @@ def main() -> int:  # noqa: PLR0915
             one.park_s = 0.0
             one.park_target = targets[-1]
             one.park_cmd = start.copy()
-            # ⛔ THE ORDER MATTERS AND IT IS NOT THE OBVIOUS ONE. `enter_hold()` here is the
-            # script's own, which commands the measured pose and does NOT touch the mode —
-            # so setting `park` first is safe. `ArmSession.enter_hold()` DOES set the mode,
-            # and swapping it in without moving this line would leave a park running while
-            # the screen said HOLD. FINDINGS §52.1 keeps this trap next to item 23.
+            # ⛔ THE ORDER MATTERS. `ArmSession.enter_hold()` seeds the command at the
+            # measured pose AND sets mode="hold", so PARK is written AFTER it — the
+            # reverse order was the §52.1 trap: a park running while the screen said
+            # HOLD. This was the site the item-23 audit flagged; the reorder is the fix.
+            one.enter_hold()
             one.mode = "park"
-            enter_hold(one)
             one.park_best_err = float(np.max(np.abs(one.park_target - start)))
             one.park_progress_t = t
             one.park_leg_t = t
@@ -1896,7 +1895,7 @@ def main() -> int:  # noqa: PLR0915
             if one.mode == "teleop":
                 enter_teleop(one)
             elif one.mode == "hold":
-                enter_hold(one)
+                one.enter_hold()
             elif one.mode == "guide":
                 # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
                 # by enter_guide() — so the drift reference has to be taken here too, or the
@@ -2521,8 +2520,11 @@ def main() -> int:  # noqa: PLR0915
                             # ⛔ The follower goes under POSITION control before anything is
                             # commanded. If it were left weightless the commands would do
                             # nothing at all, and the readout would show it tracking.
+                            # ⛔ ORDER: the class's enter_hold() sets mode="hold",
+                            # so MIRROR is written AFTER it — the reverse order would
+                            # leave a mirror running while the row said HOLD (§52.1).
+                            mirror_follower.enter_hold()
                             mirror_follower.mode = "mirror"
-                            enter_hold(mirror_follower)
                             # ⭐ THE FOLLOW SPEED IS READ FROM THE FOLLOWER'S OWN CAP, not
                             # repeated here. `MirrorLink`'s default is 1.0 because that is
                             # SafeRobot's default; if `--max-speed` raises the cap, a
@@ -2749,7 +2751,7 @@ def main() -> int:  # noqa: PLR0915
                             mirror_link = None
                             for one in arms:
                                 if one.mode == "mirror":
-                                    one.mode = "hold"; enter_hold(one)
+                                    one.enter_hold()
                             hint("")
                             print("\n  ⭐ MIRROR off — the follower is HOLDING.\n")
                             continue
@@ -2863,7 +2865,7 @@ def main() -> int:  # noqa: PLR0915
                                 wizard.mode = "guide"; enter_guide(wizard)
                                 print("\n⭐ MODE: GUIDE — arm is weightless\n")
                             else:
-                                wizard.mode = "hold"; enter_hold(wizard)
+                                wizard.enter_hold()
                                 print("\n⭐ MODE: HOLD\n")
                         elif k == "f":
                             if active is None:
@@ -3009,7 +3011,7 @@ def main() -> int:  # noqa: PLR0915
                         hint("")
                         for one in aimed:
                             if one.mode != "hold":
-                                one.mode = "hold"; enter_hold(one)
+                                one.enter_hold()
                         print(f"\n⭐ MODE: HOLD on {aimed_label}\n")
                     elif k in MODE_KEYS:
                         # ⛔ ALREADY IN THAT MODE — say so, do not call it unrecognised.
@@ -3719,7 +3721,7 @@ def main() -> int:  # noqa: PLR0915
                                       f"the tolerance with --mirror-gap "
                                       f"{mirror_link.max_gap * 2:.2f}.")
                             print("     Press i then Enter to engage it again.\n")
-                            one.mode = "hold"; enter_hold(one); hint("")
+                            one.enter_hold(); hint("")
                             mirror_link = None
                         else:
                             full = np.asarray(cmd, dtype=float).copy()
@@ -3772,7 +3774,7 @@ def main() -> int:  # noqa: PLR0915
                                 one.park_best_err = min(one.park_best_err, err)
                                 one.park_progress_t = t
                             if t - one.park_progress_t > PARK_STALL_SECONDS:
-                                one.mode = "hold"; enter_hold(one); hint("")
+                                one.enter_hold(); hint("")
                                 print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                       f"{lag:.3f} rad behind the path, no progress for "
                                       f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
@@ -3804,7 +3806,7 @@ def main() -> int:  # noqa: PLR0915
                             if leg in ("arrived", "settled"):
                                 extra = ("" if leg == "arrived" else
                                          " — as close as the arm holds itself under load")
-                                one.mode = "hold"; enter_hold(one)
+                                one.enter_hold()
                                 hint("")        # the progress readout has nothing left to say
                                 # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
                                 # passed at the end of the path, which resets the leg clock
@@ -3889,7 +3891,7 @@ def main() -> int:  # noqa: PLR0915
                                 # gap the honest thing is to say so and hold, not to keep
                                 # printing a number that is not changing — which is exactly
                                 # how the old treadmill bug hid for two sessions.
-                                one.mode = "hold"; enter_hold(one); hint("")
+                                one.enter_hold(); hint("")
                                 print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
                                       f"progress for {PARK_STALL_SECONDS:.0f}s.")
                                 print(f"   The command ran {lag:.3f} rad ahead of the arm; "
@@ -3980,7 +3982,7 @@ def main() -> int:  # noqa: PLR0915
                         replay_progress_t = t
                     if rs.finished:
                         for a in replay_arms:
-                            a.mode = "hold"; enter_hold(a)
+                            a.enter_hold()
                         hint("")
                         # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
                         # 2.3 s longer than the recording and the old message reported only
@@ -4093,7 +4095,7 @@ def main() -> int:  # noqa: PLR0915
                         # playback that sits silently holding its clock is the treadmill
                         # bug again (FINDINGS §24). Same patience the park uses.
                         for a in replay_arms:
-                            a.mode = "hold"; enter_hold(a)
+                            a.enter_hold()
                         hint("")
                         print("\n⛔ PLAYBACK BLOCKED — "
                               f"{'+'.join(a.name for a in replay_arms)} stopped following "
@@ -4252,7 +4254,7 @@ def main() -> int:  # noqa: PLR0915
             if live and (interrupted or unplanned) and any(
                     one.base_pose is not None for one in live):
                 for one in live:
-                    enter_hold(one)
+                    one.enter_hold()
                 if interrupted:
                     print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
                 else:
@@ -4270,7 +4272,7 @@ def main() -> int:  # noqa: PLR0915
             if any(one.alive() for one in arms) and not auto_parked:
                 for one in arms:
                     if one.alive():
-                        enter_hold(one)
+                        one.enter_hold()
                 print("\nEvery arm is HOLDING its pose. Nothing is released until you choose.")
                 print("   q = PARK then DISABLE — the whole shutdown in one key")
                 print("   p = PARK — drive back to the park pose, then it holds there")
@@ -4305,7 +4307,7 @@ def main() -> int:  # noqa: PLR0915
                             break
                         for one in arms:
                             if one.alive():
-                                enter_hold(one)
+                                one.enter_hold()
                         print(f"\n⚠️  the park ended as {outcome!r}, so nothing is being "
                               "released.")
                         print("   q = try again    p = park    g = weightless    d = disable")
@@ -4319,7 +4321,7 @@ def main() -> int:  # noqa: PLR0915
                         park_arms([one for one in arms if one.alive()], keys, clamp_gripper)
                         for one in arms:
                             if one.alive():
-                                enter_hold(one)
+                                one.enter_hold()
                         print("   q = park+disable    p = park again    g = weightless    d = disable")
                     elif k == "g":
                         # ⛔ EVERY arm, and with two that is 8.6 kg going weightless at once.
