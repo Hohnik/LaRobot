@@ -111,6 +111,7 @@ from keyboard import KeyReader  # noqa: E402
 from spacemouse import (  # noqa: E402
     TwistReader,
     countdown_hands_off,
+    find_all_devices,
     open_device,
     pick_device_by_wiggle,
 )
@@ -1450,6 +1451,24 @@ def main() -> int:  # noqa: PLR0915
         print("⭐ SIMULATED PUCKS — both report zero deflection, so TELEOP holds still.\n"
               "   Drive the loop with the KEYS: modes, p, w, l, a, i, q.\n")
     for name in arm_names if not args.sim else []:
+        # ⭐⭐ AN ARM WITHOUT A PUCK STILL JOINS THE SESSION (item 47, FINDINGS §68.5).
+        # With one SpaceMouse and two arms this used to refuse outright — which killed
+        # MIRROR and two-arm playback, although a mirror follower and a replaying arm
+        # never need a hand. If every attached puck is already assigned, the remaining
+        # arm gets the same zero-deflection reader --sim uses: HOLD, GUIDE, playback,
+        # scrub and MIRROR-follower all work; only its own TELEOP is inert.
+        # ⚠️ Deliberately ONLY when no unassigned device exists. If a free puck IS
+        # attached and the operator just did not move it, the abort below stands —
+        # falling back silently there would hand him a dead TELEOP he asked to assign.
+        already = {h["path"] for h in pucks.values()}
+        if pucks and not [d for d in find_all_devices() if d.get("path") not in already]:
+            pucks[name] = {"path": f"none:{name}", "handle": None, "reader": StillPuck()}
+            print(f"\n⚠️  arm {name} has NO puck — every attached SpaceMouse is already "
+                  f"assigned.\n   It still joins the session: HOLD, GUIDE, playback, "
+                  f"scrub and MIRROR-follower\n   all work. Only its own TELEOP is dead "
+                  f"(its puck reads zero deflection).\n   Attach a second SpaceMouse and "
+                  f"restart to give it one.\n")
+            continue
         info = pick_device_by_wiggle(label=name,
                                      exclude=[h["path"] for h in pucks.values()])
         if info is None:

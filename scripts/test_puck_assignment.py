@@ -81,6 +81,22 @@ def test_excluding_everything_returns_none() -> None:
         assert got is None
 
 
+def test_a_puckless_arm_still_joins_the_session() -> None:
+    """⭐⭐ Item 47 (FINDINGS §68.5): with one SpaceMouse and two arms the session used to
+    refuse outright, which killed MIRROR and two-arm playback although a follower never
+    needs a hand. The fallback lives in the session script and this file cannot attach
+    hardware, so it pins the source: the fallback exists, uses the zero-deflection
+    StillPuck, and fires ONLY when some puck is already assigned AND none is free —
+    an attached-but-unmoved puck must still abort, never silently lose its TELEOP."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    at = src.find('pucks[name] = {"path": f"none:{name}"')
+    assert at != -1, "the puckless-arm fallback is gone"
+    assert "StillPuck()" in src[at:at + 120], "the fallback no longer uses StillPuck"
+    gate = src.rfind("if pucks and not [d for d in find_all_devices()", 0, at)
+    assert gate != -1 and at - gate < 400, \
+        "the fallback lost its gate — it must fire only when no unassigned device exists"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []
