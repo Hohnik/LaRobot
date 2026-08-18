@@ -1032,6 +1032,21 @@ yam-robotics/
 5. README rewrite as the day-one door; HANDOFF slims back to live-state.
 6. The one-page hardware bring-up checklist (§10.4).
 
+### 10.6 ⭐⭐ What the colleagues' LaRobot branches show — explored 2026-08-18, his instruction
+
+> ⭐ **His instruction:** explore the team's branches, understand how their stuff looks and what their plans are, integrate those plans into ours, and deviate where a better idea exists. Fetched from the public `Hohnik/LaRobot` (remote `larobot`): `main` + `feature/sim` + `feature/camera-framework` + `feature/spacemouse`, 4-6 commits each, early skeleton stage.
+
+**What LaRobot is:** the team's greenfield rebuild starting point. A `src/robot/` package split by domain — `inputs/` · `cameras/` · `sim/` · `record/` · `train/` · `evaluate/` — plus `tests/` (pytest + conftest, per-domain folders), a `justfile` as command runner, and the ABC `put_bottles` sim assets. Working today: a viser slider-teleop of the ABC sim recording to `.npz` (`main.py`), and a plain-MuJoCo `World` class at 29.4 Hz (`TIMESTEP 0.002 × DECIMATION 17`, no CUDA needed). Targets Ubuntu 24.04, Python ≥3.14.
+
+⭐⭐ **Their two ideas worth adopting in our §10.2 layout:**
+
+1. **Policy-as-an-input.** `inputs/` holds `input.py` (an `Input` ABC), `keyboard.py`, `mouse.py`, `spacemouse.py` — **and `policy.py`**. Everything that produces commands implements one interface, so a trained policy plugs in exactly where the human does. That is ABC Phase E1's policy-adapter stated structurally, and our session loop should be described (and eventually restructured) the same way: command sources behind one interface.
+2. **The `Frame` dataclass** (`cameras/frame.py`): `camera_name` · `sequence` · `camera_timestamp_ns | None` · `host_timestamp_ns` · `rgb` · `depth: None`-able *"because of the C920"*. Dual timestamps is exactly what item 6 (timestamped capture) needs — ⭐ **our capture tooling should align its field names with their `Frame` so the rebuild lifts it unchanged.**
+
+⭐ **Consequences for §10.2:** `src/yam/` gains domain subpackages rather than staying flat — `inputs/` (spacemouse, keyboard) · `cameras/` · the existing `fake/` — and `tests/` gets per-domain folders matching theirs. A `justfile` is worth adding (they already use `just`; our COMMANDS.md lines map onto recipes). Package name `yam` stays (their package is `robot`; two names is fine, the rebuild picks one).
+
+⚠️ **What NOT to copy (and say so in the plan):** their sim `World` and our `fake_arm` solve different problems — theirs renders the ABC task scene for policy work, ours *lags like the measured hardware* so the control loop can be falsified. Both belong in the rebuild, as different modules. And their empty stubs (`camera.py`, `spacemouse.py`, `policy.py`, `record.py` are placeholder files) mean the *proven* implementations still live here — which is exactly why this walkthrough exists.
+
 ## Deliberately NOT doing, and why
 
 - **Joint-space jogging as a stepping stone** (SpaceMouse axis → one joint each, no IK). Genuinely simpler and it would prove the plumbing sooner. Rejected as the *main* path because it is throwaway — the plan needs cartesian control — and because simulation already provides a risk-free place to debug the real thing. **Kept as a fallback:** if IK fights us, joint jogging still gets a SpaceMouse driving the arm the same day.
