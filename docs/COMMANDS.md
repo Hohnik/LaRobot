@@ -6,7 +6,7 @@
 >
 > ⭐⭐ **`teleop_session.py` takes `--arms B,G` and DRIVES BOTH ARMS**, confirmed on the hardware 2026-08-14 ([FINDINGS §55](FINDINGS.md)). `--arm` is unchanged and is still the one to type for one arm; the two spellings must agree or the session refuses. Each arm gets its own puck (assigned by wiggle), its own axis map, its own park pose and its own status row.
 >
-> ⛔ **Three things refuse with two arms, on purpose:** `--start-mode guide` (two arms weightless before anything is on screen), `w` and `l` (the recorder holds one arm's joints, so it would capture half a demonstration), and `m` while BOTH is selected (it edits one map from one wiggle). ⚠️ **This paragraph said "`--arms B,G` refuses today" until 2026-08-14 evening**, which was true for a few hours.
+> ⛔ **Two things refuse with two arms, on purpose:** `--start-mode guide` (two arms weightless before anything is on screen) and `m` while BOTH is selected (it edits one map from one wiggle). ⚠️ **This paragraph listed `w` and `l` as a third refusal until 2026-08-19** — that was true when the recorder held one arm's joints, and stale from 2026-08-14 on, when recordings became every arm in one timeline (ABC's own shape) and his two-arm recording ran on hardware. The §33.3 staleness pattern, caught by reading the paragraph against the code.
 
 ---
 

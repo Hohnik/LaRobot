@@ -514,6 +514,18 @@ w4  lifted, jaws closed
 
 ⭐ **The order I would build it in:** the pause at each waypoint first, because grabbing needs it anyway. Then composite runs assembled from *already saved* poses and recordings, which needs no change to the mode machine. Teaching a leg in the middle of a run last, because it is the only part that touches the rule about abandoning a run.
 
+### ⭐⭐ 6.6.1a The execution design for phase 2 (composite runs) — written 2026-08-19 so the building session starts from answers
+
+**The pause (phase 1) is BUILT and confirmed** ([FINDINGS §70.5](FINDINGS.md)), so phase 2 is next: a run typed as poses AND takes, e.g. `p 1 w2 3 Enter` meaning *pose 1 → play recording 2 → pose 3*. What already exists does almost all of it:
+
+1. **The typing UI**: `park_sequence` is a list of digit strings today. It becomes a list of `("pose", "1")` / `("take", "2")` entries; inside the `p` prompt, `w` before a digit means a take (the two-key idiom `s <digit>` / `l <digit>` already established). The plan line prints `RUN 1 → ▶2 → 3` and counts jaw stops per pose-leg exactly as now.
+2. **The runner is a QUEUE OF HANDOVERS, and both handover halves already exist and are hardware-confirmed**: the `l` flow parks to a recording's start pose and hands over to replay on ARRIVAL (never on interruption — the [FINDINGS §57.1](FINDINGS.md) rule), and replay completion already restores HOLD. Phase 2 threads them: a session-level `composite_queue` of remaining legs; a pose-leg runs the class park (`begin_path`, jaw pauses included); a take-leg reuses `replay_pending` exactly as `l` does; each completion pops the next leg.
+3. ⛔ **The seam rule from §6.6.1 is implemented BY the existing park**: a take-leg's park-to-start IS the join — planned legs aim at the take's own first pose, so no seam can jump by construction. The take's LAST pose is where the next pose-leg starts from, which the class park handles like any start pose.
+4. ⛔ **The four traps, named in advance:** ① the [§57.1](FINDINGS.md) family — every handover happens in the ARRIVAL/COMPLETION branch, never in a mode-key branch, and any abandonment (h/t, blocked park, stopped replay) clears the WHOLE `composite_queue` with a printed count, the `abandon_path` rule at composite scale; ② `begin_path`'s replay-cancel guard (a park started by anything else cancels a pending playback) must treat a composite's own pose-leg parks as `for_replay`-style friendly, or leg 1 cancels leg 2 — the guard gains a `composite` flag; ③ the recorder (`w`) must refuse or detach while a composite runs, since a composite IS partly a playback; ④ per-arm: a composite is SESSION-level like replay (takes span arms), so with two arms the pose-legs park every aimed arm and the take plays its own arms — the layout machinery (`Layout.from_meta`) already answers whose joints are whose.
+5. **Commit sequence, each green:** (a) the leg-list type + typing UI + plan line, no runner (refuses to run, says so); (b) the runner for pose-only lists (must behave byte-identically to today's `p` runs — pinned); (c) take-legs; (d) `check_flags`/COMMANDS/tests ride along per commit. Sim-drive grows a composite scenario in (c).
+
+⏸ Phase 3 (teaching a leg MID-run) stays deliberately unbuilt until phase 2 has met the arm: it is the only part that touches the abandon rule, and [§6.6.1](ROADMAP.md) point 4's warning stands.
+
 ### The three ways to collect demos, side by side
 
 | | how it works | good | bad |
