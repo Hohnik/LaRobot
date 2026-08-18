@@ -4921,3 +4921,14 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 ⚠️ **One honest miss while testing it:** the old-file fixture GUESSED the file shape (nested sample lists) instead of matching `to_dict()`'s real flat rows, and failed against its own library — the claim-names-a-method rule ([§36.3](FINDINGS.md)'s family) applied to a fixture. Matched to the real shape, with a comment saying so.
 
 ✅ Verified: 4 new tests in `tests/test_recording.py` (69/69 there), full suite **717/717 across 30 files**, sim drive 25/25, `check_restructure` coherent. ⬜ Owes one bench feel-run: record, `k` twice, read the stop summary and the listing.
+
+### 70.11 ⬜⭐ THE BENCH LIST FOR HIS NEXT VISIT — four items, about five minutes, and what each one answers
+
+> Written 2026-08-19 while the rig is out of reach, so tomorrow starts with a list instead of an archaeology dig. **Plug in: both arms (CAN adapters + mains power), BOTH D405s and the C920, the one SpaceMouse — and put a graspable object (the Lego piece) on the desk.**
+
+1. **`uv run apps/capture_probe.py --cameras d405,c920 --seconds 10 --save`** (~30 s) — the two-camera bandwidth measurement ([§70.9](FINDINGS.md)): per camera the achieved fps, fresh ratio, worst blind gap. ⚠️ With two D405s attached, `d405` may refuse as ambiguous — then `--indices` per the listing. Add the second D405 in a second run if the first is clean: three cameras on one tree is the real dataset load.
+2. **`uv run apps/camera_view.py --list`** (~30 s, one glance) — the new uniqueID lines against [§70.6](FINDINGS.md)'s locationIDs (`0x01220000` / `0x01210000`): if a D405's uniqueID embeds its locationID, item 5 (telling identical cameras apart) closes with no root and no lens-covering.
+3. **The grab re-run** (~2 min): re-run the §70.3 sequence on the Lego piece. ⭐ **The pause line now prints `arm settled X rad off`** — at the friction floor (~0.02-0.04) the POSE was taught off, so re-save the at-object waypoints a few millimetres further and it grips; well above the floor means the arm never got there, which is a different conversation. The grasp verdict line says whether it held.
+4. **One labelled recording** (~1 min): `w` · move · `k` · move · `k` · move · `w`, save it, then `uv run checks/check_recordings.py` — the stop summary and the listing should both show the bad stretch ([§70.10](FINDINGS.md)).
+
+⚠️ Standing, unchanged: the repo has NO remote of Julien's own (229 commits on one Mac — needs his GitHub account, ~5 minutes with him present), and the two old API keys from `AutonomousMAS/.env` are still unrotated (Mind Understanding's `state/NOW.md` §4 item 2, open since 2026-08-06).
