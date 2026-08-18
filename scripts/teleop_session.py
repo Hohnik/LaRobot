@@ -1705,39 +1705,15 @@ def main() -> int:  # noqa: PLR0915
         # that is a recorded decision, not an oversight: FINDINGS §52.1. Collapsing them is
         # ROADMAP §8.2 item 23, it changes what the arm is commanded at the margins, and it
         # therefore needs its own bench pass.
-        def resync(one: ArmSession) -> None:
-            """⛔ Re-anchor EVERY cached variable to the measured pose.
+        # ⭐ resync lives on ArmSession too (item 23): every class enter_* method
+        # calls self.resync() itself, so the script no longer owns any mode hygiene.
+        # The GUIDE→TELEOP snap story lives in ArmSession.resync's docstring.
 
-            This is the fix for the snap Julien saw going GUIDE → TELEOP. `prev_q`
-            was initialised once before the loop and only updated inside teleop,
-            so after hand-guiding the arm it still held the pose from minutes
-            earlier. The very first teleop cycle then computed
-            `clip(q_target - prev_q)` and commanded `prev_q + 0.015` — i.e. it
-            aimed the arm at where it USED to be, snapped there, and walked back
-            at 1.5 rad/s. Exactly what he described.
-
-            The general rule, and the reason this is its own function called from
-            every transition: **a mode change must re-read reality. Never carry
-            cached state across one.**
-            """
-            one.prev_q = np.asarray(one.robot.get_joint_pos(), dtype=float)[:N_ARM]
-            if hasattr(one.robot, "resync"):
-                one.robot.resync()
-
-        def enter_teleop(one: ArmSession) -> None:
-            resync(one)
-            q = np.asarray(one.robot.get_joint_pos(), dtype=float)
-            one.robot.command_joint_pos(q)       # leaves zero-gravity mode
-            # Take the jaws exactly where they are. Do NOT clamp here: clamping on
-            # entry is a command to move, and nobody asked for that.
-            one.gripper_value = float(q[N_ARM]) if len(q) > N_ARM else 0.5
-            # ⭐ The frame is this ARM's now, not the session's, so two arms can be driven
-            # in different frames — one in `world` while the other follows its own wrist in
-            # `tool`. The axis map store was already per-arm-per-frame, so nothing new had
-            # to be invented for it (`--fork-map`).
-            one.teleop = CartesianTeleop(frame=one.frame)
-            one.teleop.reset(q[:N_ARM])
-            one.home_ee = one.teleop.ee_position().copy()
+        def make_teleop(frame: str) -> CartesianTeleop:
+            """⭐ Injected into `ArmSession.enter_teleop` (item 23 group ③): the class
+            stays testable because it never constructs the IK itself, and the frame is
+            the ARM's own, so two arms can be driven in different frames at once."""
+            return CartesianTeleop(frame=frame)
 
         # ⭐ enter_hold lives on ArmSession now (item 23 group ①, 2026-08-18): the class
         # method resyncs, commands the measured pose AND sets mode="hold" — so the two
@@ -1871,7 +1847,7 @@ def main() -> int:  # noqa: PLR0915
         # build, reading the one `robot` local.
         for one in arms:
             if one.mode == "teleop":
-                enter_teleop(one)
+                one.enter_teleop(make_teleop)
             elif one.mode == "hold":
                 one.enter_hold()
             elif one.mode == "guide":
@@ -2837,7 +2813,7 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  controls now:")
                             print(wizard.axis_map.describe(wizard.frame))
                             if k == "t":
-                                wizard.mode = "teleop"; enter_teleop(wizard)
+                                wizard.enter_teleop(make_teleop)
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
                             elif k == "g":
                                 guide_warn = wizard.enter_guide()
@@ -2957,7 +2933,11 @@ def main() -> int:  # noqa: PLR0915
                         # until you have watched the arm go that way. Julien:
                         # *"the actual mapping has to happen while the arm is moving so I
                         # can see what the different directions are doing."*
-                        edit_arm.mode = "map"; enter_teleop(edit_arm)
+                        # ⛔ ORDER: the class's enter_teleop() sets mode="teleop", so MAP is
+                        # written AFTER it — the reverse would run CONTROLS while the row
+                        # said TELEOP (the §52.1 trap, third instance).
+                        edit_arm.enter_teleop(make_teleop)
+                        edit_arm.mode = "map"
                         edit_arm.last_active_axis = None
                         print(f"\n⭐ MODE: CONTROLS on arm {edit_arm.name} — the arm MOVES, "
                               "one isolated axis, half speed.\n")
@@ -2986,7 +2966,7 @@ def main() -> int:  # noqa: PLR0915
                         hint("")
                         for one in aimed:
                             if one.mode != "teleop":
-                                one.mode = "teleop"; enter_teleop(one)
+                                one.enter_teleop(make_teleop)
                         print(f"\n⭐ MODE: TELEOP on {aimed_label} — each arm follows its "
                               "own SpaceMouse\n")
                     elif k == "h" and any(one.mode != "hold" for one in aimed):
