@@ -71,6 +71,11 @@ TUNABLE: dict[str, tuple[type, bool, str | None]] = {
     #: rate-limited command's own derivative as their velocity setpoint. Same family as
     #: `mirror_catchup`: a gain, defaults OFF, and 0 must stay reachable by key.
     "vel_ff": (float, False, None),
+    #: ⭐ The scrub's full-push pace, in recording-seconds per second — his time-lapse dial
+    #: (2026-08-18). Adjusted with -/+ DURING a scrub; not on the `n` screen (its keys are
+    #: full, and the dial only means anything while a scrub is running). Safe high: a fast
+    #: cursor is held back by the lag hold, so only the clock is fast, never the arm.
+    "scrub_max": (float, False, None),
 }
 
 
@@ -240,6 +245,7 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     #: does — expect overshoot; the position command stays rate-limited underneath.
     #: ⛔ Must equal `yam_robot.VEL_FF_CEILING`; a test pins the sync.
     "vel_ff": (0.0, 3.0),
+    "scrub_max": (0.25, 8.0),
 }
 
 #: ⛔⭐⭐⭐ A LADDER OF ROUND NUMBERS, BECAUSE THE RATIO STEP PRODUCED UNUSABLE VALUES.
@@ -267,6 +273,8 @@ LADDERS: dict[str, tuple[float, ...]] = {
     "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
     "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
     "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0),
+    #: ⭐ 1.0 = the recording's own pace; 8.0 = an 8x time lapse for skimming to a moment.
+    "scrub_max": (0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0),
     #: ⭐ The CARTESIAN speed a full puck deflection asks for. Its default is 0.12 m/s and it
     #: spans two orders of magnitude, so the low rungs are fine and the high ones are coarse.
     "linear_scale": (0.03, 0.06, 0.12, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0, 12.0, 15.0),

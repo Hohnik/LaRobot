@@ -33,6 +33,7 @@ from recording import (  # noqa: E402
     scrub_rate,
     scrub_step,
 )
+from settings import LADDERS, LIVE_BOUNDS, TUNABLE, adjust  # noqa: E402
 
 
 def _traj(duration: float = 2.0, n: int = 7) -> Trajectory:
@@ -94,6 +95,24 @@ def test_a_lagging_arm_freezes_the_cursor_in_both_directions() -> None:
         rs = scrub_step(traj, 1.0, behind, 0.05, defl)
         assert rs.held and rs.cursor == 1.0, \
             f"a lagging arm did not hold the cursor at deflection {defl}"
+
+
+def test_the_time_lapse_dial_scales_the_pace() -> None:
+    """⭐ His 2026-08-18 ask: "more than normal speed if I fully press the control
+    forward... time lapse speed". A full push at max_rate 3 covers twice the recording
+    time a full push at 1.5 covers, and the dial's ladder reaches both of its ends."""
+    traj = _traj(duration=8.0)
+    at = traj.pose_at(2.0)
+    slow = scrub_step(traj, 2.0, at, 0.1, 1.0, max_rate=1.5)
+    fast = scrub_step(traj, 2.0, at, 0.1, 1.0, max_rate=3.0)
+    assert abs((fast.cursor - 2.0) - 2.0 * (slow.cursor - 2.0)) < 1e-9, \
+        "doubling max_rate did not double the full-push pace"
+    assert "scrub_max" in TUNABLE, "the dial cannot be saved as a default"
+    value = LIVE_BOUNDS["scrub_max"][0]
+    for _ in range(12):
+        value = adjust("scrub_max", value, True)
+    assert value == LIVE_BOUNDS["scrub_max"][1] == LADDERS["scrub_max"][-1], \
+        "the dial's + key cannot reach its ceiling"
 
 
 def test_grippers_can_be_left_out_of_the_lag_check() -> None:

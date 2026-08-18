@@ -217,6 +217,22 @@ def test_a_dead_chain_cannot_be_parked_and_the_docs_say_so() -> None:
         "the park is no longer gated on the chain being alive"
 
 
+def test_a_dead_puck_parks_gracefully_instead_of_raising() -> None:
+    """⛔⭐ FINDINGS §68.2: pulling a SpaceMouse mid-session raised `OSError: read error`,
+    the exception skipped the auto-park entirely, and the finally disabled every motor
+    with the arms wherever they stood. The per-cycle read is now guarded: a dead puck
+    reads as centred and the stop routes through the SAFE STOP (park, then disable).
+    This file cannot unplug hardware, so it pins the guard in the source."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    read_at = src.find("one.raw_axes = one.reader.read()")
+    assert read_at != -1, "the per-cycle puck read moved; update this test with care"
+    guarded = src.rfind("try:", 0, read_at)
+    assert guarded != -1 and read_at - guarded < 120, \
+        "the per-cycle puck read is no longer inside a try — an unplug drops the arms again"
+    assert "SpaceMouse stopped answering" in src, \
+        "the graceful stop_reason for a dead puck is gone"
+
+
 def test_liveness_is_captured_BEFORE_the_motors_are_disabled() -> None:
     """⛔⭐ FINDINGS §58.45: `chain_alive` was read AFTER `shutdown_robot()`, so every
     incident file ever written said False and the field measured nothing. The fix is an

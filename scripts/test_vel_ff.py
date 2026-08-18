@@ -158,6 +158,48 @@ def test_the_live_setting_exists_and_its_ladder_reaches_both_ends() -> None:
     assert LADDERS["vel_ff"][0] == 0.0
 
 
+def test_a_joint_past_its_command_gets_zero_push_immediately() -> None:
+    """⛔ FINDINGS §68.3, his jitter report at gain 3: above gain 1 a joint overshoots the
+    rate-limited command, and the setpoint kept pushing while the position term pulled
+    back — the forward jitter, and the visible pull-back at release. A joint whose
+    position error opposes its setpoint now gets zero push, immediately."""
+    safe, fake = _pair(vel_ff=3.0, max_speed=1.0)
+    safe.command_joint_pos(np.full(N, 10.0))          # drives forward, arm still at 0
+    fake.q[:] = 5.0                                    # teleport the arm PAST the command
+    safe.command_joint_pos(np.full(N, 10.0))          # command still moving forward
+    sent = fake.commanded_vels[-1]
+    assert np.all(sent[:6] == 0.0), \
+        f"a joint past its command was still pushed: {sent[:6]}"
+
+
+def test_release_decays_the_push_instead_of_cutting_it() -> None:
+    """⭐ The smoothing half of FINDINGS §68.3: when the hand releases, the raw derivative
+    drops to zero in one cycle, and the sent setpoint must DECAY over a few cycles (an
+    unsmoothed cut is the small "latent movement" he felt below gain 1)."""
+    safe, fake = _pair(vel_ff=1.0, max_speed=1.0)
+    safe.command_joint_pos(np.full(N, 10.0))          # moving: full setpoint
+    first = fake.commanded_vels[-1][0]
+    assert first > 0.0
+    frozen = np.asarray(fake.cmd, dtype=float).copy() # the pose the limiter last sent
+    last = first
+    for _ in range(3):                                 # command the SAME pose: raw vel 0
+        safe.command_joint_pos(frozen)
+        now = fake.commanded_vels[-1][0]
+        assert 0.0 <= now < last, f"the release did not decay: {now} after {last}"
+        last = now
+
+
+def test_resync_clears_the_smoothed_setpoint() -> None:
+    """⛔ The smoothed feedforward is state; carrying it across a mode change would push
+    the new mode's first command with the old mode's speed — the park-spasm family
+    (FINDINGS §66.0) one layer down."""
+    safe, fake = _pair(vel_ff=1.0)
+    safe.command_joint_pos(np.full(N, 10.0))
+    assert safe._ff_prev is not None  # noqa: SLF001
+    safe.resync()
+    assert safe._ff_prev is None, "resync left a stale feedforward behind"  # noqa: SLF001
+
+
 def test_the_fake_records_what_the_real_motor_would_be_sent() -> None:
     """⭐ The fake's physics ignores the setpoint ON PURPOSE (an unmeasured benefit is an
     invented constant), but it must move exactly as it would for the same positions."""

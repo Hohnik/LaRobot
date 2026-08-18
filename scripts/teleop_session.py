@@ -130,6 +130,7 @@ from recording import (  # noqa: E402
     TrackingLog,
     Trajectory,
     replay_step,
+    SCRUB_MAX_RATE,
     scrub_step,
     safe_time_scale,
 )
@@ -1023,6 +1024,12 @@ def main() -> int:  # noqa: PLR0915
                          "⚠️ Above 1 = EXAGGERATED (his 2026-08-18 ask, to make the effect "
                          "feelable) — expect overshoot. The jaw never gets feedforward. "
                          "Live: setting 9 on the n screen.")
+    ap.add_argument("--scrub-max", type=float, default=SCRUB_MAX_RATE, metavar="RATE",
+                    help="⭐ the puck scrub's full-push pace, in recording-seconds per "
+                         "second (default %(default)s). 1 = the recording's own pace; "
+                         "higher = a time lapse for skimming to a moment. -/+ change it "
+                         "LIVE during a scrub. Safe high: a fast cursor is held back by "
+                         "the lag hold, so only the clock is fast, never the arm.")
     ap.add_argument("--mirror-catchup", type=float, default=DEFAULT_CATCHUP,
                     metavar="PER_SECOND",
                     help="⭐ how fast MIRROR corrects the follower's STANDING offset. 0 = off "
@@ -3079,6 +3086,17 @@ def main() -> int:  # noqa: PLR0915
                         # ramp — so a slip lands on a key that would otherwise start 4.3 kg
                         # moving. Showing the plan and waiting for Enter means a stray `l`
                         # can never move the arm. Same shape as `p 1 2 3 Enter`.
+                        # ⛔ REFUSED WHILE A PLAYBACK IS RUNNING (FINDINGS §68.4): on
+                        # 2026-08-18 `l` mid-scrub opened this prompt ON TOP of the running
+                        # playback — two live states again, the item 38 family — and the
+                        # scrub kept driving the arm underneath the menu. One playback at
+                        # a time; stopping it stays an explicit act (h or t), never a side
+                        # effect of asking for the next one.
+                        if replay is not None:
+                            hint("")
+                            print("\n  ⚠️ a playback is already running — press h or t to "
+                                  "stop it, then l to pick the next one.\n")
+                            continue
                         pending = "take_play"
                         # ⭐ Both folders in a --sim session, with the simulated ones
                         # marked, because "saved: 1, 2, 7" that silently mixes real
@@ -3197,7 +3215,16 @@ def main() -> int:  # noqa: PLR0915
                         # is meaningless while the puck is not driving, and a key that
                         # does nothing where you are is the defect class that made `b`
                         # look broken (FINDINGS §17.1).
-                        if any(one.mode == "park" for one in aimed):
+                        # ⭐ In a SCRUB they mean the full-push pace — his time-lapse dial
+                        # (FINDINGS §68.5): "more than normal speed if I fully press the
+                        # control forward". Safe high: a fast cursor is held back by the
+                        # lag hold, so only the clock is fast, never the arm.
+                        if replay is not None and replay_scrub:
+                            args.scrub_max = adjust_setting(
+                                "scrub_max", args.scrub_max, True)
+                            hint(f"scrub pace: full push = {args.scrub_max:g}x the "
+                                 f"recording's own speed")
+                        elif any(one.mode == "park" for one in aimed):
                             for one in aimed:
                                 one.park_speed = min(args.teleop_speed,
                                                      one.park_speed * 1.25)
@@ -3209,7 +3236,12 @@ def main() -> int:  # noqa: PLR0915
                                  + (" (ceiling)"
                                     if args.linear_scale >= MAX_LINEAR_SCALE else ""))
                     elif k == "-":
-                        if any(one.mode == "park" for one in aimed):
+                        if replay is not None and replay_scrub:
+                            args.scrub_max = adjust_setting(
+                                "scrub_max", args.scrub_max, False)
+                            hint(f"scrub pace: full push = {args.scrub_max:g}x the "
+                                 f"recording's own speed")
+                        elif any(one.mode == "park" for one in aimed):
                             for one in aimed:
                                 one.park_speed = max(0.05, one.park_speed / 1.25)
                             hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
@@ -3374,7 +3406,24 @@ def main() -> int:  # noqa: PLR0915
                 # gripper follow whichever arm the previous loop ended on
                 # (FINDINGS §54.1).
                 for one in arms:
-                    one.raw_axes = one.reader.read()
+                    try:
+                        one.raw_axes = one.reader.read()
+                    except Exception as exc:  # noqa: BLE001
+                        # ⛔⭐⭐ AN UNPLUGGED PUCK MUST NEVER DROP THE ARMS. On 2026-08-18
+                        # Julien pulled a SpaceMouse mid-session; `read()` raised
+                        # `OSError: read error`, the exception skipped the auto-park
+                        # entirely, and the `finally` disabled every motor with the arm
+                        # wherever it stood (FINDINGS §68.2). His ruling: a graceful quit.
+                        # So: the dead puck reads as CENTRED (zero deflection, the same
+                        # honest stand-in --sim uses), and the stop_reason routes through
+                        # the SAFE STOP — every live arm parks, then the motors disable.
+                        one.raw_axes = [0.0] * 6
+                        if not stop_reason:
+                            stop_reason = (f"arm {one.name}'s SpaceMouse stopped answering "
+                                           f"({type(exc).__name__}) — unplugged?")
+                            print(f"\n⛔ {stop_reason}")
+                            print("   Treating that puck as centred and parking safely.\n")
+                        continue
                     buttons = getattr(one.reader, "buttons", 0)
                     pressed = buttons & ~one.buttons_prev              # rising edge only
                     one.buttons_prev = buttons
@@ -3752,7 +3801,9 @@ def main() -> int:  # noqa: PLR0915
                                                   f"{'+'.join(a.name for a in replay_arms)}."
                                                   f" The puck is the clock — push forward "
                                                   f"to play, pull back to rewind, let go to "
-                                                  f"freeze. h or t ends it.\n")
+                                                  f"freeze.\n     Full push = "
+                                                  f"{args.scrub_max:g}x the recording "
+                                                  f"(-/+ changes it). h or t ends it.\n")
                                         else:
                                             print(f"\n▶  PLAYING {replay.duration:.1f}s of "
                                                   f"recorded movement on "
@@ -3811,7 +3862,8 @@ def main() -> int:  # noqa: PLR0915
                                 defl = float(ax[1])
                         rs = scrub_step(replay, replay_s, measured, real_dt, defl,
                                         max_lag=MAX_CURSOR_LAG,
-                                        compare=replay_layout.tracked_indices(N_ARM))
+                                        compare=replay_layout.tracked_indices(N_ARM),
+                                        max_rate=args.scrub_max)
                     else:
                         rs = replay_step(replay, replay_s, measured, real_dt,
                                          speed=replay_speed, max_lag=MAX_CURSOR_LAG,
@@ -3976,8 +4028,16 @@ def main() -> int:  # noqa: PLR0915
                         replay = None
                     elif t >= next_park_report:
                         next_park_report = t + 1.0
-                        hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
-                             f"{rs.lag:.3f} rad behind")
+                        # ⭐ A scrub is a POSITION, never a countdown — it goes both ways,
+                        # and "playing… Xs left" over a scrub read as a stuck playback
+                        # (his 2026-08-18 report, FINDINGS §68.4).
+                        if replay_scrub:
+                            hint(f"  scrubbing… at {replay_s:.1f}s of "
+                                 f"{replay.duration:.1f}s (puck: forward plays, back "
+                                 f"rewinds), {rs.lag:.3f} rad behind")
+                        else:
+                            hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
+                                 f"{rs.lag:.3f} rad behind")
 
 
                 # ---- 5. report --------------------------------------------

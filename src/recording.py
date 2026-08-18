@@ -580,7 +580,8 @@ def scrub_rate(deflection: float, deadband: float = SCRUB_DEADBAND,
 
 def scrub_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
                deflection: float, max_lag: float = 0.15,
-               compare: Sequence[int] | None = None) -> ReplayStep:
+               compare: Sequence[int] | None = None,
+               max_rate: float = SCRUB_MAX_RATE) -> ReplayStep:
     """One control cycle of PUCK-SCRUBBED playback: the hand is the clock.
 
     The same shape as `replay_step`, with three deliberate differences:
@@ -594,6 +595,12 @@ def scrub_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: f
     3. **The lag hold works in both directions.** If the arm falls `max_lag` behind the
        commanded pose, the cursor freezes exactly as in a normal playback, whichever way
        the hand is dragging it.
+
+    `max_rate` is the full-push pace in recording-seconds per second — his time-lapse
+    dial (2026-08-18: *"more than normal speed if I fully press the control forward"*).
+    ⚠️ A high value is safe by construction: the cursor can outrun the arm, and then the
+    lag hold freezes it until the arm catches up, so the ARM's speed is still bounded by
+    `SafeRobot` and the recording's own motion — only the CLOCK is fast.
     """
     if not traj.samples:
         raise ValueError("cannot scrub an empty recording")
@@ -603,7 +610,8 @@ def scrub_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: f
     lag = max((abs(target[i] - measured[i]) for i in idx), default=0.0)
     held = lag >= max_lag
     moved = cursor if held else min(traj.duration,
-                                    max(0.0, cursor + dt * scrub_rate(deflection)))
+                                    max(0.0, cursor + dt * scrub_rate(
+                                        deflection, max_rate=max_rate)))
     return ReplayStep(cursor=moved, target=target, lag=lag, finished=False, held=held)
 
 

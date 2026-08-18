@@ -33,6 +33,8 @@
 >
 > ⭐⭐ **Fourth 2026-08-18 layer:** ⛔ **NO SECOND D405 — his ruling** ([FINDINGS §67.12](FINDINGS.md)): the walkthrough's cameras are one D405 + the C920; item 5 moves into the plan as the rebuild's first camera task. ✅ **The PUCK SCRUB is built** ([FINDINGS §67.13](FINDINGS.md)): `j` at the play prompt — forward plays, back rewinds, release freezes; deadman by spring centre; 702 checks green. ⬜ Owes one feel-run.
 >
+> ⭐⭐⭐ **Fifth 2026-08-18 layer, from FIVE runs read line by line ([FINDINGS §68](FINDINGS.md)):** ✅ the **scrub confirmed** (*"the scrub works"*) and the **MIRROR variant ran for the first time** (the sign flip live: B `−0.39` vs G `+0.39`) · ⛔ **an unplugged puck DROPPED THE ARMS** — the read is guarded now, a dead puck parks gracefully (§68.2) · ✅ **his feedforward question answered**: gain 3's pull-back was overshoot-return, and the mitigation is built (past-the-command joints get zero push + a 2-cycle smoothing, §68.1) · ✅ his **time-lapse dial** built (`-`/`+` in a scrub, up to 8×, §68.4) · ⛔ `l` refuses during a playback (§68.3) · ⛔ **NO SECOND SPACEMOUSE either** — the second-puck teleop-dial role is OUT per his friends' plan; ⬜ **item 47 (a puckless arm still joins, restoring MIRROR with one puck) is the next build item** (§68.5). ⬜ Bench: re-feel gain 2-3 after the mitigation, and a scrub with `-`/`+`.
+>
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
 > ⭐⭐ **Run this before anything else. It answers "what state is the rig in?", which is the right first question here:**

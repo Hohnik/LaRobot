@@ -4689,4 +4689,58 @@ His words, 2026-08-18: *"I will not get the second camera, so just work without 
 5. **The lag hold works in both directions**: an arm `MAX_CURSOR_LAG` behind freezes the cursor exactly as in a normal playback.
 6. ⭐ **The "third puck role" worry dissolved**: the dial is not a device role but a *playback behaviour* reading the already-assigned pucks, which are idle during replay. No assignment logic changed at all.
 
-✅ **Verified:** `scripts/test_scrub.py` 6/6 (deadman freeze · forward/backward symmetry · linear-past-deadband capped rate · clamps at both ends, never finishes · bidirectional lag hold · grippers excludable from the lag check), full sweep **702 checks across 28 files**, sim drive 25/25, `check_flags` ✓. ⬜ **Owes one hardware feel-run**: `l` a recording, `j`, scrub it both ways.
+✅ **Verified:** `scripts/test_scrub.py` 6/6 (deadman freeze · forward/backward symmetry · linear-past-deadband capped rate · clamps at both ends, never finishes · bidirectional lag hold · grippers excludable from the lag check), full sweep **702 checks across 28 files**, sim drive 25/25, `check_flags` ✓. ⬜ **Owes one hardware feel-run**: `l` a recording, `j`, scrub it both ways. ✅ **Ran the same evening — [§68](FINDINGS.md).**
+
+## 68 ⭐⭐⭐ 2026-08-18, EVENING — FIVE RUNS READ LINE BY LINE: THE SCRUB AND THE MIRROR VARIANT CONFIRMED, AN UNPLUG DROPPED THE ARMS, AND THE FEEDFORWARD QUESTION ANSWERED
+
+> ⭐ His instruction: *"deeply check through… the entire history of the runs I gave you so that you know what happened and that you can find any problems, especially UX or usability."* Every block below traces to a line in his pasted logs.
+
+### 68.0 ✅⭐⭐ WHAT THE RUNS CONFIRMED, each for the first time on hardware
+
+1. ✅⭐⭐ **The PUCK SCRUB works** — his words: *"the scrub works. [I was] able to go forward and backwards"* (the transcript's "Unable" is the speech-to-text; the logs show the scrub running). Two-arm scrub on B+G (slot 8) and one-arm on B (slot 9), park-to-start each time.
+2. ✅⭐⭐ **The MIRROR variant (`mirror`, for arms FACING each other) ran for the first time** — until now `MIRROR_SIGNS` was *"a geometric prediction"*. His 286 s session: `FOLLOWING (mirror) — tracking 0.016 rad behind`, with B at `q[0] = −0.39` and G at `q[0] = +0.39` — the sign flip, live, on hardware. He also switched copy↔mirror at the prompt, both directions of leadership.
+3. ✅ **Item 43's fix proved itself**: the settings rows under every `-`/`+` press are in his logs, mid-scrub and mid-teleop, showing REPLAY/TELEOP/HOLD state per press.
+4. ✅ **The overwrite guard, the park-arrival handover, the frame-named exit summary, and the failed-build path** (a transient `USBError` at build exited cleanly, retry worked) all appear in the logs doing their jobs.
+
+### 68.1 ✅⭐⭐⭐ HIS FEEDFORWARD QUESTION, ANSWERED — the mechanism fits every one of his observations
+
+His report: at gain 3 the arm *"moves as long as I'm holding the mouse, but then basically pushes back into the original position after I let go… like it's controlling it into the other direction."* At gains below 1, *"some latent movement"* after release. At exactly 1, *"basically doesn't change the direction at all."* At 0, *"the control continues, kind of smoothed out."* He asked: *"what exactly is the goal here?… does that make sense?"*
+
+⭐⭐ **It makes complete sense, and each level is the physics doing exactly what the number says:**
+
+- **Gain 0:** the arm always trails the frozen command; on release the position term keeps pulling it the rest of the way — the smooth continuation he felt.
+- **Gain < 1:** same trailing, but the velocity setpoint cuts to zero in one cycle on release, so the motor brakes while the position term still pulls — the "latent movement", shorter and less smooth than at 0.
+- **Gain = 1:** the arm tracks the command almost exactly (that is the point), so at release there is almost no leftover gap in either direction — *"doesn't change direction at all"*. **1 is the physically correct value; his observation is the confirmation.**
+- ⛔ **Gain > 1: the motor is told the target moves FASTER than it does, so the arm overshoots the rate-limited command.** While he holds: the position term pulls back against the setpoint's push at every crossing — **the forward jitter**. On release: the arm sits PAST where the command stopped, and the position term pulls it back — **the "controlling it back the other direction" he saw. It was never aiming backwards; it was returning from overshoot.**
+
+✅⭐⭐ **Mitigation built the same evening, both halves in `SafeRobot` ([§68.3](FINDINGS.md)-adjacent code, tests in `test_vel_ff.py`):**
+1. ⛔ **A joint already past its command gets ZERO push, immediately** — the crossing stops the drive instead of fighting through it. At gains ≤ 1 the gate almost never engages, so the physically-exact setting is unchanged.
+2. ⭐ **The setpoint is smoothed over ~2 cycles** — the 90 Hz stepped derivative no longer arrives as jerk, and a release decays the push over a few cycles instead of cutting it (the sub-1 "latent movement"). ⚠️ The smoothing constant is a tuning choice, not a measurement — verify on the arm. `resync()` clears the smoothed state, so no mode change inherits it (the park-spasm family, one layer down).
+⬜ **Owes a re-run at gain 2-3: the jitter and the pull-back should both be visibly smaller.**
+
+### 68.2 ⛔⭐⭐⭐ AN UNPLUGGED SPACEMOUSE DROPPED THE ARMS — fixed: a dead puck now parks gracefully
+
+⛔ **What his log shows:** mid-TELEOP, `⛔ OSError: read error`, then straight to `motors confirmed disabled` — **no park**. The per-cycle `reader.read()` raised, the exception skipped the whole post-loop safe-stop, and the `finally` disabled every motor wherever the arms stood. His words: *"everything just deactivates and the arms just fall down."*
+
+✅ **The fix:** the per-cycle read is guarded. A dead puck reads as **centred** (zero deflection — the same honest stand-in `--sim` uses) and sets a stop reason that routes through the **SAFE STOP**: every live arm parks, then the motors disable. His ruling implemented exactly: *"a graceful quit is probably good when something gets unplugged."* A source-pin test in `test_incident.py` keeps the guard in place.
+
+### 68.3 ✅⭐ THE `l`-DURING-PLAYBACK OVERLAP — his mid-scrub find, fixed
+
+⛔ **His report:** pressing `l` while a scrub ran opened the PLAY prompt **on top of** the running playback — the menu and the motion both live, the item-38 family again — and the *"playing…"* line kept refreshing underneath, reading as stuck. ✅ **Fixed:** `l` refuses while any playback runs (*"press h or t to stop it, then l"*) — stopping a playback stays an explicit act, never a side effect of asking for the next one. ✅ And the held-cursor line during a scrub now reads **"scrubbing… at Xs of Ys"** — a position, never a countdown, because a scrub goes both ways.
+
+### 68.4 ✅⭐ THE TIME-LAPSE DIAL — his ask, built
+
+His ask: set the scrub's top speed *"before… or while I start the scrub… so that I could scrub through it in time-lapse speed."* ✅ `--scrub-max` (default 1.5, savable) presets it; **`-`/`+` during a scrub walk a ladder up to 8×**, printed per press; the start banner names the current pace. ⭐ **Safe by construction:** a fast cursor is held back by the lag hold, so only the CLOCK is fast — the arm's speed stays bounded by `SafeRobot` and the recording's own motion.
+
+### 68.5 ⭐⭐ HIS RULINGS: NO SECOND SPACEMOUSE EITHER, and what that parks
+
+- **The second SpaceMouse is gone** (a friend is testing with it): *"continue as much as possible without the second mouse."* The **teleop speed-dial role for a second puck is OUT** (*"they didn't want the other space mouse feature to be integrated"*) — noted for the architecture plan; the scrub already covers the dial idea with ONE puck, since the pucks are idle during playback.
+- ⛔ **Two-arm sessions currently REFUSE with one puck** — his log: *"✗ no unassigned SpaceMouse left for G."* That blocks MIRROR and two-arm playback entirely, although the follower and replay arms never need a puck. ⬜ **The fix is item 47 in [ROADMAP §8.2](ROADMAP.md): an arm without a puck joins the session with a null reader** (zero deflection, HOLD/GUIDE/playback/mirror-follower fully usable; only its TELEOP is dead) with a plain note in the plan. **The next build item.**
+- One D405, no C920, no second D405, no second puck: the walkthrough's hardware is now exactly **what is on the desk**, and every "would need more hardware" thread lives in the consolidation plan instead.
+
+### 68.6 ⚠️ SMALL OBSERVATIONS FROM THE LOGS, kept so they are not re-derived
+
+- In the vel_ff-3 scrub, lag reached **0.876 rad** and the cursor held for a long stretch — consistent with the overshoot oscillation fighting the tracking; worth re-checking after the §68.1 mitigation.
+- His 40 s single-arm run walked `vel_ff` 0→1.5 while driving: the settings rows show `q` changing between presses — he tunes while moving, which is exactly what the live rows are for.
+- The Ctrl-C during the vel_ff-3 scrub wrote the **first incident file carrying `chain_alive_at_teardown`** ([§67.6](FINDINGS.md)).
+- ⚠️ At `vel_ff 2` in TELEOP his wrist hit `q[5] = −2.02` with a persistent `STUCK lead 0cm/14°` — the rotation lead pinned while the wrist sat far from centre. Not diagnosed; if it recurs after the mitigation, it earns its own item.

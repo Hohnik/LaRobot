@@ -873,6 +873,7 @@ class SafeRobot:
         # tests it slowly (his go, 2026-08-18). Live-editable like max_speed.
         self.vel_ff = 0.0
         self._ff_warned = False
+        self._ff_prev: Any = None    # last SENT velocity setpoint, for the smoothing
         self._last_cmd: Any = None
         self._last_t: float | None = None
         self.limited_cycles = 0      # how often a limit actually bit
@@ -918,6 +919,28 @@ class SafeRobot:
         # ⛔ The jaw (index 6 in this stack) NEVER gets feedforward. On a jaw squeezing an
         # object the extra torque pushes harder into it, which is how motor 7 was cooked.
         vel[6:] = 0.0
+        # ⭐ Smooth the setpoint over ~2 cycles. The derivative of a 90 Hz stepped command
+        # carries step noise, and at release this decays the push over a few cycles
+        # instead of cutting it in one — the small "latent movement" he felt below gain 1
+        # was the unsmoothed cut. A tuning constant, not a measured one — verify on arm.
+        if self._ff_prev is None or len(self._ff_prev) != len(vel):
+            self._ff_prev = vel.copy()
+        else:
+            self._ff_prev = 0.5 * vel + 0.5 * self._ff_prev
+        # ⛔⭐ NEVER PUSH A JOINT THAT IS ALREADY PAST ITS COMMAND (FINDINGS §68.3, from
+        # Julien's jitter report at gain 3). Above gain 1 the motor is deliberately told
+        # the target moves faster than it does, so the joint OVERSHOOTS the rate-limited
+        # command; without this gate the setpoint kept pushing while the position term
+        # pulled back — the forward jitter he felt. And at release the arm had been
+        # driven PAST the command, so the position term visibly pulled it back, his
+        # exact "it controls it back the other direction" question. The gate: a joint
+        # whose position error opposes its setpoint gets zero push, IMMEDIATELY (the
+        # smoothing memory is cleared too, so a crossing cuts hard while a release still
+        # decays softly). At gains ≤ 1 the gate almost never engages, which leaves the
+        # physically-exact setting unchanged.
+        past = np.sign(self._ff_prev) * np.sign(limited - measured) < 0.0
+        self._ff_prev[past] = 0.0
+        vel = self._ff_prev.copy()
         send = getattr(self._robot, "command_joint_state", None)
         if send is None:
             # ⚠️ Said ONCE rather than silently dropped: a set gain that quietly does
@@ -941,6 +964,10 @@ class SafeRobot:
         import numpy as np
 
         self._last_cmd = np.asarray(self._robot.get_joint_pos(), dtype=float)
+        # ⛔ The smoothed feedforward is state too: carrying it across a mode change
+        # would push the first command of the new mode with the OLD mode's speed —
+        # the park-spasm family (FINDINGS §66.0), one layer down.
+        self._ff_prev = None
         self._last_t = None
 
 
