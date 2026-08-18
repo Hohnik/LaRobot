@@ -1744,33 +1744,11 @@ def main() -> int:  # noqa: PLR0915
         # sites that want a DIFFERENT mode afterwards (the park seed, the mirror engage)
         # write their mode AFTER the call. The script's own copy is gone.
 
-        def enter_guide(one: ArmSession) -> None:
-            """Return to weightless after PD control.
-
-            ⛔ The method is `enter_gravity_comp_idle()`. My first attempt guessed
-            at `enable_gravity_comp` / `set_zero_gravity_mode` / `zero_gravity`,
-            none of which exist — so GUIDE silently never worked after the first
-            time, while the banner still announced "arm is weightless". Another
-            message that lied. Guessing an API name and reporting success on the
-            fallback path is exactly the failure mode this codebase specialises in.
-
-            ⛔⭐ AND UNDERSTAND WHAT THIS MODE ACTUALLY RESTS ON. `zero_gravity_mode`
-            sets **kp = 0** and commands zero torque, so the computed gravity
-            compensation is the ONLY thing holding 4.3 kg up — there is no position
-            term to absorb an error. Any shortfall in the model is an unopposed
-            torque. That is how the arm fell on 2026-08-10 (FINDINGS §11): with
-            `--no-gripper` the model was 0.695 kg light and the elbow was 39% short.
-            GUIDE is therefore the mode where a dynamics-model error becomes a
-            falling arm rather than a droop, which is why `guide_ref` is recorded
-            here and drift is now printed live.
-            """
-            resync(one)
-            one.guide_ref = np.asarray(one.robot.get_joint_pos(), dtype=float)
-            fn = getattr(one.robot, "enter_gravity_comp_idle", None)
-            if callable(fn):
-                fn()
-                return
-            print("  ⚠️  enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)")
+        # ⭐ enter_guide lives on ArmSession now (item 23 group ②, 2026-08-18). The class
+        # method records guide_ref, sets mode="guide" and RETURNS the "NOT weightless"
+        # warning instead of printing it — every caller prints the return, so the
+        # warning that once explained a falling arm (FINDINGS §11) cannot be dropped.
+        # The kp=0 physics and the API-name history live in the class docstring.
 
         def sample_layout() -> Layout:
             """How a recording's flat sample maps onto this session's arms, right now.
@@ -2862,7 +2840,9 @@ def main() -> int:  # noqa: PLR0915
                                 wizard.mode = "teleop"; enter_teleop(wizard)
                                 print("\n⭐ MODE: TELEOP — SpaceMouse drives, all axes\n")
                             elif k == "g":
-                                wizard.mode = "guide"; enter_guide(wizard)
+                                guide_warn = wizard.enter_guide()
+                                if guide_warn:
+                                    print(f"\n  ⚠️  {guide_warn}\n")
                                 print("\n⭐ MODE: GUIDE — arm is weightless\n")
                             else:
                                 wizard.enter_hold()
@@ -2997,7 +2977,9 @@ def main() -> int:  # noqa: PLR0915
                         hint("")
                         for one in aimed:
                             if one.mode != "guide":
-                                one.mode = "guide"; enter_guide(one)
+                                guide_warn = one.enter_guide()
+                                if guide_warn:
+                                    print(f"\n  ⚠️  {guide_warn}\n")
                         print(f"\n⭐ MODE: GUIDE on {aimed_label} — weightless, "
                               "you are holding it now\n")
                     elif k == "t" and any(one.mode != "teleop" for one in aimed):
@@ -4329,7 +4311,9 @@ def main() -> int:  # noqa: PLR0915
                         # disabling, so it is the safer of the two. The banner says how much.
                         for one in arms:
                             if one.alive():
-                                enter_guide(one)
+                                guide_warn = one.enter_guide()
+                                if guide_warn:
+                                    print(f"\n  ⚠️  {guide_warn}\n")
                         print(f"\n⭐ weightless: {'+'.join(one.name for one in arms if one.alive())}"
                               " — park them by hand, then press d to disable.")
                     elif k == "d":
