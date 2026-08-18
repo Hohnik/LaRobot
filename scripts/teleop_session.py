@@ -4274,9 +4274,14 @@ def main() -> int:  # noqa: PLR0915
     # the thermal lines above, expressed as a loop that does not run rather than as an
     # `if`. That is why `arms` is declared before the `try` (FINDINGS §48.3).
     for one in arms:
-        print(f"axis map {one.name}: {one.axis_map.one_line(one.frame)}")
+        # ⛔ BOTH lines print in the SAME frame, and the frame is NAMED. This summary once
+        # printed the current map in the frame the arm ENDED in (camera) against a `was:`
+        # line in world labels — different motion names for the same store — and it read
+        # as a scrambled, saved map. Verifying that nothing was actually written cost real
+        # bench time, twice (FINDINGS §66.2, ROADMAP §8.2 item 45).
+        print(f"axis map {one.name} ({one.frame} frame): {one.axis_map.one_line(one.frame)}")
         if one.axis_map != one.axis_map_at_start:
-            print(f"     was: {one.axis_map_at_start.one_line()}")
+            print(f"     was: {one.axis_map_at_start.one_line(one.frame)}")
         else:
             print("     unchanged — nothing was written.")
         if one.axis_map.unbound():
