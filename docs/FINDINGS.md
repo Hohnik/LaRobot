@@ -457,7 +457,7 @@ It integrates from the **command**, never from the measurement, so when the arm 
 G's first run refused correctly — it has never had its jaws calibrated, `config/gripper_limits.json` holds `B` only — and then printed:
 
 ```
-Run this once:  uv run scripts/calibrate_gripper.py --yes
+Run this once:  uv run apps/calibrate_gripper.py --yes
 ```
 
 **No `--arm G`.** Following that literally drives **B's** jaws into both mechanical stops, while the arm you were trying to start stays uncalibrated and the same refusal comes back. The other two refusals in `yam_robot.py` both interpolate `--arm {arm}`; this one did not.
@@ -795,8 +795,8 @@ This section briefly claimed the opposite, on the strength of the device's **nam
 ### Using it
 
 ```bash
-uv run scripts/camera_view.py --list                    # names, indices, and the checks
-uv run scripts/camera_view.py --camera c920 --term      # select by name, not index
+uv run apps/camera_view.py --list                    # names, indices, and the checks
+uv run apps/camera_view.py --camera c920 --term      # select by name, not index
 ```
 
 `--camera` accepts any part of the name, plus the aliases `d405`, `realsense`, `c920`, `iphone`, `builtin`, and a `vid:pid`. It **refuses** on no match or an ambiguous one and never falls back to index 0.
@@ -1148,7 +1148,7 @@ The camera itself is healthy. `ioreg` reports serial `255323071773`, `Device Spe
 
 ⭐ **This settles why OpenCV gets a real photograph rather than a depth map.** [§8](FINDINGS.md) recorded that macOS lists exactly one entry for the D405 and calls it `… Depth`, and inferred that the colour picture arrives over that single entry. At the USB level there is a **distinct `RGB` interface**, and macOS's UVC driver has claimed exactly that one. The colour picture is the RGB interface doing its job.
 
-⚠️ **An open question worth one command.** If the `Depth` or `Y` interfaces also appear as *capture devices*, some depth or infrared data may be reachable through OpenCV with no SDK at all. `uv run scripts/camera_view.py --list` answers it: one D405 entry, or more than one? ⛔ Julien has to run it; the agent cannot open a camera ([§21.1](FINDINGS.md)).
+⚠️ **An open question worth one command.** If the `Depth` or `Y` interfaces also appear as *capture devices*, some depth or infrared data may be reachable through OpenCV with no SDK at all. `uv run apps/camera_view.py --list` answers it: one D405 entry, or more than one? ⛔ Julien has to run it; the agent cannot open a camera ([§21.1](FINDINGS.md)).
 
 ### 28.3 ⛔ Google Chrome was holding BOTH cameras, after he believed everything was closed
 
@@ -1230,7 +1230,7 @@ Julien, on two screenshots taken minutes apart: *"they get worse over time, whic
 
 ### The arithmetic, from his own two screenshots
 
-The controller in `run_terminal` ([`scripts/camera_view.py`](../scripts/camera_view.py)) measures its own draw cost every 0.4 s and adjusts the width it sends:
+The controller in `run_terminal` ([`scripts/camera_view.py`](../apps/camera_view.py)) measures its own draw cost every 0.4 s and adjusts the width it sends:
 
 - `target` = half the frame interval = `0.5 × 1000/30` = **16.7 ms**
 - `draw > 16.7 ms` → shrink, `× 0.85`
@@ -1250,7 +1250,7 @@ FaceTime draws pixels onto the screen. The terminal path has to encode **every f
 ⭐ **Immediate workaround, and it costs nothing:** drop `--term` and use the window.
 
 ```bash
-uv run scripts/camera_view.py --camera d405 --big
+uv run apps/camera_view.py --camera d405 --big
 ```
 
 ### The fix, written down and NOT applied
@@ -1491,7 +1491,7 @@ He also reported the D405 could not be found. **Everything measurable about it i
 ⛔ **So this is unexplained and needs his error text.** `ioreg` cannot show it, and the agent cannot open a camera ([§21.1](FINDINGS.md)). The command that would settle it:
 
 ```bash
-uv run scripts/camera_view.py --list
+uv run apps/camera_view.py --list
 ```
 
 ⚠️ One candidate worth checking in that output: **Google Chrome holds a device user client on both cameras**, visible in the `IOService` plane. It also held them earlier while the camera worked, so it is not obviously the cause, and it is the cheapest thing to eliminate.
@@ -1540,7 +1540,7 @@ In the plan line that reads `ROLL←yaw− PITCH←roll+ YAW←pitch−` before 
 | serial | truncated to 12 chars | full 16 chars, matching `ARM_SERIALS` |
 | `idVendor` | `0x0483` (STMicroelectronics bootloader) | `7504` = `0x1D50` (candleLight application firmware) |
 
-⭐ **And it was confirmed through the real code path, not only through `ioreg`.** `uv run scripts/probe_can.py --seconds 3` opened the adapter, computed the 1 Mbit/s bitrate from a 160 MHz clock, and reported **`✓ listen-only granted`**. That proves libusb can claim the board and the gs_usb protocol answers, which a device listing cannot. Zero frames in 3 s is the expected reading for a healthy idle arm, for the reason written at the top of that script.
+⭐ **And it was confirmed through the real code path, not only through `ioreg`.** `uv run apps/probe_can.py --seconds 3` opened the adapter, computed the 1 Mbit/s bitrate from a 160 MHz clock, and reported **`✓ listen-only granted`**. That proves libusb can claim the board and the gs_usb protocol answers, which a device listing cannot. Zero frames in 3 s is the expected reading for a healthy idle arm, for the reason written at the top of that script.
 
 ⛔⭐ **WHY THEY RECOVERED IS UNKNOWN, and that is now the second unknown on the same fault.** §32 already recorded that the *cause* was never established. The *recovery* is equally unexplained: no agent touched the boards, and the recovery ladder in [§32.0](FINDINGS.md) was never run. **Julien did something between 14:55 and 15:22 and it is not written down.** ⚠️ The ladder's step 1 hypothesis — a BOOT jumper left in the boot position — predicts that only moving a jumper clears it, so if he simply replugged again, that hypothesis is **wrong** and the real cause is still live. **This question is in [HANDOFF §5.5](HANDOFF.md) task 0 and it is worth 30 seconds of his time**, because the difference decides whether this recurs mid-session.
 
@@ -1548,7 +1548,7 @@ In the plan line that reads `ROLL←yaw− PITCH←roll+ YAW←pitch−` before 
 
 ⛔ **The handoff said: "the saved recordings in `recordings/` (slots 1, 3, 4, 5, 6) are all PADDED and should be discarded rather than used."** ⭐ **Two of the five are padded. Three are clean, and they are the evidence that the fix works.**
 
-⛔⭐ **READ THIS BEFORE THE TABLE — it is a dated record, not the current state.** Julien recorded over slots **3 and 4** at 16:34 and 16:35, about an hour after this was written, so the two padded files below **no longer exist** and every recording now on disk is clean. That is the third time in one day that a written measurement outlived the file it described ([§34.7](FINDINGS.md)). ⭐ **The table stays exactly as measured**, because it is the *evidence* that the `w` freeze fix works, and a decision's evidence does not expire. For the current state run **`uv run scripts/check_recordings.py`**.
+⛔⭐ **READ THIS BEFORE THE TABLE — it is a dated record, not the current state.** Julien recorded over slots **3 and 4** at 16:34 and 16:35, about an hour after this was written, so the two padded files below **no longer exist** and every recording now on disk is clean. That is the third time in one day that a written measurement outlived the file it described ([§34.7](FINDINGS.md)). ⭐ **The table stays exactly as measured**, because it is the *evidence* that the `w` freeze fix works, and a decision's evidence does not expire. For the current state run **`uv run checks/check_recordings.py`**.
 
 Measured with `Trajectory.trailing_still_seconds()` at 15:22, before those two re-recordings:
 
@@ -1570,7 +1570,7 @@ Measured with `Trajectory.trailing_still_seconds()` at 15:22, before those two r
 
 ⛔⭐ **A padded tail is NOT motionless, and this is the trap that made the check look impossible.** A weightless arm held by a hand wobbles at a **flat 0.032 to 0.038 rad/s** for as long as it is held — the two padded tails sit dead level on that floor for seconds. A first attempt using 0.02 rad/s as "still" reported **zero padding on all five files** and would have confirmed the wrong answer. The threshold is 0.05 rad/s and it sits above the wobble floor by measurement, not by taste.
 
-⭐ **It is now a script rather than a sentence: `uv run scripts/check_recordings.py`.** No hardware, reads only, and it prints the table above from whatever is actually on disk. Four tests cover the function, including the one that fails if the threshold is put back below the wobble floor.
+⭐ **It is now a script rather than a sentence: `uv run checks/check_recordings.py`.** No hardware, reads only, and it prints the table above from whatever is actually on disk. Four tests cover the function, including the one that fails if the threshold is put back below the wobble floor.
 
 ### 33.2 ⛔⭐ The speed table in `joint_speed`'s docstring went stale in under three hours, and nothing could see it
 
@@ -1727,7 +1727,7 @@ At 15:22 the bus held **one** D405 (`255323071773`) and an **HD Pro Webcam C920*
 
 ⭐ **This is also the finding that justifies `scripts/check_rig.py`.** The bench changed under an agent that was mid-session, and every document describing the cameras became wrong, silently. One command now prints the state of both adapters, both pucks, every camera and the whole USB topology. **Run it at the start of a session.**
 
-⚠️ **The serial confusion in item 5b is now half-explained and half-open.** It recorded `260322274021` from librealsense against `255323071773` from the USB descriptor, *"same evening, one camera on the bus"*, and treated it as one camera reporting two serials. **The second camera's USB serial is `260323072846`, which shares the `2603` prefix and not the digits.** ⛔ So it is still not settled, and the honest reading is that nobody knows which number belongs to which camera. Settle it with both cameras attached: run `sudo rs-enumerate-devices -s` and compare against `uv run scripts/check_rig.py`.
+⚠️ **The serial confusion in item 5b is now half-explained and half-open.** It recorded `260322274021` from librealsense against `255323071773` from the USB descriptor, *"same evening, one camera on the bus"*, and treated it as one camera reporting two serials. **The second camera's USB serial is `260323072846`, which shares the `2603` prefix and not the digits.** ⛔ So it is still not settled, and the honest reading is that nobody knows which number belongs to which camera. Settle it with both cameras attached: run `sudo rs-enumerate-devices -s` and compare against `uv run checks/check_rig.py`.
 
 ### 34.6 ⚠️⭐ The DFU cause, after his answer — the jumper theory is probably dead and the fault is unexplained
 
@@ -1741,7 +1741,7 @@ At 15:22 the bus held **one** D405 (`255323071773`) and an **HD Pro Webcam C920*
 
 ⭐ **The one question that separates them, and it is worth 30 seconds:** **when it cleared, did you unplug the CANables from the hub itself, or the hub from the Mac?** Cables from the hub, and this is closed as a power-cycle that did not happen. Anything else, and it is unexplained and expected to recur.
 
-⭐ **The mechanical defence is now in place either way:** `uv run scripts/check_rig.py --raw` prints which adapters are in DFU, which are absent, and the full bus topology, which is exactly the data [§32](FINDINGS.md) asks to capture before touching anything.
+⭐ **The mechanical defence is now in place either way:** `uv run checks/check_rig.py --raw` prints which adapters are in DFU, which are absent, and the full bus topology, which is exactly the data [§32](FINDINGS.md) asks to capture before touching anything.
 
 ### 34.7 ⛔ Slots 3 and 4 were overwritten, which is the third instance in one day
 
@@ -1876,7 +1876,7 @@ The tracking file records the recording's own metadata, and it says:
 
 ⚠️ **One weaker variant is worth keeping, because it changes what to do.** [§32.0](FINDINGS.md) noted that DFU only clears on a genuine reset, which needs power actually gone. **A replug that is too quick may not discharge the board.** So the earlier failed attempt and the later successful one may differ only in how long the plug was out. ⛔ **Practical rule from now on: unplug, WAIT ABOUT TEN SECONDS, then plug back in.** It costs nothing and it removes one variable.
 
-⭐ **And the data to capture if it recurs is now one command.** Run `uv run scripts/check_rig.py --raw` **before touching anything**: it answers whether it is one adapter or both, whether they are absent or in DFU, and whether the hub re-enumerated. Then note whether the session had just exited cleanly and whether anything was knocked.
+⭐ **And the data to capture if it recurs is now one command.** Run `uv run checks/check_rig.py --raw` **before touching anything**: it answers whether it is one adapter or both, whether they are absent or in DFU, and whether the hub re-enumerated. Then note whether the session had just exited cleanly and whether anything was knocked.
 
 ### 35.6 ⚠️⭐ ARM G IS SHARED WITH A COLLEAGUE — an operational fact with a real planning consequence
 
@@ -2294,7 +2294,7 @@ if int(motor_info.error_code, 16) != MotorErrorCode.normal:
 
 ### 39.3 ⭐ WHAT THIS MEANS AT THE BENCH, IN ONE PARAGRAPH
 
-**Glance at the arms before running anything.** All lights **red and steady** is a healthy, powered, uncommanded rig — nothing wrong. **Any light flashing red is a real latched fault**, and `uv run scripts/ping_motors.py --arm <B|G> --yes` will now **name it and leave it in place** instead of quietly erasing it. Write the code down; it is the only record. Clear it deliberately with `--attempt-error-clear` when you are done reading it.
+**Glance at the arms before running anything.** All lights **red and steady** is a healthy, powered, uncommanded rig — nothing wrong. **Any light flashing red is a real latched fault**, and `uv run apps/ping_motors.py --arm <B|G> --yes` will now **name it and leave it in place** instead of quietly erasing it. Write the code down; it is the only record. Clear it deliberately with `--attempt-error-clear` when you are done reading it.
 
 ### 39.4 ⛔ THE PATTERN, AND IT IS WORKING-CONTRACT RULE 7 AGAIN
 
@@ -2954,7 +2954,7 @@ Every step found something that had nothing to do with moving a field:
 
 ### 50.4 ⬜ WHAT COMES NEXT, IN ORDER
 
-1. ⬜⭐⭐ **The hardware test, and it asks ONE question:** `uv run scripts/teleop_session.py --yes --arm B --start-mode hold`, then drive normally. **Does it feel identical?** ⚠️ Try GUIDE and the gripper too, since [§47](FINDINGS.md) records that "teleop feels identical" only covered the fields TELEOP reads.
+1. ⬜⭐⭐ **The hardware test, and it asks ONE question:** `uv run apps/teleop_session.py --yes --arm B --start-mode hold`, then drive normally. **Does it feel identical?** ⚠️ Try GUIDE and the gripper too, since [§47](FINDINGS.md) records that "teleop feels identical" only covered the fields TELEOP reads.
 2. ⬜ **Step 2: the `a` selector** (B → G → BOTH) and per-arm status rows. Still one arm.
 3. ⬜ **Step 3: `--arms B,G`.** ⚠️ First step that needs arm G, which a colleague borrows ([§35.6](FINDINGS.md)).
 4. ⬜ Steps 4-6: GUIDE on two arms, then mirror mode, then the two-arm recorder.
@@ -3209,7 +3209,7 @@ Renaming `park` → `base_pose` inside `park_and_wait` rewrote its docstring, si
 **Nothing in them changes behaviour at N=1**, so the test is the same single question as step 2's: does one arm still feel identical? ⛔ **Ask it before the next block lands**, not after. Eight mechanical commits can be attributed to a commit if something is wrong; eleven, with the keyboard rewritten in the middle, cannot — and three of the eight introduced a real defect that was caught by reading rather than by a test ([§53.1](FINDINGS.md), [§53.3](FINDINGS.md), [§53.4](FINDINGS.md)).
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B --start-mode hold
+uv run apps/teleop_session.py --yes --arms B --start-mode hold
 ```
 
 ⭐ **Drive it, press `m` and leave it, park with `p 0`, and quit with `q q`.** The only visible differences from the last session are three lines of wording: `axis map B  :` and `park pose B :` in the plan, and `axis map B:` in the closing summary.
@@ -3293,7 +3293,7 @@ Three names, computed once per keypress: `aimed` (every selected arm), `edit_arm
 
 ### 54.6 ⭐⭐ THE CHECKER HAS EIGHT CHECKS NOW, AND EVERY ONE OF THEM CAUGHT SOMETHING REAL
 
-`uv run scripts/check_restructure.py` — **run it after every commit in this series.**
+`uv run checks/check_restructure.py` — **run it after every commit in this series.**
 
 | check | what it caught, in this repo, for real |
 |---|---|
@@ -3320,7 +3320,7 @@ Three names, computed once per keypress: `aimed` (every selected arm), `edit_arm
 - ✅ **Both D405 cameras are attached** (serials `255323071773` and `260323072846`), which is not needed for this run and is recorded because the count has changed twice.
 
 ```bash
-uv run scripts/check_rig.py && uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+uv run checks/check_rig.py && uv run apps/ping_motors.py --arm B --yes && uv run apps/ping_motors.py --arm G --yes
 ```
 
 ✅⭐ **THAT PING WAS RUN BY THE AGENT ON 2026-08-14 AT NIGHT, and all 14 motors answered:**
@@ -3341,7 +3341,7 @@ and it looks like a fault if unexpected."*
 **Then the run itself. Desk clear, gripper enabled, hand near the mains:**
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+uv run apps/teleop_session.py --yes --arms B,G --start-mode hold
 ```
 
 ⭐ **What to expect, in order:** wiggle arm B's puck, then arm G's · two build lines, one per arm · **two status rows**, arm B on top with the clock beside it · both arms HOLDING.
@@ -3458,7 +3458,7 @@ The tenth and eleventh instances of [§33.3](FINDINGS.md), and both were **hours
 ⚠️ **Arms clear of each other and of anything on the desk.** The follower will move on its own.
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+uv run apps/teleop_session.py --yes --arms B,G --start-mode hold
 ```
 
 1. **`a` until the row shows `SELECTED: B`.** That arm leads.
@@ -3570,7 +3570,7 @@ His two runs an hour apart loaded arm G's jaw limits **in different frames**: `[
 ### 56.8 ⬜⭐⭐ THE TWO-ARM RECORDING RUN — about ten minutes
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
+uv run apps/teleop_session.py --yes --arms B,G --start-mode hold
 ```
 
 1. **`a` to B, `i`, Enter** — mirror engaged, arm G following.
@@ -3581,7 +3581,7 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold
 6. **`l` then `7`.** The plan appears. **Enter.** ⭐ Both arms should park to their own start pose, print *"waiting for …"* if one arrives first, and then play together.
 7. **`q` `q`.**
 
-⭐ **What proves it worked:** `uv run scripts/check_recordings.py` shows `7.json` with **`arms` = `B,G`**, and the playback drove both arms.
+⭐ **What proves it worked:** `uv run checks/check_recordings.py` shows `7.json` with **`arms` = `B,G`**, and the playback drove both arms.
 
 **512 headless tests. Nothing pushed (working-contract rule 9).**
 
@@ -3706,7 +3706,7 @@ His two-arm recording saved to slot 1 and replaced a hand-guided one-arm take fr
 ### 57.11 ⬜⭐⭐ THE RUN THAT IS OWED — the two-arm recording, end to end
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 2 --teleop-speed 2 --mirror-gap 0.6
+uv run apps/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 2 --teleop-speed 2 --mirror-gap 0.6
 ```
 
 1. **`a` to BOTH, `t`** — drive both arms with both pucks for a few seconds.
@@ -3714,7 +3714,7 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 3. **`l` then `7`, then Enter.** Both arms park to their own start pose. ⭐ **Watch for *"waiting for G"* followed by the playback actually starting** — that is the fixed bug.
 4. **`q` `q`.**
 
-⭐ **Proof afterwards:** `uv run scripts/check_recordings.py` shows `7.json` with `arms` = `B,G`, and the playback printed a per-joint table naming rows `B base_yaw`, `G base_yaw` and so on.
+⭐ **Proof afterwards:** `uv run checks/check_recordings.py` shows `7.json` with `arms` = `B,G`, and the playback printed a per-joint table naming rows `B base_yaw`, `G base_yaw` and so on.
 
 **519 headless tests. Nothing pushed (working-contract rule 9).**
 
@@ -3768,7 +3768,7 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 
 ### 58.4 ⬜⭐⭐⭐ WHAT CAN BE DONE WITH NO HARDWARE AT ALL — in the order I would do it
 
-⭐ **All of this is real work and none of it needs an arm.** Everything here is checkable with `uv run scripts/check_restructure.py`, the 519 headless tests, and `--yes`-less dry runs.
+⭐ **All of this is real work and none of it needs an arm.** Everything here is checkable with `uv run checks/check_restructure.py`, the 519 headless tests, and `--yes`-less dry runs.
 
 1. ⬜⭐⭐ **Collapse the two park implementations** ([ROADMAP §8.2](ROADMAP.md) item 23). `ArmSession.step_path()` and its tests describe a park that **never runs**; the live one is the `mode == "park"` branch in the script. A reader who sees those tests pass is wrong about the code that moves 4.3 kg. ⛔ The trap is written down: the script does `arm.mode = "park"` and then calls its own `enter_hold()`, which leaves the mode alone, while the class's `enter_hold()` sets it to `hold` ([§52.1](FINDINGS.md)). Needs one bench pass over all modes afterwards.
 2. ⏳⭐⭐ **A simulation harness — HALF BUILT 2026-08-15, see [§59.0](FINDINGS.md). `src/fake_arm.py` exists; the session cannot yet be told to use it.** ⭐ **The pieces already exist:** `scripts/teleop_sim.py` drives the IK with no arm, `mink` and MuJoCo are already dependencies (that is how the IK solves), and `scripts/test_park_arms.py` and `scripts/test_status_row.py` show the shape — a fake robot with `get_joint_pos` / `command_joint_pos` / `num_dofs` / `motor_chain.running`. ⛔ **What is missing is a fake that behaves like the real thing over TIME**: a first-order lag on each joint so a command is followed rather than teleported, plus `SafeRobot`'s two limits, so the loop can be run end to end without hardware. **That would have caught three of this week's defects** — the double-advanced cursor, the playback cancel, and the stale `q`. ⚠️ It cannot replace hardware for feel, gravity compensation or thermal behaviour, and saying so is part of building it.
@@ -3784,7 +3784,7 @@ uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 
 ⭐⭐ **Omit `--yes` and the whole session runs with nothing connected.** Confirmed after the arms were disconnected:
 
 ```bash
-uv run scripts/teleop_session.py --arms B,G --start-mode hold
+uv run apps/teleop_session.py --arms B,G --start-mode hold
 ```
 
 printed the full plan, the per-arm build, the CONTROLS block and `DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.`, then exited **0**.
@@ -3799,7 +3799,7 @@ printed the full plan, the per-arm build, the CONTROLS block and `DRY RUN — no
 ⛔⭐⭐ **HOW THE WRONG VERSION GOT WRITTEN, because the mechanism will catch the next agent too.** The evidence was a **zsh** loop:
 
 ```zsh
-for f in "--arms B" "--arms B,G"; do uv run scripts/teleop_session.py $f; echo $?; done
+for f in "--arms B" "--arms B,G"; do uv run apps/teleop_session.py $f; echo $?; done
 ```
 
 ⛔ **zsh does NOT word-split an unquoted parameter expansion, unlike bash.** So `$f` arrived as **one** argument containing a space, argparse said `unrecognized arguments: --arms B`, and every iteration exited 2. **I then read that 2 off a run whose output I had discarded with `>/dev/null`, and explained it as a feature.** ⚠️ Use `${=f}` in zsh, or pass real words, or check the output rather than only the code.
@@ -3830,7 +3830,7 @@ for f in "--arms B" "--arms B,G"; do uv run scripts/teleop_session.py $f; echo $
 1. ⛔ **The agent never runs anything that sends a setpoint.** Scripts that enable motors and send nothing are yours (`check_rig.py`, `ping_motors.py`, `identify_arm.py`, `check_arms_match.py`). Anything that commands a position is Julien's. [HANDOFF §4](HANDOFF.md) rule 1.
 2. ⛔ **Nothing is pushed until he says so.** [HANDOFF §4](HANDOFF.md) rule 9.
 3. ⭐ **Run a session until you need him, then say what you need.** [HANDOFF §4](HANDOFF.md) rule 11, and the four things that count as needing him.
-4. ⛔ **`uv run scripts/check_restructure.py` after every commit.** Eight checks, and every one of them has caught something real ([§54.6](FINDINGS.md)).
+4. ⛔ **`uv run checks/check_restructure.py` after every commit.** Eight checks, and every one of them has caught something real ([§54.6](FINDINGS.md)).
 5. ⚠️ **A mechanical rewrite needs its region and its prose checked, not just its substitutions.** Five defects this week came from region-bounded edits ([§53](FINDINGS.md), [§54.1](FINDINGS.md), [§57.2](FINDINGS.md)).
 6. ⚠️ **A test scenario built from intuition needs its trace printed once before its assertion is trusted.** Three of mine in a row proved nothing ([§57.9](FINDINGS.md)).
 7. ⛔ **"Correct at N=1 by construction" is this week's defect signature.** Three separate bugs worked perfectly with one arm and would have been wrong with two ([§54.1](FINDINGS.md), [§56.5](FINDINGS.md), [§57.1](FINDINGS.md)). **With one arm connected, a passing test proves less than it looks like.**
@@ -3994,7 +3994,7 @@ Both halves are modelled as the different physical things they are, and the cons
 | ⛔ **therefore no automatic refusal is added** | which is what [§58.4](FINDINGS.md) item 4 already ruled: the margin is his |
 | ⬜⭐ **what IS worth offering: a WARNING, not a refusal** | the distance is computable every cycle, so the status row could show it and go loud when it closes. **A warning constrains nothing and removes the "I forgot" failure**, which is the one manual avoidance is exposed to |
 
-⚠️⭐⭐ **THE MEASUREMENT AT HIS SPACING, AND I GOT IT WRONG THE FIRST TIME.** I wrote "about 21 cm" here, having read the wrong row of my own tool's output. `uv run scripts/check_collision.py --separation 0.70` actually says:
+⚠️⭐⭐ **THE MEASUREMENT AT HIS SPACING, AND I GOT IT WRONG THE FIRST TIME.** I wrote "about 21 cm" here, having read the wrong row of my own tool's output. `uv run checks/check_collision.py --separation 0.70` actually says:
 
 | pose | conservative clearance | closest parts |
 |---|---|---|
@@ -4125,7 +4125,7 @@ Both halves are modelled as the different physical things they are, and the cons
 ⭐ **[ROADMAP §8.2](ROADMAP.md) item 16's tooling ALREADY EXISTS** and nobody had noticed: `camera_view.py --probe` sweeps resolutions and codecs and reports the real FOURCC pixel format for each. So the depth question needs one command from him rather than new code:
 
 ```bash
-uv run scripts/camera_view.py --camera d405 --probe
+uv run apps/camera_view.py --camera d405 --probe
 ```
 
 ⚠️⭐ **AND THERE IS A CONTRADICTION WORTH SETTLING WITH IT.** The device names itself *"Depth Camera 405"* and `camera_view.py` warns that *"macOS exposes only this camera's DEPTH stream over plain UVC, so expect a depth/infrared picture rather than colour"*. ⛔ **But his measurement says `colour` at 1280x720.** Either the warning is stale, or a depth frame delivered as three channels reads as colour to the brightness check. **The probe's FOURCC is what settles it, and the answer decides whether depth is available with no SDK at all** ([§8](FINDINGS.md), [§31.2](FINDINGS.md)).
@@ -4598,7 +4598,7 @@ Everything else on the owed list is now confirmed: catchup ([§67.1](FINDINGS.md
 1. ⚠️ **`test_incident.py` 17/18 — a stale source-pin, red for days.** It asserted the literal string `chain_alive(robot) and (interrupted or unplanned)`; the N-arm rewrite changed the gate to `live = [one for one in arms if one.alive()]` days ago. The *safety property survived* (the park is still gated on liveness, now per-arm, which is better); only the pin went stale. ✅ Updated to pin the new shape.
 2. ⛔⭐⭐ **`test_settings.py` 35/38 — a REAL regression in the ladder rework ([§64.2](FINDINGS.md)), and the tests CAUGHT it, and it shipped anyway.** `adjust()`'s fallback snapped a value with no rung left in the pressed direction to the FAR end of the ladder. A value outside the ladder's ends is legal (flags and saved defaults): **`+` on `floor` at 0.5 DROPPED it to 0.1, and `-` on `max_speed` at 0.1 RAISED it to 0.25** — a press moving a safety limit the way the operator did not ask, on a rig with no e-stop. ✅ Fixed: no rung left in the pressed direction → the value stays exactly where it is, and `at_bound` already tells the operator why. Two new tests pin it, plus one pinning that his flag values (1, 1.5, 2, 4, 10) stay on the ladder.
 
-⭐⭐ **The transferable lesson sharpens [§59.1](FINDINGS.md)'s:** there, a checker was silently disarmed and only a falsification *count* showed it. Here, working tests fired and **nothing collected the shot** — a suite that is never run as a whole is a fixture with no counter. **[ROADMAP §10.5](ROADMAP.md) step 2 (one runner over all test files) stops being a tidiness item and becomes defect-backed.** ✅ **Built the next session: `uv run scripts/run_tests.py`** ([§70.4](FINDINGS.md)) — the old one-loop sweep (`for f in scripts/test_*.py; do uv run "$f" | tail -1; done`) is superseded.
+⭐⭐ **The transferable lesson sharpens [§59.1](FINDINGS.md)'s:** there, a checker was silently disarmed and only a falsification *count* showed it. Here, working tests fired and **nothing collected the shot** — a suite that is never run as a whole is a fixture with no counter. **[ROADMAP §10.5](ROADMAP.md) step 2 (one runner over all test files) stops being a tidiness item and becomes defect-backed.** ✅ **Built the next session: `uv run checks/run_tests.py`** ([§70.4](FINDINGS.md)) — the old one-loop sweep (`for f in tests/test_*.py; do uv run "$f" | tail -1; done`) is superseded.
 
 ### 67.6 ✅ ITEM 31 IS BUILT: LIVENESS IS CAPTURED BEFORE THE MOTORS ARE DISABLED
 
@@ -4842,7 +4842,7 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 
 ### 70.4 ✅⭐⭐ ONE RUNNER OVER EVERY TEST FILE — [ROADMAP §10.5](ROADMAP.md) step 2, the §67.5 remedy, falsified before trusted
 
-✅ **`uv run scripts/run_tests.py`** runs all 29 `test_*.py` files (4 processes wide), prints one line per file and a **TOTAL: 702/702 checks across 29 files**. A file fails on any of THREE independent signals: nonzero exit, no `N/M passed` count line (a crash prints a traceback and no count), or N < M — because §67.5's red files each showed a different one. ⭐ **The TOTAL is the point**: it is the §59.1 catch-counter applied to the suite itself, so a silently disarmed check shows as the number dropping while everything stays green, and the runner says so in its own output.
+✅ **`uv run checks/run_tests.py`** runs all 29 `test_*.py` files (4 processes wide), prints one line per file and a **TOTAL: 702/702 checks across 29 files**. A file fails on any of THREE independent signals: nonzero exit, no `N/M passed` count line (a crash prints a traceback and no count), or N < M — because §67.5's red files each showed a different one. ⭐ **The TOTAL is the point**: it is the §59.1 catch-counter applied to the suite itself, so a silently disarmed check shows as the number dropping while everything stays green, and the runner says so in its own output.
 
 ⭐ **`scripts/falsify_run_tests.py` proves the runner can see a failure** — four fixtures (passing · failing assert · crash before any count · a LIAR that prints `3/3 passed` and exits nonzero), and the runner must catch exactly the right three. 6/6.
 
@@ -4887,3 +4887,13 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 ✅ **Verified, all on the moved tree:** `run_tests.py` **705/705 across 29 files** · `drive_sim_session` 25/25 plain AND `--vel-ff 0.5` · `check_restructure` coherent · `check_flags` ✓ (including the two re-pathed `uv run src/yam/inputs/spacemouse_live.py` doc lines) · 1108/1108 links · all three falsifiers (`run_tests` 6/6, `check_flags` clean, `fake_arm` PASS). ⚠️ What no checker can say, as always: that the FEEL is unchanged — but no behaviour was edited, only imports and locations, and the sim drive runs the identical loop.
 
 ⬜ **What remains of [ROADMAP §10.5](ROADMAP.md): step 4** (sort `scripts/` into `apps/` · `checks/` · `tests/`, update `check_flags` + docs same commit) · **step 5** (README as the day-one door — ⚠️ wants his answer on ONE language) · **step 6** (the one-page hardware bring-up checklist).
+
+### 70.8 ✅⭐⭐⭐ STEP 4 LANDED — apps/ · checks/ · tests/ — AND THE FALSIFIER CAUGHT A CHECKER GOING GREEN-WHILE-BLIND, live, mid-restructure
+
+✅ **The split ([ROADMAP §10.5](ROADMAP.md) step 4, 2026-08-19):** all 59 scripts moved by `git mv` — 29 `test_*.py` → `tests/` · the 7 `check_*.py`, 3 `falsify_*.py`, `run_tests.py` and `drive_sim_session.py` → `checks/` · the 18 runnable tools (teleop_session, camera_view, calibrate_gripper, ping_motors, the probes, …) → `apps/`. `scripts/` no longer exists. Both pre-analysed traps resolved as planned: tests OF an app or check script import it from its directory via two explicit path lines (the library `yam` needs none), and every documented COMMAND line was re-pathed everywhere, dated entries included, while prose keeps its day's paths.
+
+⭐⭐⭐ **The §59.1 scenario happened FOR REAL, and the falsifier caught it.** `check_flags`' command-extraction regex hardcoded `uv run (scripts/…)`. After the move it matched nothing, so the checker printed its usual green *"every documented command's flags exist"* while validating **zero** commands. Nothing in its own output differed. **`falsify_check_flags` failed 6 of 10 cases** ("wanted reported, got left alone") — the catch-count dropping is the ONLY thing that saw it. The pattern now names the real directories (with a comment saying why the alternation is load-bearing), and the checker reports **106 command lines against 30 parsers** — up from 79, because the widened pattern also sees the `src/yam` diagnostic and lines the old pattern never covered. ⭐ The lesson, now with a live specimen: **a checker's green run is a claim about the inputs it can still see**, and only a falsification count notices when that set silently becomes empty.
+
+✅ **Verified, all from the new paths:** `checks/run_tests.py` **705/705 across 29 files** (total unchanged through the second move in two days) · sim drive 25/25 plain and `--vel-ff 0.5` · `check_restructure` coherent · `check_flags` 106/30 ✓ · 1120/1120 links · all three falsifiers pass.
+
+⭐ **His language ruling, 2026-08-19, unblocks step 5:** *"both German and English are completely fine, you can just write everything in English, but we are all fluent in both."* So: everything new in English, the German documents stay as they are, and the README rewrite has no open questions left.

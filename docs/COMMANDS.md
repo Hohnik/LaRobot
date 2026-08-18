@@ -14,10 +14,10 @@
 
 ```bash
 # 1. Dial in which puck direction drives which motion. NO HARDWARE — arms can be unplugged.
-uv run scripts/map_axes.py
+uv run apps/map_axes.py
 
 # 2. Everyday driving: guide by hand, teleop with the SpaceMouse, park. All in one session.
-uv run scripts/teleop_session.py --yes --arm B
+uv run apps/teleop_session.py --yes --arm B
 
 # 3. After ANY power cycle, AND once per arm before its very first run. ~10 s, jaws only.
 #    ⛔ --arm is NOT optional here: without it this calibrates B whatever you meant,
@@ -27,11 +27,11 @@ uv run scripts/teleop_session.py --yes --arm B
 #    ⚠️ The ±2π frame shift differs per session and per arm — B needed −2π and G +2π on
 #    2026-08-14 — and build_robot() reconciles it automatically. Never write a direction
 #    into the file; run ping_motors.py to see the current one.
-uv run scripts/calibrate_gripper.py --yes --arm B
-uv run scripts/calibrate_gripper.py --yes --arm G
+uv run apps/calibrate_gripper.py --yes --arm B
+uv run apps/calibrate_gripper.py --yes --arm G
 
 # 4. Is the arm alive? Enables all 7, reads, disables. Nothing moves.
-uv run scripts/read_arm_state.py --yes --arm B
+uv run apps/read_arm_state.py --yes --arm B
 ```
 
 ### `teleop_session.py` — the keys
@@ -114,8 +114,8 @@ By default **both arms share one map**, and the plan line says so out loud:
 If G genuinely needs different directions — a mirrored arm may well want an inverted Y — give it its own, seeded from whatever it uses today:
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm G --fork-map     # G gets its own map
-uv run scripts/teleop_session.py --yes --arm G --share-map    # ...and back to the shared one
+uv run apps/teleop_session.py --yes --arm G --fork-map     # G gets its own map
+uv run apps/teleop_session.py --yes --arm G --share-map    # ...and back to the shared one
 ```
 
 ⛔ **Check the scope line before editing.** Tuning G while it is still on the shared map changes B too.
@@ -148,10 +148,10 @@ Measured in simulation 2026-08-10: gravity is `(0,0,−9.81)` and joint 1 rotate
 Two terminals. Neither the camera process nor the frame setting can move a motor on its own.
 
 ```bash
-uv run scripts/camera_view.py --list                  # names, indices, and the checks
-uv run scripts/probe_camera_pixels.py --index 0       # ⭐ depth or photograph? from the PIXELS
-uv run scripts/camera_view.py --camera c920 --term    # ⭐ by NAME, drawn in this terminal
-uv run scripts/camera_view.py --camera c920 --big     # by name, in a window
+uv run apps/camera_view.py --list                  # names, indices, and the checks
+uv run apps/probe_camera_pixels.py --index 0       # ⭐ depth or photograph? from the PIXELS
+uv run apps/camera_view.py --camera c920 --term    # ⭐ by NAME, drawn in this terminal
+uv run apps/camera_view.py --camera c920 --big     # by name, in a window
 ```
 
 ⭐ **Select by name, not by index.** The index is an AVFoundation artefact that moves on replug; the name does not. `--camera` takes any part of the name plus the aliases `d405`, `realsense`, `c920`, `iphone`, `builtin`, or a `vid:pid`. It **refuses** when a name matches nothing or matches more than one camera, and never falls back to index 0.
@@ -187,12 +187,12 @@ Then in the session, press **`v`** to cycle the control frame, or start with `--
 ## Read-only — cannot move anything, no `--yes` needed
 
 ```bash
-uv run scripts/probe_hardware.py        # enumerate HID, open the SpaceMouse, listen 5 s
-uv run scripts/probe_can.py             # listen-only CAN watch; the transceiver cannot even ACK
+uv run apps/probe_hardware.py        # enumerate HID, open the SpaceMouse, listen 5 s
+uv run apps/probe_can.py             # listen-only CAN watch; the transceiver cannot even ACK
 uv run src/yam/inputs/spacemouse_live.py --seconds 25 --until-complete   # live 6-axis readout
-uv run scripts/map_axes.py              # ⭐ dial in the axis map. SpaceMouse only, no robot at all
-uv run scripts/teleop_sim.py --demo     # the FULL teleop loop against MuJoCo. No hardware at all
-uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, still simulation only
+uv run apps/map_axes.py              # ⭐ dial in the axis map. SpaceMouse only, no robot at all
+uv run apps/teleop_sim.py --demo     # the FULL teleop loop against MuJoCo. No hardware at all
+uv run apps/teleop_sim.py            # ...driven by the real SpaceMouse, still simulation only
 ```
 
 `teleop_sim.py` now applies `config/spacemouse_map.json`, so **a mapping can be verified in simulation before the arm is involved**. Until 2026-08-10 it ignored the map entirely — which made the one place an axis convention is free to get wrong the one place it could not be tested.
@@ -200,10 +200,10 @@ uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, stil
 ## ⭐⭐⭐ Stop typing the flags — save them once
 
 ```bash
-uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --teleop-speed 4 --mirror-gap 0.6 --max-lag 0.4 --save-defaults
+uv run apps/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --teleop-speed 4 --mirror-gap 0.6 --max-lag 0.4 --save-defaults
 ```
 
-⭐ **That is a DRY RUN (no `--yes`), so nothing is energised and the settings are still written.** Afterwards `uv run scripts/teleop_session.py --yes --arms B,G` runs with all of it.
+⭐ **That is a DRY RUN (no `--yes`), so nothing is energised and the settings are still written.** Afterwards `uv run apps/teleop_session.py --yes --arms B,G` runs with all of it.
 
 ⭐ **Three layers, and a flag always wins:** built-in constant → `config/session_defaults.json` → the flag you type. So a saved default replaces the constant, and a flag still overrides the file for one run.
 
@@ -227,7 +227,7 @@ uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --te
 ### ⭐⭐ `--vel-ff` — velocity feedforward, the real answer to the lag (item 44)
 
 ```bash
-uv run scripts/teleop_session.py --yes --arms B,G --vel-ff 0.25
+uv run apps/teleop_session.py --yes --arms B,G --vel-ff 0.25
 ```
 
 ⭐ **What it is:** the motors' MIT-mode frame carries a velocity setpoint, and this stack always sent zero — so all torque came from position error, which is the measured `0.033 s × speed` lag ([FINDINGS §66.1](FINDINGS.md)). With `--vel-ff` each motor also receives that fraction of the rate-limited command's own speed, so torque starts flowing before error builds. **0 = off (the default) · 1 = exactly the command's speed, the physically-motivated value and the hard cap.** Live: setting 9 on the `n` screen. The setpoint is smoothed over ~2 cycles, and a joint already past its command gets no push.
@@ -245,7 +245,7 @@ Press `n` in any session. It lists the six limits with their current values:
 ## ⭐⭐ `--sim` — run the WHOLE session with nothing attached
 
 ```bash
-uv run scripts/teleop_session.py --sim --yes --arms B,G --start-mode hold
+uv run apps/teleop_session.py --sim --yes --arms B,G --start-mode hold
 ```
 
 ⭐ **No arms, no CAN adapter, no SpaceMouse.** It builds simulated arms that **lag** the way the real ones were measured to, wraps them in the **real** `SafeRobot`, and runs the same loop. Drive it with the keys: `a` `t` `g` `h` `w` `l` `p` `i` `q`. ⚠️ `--yes` is still required, because the loop really runs; nothing can move because nothing is attached.
@@ -259,14 +259,14 @@ uv run scripts/teleop_session.py --sim --yes --arms B,G --start-mode hold
 ## ⭐ The checkers — no hardware, and they answer real questions
 
 ```bash
-uv run scripts/run_tests.py                          # ⭐⭐ EVERY test file as ONE suite, with a total
-uv run scripts/check_rig.py                          # what is on the USB bus. Never transmits
-uv run scripts/check_flags.py                        # do the commands in docs/ actually work?
-uv run scripts/check_links.py                        # every relative link and § reference
-uv run scripts/check_recordings.py                   # what is in each recording slot
-uv run scripts/check_restructure.py                  # the N-arm restructure is still coherent
-uv run scripts/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
-uv run scripts/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
+uv run checks/run_tests.py                          # ⭐⭐ EVERY test file as ONE suite, with a total
+uv run checks/check_rig.py                          # what is on the USB bus. Never transmits
+uv run checks/check_flags.py                        # do the commands in docs/ actually work?
+uv run checks/check_links.py                        # every relative link and § reference
+uv run checks/check_recordings.py                   # what is in each recording slot
+uv run checks/check_restructure.py                  # the N-arm restructure is still coherent
+uv run checks/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
+uv run checks/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
 ```
 
 ⭐⭐ **`run_tests.py` exists because two test files sat red for days with nobody able to see it** ([FINDINGS §67.5](FINDINGS.md)) — each file has its own `main()` and nothing ran them all. It fails a file on any of three signals (nonzero exit, no count line, passed < total) and prints a **grand total**: compare it against the last committed figure, because a total that DROPS while everything is green means a check was silently disarmed ([FINDINGS §59.1](FINDINGS.md), [§70.4](FINDINGS.md)).
@@ -278,9 +278,9 @@ uv run scripts/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end
 ### ⭐ Proving the checkers are not just green
 
 ```bash
-uv run scripts/falsify_run_tests.py      # 4 fixture suites: pass, assert-fail, crash, liar — 3 must be caught
-uv run scripts/falsify_fake_arm.py       # break the simulated arm 5 ways; each must be caught
-uv run scripts/falsify_check_flags.py    # 7 broken commands must be reported, 3 good ones not
+uv run checks/falsify_run_tests.py      # 4 fixture suites: pass, assert-fail, crash, liar — 3 must be caught
+uv run checks/falsify_fake_arm.py       # break the simulated arm 5 ways; each must be caught
+uv run checks/falsify_check_flags.py    # 7 broken commands must be reported, 3 good ones not
 ```
 
 ⭐⭐ **`drive_sim_session.py` is the only thing that runs the 3000-line loop end to end**, and it earned its place: it caught a crash that **616 unit tests missed**. The save handler read a local assigned only inside the overwrite-guard branch, so the first save of any session raised `UnboundLocalError`. The 12 tests of that exact decision all passed, because they call the pure function directly and the defect was in the CALL SITE. ⚠️ **Extracting a decision into a testable function does not test the code that calls it** ([FINDINGS §62.1](FINDINGS.md)).
@@ -290,7 +290,7 @@ uv run scripts/falsify_check_flags.py    # 7 broken commands must be reported, 3
 ## Tests — no hardware, no device, no simulation
 
 ```bash
-uv run scripts/test_axis_map.py && uv run scripts/test_park_target.py
+uv run tests/test_axis_map.py && uv run tests/test_park_target.py
 ```
 
 ⚠️ **Those two are 34 checks of the 549 that exist.** Everything matching `scripts/test_*.py` is headless and passes as of 2026-08-15; run them all with a loop rather than naming two. ⭐ **`scripts/test_fake_arm.py` is the newest and the one to read first** — it drives a simulated arm that *lags* at four speeds and asserts each lands inside the following-error band measured on the real hardware ([FINDINGS §59.0](FINDINGS.md)).
@@ -314,9 +314,9 @@ Without the viewer the run continues headless, so `--view` is optional in every 
 These send CAN frames yet never enable anything — register reads only.
 
 ```bash
-uv run scripts/identify_arm.py --yes --arm B              # motor models, sw versions, safety timeout
-uv run scripts/identify_arm.py --arm B --scan 1 8 --yes   # what is on this bus at all
-uv run scripts/bench_can.py --yes --cycle --samples 8000     # control-rate measurement
+uv run apps/identify_arm.py --yes --arm B              # motor models, sw versions, safety timeout
+uv run apps/identify_arm.py --arm B --scan 1 8 --yes   # what is on this bus at all
+uv run apps/bench_can.py --yes --cycle --samples 8000     # control-rate measurement
 ```
 
 **`--scan` is the first thing to run when something feels wrong.** If it reports 0 devices, the problem is power or wiring, not software — see `FINDINGS.md` §8.
@@ -326,8 +326,8 @@ uv run scripts/bench_can.py --yes --cycle --samples 8000     # control-rate meas
 ## Enables motors, sends no setpoint — the arm should not move
 
 ```bash
-uv run scripts/ping_motors.py --yes --arm B      # per-motor position, torque, TEMPERATURE, error
-uv run scripts/read_arm_state.py --yes --arm B   # all 7 through the whole-arm chain
+uv run apps/ping_motors.py --yes --arm B      # per-motor position, torque, TEMPERATURE, error
+uv run apps/read_arm_state.py --yes --arm B   # all 7 through the whole-arm chain
 ```
 
 `ping_motors.py` is also the temperature check. Idle is **31-36 °C**; **41-42 °C while holding a pose is normal thermal equilibrium, not a fault.**
@@ -337,13 +337,13 @@ uv run scripts/read_arm_state.py --yes --arm B   # all 7 through the whole-arm c
 ## ⛔ Moves the arm
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm B                 # ⭐ the one to use
-uv run scripts/calibrate_gripper.py --yes --arm B              # jaws to both stops, gently, once
-uv run scripts/hold_pose.py --yes --arm B                      # hold the pose; success = nothing moves
-uv run scripts/hold_pose.py --yes --arm B --zero-gravity       # weightless, hand-guide only
-uv run scripts/teleop_gripper.py --yes --arm B                 # gripper twist + jaws only, no IK
-uv run scripts/move_one_motor.py --yes --arm B --delta 1.5 --cycles 3   # one motor, bounded
-uv run scripts/move_both_grippers.py --yes                        # both arms' grippers, one loop
+uv run apps/teleop_session.py --yes --arm B                 # ⭐ the one to use
+uv run apps/calibrate_gripper.py --yes --arm B              # jaws to both stops, gently, once
+uv run apps/hold_pose.py --yes --arm B                      # hold the pose; success = nothing moves
+uv run apps/hold_pose.py --yes --arm B --zero-gravity       # weightless, hand-guide only
+uv run apps/teleop_gripper.py --yes --arm B                 # gripper twist + jaws only, no IK
+uv run apps/move_one_motor.py --yes --arm B --delta 1.5 --cycles 3   # one motor, bounded
+uv run apps/move_both_grippers.py --yes                        # both arms' grippers, one loop
 ```
 
 **Superseded but kept:** `teleop_arm.py` was the two-phase version. `teleop_session.py` replaces it — the phases became live mode switches, and the snap bug it contained is fixed there, not here.
@@ -355,7 +355,7 @@ uv run scripts/move_both_grippers.py --yes                        # both arms' g
 **Separately, today:** just change the flag. Each session assigns its own puck.
 
 ```bash
-uv run scripts/teleop_session.py --yes --arm G
+uv run apps/teleop_session.py --yes --arm G
 ```
 
 **Simultaneously:** not built yet. The hard half is proven — `move_both_grippers.py` already drives two arms from one 100 Hz loop across two buses — but cartesian bimanual needs one process holding both robots, two `CartesianTeleop` instances and two pucks assigned up front. Budget is fine: 14 motors ≈ 6.2 ms/cycle against a 10 ms deadline.

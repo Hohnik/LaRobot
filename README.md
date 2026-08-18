@@ -91,7 +91,7 @@ Enumerated on 2026-08-07 via `ioreg`, `system_profiler` and `hid.enumerate()`.
 
 > ### ⭐ That recommendation was WRONG, and now it is measured rather than argued. 2026-08-10.
 >
-> `uv run scripts/bench_can.py --yes --cycle --samples 8000` — real 7-motor cycles against the real arm, sustained for 25 s:
+> `uv run apps/bench_can.py --yes --cycle --samples 8000` — real 7-motor cycles against the real arm, sustained for 25 s:
 >
 > ```
 > 8000/8000 cycles complete, 0 missed replies
@@ -114,7 +114,7 @@ The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three fact
 |---|---|
 | `CanInterface.__init__(channel, bustype="socketcan", bitrate=1_000_000, …)` builds `can.interface.Bus(bustype=bustype, …)` — **`bustype` is a plain argument, not a hardcoded string** | `third_party/i2rt/i2rt/motor_drivers/can_interface.py:14,21` |
 | `DMSingleMotorCanInterface` passes `bustype` straight through, so **`bustype="gs_usb"` reaches python-can untouched** | `dm_driver.py:135,142` |
-| The adapter **opens listen-only at 1 Mbit/s** on this Mac: `fclk=160 MHz`, timings computed by python-can, `listen_only_granted=True` | `uv run scripts/probe_can.py` |
+| The adapter **opens listen-only at 1 Mbit/s** on this Mac: `fclk=160 MHz`, timings computed by python-can, `listen_only_granted=True` | `uv run apps/probe_can.py` |
 
 ⚠️ **The one layer that does NOT work is the one the docs tell you to use.** `get_yam_robot()` → `DMChainCanInterface` selects the bus with `if "can" in channel:` and then **hardcodes `bustype="socketcan"`** (`dm_driver.py:409-417`). There is no argument that overrides it. So the high-level robot object is Linux-only as shipped; the motor-driver layer beneath it is not. Everything here goes through that lower layer, via [`src/yam/can.py`](src/yam/can.py).
 
@@ -140,10 +140,10 @@ The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three fact
 > ⚠️ **This section is session 2's snapshot, and it is no longer the live state** — it lists the probe scripts that existed when the arm had never been driven. Everything since (teleop, gravity compensation, PARK, the gripper, control frames, mirror logic, the camera view) is in **[docs/HANDOFF.md](docs/HANDOFF.md) §2**, which separates what is *confirmed on hardware* from what is only verified in simulation. **Two "what works" lists is one too many; that one is authoritative.**
 
 ```bash
-uv run scripts/probe_hardware.py    # enumerate everything, open the SpaceMouse, listen 5 s
+uv run apps/probe_hardware.py    # enumerate everything, open the SpaceMouse, listen 5 s
 uv run src/yam/inputs/spacemouse_live.py       # live 6-DoF bar readout — move the device and watch
-uv run scripts/probe_can.py         # listen-only CAN watch — silent transceiver, cannot even ACK
-uv run scripts/ping_motors.py       # DRY RUN by default; --yes transmits (see §5)
+uv run apps/probe_can.py         # listen-only CAN watch — silent transceiver, cannot even ACK
+uv run apps/ping_motors.py       # DRY RUN by default; --yes transmits (see §5)
 ```
 
 - `scripts/probe_hardware.py` — enumerates all 26 HID interfaces, isolates the 3Dconnexion ones, opens the multi-axis interface and reports whether data flows. **Verified: opens successfully.**
@@ -202,7 +202,7 @@ uv run scripts/ping_motors.py       # DRY RUN by default; --yes transmits (see �
 
 ### 6.0 The arm, as measured
 
-`uv run scripts/identify_arm.py --yes` reads each motor's `gear_ratio`, and the Damiao part number **is** the gear ratio — DM43**40** reports 40.0, DM43**10** reports 10.0. `sw_ver` partitions identically as a cross-check.
+`uv run apps/identify_arm.py --yes` reads each motor's `gear_ratio`, and the Damiao part number **is** the gear ratio — DM43**40** reports 40.0, DM43**10** reports 10.0. `sw_ver` partitions identically as a cross-check.
 
 | | motor | gear_ratio | sw_ver |
 |---|---|---|---|

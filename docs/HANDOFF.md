@@ -25,20 +25,20 @@
 >
 > ⬜⭐⭐ **WHAT COMES NEXT, in order ([ROADMAP §8.2](ROADMAP.md)'s scope block is the live list):**
 > 1. ✅✅ **The jaw pause + grasp check (items 3, 10) — CONFIRMED ON HARDWARE 2026-08-18** ([FINDINGS §70](FINDINGS.md); his pass: [§70.5](FINDINGS.md)): a run splits where only the jaws move, settles the arm, waits for the jaws by measurement, and reports the grab. **The grasp check's first real answer was a TRUE negative** — the piece was missed; the miss is the [§69.2](FINDINGS.md) friction floor, and the settle-gate + printed settle offset now bound the software's share of it. The dataset-grade grab stays item 12: taught legs for millimetre work.
-> 2. ⏳ **The §10 restructure — steps 2 AND 3 are DONE** ([FINDINGS §70.4](FINDINGS.md), [§70.7](FINDINGS.md)): one test runner, and `src/` is the installed package `yam` with domain folders, zero path hacks, suite total unchanged. ⬜ Remaining: step 4 (sort `scripts/` into `apps/`·`checks/`·`tests/`), step 5 (README rewrite — ⚠️ wants his ONE-language answer), step 6 (the bring-up checklist page).
+> 2. ⏳ **The §10 restructure — steps 2, 3 AND 4 are DONE** ([FINDINGS §70.4](FINDINGS.md), [§70.7](FINDINGS.md)): one test runner, and `src/` is the installed package `yam` with domain folders, zero path hacks, suite total unchanged. The scripts live in `apps/`·`checks/`·`tests/` now — `scripts/` is gone, and the suite command is `uv run checks/run_tests.py` ([FINDINGS §70.8](FINDINGS.md), which also holds the live §59.1 specimen the split produced). ⬜ Remaining: step 5 (README as the day-one door — his language answer is in: English, German docs stay) and step 6 (the bring-up checklist page).
 > 3. **The camera chain** (items 5, 6): identify the two D405s (distinct serials are readable, serial→OpenCV-index is the open half) and timestamped multi-camera capture aligned with joint data, shaped like LaRobot's dual-timestamp `Frame`. ⛔ The agent can NEVER run a camera (macOS per-app permission, [§61.3](FINDINGS.md)) — write headless, hand him one command.
 > 4. **The data-collection features** (items 7, 8, 9, 12), then **the consolidation plan** — the deliverable, written against [Setup-Anleitung.md](Setup-Anleitung.md) (what was planned vs what this repo did and why).
 >
 > ✅ **NOTHING IS OWED AT THE BENCH.** The jaw-pause pass ran on 2026-08-18 ([FINDINGS §70.5](FINDINGS.md)) and closed the last owed item; every built feature is confirmed on the arm. ⚠️ One refinement landed AFTER his pass (the settle-gate: the arm settles before the jaws move, and the pause line prints the settled offset) — it rides along with whatever grab he runs next, no dedicated session needed.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word, and the repo still has NO private remote (his own item — 212 commits exist on this Mac alone; the `Hohnik/LaRobot` snapshot branch stopped at 56). His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run scripts/run_tests.py` is now the one-command suite (total today: **702/702 across 29 files** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word, and the repo still has NO private remote (his own item — 212 commits exist on this Mac alone; the `Hohnik/LaRobot` snapshot branch stopped at 56). His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **702/702 across 29 files** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
 > ⭐⭐ **Run this before anything else. It answers "what state is the rig in?", which is the right first question here:**
 >
 > ```bash
-> uv run scripts/check_rig.py
+> uv run checks/check_rig.py
 > ```
 >
 > ✅ **As of 2026-08-14 ~18:00: both adapters were out of DFU and all 14 motors healthy** — 31-34 °C, jaws reconciling with the usual −2π shift. ⚠️ **That is a dated reading, not a fact about the rig.** Run the command; it recomputes the answer ([FINDINGS §33.3](FINDINGS.md)).
@@ -82,7 +82,7 @@
 >
 > ⭐⭐ **THE FLAGS ARE LIVE NOW: press `n`** for a SETTINGS screen on the six limits, `s` to save them for every later session ([FINDINGS §62.4](FINDINGS.md)).
 >
-> ⛔⭐⭐ **RUN `uv run scripts/drive_sim_session.py` BEFORE ASKING HIM FOR A HARDWARE RUN.** It drives the whole loop simulated, 22 checks, and it caught a crash **616 unit tests missed** ([FINDINGS §62.1](FINDINGS.md)).
+> ⛔⭐⭐ **RUN `uv run checks/drive_sim_session.py` BEFORE ASKING HIM FOR A HARDWARE RUN.** It drives the whole loop simulated, 22 checks, and it caught a crash **616 unit tests missed** ([FINDINGS §62.1](FINDINGS.md)).
 >
 > ⛔⭐⭐ **CAMERAS: THE AGENT CANNOT RUN THEM, EVER.** macOS grants camera access per parent app, so his terminal has it and an agent shell does not, and no agent can grant it. ⭐ **Write camera tooling, hand him the command** ([FINDINGS §61.3](FINDINGS.md)). ✅⛔⭐⭐⭐ **AND THE DEPTH QUESTION IS SETTLED: NO.** He ran the pixel probe and **all four modes, 848x480 included, are ordinary colour photographs** — 0.00% zero pixels, three differing channels ([FINDINGS §63.0](FINDINGS.md)). **The D405 is a plain colour camera for this stack. Depth needs the SDK or it needs nothing**, so nobody should spend a day on `librealsense` hoping otherwise.
 >
@@ -91,7 +91,7 @@
 > ### ⬜⭐⭐ THE RUN THAT IS OWED when the arms are back — the two-arm recording, END TO END
 >
 > ```bash
-> uv run scripts/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 2 --teleop-speed 2 --mirror-gap 0.6
+> uv run apps/teleop_session.py --yes --arms B,G --start-mode hold --max-speed 2 --teleop-speed 2 --mirror-gap 0.6
 > ```
 >
 > **`a` to BOTH · `t` · drive both arms · `w` · move · `w` · `7` to save · then `l` `7` Enter · `q` `q`.**
@@ -125,7 +125,7 @@
 > ⚠️⚠️ **ORDER MATTERS: ping BEFORE power-cycling.** A mains cycle erases the fault code, which is the only record of what happened.
 >
 > ```bash
-> uv run scripts/ping_motors.py --arm B --yes
+> uv run apps/ping_motors.py --arm B --yes
 > ```
 >
 > ⭐ **The codes:** `8` over-voltage · `9` under-voltage · `A` over-current · `B` MOS overheat · `C` coil overheat · `D` loss of communication · `E` overload.
@@ -154,8 +154,8 @@
 > ⭐ **The two commands that answer "is a motor healthy?", in order, both agent-safe:**
 >
 > ```bash
-> uv run scripts/identify_arm.py --arm G --yes   # register reads only, cannot energise
-> uv run scripts/ping_motors.py  --arm G --yes   # enables each motor for one frame, no setpoint
+> uv run apps/identify_arm.py --arm G --yes   # register reads only, cannot energise
+> uv run apps/ping_motors.py  --arm G --yes   # enables each motor for one frame, no setpoint
 > ```
 >
 > ⚠️ `check_rig.py` reports **device** state and never transmits, so it cannot report motor state. These two do. The second is the only way to read an error code or a temperature.
@@ -197,13 +197,13 @@
 > ✅✅ **2. DONE 2026-08-14 09:10 — the register diff is clean on both arms, and there is now a script for it.** [FINDINGS §38](FINDINGS.md). **140 reads** (10 registers × 7 motors × 2 arms), run three times, identical every time. **Every register agrees on both arms except `inertia` and `flux`, and both are measured per-motor data.** `timeout` reads **8000 on all 14 motors**, so the safety timeout is enabled everywhere. ⭐ **The result that actually answers the worry: `inertia` matches the value recorded on 2026-08-10 in [§1](FINDINGS.md) to every digit**, which is what rules out a re-calibration having been saved to flash. ⛔ **What it cannot cover, and it is the risk [§37.6](FINDINGS.md) named: the `PMAX`/`VMAX`/`TMAX` scaling limits are not readable at all** — they are hardcoded Python constants in the SDK, not registers it can ask for. [FINDINGS §38.1](FINDINGS.md) has what bounds them instead, and why "both arms read zero at rest" is not the evidence it looks like.
 >
 > ```bash
-> uv run scripts/check_rig.py && uv run scripts/check_arms_match.py --yes
+> uv run checks/check_rig.py && uv run checks/check_arms_match.py --yes
 > ```
 >
 > ✅✅ **3. DONE 2026-08-14 09:45 by Julien, then twice more by the agent.** All 14 motors answer, every error code `0x1`, temperatures **29-34 °C** against a 55 °C warning, and every motor at rest ([FINDINGS §40.3](FINDINGS.md)). ⭐⭐ **"No motor is holding a fault" is a trustworthy statement for the first time**, because [§39.1](FINDINGS.md)'s fix had landed an hour earlier, so error clearing was **off** and a latched fault would have been named rather than erased. ⛔⭐ **And his output carried the finding of the day: arm G's gripper encoder frame had jumped 2π overnight** ([FINDINGS §40.0](FINDINGS.md)). It was handled correctly, nothing needs fixing, and two documents that recorded "G needs no shift" as a property of the arm are corrected. ⚠️ **He ran this before reporting on the LEDs, so that observation closed unmade** — and it cost nothing, because the ping proves there was no fault to see. **The command, for next time:**
 >
 > ```bash
-> uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+> uv run apps/ping_motors.py --arm B --yes && uv run apps/ping_motors.py --arm G --yes
 > ```
 >
 > ✅✅⭐⭐ **4. BOTH TESTS RAN AND BOTH PASSED — 2026-08-14, 11:00. [FINDINGS §41](FINDINGS.md).**
@@ -220,7 +220,7 @@
 > **Start it. Note `--start-mode hold`, which is NOT the default:**
 >
 > ```bash
-> uv run scripts/teleop_session.py --yes --arm B --start-mode hold
+> uv run apps/teleop_session.py --yes --arm B --start-mode hold
 > ```
 >
 > ⚠️ **The default is `guide`, which makes the arm weightless the instant it starts.** `hold` is both safer and what test A needs, because the recording has to *begin* in HOLD.
@@ -239,7 +239,7 @@
 > **Then quit the session (`q` then `p` then `d`) and run this:**
 >
 > ```bash
-> uv run scripts/check_recordings.py
+> uv run checks/check_recordings.py
 > ```
 >
 > ✅ **A pass is `2.json` showing `live:hold+guide` in the "how it was made" column.** ⛔ **A fail is `live:hold` on its own**, which means the fix did not apply. ⭐ The column will also flag it `⛔ implausible` if the label says HOLD while the arm moved at hand-guiding speed, which is how `3.json` was caught.
@@ -275,16 +275,16 @@
 > **The four commands that check the tree and the rig, none of which can energise a motor:**
 >
 > ```bash
-> uv run scripts/run_tests.py                        # the whole headless suite, ONE command, with a total
-> uv run scripts/check_rig.py                        # what state is every device in?
-> uv run scripts/check_recordings.py                 # what is on disk, and is any of it padded?
-> uv run scripts/check_links.py                      # 1 known break, in Setup-Plan.md, not ours
+> uv run checks/run_tests.py                        # the whole headless suite, ONE command, with a total
+> uv run checks/check_rig.py                        # what state is every device in?
+> uv run checks/check_recordings.py                 # what is on disk, and is any of it padded?
+> uv run checks/check_links.py                      # 1 known break, in Setup-Plan.md, not ours
 > ```
 >
 > **And the fifth, which does transmit — register reads only, so it cannot energise or command anything:**
 >
 > ```bash
-> uv run scripts/check_arms_match.py --yes           # do both arms still read identically, and has anything moved?
+> uv run checks/check_arms_match.py --yes           # do both arms still read identically, and has anything moved?
 > ```
 >
 > ⭐ **Those four `check_*` scripts exist because the same defect kept recurring**: a measurement written into a document, correct on the day, wrong a day later. A script that reads the thing it describes cannot go stale. [FINDINGS §33.3](FINDINGS.md). ⚠️ **Note that the test count is deliberately not written above any more** — it was `360` while the suite held 384, which is the same defect one layer up.
@@ -337,7 +337,7 @@
 >    ⭐ **Verify at any time with one command:**
 >
 >    ```bash
->    uv run scripts/check_restructure.py
+>    uv run checks/check_restructure.py
 >    ```
 >
 >    ⛔⭐⭐ **THE ONE HAZARD THAT WOULD HAVE BEEN SILENT, and it is worth reading before touching this again.** `ArmSession.__init__` sets `self.mode = "hold"`. **Without the `arm.mode = start_mode` handover, `--start-mode guide` would build a WEIGHTLESS robot and run the loop believing it was in HOLD** — nothing raises, and GUIDE is the mode where a dynamics-model error becomes a *falling* arm. ⭐ **Found by asking what the class's own default was, not by anything failing.** No test, dry run or checker could have caught it, because every substitution was correct and the fault would have been a *missing* line. **That is the limit of a mechanical check.** Two tests now pin it.
@@ -347,7 +347,7 @@
 >    ⬜⭐⭐ **WHAT IS OWED NOW: the hardware test, and it asks ONE question.**
 >
 >    ```bash
->    uv run scripts/teleop_session.py --yes --arm B --start-mode hold
+>    uv run apps/teleop_session.py --yes --arm B --start-mode hold
 >    ```
 >
 >    **Does it feel identical?** ⚠️ **Use GUIDE and the gripper as well as TELEOP.** Julien's earlier *"teleop feels identical"* was real but partial — it covered `prev_q` and `home_ee`, which the TELEOP branch reads, and not `guide_ref`, `gripper_value` or `stall_since`. One GUIDE stretch and one gripper open/close closes that gap.
@@ -415,7 +415,7 @@ Julien and a friend are building a **bimanual YAM robot setup** for a university
 ## 3. The commands that matter
 
 ```bash
-cd ~/Developer/Projects/yam-robotics && uv run scripts/teleop_session.py --yes --arm B
+cd ~/Developer/Projects/yam-robotics && uv run apps/teleop_session.py --yes --arm B
 ```
 
 ```
@@ -434,8 +434,8 @@ OTHER     r  wrist rotation on/off   ?  help    q  QUIT → then p park, g guide
 Arms are **B** and **G**, matching the labels on the hardware. `--arm arm1` is gone and fails loudly.
 
 ```bash
-uv run scripts/camera_view.py --list          # which index is the arm-mounted camera
-uv run scripts/camera_view.py --index 0 --big # live view; keys 1-5 change resolution
+uv run apps/camera_view.py --list          # which index is the arm-mounted camera
+uv run apps/camera_view.py --index 0 --big # live view; keys 1-5 change resolution
 ```
 
 ⛔ **First camera run needs macOS permission** — System Settings → Privacy & Security → Camera.
@@ -540,7 +540,7 @@ These are not preferences, they were arrived at by things going wrong.
 ⛔⭐ **DO NOT READ THE TABLE BELOW AS CURRENT. It is a dated snapshot, and one of its rows turned out to describe a thing that changes overnight.** Re-derive it instead, in one command:
 
 ```bash
-uv run scripts/check_rig.py && uv run scripts/ping_motors.py --arm B --yes && uv run scripts/ping_motors.py --arm G --yes
+uv run checks/check_rig.py && uv run apps/ping_motors.py --arm B --yes && uv run apps/ping_motors.py --arm G --yes
 ```
 
 **Health check after the overnight power cycle, 2026-08-11, kept for its history only:**
@@ -598,7 +598,7 @@ ioreg -p IOUSB -w0 -l | grep -iE "USB Product Name|USB Serial Number"
 | 3 | **Live telemetry on screen** | His clarification: camera fps, motor temperatures, poses **in units a human can act on**, gripper angles. ⚠️ The requirement is *understandable*, not *complete* — raw radians and quaternions fail it; degrees, centimetres and named axes pass |
 | 4 | **Debug logs with more than one view** | *"we don't always need access to all of the data when we're debugging specific parts."* Not one firehose: one structured record per cycle, plus filtered views (thermal only, IK only, input only). Design not started |
 | 5 | **Recorder → MCAP in ABC's schema** | ⏸️ **Deferred by Julien** while a friend finishes the plan. Building now would guess at a schema about to be specified. Get it wrong and every demo must be re-collected. ⛔ **And as of 2026-08-12 it is blocked by item 0a as well**, on a second axis: the schema is his friend's to specify, but *what gets recorded* — nominal waypoint or actually-commanded pose, and whether perturbed replays are recorded at all — follows from [ROADMAP §6.6](ROADMAP.md). Recording the nominal target instead of the real command yields a dataset that looks correct and teaches nothing |
-| 5b | ⛔⭐ **Cameras: the second D405 IS NOW PLUGGED IN, and the C920 is gone** — full plan in [ROADMAP.md](ROADMAP.md) §7.1-7.3 | ⛔ **This happened at the bench on 2026-08-13 without a session, so the advice below to "read §7.1 before plugging it in" arrived too late.** Measured two independent ways at 16:52: two D405s on the bus, serials `255323071773` and `260323072846`, and no C920 ([FINDINGS §34.5](FINDINGS.md)). ⭐⭐ **AND THE FEAR TURNED OUT TO BE HALF WRONG, IN OUR FAVOUR: the two D405s report DISTINCT USB serials, readable with no root** — `uv run scripts/check_rig.py` prints them. The claim below that *"the plain-webcam path cannot read a serial"* is true of OpenCV and false of the USB bus, and the bus is available to us for free. ⛔ **What is still unsolved is the mapping**, which is the harder half: macOS's USB enumeration order is not OpenCV's device-index order ([FINDINGS §22](FINDINGS.md)), so knowing a serial exists does not say which index opens it. Use the wiggle method ([FINDINGS §28.6](FINDINGS.md)) for which-camera-is-on-which-arm. **The original note, still worth reading for the method:** Cameras are identified by asking each for a picture size only one supports ([FINDINGS §22](FINDINGS.md)); **two identical D405s support the same sizes, so that method cannot separate them.** ⭐ **UPDATE 2026-08-12: librealsense is INSTALLED and it works, but only with `sudo`** ([FINDINGS §28](FINDINGS.md)). macOS's own webcam driver holds the camera's control interface, and taking it back needs root. ⛔ **So this does not solve identification inside our code**, because a 100 Hz control loop must not run as root. Use `sudo rs-enumerate-devices -s` for inspection, keep streaming on the OpenCV path, and use the **wiggle method** for which-camera-is-on-which-arm ([FINDINGS §28.6](FINDINGS.md)) — the same trick already used for the two SpaceMice. ⛔⭐ **Also unresolved: the camera reports TWO DIFFERENT serial numbers** depending on whether librealsense or the USB descriptor is asked (`260322274021` vs `255323071773`, same evening, one camera on the bus). Settle it on the next hardware session before writing any serial into a config file. ⚠️ Also open: **measure the real mount** (the code's `camera` frame assumes a modelled 25° tilt that the photographs do not match — drive in `tool` until measured), **measure two-camera USB bandwidth** (fails as dropped frames, not as an error), and **re-measure latency** rather than assuming the C920's ~200 ms carries over. ⭐ **And the cable is wrong today**: it strains the plug when the wrist twists and hangs loose in the workspace. `ROADMAP.md` §7.3 has the fix and the USB length limits |
+| 5b | ⛔⭐ **Cameras: the second D405 IS NOW PLUGGED IN, and the C920 is gone** — full plan in [ROADMAP.md](ROADMAP.md) §7.1-7.3 | ⛔ **This happened at the bench on 2026-08-13 without a session, so the advice below to "read §7.1 before plugging it in" arrived too late.** Measured two independent ways at 16:52: two D405s on the bus, serials `255323071773` and `260323072846`, and no C920 ([FINDINGS §34.5](FINDINGS.md)). ⭐⭐ **AND THE FEAR TURNED OUT TO BE HALF WRONG, IN OUR FAVOUR: the two D405s report DISTINCT USB serials, readable with no root** — `uv run checks/check_rig.py` prints them. The claim below that *"the plain-webcam path cannot read a serial"* is true of OpenCV and false of the USB bus, and the bus is available to us for free. ⛔ **What is still unsolved is the mapping**, which is the harder half: macOS's USB enumeration order is not OpenCV's device-index order ([FINDINGS §22](FINDINGS.md)), so knowing a serial exists does not say which index opens it. Use the wiggle method ([FINDINGS §28.6](FINDINGS.md)) for which-camera-is-on-which-arm. **The original note, still worth reading for the method:** Cameras are identified by asking each for a picture size only one supports ([FINDINGS §22](FINDINGS.md)); **two identical D405s support the same sizes, so that method cannot separate them.** ⭐ **UPDATE 2026-08-12: librealsense is INSTALLED and it works, but only with `sudo`** ([FINDINGS §28](FINDINGS.md)). macOS's own webcam driver holds the camera's control interface, and taking it back needs root. ⛔ **So this does not solve identification inside our code**, because a 100 Hz control loop must not run as root. Use `sudo rs-enumerate-devices -s` for inspection, keep streaming on the OpenCV path, and use the **wiggle method** for which-camera-is-on-which-arm ([FINDINGS §28.6](FINDINGS.md)) — the same trick already used for the two SpaceMice. ⛔⭐ **Also unresolved: the camera reports TWO DIFFERENT serial numbers** depending on whether librealsense or the USB descriptor is asked (`260322274021` vs `255323071773`, same evening, one camera on the bus). Settle it on the next hardware session before writing any serial into a config file. ⚠️ Also open: **measure the real mount** (the code's `camera` frame assumes a modelled 25° tilt that the photographs do not match — drive in `tool` until measured), **measure two-camera USB bandwidth** (fails as dropped frames, not as an error), and **re-measure latency** rather than assuming the C920's ~200 ms carries over. ⭐ **And the cable is wrong today**: it strains the plug when the wrist twists and hangs loose in the workspace. `ROADMAP.md` §7.3 has the fix and the USB length limits |
 | 6 | ⭐⭐ **The D405 wrist cameras — and the cheap shortcut WORKS** | ⛔ **UPDATED 2026-08-13 16:52: BOTH are now on the bus**, serials `255323071773` and `260323072846`, and the C920 has been unplugged ([FINDINGS §34.5](FINDINGS.md)). *The sentence that follows was written when only one was attached and is kept for its measurement, not its state:* One is mounted on **arm B**, plugged in, and **measured** (serial `255323071773`, USB SuperSpeed); the second is with **arm G** and still unplugged — only one serial is on the bus. ⭐ **2026-08-11: OpenCV opens it over plain UVC and gets a real picture** — Julien's live view shows a textured photographic image and `--list` reports `colour`. *(An earlier note here said "depth only". That was inferred from the device's NAME — macOS calls it `… Depth` — and it was wrong; the pixels say otherwise. FINDINGS §22.)* **So driving from the wrist camera needs no SDK at all**, and `brew install librealsense` is an upgrade for depth data, intrinsics and camera controls rather than a prerequisite. Next: mount it properly, then `v` → **tool** frame (⛔ *not* `camera`, until the real mount transform is measured — COMMANDS). He gave the manual's link: `intelrealsense.com/get-started` |
 | 6b | **Camera latency — probably NOT worth more software effort** | Julien perceives ~0.2 s. **Measured: the draw cost is ~2 ms**, so render, terminal and grabber are all irrelevant. The rest is the C920 itself — sensor readout, onboard MJPEG encode, USB transport — typically 100-200 ms for a consumer webcam and not removable in software. Resolution is the only lever (key `1` = 320×180). ⛔ **Confirm the 2 ms is still ~2 ms, then stop**; the real answer is the D405 wrist cameras. [FINDINGS §21.3](FINDINGS.md) |
 | 7 | **A remote of Julien's own** | ⚠️ Partly addressed 2026-08-12 — 56 commits now sit on the branch `julien/yam-teleop-wip` in his friend's public repo, so the work is no longer on one Mac alone. That branch is not a backup he controls, so a private remote of his own remains open |
