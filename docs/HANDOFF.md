@@ -23,6 +23,8 @@
 >
 > ⬜ **Owed at the bench, complete list ([FINDINGS §67.4](FINDINGS.md)):** the 30-second park-spasm check (`q` · `g` · move an arm by hand · `p` — it must not jerk), and replugging the C920 (plus the second D405 whenever convenient) for the camera chain. ⚠️ The rig as read on 2026-08-18: both adapters healthy, two SpaceMice, **one D405, no C920** ([§67.3](FINDINGS.md)).
 >
+> ⭐⭐ **Second 2026-08-18 layer ([FINDINGS §67.7](FINDINGS.md), [§67.8](FINDINGS.md)):** the [ROADMAP §10](ROADMAP.md) restructure is **ratified** (explore the colleagues' `Hohnik/LaRobot` branches first) · **build-in-prototype is the standing default** for hesitant features · item 44 (velocity feedforward) and item 13 (speed-dial puck) are GO · item 32 closed — **Marius's [Setup-Anleitung.md](Setup-Anleitung.md) is in the repo and all 991 links resolve** · ⛔ new working-contract **rule 12 in §4**: his messages arrive through speech-to-text he never sees; quote garbled phrases back with context, never guess-and-act.
+>
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
 > ⭐⭐ **Run this before anything else. It answers "what state is the rig in?", which is the right first question here:**
@@ -517,6 +519,9 @@ These are not preferences, they were arrived at by things going wrong.
 ⭐ **Write findings down as you go, in the repo rather than in chat.** His global directive 7 is *concise chat, detail in files*. **A finding that exists only in a chat message is lost at the next session boundary**, which is why this file, `FINDINGS.md` and `ROADMAP.md` are shaped the way they are. Write it when you find it, not at the end.
 
 ⭐ **Bundle questions and make them unmissable.** Put the question in its own block, say what changes depending on the answer, and attach a recommendation. He asks to be disagreed with (*"you're the expert"*). ⚠️ **A question with no recommendation makes him do the work twice.**
+
+12. ⛔⭐⭐ **HIS MESSAGES ARRIVE THROUGH SPEECH-TO-TEXT, AND HE DOES NOT SEE THE TRANSCRIPTION.** Added 2026-08-18 ([FINDINGS §67.8](FINDINGS.md)). He speaks; a mediocre speech-to-text model writes; the agent reads whatever it wrote. **When a phrase reads garbled, incoherent, or has weird words in weird places, quote it back with its surrounding context and ask** — he can usually reconstruct what he meant from where it happened. ⛔ **Never silently guess a reading and act on it**: a mis-heard number, arm name or flag is exactly how a wrong instruction becomes motion on a rig with no e-stop. His own words: *"if you ever don't understand something or something seems to be written in a weird way… always feel free to let me know."*
+
 ## 4.5 The rig, as of 2026-08-11
 
 - **Power: wall sockets only. THERE IS NO E-STOP.** Julien confirmed it. The only way to cut power in a hurry is the mains plug, so *keep a hand near it* and prefer the software stops — `h` for HOLD, `q` for the consent flow. This is also why every new motion path here is slow, bounded and interruptible: there is no hardware backstop underneath the software one.
