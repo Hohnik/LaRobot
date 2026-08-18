@@ -1015,16 +1015,17 @@ def main() -> int:  # noqa: PLR0915
                          f"harder hit. Raise it in small steps (0.25 → 0.35) and watch what the "
                          f"arm does when it meets something")
     ap.add_argument("--vel-ff", type=float, default=0.0, metavar="GAIN",
-                    help="⭐ velocity feedforward gain, 0..3 (default 0 = off, item 44). "
+                    help="⭐ velocity feedforward gain, 0..1 (default 0 = off, item 44). "
                          "The motors' MIT-mode frame carries a velocity setpoint and this "
                          "stack always sent zero, so all torque came from position error — "
                          "the measured 0.033 s × speed lag is that (FINDINGS §66.1). At "
                          "GAIN > 0 each motor also receives GAIN × the rate-limited "
                          "command's own derivative, so torque flows before error builds. "
-                         "1 = exactly the command's speed, the physically-motivated value. "
-                         "⚠️ Above 1 = EXAGGERATED (his 2026-08-18 ask, to make the effect "
-                         "feelable) — expect overshoot. The jaw never gets feedforward. "
-                         "Live: setting 9 on the n screen.")
+                         "1 = exactly the command's speed, the physically-motivated value "
+                         "and the hard cap. ⛔ Values above 1 existed for one day and are "
+                         "a measured dead end — jitter raw, 5-10 Hz stepping gated "
+                         "(FINDINGS §68.6); anything higher is clamped to 1. The jaw "
+                         "never gets feedforward. Live: setting 9 on the n screen.")
     ap.add_argument("--scrub-max", type=float, default=SCRUB_MAX_RATE, metavar="RATE",
                     help="⭐ the puck scrub's full-push pace, in recording-seconds per "
                          "second (default %(default)s). 1 = the recording's own pace; "
@@ -1364,12 +1365,12 @@ def main() -> int:  # noqa: PLR0915
         # ⭐ Same rule as mirror-catchup: a control term that changes what the arm does is
         # named in the plan, so it can be ruled out (or blamed) later.
         shown_ff = min(args.vel_ff, VEL_FF_CEILING)
-        over = "" if shown_ff <= 1.0 else \
-            "  ⚠️ ABOVE 1 = EXAGGERATED — the motors are told the target moves faster " \
-            "than it does; expect overshoot"
+        capped = "" if args.vel_ff <= VEL_FF_CEILING else \
+            f"  ⚠️ capped from {args.vel_ff:g}: above 1 is a measured dead end " \
+            f"(FINDINGS §68.6)"
         print(f"  feedforward : ON at {shown_ff:g} — motors also receive that "
               f"fraction of the command's own speed, so torque starts before error builds "
-              f"(item 44; jaw excluded){over}")
+              f"(item 44; jaw excluded){capped}")
     lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
     # ⭐⭐ THE PLAN NOW SAYS WHAT EACH LIMIT DOES, NOT JUST ITS VALUE. Julien, 2026-08-17:
     # *"I want to understand what MaxLag exactly does. I think I understand Max speed… but then

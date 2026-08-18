@@ -239,12 +239,11 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     "mirror_catchup": (0.0, 20.0),
     "linear_scale": (0.03, 15.0),
     #: ⭐ 1.0 sends exactly the command's own derivative, the physically-motivated value.
-    #: ⚠️ The headroom above 1.0 is EXAGGERATION, added at Julien's ask on 2026-08-18
-    #: (*"exaggerate the numbers so that I can actually see what's happening"*) after 0.25
-    #: felt real but subtle. Up there the motor is told the target moves faster than it
-    #: does — expect overshoot; the position command stays rate-limited underneath.
+    #: ⛔ The 3.0 headroom of 2026-08-18 is REMOVED after two bench sessions: above 1 the
+    #: setpoint contradicts the position command by construction, and it jittered raw AND
+    #: stepped at 5-10 Hz gated — "just not that usable" ([FINDINGS §68.6]). 1 is the fix.
     #: ⛔ Must equal `yam_robot.VEL_FF_CEILING`; a test pins the sync.
-    "vel_ff": (0.0, 3.0),
+    "vel_ff": (0.0, 1.0),
     "scrub_max": (0.25, 8.0),
 }
 
@@ -272,7 +271,7 @@ LADDERS: dict[str, tuple[float, ...]] = {
     "reach": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2),
     "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
     "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
-    "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0),
+    "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0),
     #: ⭐ 1.0 = the recording's own pace; 8.0 = an 8x time lapse for skimming to a moment.
     "scrub_max": (0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0),
     #: ⭐ The CARTESIAN speed a full puck deflection asks for. Its default is 0.12 m/s and it

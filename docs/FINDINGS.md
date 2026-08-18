@@ -4738,7 +4738,19 @@ His ask: set the scrub's top speed *"before… or while I start the scrub… so 
 - ⛔ **Two-arm sessions REFUSED with one puck** — his log: *"✗ no unassigned SpaceMouse left for G."* That blocked MIRROR and two-arm playback entirely, although the follower and replay arms never need a puck. ✅ **Built the same evening (item 47): when every attached puck is already assigned, the remaining arm joins with the zero-deflection `StillPuck`** and a plain note — HOLD/GUIDE/playback/scrub/MIRROR-follower all work, only its own TELEOP is inert. ⚠️ Gated deliberately: a free-but-unmoved puck still aborts, so a wanted assignment never silently becomes a dead TELEOP. ⬜ One bench run confirms MIRROR with one puck.
 - One D405, no C920, no second D405, no second puck: the walkthrough's hardware is now exactly **what is on the desk**, and every "would need more hardware" thread lives in the consolidation plan instead.
 
-### 68.6 ⚠️ SMALL OBSERVATIONS FROM THE LOGS, kept so they are not re-derived
+### 68.6 ⛔⭐⭐⭐ FEEDFORWARD ABOVE 1 IS A MEASURED DEAD END — his second verdict, the stepping mechanism, and why no fix exists up there
+
+⛔ **His verdict on the mitigated version, 2026-08-18 late:** *"still jittering back and forth, and therefore not really that usable… basically moving in steps now… between five and ten steps per second… kind of feels like the motor's vibrating"* — and **it stepped during PARKS**, a motion that *"knows exactly where it's going."* His ruling: *"either we find a way in which this works and makes the controls nicer and more exact, or it's just not that usable."*
+
+⭐⭐ **The stepping rate is the diagnosis.** The past-the-command gate is an on/off switch: push (arm behind) → overshoot (gain > 1 guarantees it) → gate cuts to zero → the arm falls back behind → the gate reopens and the push rebuilds through the 2-cycle filter → overshoot again. That relaxation cycle at 90 Hz with a 2-cycle filter and real motor dynamics lands at a few Hz — **his 5-10 steps per second, felt from the outside.** The gate turned continuous jitter into bang-bang stepping; it moved the symptom, never removed it.
+
+⭐⭐⭐ **Why nothing can fix gain > 1, stated once so nobody retunes at this wall again:** above 1 the velocity setpoint CONTRADICTS the position command by construction — the motor is told to move faster than the trajectory it is simultaneously told to hold. Every smoothing, gating or fading scheme is then a choice of HOW the contradiction discharges: continuous jitter (raw), stepping (gated), or sluggishness (faded until the effective gain is ~1 again). **A "fixed" gain 3 is gain 1 wearing a costume.** The exaggeration range did its actual job — it made the effect feelable and produced the overshoot understanding ([§68.1](FINDINGS.md)) — and is now retired on his either/or.
+
+✅ **Applied:** `VEL_FF_CEILING` is **1.0** again (values above clamp, and the plan says so when it clamps), the ladder is `0 · 0.25 · 0.5 · 0.75 · 1`, and the gate + smoothing STAY — at gains ≤ 1 the gate only catches transient overshoot and the smoothing still removes derivative noise and release-cut, which is what they were good for. ⭐ **The setting he confirmed as precise is the ceiling: 1.** Parks under gain ≤ 1 track BETTER, never worse — the stepping he watched was the >1 range.
+
+⭐ **If more responsiveness is ever wanted, the legitimate lever is the servo gains (`kp`/`kd`), not more feedforward** — with item 17's standing caveats: stiffer joints hit harder, and the measured speed benefit was refuted once already. Carried into the consolidation plan as a rebuild note.
+
+### 68.7 ⚠️ SMALL OBSERVATIONS FROM THE LOGS, kept so they are not re-derived
 
 - In the vel_ff-3 scrub, lag reached **0.876 rad** and the cursor held for a long stretch — consistent with the overshoot oscillation fighting the tracking; worth re-checking after the §68.1 mitigation.
 - His 40 s single-arm run walked `vel_ff` 0→1.5 while driving: the settings rows show `q` changing between presses — he tunes while moving, which is exactly what the live rows are for.

@@ -75,13 +75,19 @@ SAFE_MAX_SPEED = 1.0
 SAFE_MAX_LAG = 0.25
 
 #: ⭐ The hard cap on the velocity-feedforward gain (item 44). 1.0 sends exactly the
-#: rate-limited command's own speed, which is the physically-motivated value. ⚠️ Above 1.0
-#: the motor is told the target moves FASTER than it does — exaggeration Julien asked for
-#: on 2026-08-18 (*"exaggerate the numbers so that I can actually see what's happening"*)
-#: after 0.25 felt real but subtle ([FINDINGS §67.10](../docs/FINDINGS.md)). Expect
-#: overshoot up there; the position command stays rate-limited and lag-clipped throughout.
+#: rate-limited command's own speed, which is the physically-motivated value — and the one
+#: Julien felt as precise (*"one basically doesn't change the direction at all"*).
+#: ⛔⛔ THE CAP WAS 3.0 FOR ONE DAY AND THAT RANGE IS A MEASURED DEAD END — do not raise it
+#: again without reading [FINDINGS §68.6](../docs/FINDINGS.md). Above 1.0 the velocity
+#: setpoint CONTRADICTS the position command by construction: the motor is told to move
+#: faster than the trajectory it is also told to hold. Raw, that was continuous jitter and
+#: a visible spring-back at release; with the past-the-command gate it became 5-10 Hz
+#: stepping ("like the motor's vibrating"), including during parks. Two bench sessions,
+#: same verdict: *"just not that usable."* Any fix that smooths gain 3 converges to gain-1
+#: behaviour, so 1.0 IS the fix. More responsiveness, if ever wanted, is a kp/kd tuning
+#: question ([ROADMAP §8.2](../docs/ROADMAP.md) item 17's caveats), never more gain here.
 #: ⛔ Kept in mechanical sync with `settings.LIVE_BOUNDS["vel_ff"]` by a test.
-VEL_FF_CEILING = 3.0
+VEL_FF_CEILING = 1.0
 
 
 # 0.5 Nm is I2RT's default and is what Julien watched slam the stops. 0.3 is
