@@ -772,6 +772,60 @@ def test_an_occupied_slot_is_DESCRIBED_before_it_can_be_overwritten() -> None:
         assert broken and "unreadable" in broken
 
 
+def test_labels_a_recording_starts_good_and_marks_toggle() -> None:
+    t = Trajectory()
+    t.append(0.0, (0.0,)); t.append(1.0, (0.1,)); t.append(5.0, (0.2,))
+    assert t.label_at(0.5) == "good", "a recording is good until a mark says otherwise"
+    t.mark(1.0, "bad"); t.mark(3.0, "good")
+    assert t.label_at(2.0) == "bad" and t.label_at(4.0) == "good"
+    assert t.label_spans() == [(0.0, 1.0, "good"), (1.0, 3.0, "bad"), (3.0, 5.0, "good")]
+    assert abs(t.bad_seconds() - 2.0) < 1e-9
+
+
+def test_labels_survive_the_file_and_old_files_read_as_all_good() -> None:
+    t = Trajectory()
+    t.append(0.0, (0.0,)); t.append(4.0, (0.1,))
+    t.mark(1.0, "bad")
+    again = Trajectory.from_dict(t.to_dict())
+    assert abs(again.bad_seconds() - 3.0) < 1e-9, "marks must round-trip through the file"
+    # ⚠️ the REAL file shape (flat [t, *joints] rows + n_joints), matched against
+    # to_dict()'s output rather than guessed — the first version of this fixture
+    # invented a nested shape and failed against its own library.
+    old = Trajectory.from_dict({"samples": [[0.0, 0.0], [2.0, 0.1]],
+                                "n_joints": 1, "meta": {}})
+    assert old.bad_seconds() == 0.0 and old.label_spans() == [(0.0, 2.0, "good")], \
+        "a recording saved before labels existed is all good, exactly as it always was"
+
+
+def test_labels_refuse_nonsense_and_out_of_order_marks() -> None:
+    t = Trajectory()
+    t.append(0.0, (0.0,)); t.append(2.0, (0.1,))
+    try:
+        t.mark(1.0, "meh")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unknown label must refuse, not save silently")
+    t.mark(1.5, "bad")
+    try:
+        t.mark(1.0, "good")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("marks must arrive in time order, like samples")
+
+
+def test_labels_clamp_to_the_sampled_range_and_merge_repeats() -> None:
+    t = Trajectory()
+    t.append(1.0, (0.0,)); t.append(5.0, (0.1,))
+    t.mark(0.2, "bad")            # pressed before the first sample landed
+    t.mark(2.0, "bad")            # same label again — must merge, not split
+    t.mark(6.5, "good")           # pressed after the last sample
+    spans = t.label_spans()
+    assert spans == [(1.0, 5.0, "bad")], f"clamped + merged spans expected, got {spans}"
+    assert abs(t.bad_seconds() - 4.0) < 1e-9
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items())
              if n.startswith("test_") and callable(f)]

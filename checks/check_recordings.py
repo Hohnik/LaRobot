@@ -122,6 +122,10 @@ def main() -> int:
         method, fault = label_verdict(
             str(traj.meta.get("method", "?")), traj.meta.get("modes"), traj.joint_speed(99)
         )
+        # ⭐ item 8: a labelled recording says so here, because the dataset export will
+        # act on these spans and a label nobody can see is a label nobody can check.
+        if traj.bad_seconds() > 0:
+            method += f" · ✎{traj.bad_seconds():.1f}s bad"
         if fault:
             contradictory.append(path.name)
         # ⚠️ Read through `Layout.from_meta`, which also understands files written before

@@ -4911,3 +4911,13 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 ⬜ **What only the bench can say, one command each:**
 1. `uv run apps/capture_probe.py --cameras d405,c920 --seconds 10` — per camera: achieved fps, fresh ratio, worst blind gap. ⭐ **That run IS the two-camera bandwidth measurement** [§34.5](FINDINGS.md) has warned about since 2026-08-13: exhaustion shows as a low fps and long gaps, never as an error. `--save` files the JSON + one PNG per camera under `recordings/cameras/`.
 2. `uv run apps/camera_view.py --list` — now prints each camera's AVFoundation **uniqueID**, which is the one-glance test of item 5's open hypothesis: if a D405's uniqueID embeds its USB locationID ([§70.6](FINDINGS.md): `0x01220000` / `0x01210000`), serial→index closes with no root and no lens-covering.
+
+### 70.10 ✅⭐ LABELS WHILE DRIVING — item 8's keypress half, built into the recording file itself
+
+✅ **`k` while recording toggles BAD↔good from that moment** (his idea from [ROADMAP §6.6](ROADMAP.md): mark the stretches where a demonstration went wrong, so they never train a model as if they were good). The model is deliberately minimal: a recording starts implicitly `good`, each mark holds until the next, and `Trajectory.label_spans()` merges the presses into `(start, end, label)` stretches — the shape the dataset export (item 7) will consume. `bad_seconds()` is the one-number summary, printed at stop and shown per slot by `check_recordings.py`.
+
+⭐ **Two decisions worth keeping:** ① marks live inside the recording's `meta`, so the FILE FORMAT is unchanged — every recording saved before labels existed loads and reads as all-good, which is what it always was; ② labels are DATA, never control — a bad stretch plays back exactly like a good one, because the labels' consumer is the export, and a playback that silently skipped stretches would be a different (and surprising) feature.
+
+⚠️ **One honest miss while testing it:** the old-file fixture GUESSED the file shape (nested sample lists) instead of matching `to_dict()`'s real flat rows, and failed against its own library — the claim-names-a-method rule ([§36.3](FINDINGS.md)'s family) applied to a fixture. Matched to the real shape, with a comment saying so.
+
+✅ Verified: 4 new tests in `tests/test_recording.py` (69/69 there), full suite **717/717 across 30 files**, sim drive 25/25, `check_restructure` coherent. ⬜ Owes one bench feel-run: record, `k` twice, read the stop summary and the listing.

@@ -1231,6 +1231,7 @@ def main() -> int:  # noqa: PLR0915
     take_to_save: Trajectory | None = None   # frozen, waiting for its slot digit
     take_t0 = 0.0
     take_modes: list[str] = []          # every mode the current recording passed through
+    take_label = "good"                 # the label in force while recording — k toggles it
     replay: Trajectory | None = None    # being played back right now, or None
     replay_t0 = 0.0
     replay_s = 0.0                      # seconds into the recording, held back on lag
@@ -2991,6 +2992,23 @@ def main() -> int:  # noqa: PLR0915
                     # been saved as half of itself. The recorder now samples every arm into one
                     # timeline, which is ABC's own shape (ROADMAP §9.2), so the refusal is gone
                     # along with the test that pinned it.
+                    elif k == "k":
+                        # ⭐ LABEL A STRETCH while recording (ROADMAP §8.2 item 8, the
+                        # keypress half of his microphone idea): press k when it goes
+                        # wrong, press k again when it is good again. A recording starts
+                        # implicitly good, so the first press always means BAD-from-here.
+                        # ⚠️ Labels are DATA for the dataset export, never control: a bad
+                        # stretch still plays back, and nothing about the motion changes.
+                        if take is None:
+                            print("\n  k labels a stretch while RECORDING — press w first.\n")
+                        else:
+                            take_label = "bad" if take_label == "good" else "good"
+                            take.mark(t - take_t0, take_label)
+                            if take_label == "bad":
+                                print(f"\n  ✎ BAD from {t - take_t0:.1f}s — press k again "
+                                      "when it is good again.\n")
+                            else:
+                                print(f"\n  ✎ good again at {t - take_t0:.1f}s.\n")
                     elif k == "w":
                         # ⭐ START OR STOP RECORDING. Deliberately allowed in EVERY mode,
                         # not only GUIDE. Hand-guiding is the intended use and the reason
@@ -3033,11 +3051,12 @@ def main() -> int:  # noqa: PLR0915
                                 "frame": arms[0].frame,
                             })
                             take_t0 = t
+                            take_label = "good"   # every recording starts good; k marks bad
                             take_modes = [f"{one.name}:{one.mode}" for one in arms]
                             print("\n⏺  RECORDING " + " · ".join(
                                 f"{one.name} {one.mode.upper()}" for one in arms)
                                 + f"  ({sample_layout().n_joints} joints per sample). "
-                                "Press w again to stop.\n")
+                                "Press w again to stop, k to mark a bad stretch.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
                             # ON 2026-08-13. `take` was left in place while the "which slot?"
@@ -3059,6 +3078,10 @@ def main() -> int:  # noqa: PLR0915
                             # labelled `live:hold`. Both fields are kept: `method` stays for
                             # anything already reading it, and `modes` is the truth.
                             take_to_save.meta["modes"] = list(take_modes)
+                            if take_to_save.meta.get("marks"):
+                                print(f"  ✎ labels: {take_to_save.bad_seconds():.1f}s of "
+                                      f"{take_to_save.duration:.1f}s marked BAD "
+                                      f"({len(take_to_save.meta['marks'])} mark(s)).")
                             if len(take_modes) > 1:
                                 # ⛔⭐⭐ THE PREFIX IS COMPUTED IN TWO PLACES AND THIS ONE
                                 # HARDCODED "live:", WHICH SILENTLY UNDID THE `sim:` STAMP.

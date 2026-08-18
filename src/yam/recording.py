@@ -225,6 +225,67 @@ class Trajectory:
         """
         return self.samples[0].q if self.samples else None
 
+    # ---------------------------------------------------------------- labels ----
+
+    #: The only two labels a stretch can carry. Two on purpose: his idea (ROADMAP §6.6)
+    #: is marking BAD stretches of an otherwise good demonstration, so the model is
+    #: "everything is good until marked bad, and bad until marked good again" — a
+    #: richer taxonomy would mean deciding categories before any dataset exists to need them.
+    LABELS = ("good", "bad")
+
+    def mark(self, t: float, label: str) -> None:
+        """Label the stretch from `t` (seconds into the recording) onward.
+
+        ⭐ ROADMAP §8.2 item 8, the keypress half of his idea: press a key when a stretch
+        goes wrong, press it again when it is good again. A recording starts implicitly
+        `good`, and each mark holds until the next one. ⛔ Stored in `meta`, so the file
+        format is unchanged and every recording saved before labels existed still loads —
+        it simply has no marks, which reads as all-good, which is what it always was.
+        """
+        if label not in self.LABELS:
+            raise ValueError(f"label must be one of {self.LABELS}, not {label!r}")
+        marks = self.meta.setdefault("marks", [])
+        if marks and float(t) < float(marks[-1]["t"]):
+            raise ValueError("marks must arrive in time order, like samples")
+        marks.append({"t": float(t), "label": label})
+
+    def label_at(self, t: float) -> str:
+        """The label in force at `t`: `good` until a mark at or before `t` says otherwise."""
+        label = "good"
+        for m in self.meta.get("marks", []):
+            if float(m["t"]) <= t:
+                label = str(m["label"])
+            else:
+                break
+        return label
+
+    def label_spans(self) -> list[tuple[float, float, str]]:
+        """Merged `(start, end, label)` spans covering the whole recording.
+
+        Marks outside the sampled range clamp to it, consecutive same-label marks merge,
+        and an empty recording has no spans. This is the shape the dataset export (item 7)
+        consumes: it needs stretches, not keypresses.
+        """
+        if not self.samples:
+            return []
+        t0, t1 = self.samples[0].t, self.samples[-1].t
+        spans: list[tuple[float, float, str]] = []
+        cur_label, cur_start = "good", t0
+        for m in self.meta.get("marks", []):
+            mt = min(max(float(m["t"]), t0), t1)
+            if m["label"] == cur_label:
+                continue
+            if mt > cur_start:
+                spans.append((cur_start, mt, cur_label))
+            cur_label, cur_start = str(m["label"]), mt
+        if t1 > cur_start or not spans:
+            spans.append((cur_start, t1, cur_label))
+        return spans
+
+    def bad_seconds(self) -> float:
+        """How much of the recording is marked bad, for summaries and for filtering."""
+        return sum(e - s for s, e, label in self.label_spans() if label == "bad")
+
     def pose_at(self, t: float) -> tuple[float, ...]:
         """Where the arm was at time `t`, interpolated between the two nearest samples.
 
