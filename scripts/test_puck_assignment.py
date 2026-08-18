@@ -97,6 +97,23 @@ def test_a_puckless_arm_still_joins_the_session() -> None:
         "the fallback lost its gate — it must fire only when no unassigned device exists"
 
 
+def test_a_single_shared_puck_follows_the_selection() -> None:
+    """⭐⭐ His design (FINDINGS §68.8): with ONE real puck in a multi-arm session, `a`
+    aims the puck as well as the mode keys — B, G, or BOTH driving both arms at once.
+    Source-pinned: the shared reader is read ONCE per cycle (two arms draining one HID
+    queue would split the event stream), routing uses the live selection, and unaimed
+    arms read a centred puck."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    assert "shared_axes = shared_puck.read()" in src, \
+        "the shared puck is no longer read once at session level"
+    assert "aimed_now = one.name in selection.names()" in src, \
+        "the shared puck no longer follows the selection"
+    assert 'one.raw_axes = list(shared_axes) if aimed_now else [0.0] * 6' in src, \
+        "unaimed arms no longer read as centred"
+    gate = src.find("if len(arm_names) > 1 and len(_real_pucks) == 1 else None")
+    assert gate != -1, "the shared-puck mode lost its exactly-one-real-puck gate"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []

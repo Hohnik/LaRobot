@@ -1242,6 +1242,12 @@ def main() -> int:  # noqa: PLR0915
     # play, pull back to rewind, release to freeze. Chosen with `j` at the play prompt,
     # never the default, because a long unattended playback must not need a held hand.
     replay_scrub = False
+    # ⭐ The scrub hint reports the EFFECTIVE pace over the last second, measured, because
+    # the dial's number and the achieved pace genuinely differ: the lag hold freezes the
+    # clock whenever the ARM cannot keep up, so "8x" on a fast recording plays at whatever
+    # max_speed allows. He measured that gap by feel on 2026-08-18 ("no way that was
+    # eight times") — the readout makes it a number instead (FINDINGS §68.8).
+    scrub_ref_t = scrub_ref_s = scrub_ref_h = 0.0
     # ⛔⭐⭐ INITIALISED HERE BECAUSE IT WAS NOT, AND THAT CRASHED A SESSION. `replace_slot`
     # is assigned only inside the overwrite-guard branch, and the save handler reads it on
     # EVERY keypress at the save prompt. So the very first save of a session — the guard
@@ -1503,6 +1509,19 @@ def main() -> int:  # noqa: PLR0915
     # `scripts/check_restructure.py` finds the construction point by locating the
     # `ArmSession(` call rather than this line, so it can still catch a genuine
     # use-before-build.
+    # ⭐⭐ ONE PUCK, N ARMS → THE PUCK FOLLOWS THE SELECTION. His design, 2026-08-18
+    # (FINDINGS §68.8): with a single real SpaceMouse in a multi-arm session, `a` aims
+    # the puck as well as the mode keys — B, then G, then BOTH, where BOTH drives both
+    # arms at once, each from its own pose (his call: no mirror needed for that).
+    # Unaimed arms read a centred puck. With one puck per arm nothing changes.
+    _real_pucks = [p for p in pucks.values()
+                   if not isinstance(p.get("reader"), StillPuck)]
+    shared_puck = (_real_pucks[0]["reader"]
+                   if len(arm_names) > 1 and len(_real_pucks) == 1 else None)
+    if shared_puck is not None:
+        print("⭐ ONE puck for the whole session — it FOLLOWS THE SELECTION: press a to")
+        print("   aim it (B → G → BOTH). BOTH drives both arms at once, each from its")
+        print("   own pose. Unaimed arms read a centred puck and hold their position.\n")
     arm: ArmSession | None = None
     # ⛔⭐ DECLARED HERE FOR THE SAME REASON `arm` IS, and the reason is now stronger than
     # it was for `arm`. The `finally` block and the closing summary both iterate `arms` —
@@ -2708,6 +2727,12 @@ def main() -> int:  # noqa: PLR0915
                         elif selection.only_one():
                             hint(f"arm {selection.label} is the only arm in this session "
                                  f"— two arms is ROADMAP §6.1 step 3")
+                        elif shared_puck is not None:
+                            # ⭐ With ONE shared puck the selection aims the DRIVING too
+                            # (FINDINGS §68.8), and saying so at the switch is what makes
+                            # a suddenly-still arm read as aimed-away rather than broken.
+                            print(f"\n⭐ SELECTED: {selection.cycle()} — mode keys AND the "
+                                  "puck apply to it. Unaimed arms hold.\n")
                         else:
                             print(f"\n⭐ SELECTED: {selection.cycle()} — mode keys apply to "
                                   "it. Driving always applies to every arm.\n")
@@ -3425,26 +3450,54 @@ def main() -> int:  # noqa: PLR0915
                 # arms — and the leaked loop variable at the bottom of it made the
                 # gripper follow whichever arm the previous loop ended on
                 # (FINDINGS §54.1).
-                for one in arms:
+                # ⭐⭐ ONE PUCK, N ARMS: THE PUCK FOLLOWS THE SELECTION (his design,
+                # 2026-08-18, FINDINGS §68.8): a → B drives B, a → G drives G, a → BOTH
+                # drives both arms at once, each from its own pose. The shared reader is
+                # read ONCE per cycle — two arms draining one HID queue would split the
+                # event stream between them — and unaimed arms read as centred.
+                shared_axes: list[float] | None = None
+                shared_buttons = 0
+                if shared_puck is not None:
                     try:
-                        one.raw_axes = one.reader.read()
+                        shared_axes = shared_puck.read()
+                        shared_buttons = getattr(shared_puck, "buttons", 0)
                     except Exception as exc:  # noqa: BLE001
-                        # ⛔⭐⭐ AN UNPLUGGED PUCK MUST NEVER DROP THE ARMS. On 2026-08-18
-                        # Julien pulled a SpaceMouse mid-session; `read()` raised
-                        # `OSError: read error`, the exception skipped the auto-park
-                        # entirely, and the `finally` disabled every motor with the arm
-                        # wherever it stood (FINDINGS §68.2). His ruling: a graceful quit.
-                        # So: the dead puck reads as CENTRED (zero deflection, the same
-                        # honest stand-in --sim uses), and the stop_reason routes through
-                        # the SAFE STOP — every live arm parks, then the motors disable.
-                        one.raw_axes = [0.0] * 6
+                        # Same graceful stop as the per-arm guard below (FINDINGS §68.2).
+                        shared_axes = [0.0] * 6
                         if not stop_reason:
-                            stop_reason = (f"arm {one.name}'s SpaceMouse stopped answering "
+                            stop_reason = (f"the shared SpaceMouse stopped answering "
                                            f"({type(exc).__name__}) — unplugged?")
                             print(f"\n⛔ {stop_reason}")
-                            print("   Treating that puck as centred and parking safely.\n")
-                        continue
-                    buttons = getattr(one.reader, "buttons", 0)
+                            print("   Treating it as centred and parking safely.\n")
+                for one in arms:
+                    if shared_axes is not None:
+                        # ⭐ The puck follows the selection; unaimed arms read centred.
+                        aimed_now = one.name in selection.names()
+                        one.raw_axes = list(shared_axes) if aimed_now else [0.0] * 6
+                        buttons = shared_buttons if aimed_now else 0
+                    else:
+                        try:
+                            one.raw_axes = one.reader.read()
+                        except Exception as exc:  # noqa: BLE001
+                            # ⛔⭐⭐ AN UNPLUGGED PUCK MUST NEVER DROP THE ARMS. On
+                            # 2026-08-18 Julien pulled a SpaceMouse mid-session; `read()`
+                            # raised `OSError: read error`, the exception skipped the
+                            # auto-park entirely, and the `finally` disabled every motor
+                            # with the arm wherever it stood (FINDINGS §68.2). His ruling:
+                            # a graceful quit. So: the dead puck reads as CENTRED (zero
+                            # deflection, the same honest stand-in --sim uses), and the
+                            # stop_reason routes through the SAFE STOP — every live arm
+                            # parks, then the motors disable.
+                            one.raw_axes = [0.0] * 6
+                            if not stop_reason:
+                                stop_reason = (f"arm {one.name}'s SpaceMouse stopped "
+                                               f"answering ({type(exc).__name__}) — "
+                                               f"unplugged?")
+                                print(f"\n⛔ {stop_reason}")
+                                print("   Treating that puck as centred and parking "
+                                      "safely.\n")
+                            continue
+                        buttons = getattr(one.reader, "buttons", 0)
                     pressed = buttons & ~one.buttons_prev              # rising edge only
                     one.buttons_prev = buttons
 
@@ -3811,6 +3864,7 @@ def main() -> int:  # noqa: PLR0915
                                         replay_t0, replay_s = t, 0.0
                                         replay_progress_t = t
                                         replay_held_s, replay_worst_lag = 0.0, 0.0
+                                        scrub_ref_t, scrub_ref_s, scrub_ref_h = t, 0.0, 0.0
                                         replay_prev_target = list(replay.start_pose() or ())
                                         tracking = TrackingLog(replay.n_joints)
                                         for a in replay_arms:
@@ -4052,9 +4106,18 @@ def main() -> int:  # noqa: PLR0915
                         # and "playing… Xs left" over a scrub read as a stuck playback
                         # (his 2026-08-18 report, FINDINGS §68.4).
                         if replay_scrub:
+                            window = max(1e-6, t - scrub_ref_t)
+                            eff = abs(replay_s - scrub_ref_s) / window
+                            held_in_window = replay_held_s - scrub_ref_h
+                            scrub_ref_t, scrub_ref_s = t, replay_s
+                            scrub_ref_h = replay_held_s
+                            # ⭐ Named ONLY when the hold actually bit this window, so a
+                            # released puck never gets blamed on the arm.
+                            why = (f" — the ARM binds, raise max_speed (n, 1) to scrub "
+                                   f"faster" if held_in_window > 0.3 * window else "")
                             hint(f"  scrubbing… at {replay_s:.1f}s of "
-                                 f"{replay.duration:.1f}s (puck: forward plays, back "
-                                 f"rewinds), {rs.lag:.3f} rad behind")
+                                 f"{replay.duration:.1f}s, effective {eff:.2f}x of the "
+                                 f"recording{why}")
                         else:
                             hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
                                  f"{rs.lag:.3f} rad behind")
