@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the two-arm distance measurement, `src/collision.py`. No hardware.
+"""Tests for the two-arm distance measurement, `src/yam/collision.py`. No hardware.
 
     uv run scripts/test_collision.py
 
@@ -21,16 +21,15 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from collision import (  # noqa: E402
+from yam.collision import (  # noqa: E402
     ArmGeometry,
     BasePose,
     closest_approach,
     describe,
     reach_spheres_can_touch,
 )
-from teleop import REACH_LIMIT  # noqa: E402
+from yam.teleop import REACH_LIMIT  # noqa: E402
 
 GEOM = ArmGeometry()          # built once; loading the XML is the slow part
 ZERO = np.zeros(7)

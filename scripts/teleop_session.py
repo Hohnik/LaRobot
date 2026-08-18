@@ -92,9 +92,8 @@ from typing import Any
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
-from axis_map import (  # noqa: E402
+from yam.inputs.axis_map import (  # noqa: E402
     DEFAULT_ANGULAR_SCALE,
     DEFAULT_LINEAR_SCALE,
     PUCK_AXES,
@@ -105,27 +104,27 @@ from axis_map import (  # noqa: E402
     isolate,
     isolated_axes,
 )
-from axis_map import AxisMapStore  # noqa: E402
-from axis_map import N as N_AXES  # noqa: E402
-from keyboard import KeyReader  # noqa: E402
-from spacemouse import (  # noqa: E402
+from yam.inputs.axis_map import AxisMapStore  # noqa: E402
+from yam.inputs.axis_map import N as N_AXES  # noqa: E402
+from yam.inputs.keyboard import KeyReader  # noqa: E402
+from yam.inputs.spacemouse import (  # noqa: E402
     TwistReader,
     countdown_hands_off,
     find_all_devices,
     open_device,
     pick_device_by_wiggle,
 )
-from arm_session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
-from incident import describe, write_incident  # noqa: E402
-from mirror import (  # noqa: E402
+from yam.session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
+from yam.incident import describe, write_incident  # noqa: E402
+from yam.mirror import (  # noqa: E402
     DEFAULT_ALIGN_SPEED,
     DEFAULT_CATCHUP,
     DEFAULT_MAX_GAP,
     MirrorLink,
     pick_pair,
 )
-from motion import EASINGS, easing_factor  # noqa: E402
-from recording import (  # noqa: E402
+from yam.motion import EASINGS, easing_factor  # noqa: E402
+from yam.recording import (  # noqa: E402
     Layout,
     describe_slot,
     TrackingLog,
@@ -135,8 +134,8 @@ from recording import (  # noqa: E402
     scrub_step,
     safe_time_scale,
 )
-from screen import StatusLine, display_width  # noqa: E402
-from teleop import (  # noqa: E402
+from yam.ui.screen import StatusLine, display_width  # noqa: E402
+from yam.teleop import (  # noqa: E402
     FLOOR_LIMIT,
     FRAMES,
     REACH_LIMIT,
@@ -145,8 +144,8 @@ from teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
-from fake_arm import StillPuck, build_fake_robot  # noqa: E402
-from settings import (  # noqa: E402
+from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
+from yam.settings import (  # noqa: E402
     LIVE_ORDER,
     adjust as adjust_setting,
     live_lines,
@@ -159,8 +158,8 @@ from settings import (  # noqa: E402
     rejected_keys,
     save_defaults,
 )
-from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
-from yam_robot import (  # noqa: E402
+from yam.can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
+from yam.robot import (  # noqa: E402
     SAFE_MAX_LAG,
     SAFE_MAX_SPEED,
     VEL_FF_CEILING,
@@ -181,14 +180,14 @@ N_ARM = 6
 
 # Faster than the first run, which Julien found "very slow". Still well short of
 # what the hardware can do — this is a human-in-the-loop speed, not a limit.
-# ⭐ Defined in src/axis_map.py so `scripts/map_axes.py` reports the exact speeds
+# ⭐ Defined in src/yam/inputs/axis_map.py so `scripts/map_axes.py` reports the exact speeds
 # this session commands. Dialling a mapping against speeds the arm does not use
 # would teach the wrong feel.
 LINEAR_SCALE = DEFAULT_LINEAR_SCALE     # m/s at full deflection  (was 0.04)
 ANGULAR_SCALE = DEFAULT_ANGULAR_SCALE   # rad/s at full deflection (was 0.25)
 
 # ⚠️ `WORKSPACE_BOX = 0.30` used to live here. The workspace limit is now
-# `REACH_LIMIT` and `FLOOR_LIMIT` in `src/teleop.py`, next to the code that applies
+# `REACH_LIMIT` and `FLOOR_LIMIT` in `src/yam/teleop.py`, next to the code that applies
 # them, because the old constant sat in the script while the clamp it fed was an
 # untested inline block. FINDINGS §43.
 MAX_JOINT_STEP = 0.015     # rad/cycle ≈ 1.5 rad/s at 100 Hz
@@ -228,7 +227,7 @@ BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
 #
 # ⛔ These are non-ASCII, so they only arrive at all because `KeyReader` now decodes
 # UTF-8 across reads — `ö` is two bytes and the old one-byte reader turned it into two
-# replacement characters. See `src/keyboard.py::_refill`.
+# replacement characters. See `src/yam/inputs/keyboard.py::_refill`.
 #: ⛔⭐⭐ A CEILING ON THE LIVE SPEED KEY, BECAUSE THERE WAS NONE. `+` did
 #: `linear_scale *= 1.25` with nothing above it, at two separate call sites. On 2026-08-17
 #: Julien's CONTROLS readout showed **`lin 19.852 m/s`**, which is 165x the 0.12 m/s default
@@ -285,7 +284,7 @@ MODE_KEYS = {"g": "GUIDE", "t": "TELEOP", "h": "HOLD"}
 # corner is not the shape anyone chose. SafeRobot's 0.25 rad lag limit is the backstop
 # below this; this keeps the path faithful rather than merely safe.
 # ⭐ How fast the follower closes the initial gap in MIRROR mode. ⚠️ IMPORTED from
-# `src/mirror.py` rather than repeated, so there is ONE number. It is aliased here only
+# `src/yam/mirror.py` rather than repeated, so there is ONE number. It is aliased here only
 # because the plan line quotes it to the operator before they press Enter — the first draft
 # of this line wrote `0.30` next to a comment claiming it came from the module, which is the
 # staleness pattern in miniature: a duplicate plus a sentence asserting there is no duplicate.
@@ -432,7 +431,7 @@ MAP_HELP = """
 
 def map_reference(frame: str = "world") -> str:
     """What the six motions physically are. Measured in simulation, not assumed —
-    see `src/axis_map.py` for the numbers and for why "forward" is not claimed."""
+    see `src/yam/inputs/axis_map.py` for the numbers and for why "forward" is not claimed."""
     lines = ["  the six motions, in the WORLD frame (they do not change when the wrist turns):"]
     for i, m in enumerate(motions_for(frame)):
         lines.append(f"    {i + 1}  {m['short']:<5} {m['world']:<10}  {m['note']}")
@@ -471,7 +470,7 @@ def _safe_fact(fn) -> Any:  # noqa: ANN001
     ⛔ Runs on the shutdown path, where half of these reads throw: the chain may be
     dead, `teleop` may be `None` because the session never entered TELEOP, and a local
     may be unbound if the loop never ran a cycle. **A missing field must never become
-    an exception during teardown.** See `src/incident.py` for the same rule stated once.
+    an exception during teardown.** See `src/yam/incident.py` for the same rule stated once.
     """
     try:
         return fn()
@@ -804,7 +803,7 @@ def tracking_table(rows: list, names: list[str], hold_rad: float,
     if unmoved:
         # ⛔⭐⭐ THE LINE MUST STAY SHORT, AND ONLY RUNNING IT SHOWED WHY. The first version
         # listed every unmoved joint. In a simulated playback where nothing moved that was
-        # all fourteen names on one line, and `src/screen.py`'s painter **truncated it with
+        # all fourteen names on one line, and `src/yam/ui/screen.py`'s painter **truncated it with
         # an ellipsis** — the reader saw "B base_yaw, B shoulder_pit…" and nothing more. A
         # note whose whole job is to say WHICH joints are missing, cut off before it says
         # so, is worse than no note, because it looks answered.
@@ -923,13 +922,13 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
     ap.add_argument("--sim", action="store_true",
                     help="run the WHOLE loop against simulated arms — no hardware, no CAN "
-                         "adapter, no SpaceMouse needed. See src/fake_arm.py for what it "
+                         "adapter, no SpaceMouse needed. See src/yam/fake/arm.py for what it "
                          "can and cannot tell you.")
     # ⭐⭐ TWO SPELLINGS OF ONE IDEA, and `--arm` is the one that must not break.
     # Every other script here takes `--arm` (`ping_motors.py`, `identify_arm.py`,
     # `check_arms_match.py`), it is in every document, and it is what Julien types.
     # `--arms` is the N-arm spelling ROADMAP §6.1 step 2 asks for. They agree or the
-    # session refuses; `src/arm_session.py::parse_arms` holds the rules and the tests.
+    # session refuses; `src/yam/session.py::parse_arms` holds the rules and the tests.
     ap.add_argument("--arm", default=None, choices=sorted(ARM_SERIALS),
                     help=f"the arm, when there is one (default {DEFAULT_ARM})")
     ap.add_argument("--arms", default=None, metavar="B[,G]",
@@ -962,7 +961,7 @@ def main() -> int:  # noqa: PLR0915
                          "message told him to press keys that did something else")
     # ⭐⭐ `--box` IS GONE, replaced by `--reach` and `--floor` on 2026-08-14 by Julien's
     # decision. ⛔ Deliberately removed rather than kept as an alias that silently means
-    # something else: the same call `src/yam_can.py` made when `--arm arm1` became
+    # something else: the same call `src/yam/can.py` made when `--arm arm1` became
     # `--arm B`. A flag that keeps working while its meaning has changed underneath is
     # worse than one that fails loudly. `--box` now errors, which is the point.
     ap.add_argument("--reach", type=float, default=REACH_LIMIT,
@@ -1081,7 +1080,7 @@ def main() -> int:  # noqa: PLR0915
     # ⚠️ `ap.get_default()` rather than a second `parse_args([])`: parsing an empty list
     # would run every validation the parser carries, and a future `required=` argument would
     # make reading the defaults exit the program.
-    from settings import TUNABLE as _TUNABLE
+    from yam.settings import TUNABLE as _TUNABLE
     builtin_defaults = {k: ap.get_default(k) for k in _TUNABLE}
     saved_defaults = load_defaults(settings_file)
     ignored_defaults = rejected_keys(settings_file)
@@ -1133,7 +1132,7 @@ def main() -> int:  # noqa: PLR0915
     # Shadowing rather than converting ~60 call sites is a deliberate trade. It makes
     # the output policy ONE thing in ONE place, and — the part that matters — a print
     # added later cannot forget to follow it. The rule: `end=""` means "this is the
-    # live line, repaint it in place"; anything else scrolls above it. See src/screen.py.
+    # live line, repaint it in place"; anything else scrolls above it. See src/yam/ui/screen.py.
     screen = StatusLine()
 
     def hint(text: str = "") -> None:
@@ -1216,7 +1215,7 @@ def main() -> int:  # noqa: PLR0915
     # recording everything in the guide mode and then replaying it. That's a smart idea,
     # definitely."* `w` records, `l` plays arm back. The reasoning for why this may beat
     # saved waypoints is docs/ROADMAP.md §6.6; the movement itself lives in
-    # src/recording.py so every decision about it is testable without an arm.
+    # src/yam/recording.py so every decision about it is testable without an arm.
     #
     # ⛔⭐ THIS BLOCK DOES **NOT** MOVE INTO `ArmSession`, and an earlier note here said it
     # did. Corrected 2026-08-13 after checking it against the target data format.
@@ -1292,7 +1291,7 @@ def main() -> int:  # noqa: PLR0915
     # property of either. The follower's `mode` is `"mirror"`; the leader keeps whatever mode
     # it is in, which is the point — hand-guide it in GUIDE and the follower copies.
     #
-    # ⛔ The engagement logic lives in `src/mirror.py::MirrorLink` and has 18 tests, because
+    # ⛔ The engagement logic lives in `src/yam/mirror.py::MirrorLink` and has 18 tests, because
     # the risky part is the FIRST cycle: the two arms are never in the same pose, so
     # commanding the leader's angles straight across would make the follower jump the gap.
     mirror_link: MirrorLink | None = None
@@ -1436,7 +1435,7 @@ def main() -> int:  # noqa: PLR0915
     # hand the SAME puck to both: the single-device shortcut returns it unconditionally, and
     # nothing stops the operator moving the arm they already assigned. Both failures are
     # silent, and the symptom — two arms following arm hand — reads as a control bug rather
-    # than a device-assignment bug (`src/spacemouse.py`, 6 tests).
+    # than a device-assignment bug (`src/yam/inputs/spacemouse.py`, 6 tests).
     #
     # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
     # returns here, with nothing energised.
@@ -1664,7 +1663,7 @@ def main() -> int:  # noqa: PLR0915
         # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg weightless
         # in arm keypress, and GUIDE is where a dynamics-model error becomes a falling arm
         # rather than a droop (FINDINGS §11.1). Each arm always follows its own puck.
-        # `src/arm_session.py::ArmSelector` holds the cycle and its tests.
+        # `src/yam/session.py::ArmSelector` holds the cycle and its tests.
         selection = ArmSelector(arm_names)
 
         # ⛔ DELIBERATELY NOT RE-CHECKING THE GRIPPER FRAME HERE. Do not add it back.
@@ -3361,7 +3360,7 @@ def main() -> int:  # noqa: PLR0915
                 #
                 # ⭐⭐ EVERY ARM, CONCATENATED IN `--arms` ORDER, which is exactly the shape
                 # ABC wants: 14 states per timestep, two arms in ONE timeline (ROADMAP §9.2).
-                # `src/recording.py::Layout` owns the mapping and its tests.
+                # `src/yam/recording.py::Layout` owns the mapping and its tests.
                 #
                 # ⚠️ Sampled in ONE list comprehension so every arm's position comes from the
                 # same cycle. Reading the arms in separate statements would put a control
@@ -3919,7 +3918,7 @@ def main() -> int:  # noqa: PLR0915
                     # ⭐ THE PER-JOINT ANSWER TO "HOW FAST CAN THE ARMS MOVE", collected from
                     # motion Julien is already running rather than from a speed sweep that
                     # would command the arm faster than any existing code allows. Reasoning
-                    # in src/recording.py::TrackingLog and ROADMAP §7.5.
+                    # in src/yam/recording.py::TrackingLog and ROADMAP §7.5.
                     # ⛔⭐⭐ `measured`, NOT `q`. When this block moved out of the per-arm
                     # loop it kept reading `q`, which had been that arm's measured pose. `q` is
                     # still a bound local of `main()` from OTHER branches — the park, the save
@@ -4128,7 +4127,7 @@ def main() -> int:  # noqa: PLR0915
                     #
                     # ⚠️ Padded with `display_width`, not `len`: `⏺` and `⚠️` are one
                     # character and two columns, so `len` would misalign the rows by
-                    # exactly the number of symbols (`src/screen.py::display_width`).
+                    # exactly the number of symbols (`src/yam/ui/screen.py::display_width`).
                     lead = f" t={t:6.1f}s"
                     # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT, not only in the
                     # message that started it. A session where recording is silently still
@@ -4390,7 +4389,7 @@ def main() -> int:  # noqa: PLR0915
             # ⛔⭐ THE WHOLE BLOCK IS WRAPPED, and the reason is FINDINGS §42.0: a dry run
             # returns long before this line, and no headless test can reach it either,
             # because it needs a real robot. So this code path's FIRST execution will be
-            # on the arm, during a failure. `src/incident.py` is unit-tested and every
+            # on the arm, during a failure. `src/yam/incident.py` is unit-tested and every
             # field is individually guarded — this outer guard exists because a path that
             # cannot be tested should not be able to add a second traceback on top of the
             # one the operator is already reading.

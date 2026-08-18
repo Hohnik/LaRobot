@@ -41,7 +41,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_BITRATE, open_raw_can_interface  # noqa: E402
+from yam.can import ARM_SERIALS, DEFAULT_ARM, YAM_BITRATE, open_raw_can_interface  # noqa: E402
 
 REG_GEAR_RATIO = 20  # from i2rt register_addr_map; any read-only register works
 N_MOTORS = 7

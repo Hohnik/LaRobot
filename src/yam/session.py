@@ -1,6 +1,6 @@
 """⭐ ONE ARM'S STATE AND MODE MACHINE, so that N of them can run in one loop.
 
-    from arm_session import ArmSession, ArmSelector, parse_arms
+    from yam.session import ArmSession, ArmSelector, parse_arms
     names = parse_arms(args.arm, args.arms, ARM_SERIALS, "B")   # ["B"] or ["B", "G"]
     arm = ArmSession(robot, name=names[0], frame="world", axis_map=…, slots=…, reader=…)
     step = arm.step_path(t=1.0, dt=0.01)        # ⚠️ step_PATH. This example said
@@ -15,7 +15,7 @@ and ROADMAP step 6 is unambiguous about the alternative: extract, then run N of
 them, so single-arm and bimanual are the same code with N=1 or N=2.
 
 ⛔ **Why an extraction and not a second `teleop_bimanual.py`.** Duplication has bitten
-this repo four times: `src/spacemouse.py` exists because device logic was
+this repo four times: `src/yam/inputs/spacemouse.py` exists because device logic was
 copy-pasted and a fix landed in only one copy; the simulator's `twist_from_axes()`
 ignored the axis map for the same reason; PARK went around the gripper clamp
 because the clamp lived only in the teleop branch; and the quit path carried a
@@ -111,8 +111,8 @@ from typing import Any
 
 import numpy as np
 
-from motion import EASINGS, Easing, JointPath, easing_factor, plan_gripper_stops
-from yam_robot import (
+from yam.motion import EASINGS, Easing, JointPath, easing_factor, plan_gripper_stops
+from yam.robot import (
     GraspCheck,
     ThermalGuard,
     check_grasp,
@@ -177,7 +177,7 @@ def parse_arms(single: str | None, spec: str | None,
     precedence rule nobody would remember. This repo has already paid for the other
     approach: `--arm arm1` was deleted rather than aliased, because a flag that keeps
     working while its meaning has moved underneath is worse than one that fails loudly
-    (`src/yam_can.py`, and the same call again for `--box`).
+    (`src/yam/can.py`, and the same call again for `--box`).
 
     ⛔ AND NO ARM MAY APPEAR TWICE. `--arms B,B` would build two `ArmSession` objects
     over one CAN bus, each with its own cached `prev_q`, both commanding the same seven

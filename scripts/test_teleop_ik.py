@@ -27,10 +27,9 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from teleop import (  # noqa: E402
+from yam.teleop import (  # noqa: E402
     FLOOR_LIMIT,
     REACH_LIMIT,
     CartesianTeleop,
@@ -38,7 +37,7 @@ from teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
-from yam_can import YAM_JOINTS  # noqa: E402
+from yam.can import YAM_JOINTS  # noqa: E402
 
 DT = 0.01
 N_ARM = 6
@@ -352,7 +351,7 @@ def test_a_widened_limit_leaves_ROOM_and_does_not_sit_on_the_wall() -> None:
 def test_the_widening_margin_is_at_least_one_lead_length() -> None:
     """⭐ The reason 0.05 is the number: the goal is already allowed to lead the arm by
     `max_lead_m`, so a limit closer than that sits inside the controller's own slack."""
-    from teleop import LIMIT_WIDEN_MARGIN  # noqa: PLC0415
+    from yam.teleop import LIMIT_WIDEN_MARGIN  # noqa: PLC0415
     assert LIMIT_WIDEN_MARGIN >= CartesianTeleop().max_lead_m
 
 

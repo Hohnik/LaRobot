@@ -40,7 +40,7 @@ from gs_usb.gs_usb import GsUsb
 from gs_usb.gs_usb_frame import GsUsbFrame
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import YAM_BITRATE, patch_gs_usb_for_macos  # noqa: E402
+from yam.can import YAM_BITRATE, patch_gs_usb_for_macos  # noqa: E402
 
 DEFAULT_BITRATE = YAM_BITRATE  # I2RT documents 1 Mbit/s for the YAM
 

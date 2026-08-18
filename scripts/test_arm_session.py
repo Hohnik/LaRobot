@@ -23,13 +23,12 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
+from yam.session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
 
 #: The real thing, so a rename of an arm cannot leave these tests passing against a
 #: rig that no longer has that arm.
-from yam_can import ARM_SERIALS, DEFAULT_ARM  # noqa: E402
+from yam.can import ARM_SERIALS, DEFAULT_ARM  # noqa: E402
 
 N_ARM = 6
 

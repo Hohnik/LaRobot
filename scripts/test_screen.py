@@ -16,10 +16,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from motion import EASINGS, Easing, easing_factor  # noqa: E402
-from screen import CLEAR_LINE, StatusLine, display_width  # noqa: E402
+from yam.motion import EASINGS, Easing, easing_factor  # noqa: E402
+from yam.ui.screen import CLEAR_LINE, StatusLine, display_width  # noqa: E402
 
 
 def fresh(width: int = 80):  # noqa: ANN201

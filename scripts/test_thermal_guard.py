@@ -24,9 +24,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from yam_robot import ThermalGuard, motor_temperatures  # noqa: E402
+from yam.robot import ThermalGuard, motor_temperatures  # noqa: E402
 
 
 class FakeState:

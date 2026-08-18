@@ -34,9 +34,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import JAW_CLEAR_MARGIN, ArmSession  # noqa: E402
+from yam.session import JAW_CLEAR_MARGIN, ArmSession  # noqa: E402
 
 
 class FakeRobot:

@@ -12,7 +12,7 @@ physical arm. This script never does that. It uses the register-read path
 instead — arbitration ID `0x7FF`, sub-command `0x33` — which asks the motor's
 firmware for a stored value and cannot command motion under any circumstances.
 (Contrast: `0x55` writes a register, `0xAA` saves it to memory. Neither is used
-here, and neither is wrapped in `src/yam_can.py`.)
+here, and neither is wrapped in `src/yam/can.py`.)
 
 So this transmits, but nothing it transmits can move the arm.
 
@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     DEFAULT_ARM,
     YAM_BITRATE,
@@ -148,7 +148,7 @@ def scan(low: int, high: int, bitrate: int, confirmed: bool, arm: str = DEFAULT_
             "\n→ One arm's worth of motors on this bus. Confirmed 2026-08-10: each YAM has its OWN\n"
             "  CANable and its own bus, and BOTH arms use the identical motor IDs 1-7. Nothing in a\n"
             "  CAN frame distinguishes the arms — only the adapter serial does. That is why every\n"
-            "  script here selects by serial and never by index (src/yam_can.py)."
+            "  script here selects by serial and never by index (src/yam/can.py)."
         )
     else:
         print("\n→ More than 7 devices: something else shares this bus. Investigate before commanding.")

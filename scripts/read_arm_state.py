@@ -12,7 +12,7 @@ energised together, so treat it as a physical step.
 ⭐ WHAT IT IS ACTUALLY TESTING
 
 Not the motors — those are known good. It tests that `DMChainCanInterface`, the
-whole-arm layer, now works over gs_usb (`src/yam_can.py:patch_dm_driver_for_gs_usb`).
+whole-arm layer, now works over gs_usb (`src/yam/can.py:patch_dm_driver_for_gs_usb`).
 That layer is the only route to all seven motors at once, to gravity
 compensation, and to the gripper force limiter, and until today it was
 SocketCAN-only and therefore unreachable from macOS.
@@ -42,8 +42,7 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     DEFAULT_ARM,
     YAM_BITRATE,

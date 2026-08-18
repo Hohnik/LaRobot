@@ -51,7 +51,6 @@ import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
-sys.path.insert(0, str(REPO / "src"))
 
 #: ⭐ The three sizes his camera actually delivers, plus **848x480**, which is what item 16
 #: is about and which nothing has ever requested. ⚠️ Larger requests collapse to 1280x720 on

@@ -31,13 +31,12 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from yam_can import ARM_SERIALS, DFU_PID, DFU_VID  # noqa: E402
+from yam.can import ARM_SERIALS, DFU_PID, DFU_VID  # noqa: E402
 
 #: The working CANable. Measured from `probe_can.py`'s own device line, `1d50:606f`.
 CANDLELIGHT = (0x1D50, 0x606F)
-#: 3Dconnexion's own VID. `src/spacemouse.py` also accepts Logitech's 0x046D for older
+#: 3Dconnexion's own VID. `src/yam/inputs/spacemouse.py` also accepts Logitech's 0x046D for older
 #: units, but both pucks here report the modern one.
 SPACEMOUSE_VID = 0x256F
 #: Intel RealSense D405. ⚠️ Two of them report the SAME vid:pid, which is the whole

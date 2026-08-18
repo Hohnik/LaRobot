@@ -3,7 +3,7 @@
 
     uv run scripts/test_incident.py
 
-⛔ WHY THIS FILE EXISTS. `src/incident.py` runs on the **shutdown path**, right after the
+⛔ WHY THIS FILE EXISTS. `src/yam/incident.py` runs on the **shutdown path**, right after the
 motors have been disabled following a bad stop. Its one hard rule is that it may never
 delay or prevent that teardown, on a rig with no emergency stop.
 
@@ -24,9 +24,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from incident import describe, usb_snapshot, write_incident  # noqa: E402
+from yam.incident import describe, usb_snapshot, write_incident  # noqa: E402
 
 
 class Boom:
@@ -145,7 +144,7 @@ def test_the_usb_snapshot_never_raises_and_has_a_shape() -> None:
 def test_incidents_land_under_recordings_which_is_gitignored() -> None:
     """⚠️ An incident file holds a full pose and is evidence, not source. It must not
     become something that gets committed by habit."""
-    from incident import INCIDENT_DIR  # noqa: PLC0415
+    from yam.incident import INCIDENT_DIR  # noqa: PLC0415
 
     assert "recordings" in INCIDENT_DIR.parts
     ignore = (REPO / ".gitignore").read_text()

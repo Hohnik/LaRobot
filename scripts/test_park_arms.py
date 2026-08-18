@@ -26,10 +26,9 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-from arm_session import ArmSession  # noqa: E402
+from yam.session import ArmSession  # noqa: E402
 from teleop_session import park_arms  # noqa: E402
 
 N_ARM = 6

@@ -27,9 +27,8 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from keyboard import KeyReader  # noqa: E402
+from yam.inputs.keyboard import KeyReader  # noqa: E402
 
 
 class FakeTerminal:

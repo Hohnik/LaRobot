@@ -8,7 +8,7 @@
 
 This is the macOS port of I2RT's own `i2rt/motor_config_tool/ping_motors.py`.
 Theirs opens SocketCAN; this one goes through the CANable via gs_usb (see
-`src/yam_can.py`). The CAN traffic is byte-for-byte what I2RT's tool sends.
+`src/yam/can.py`). The CAN traffic is byte-for-byte what I2RT's tool sends.
 
 Per motor ID it sends exactly two frames:
 
@@ -63,7 +63,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     DEFAULT_ARM,
     YAM_BITRATE,
@@ -74,7 +74,7 @@ from yam_can import (  # noqa: E402
     do_not_clear_motor_faults,
     open_motor_interface,
 )
-from yam_robot import load_gripper_limits, reconcile_gripper_limits  # noqa: E402
+from yam.robot import load_gripper_limits, reconcile_gripper_limits  # noqa: E402
 
 DEFAULT_IDS = [1, 2, 3, 4, 5, 6, 7]  # 6 arm joints + gripper
 GRIPPER_ID = 7

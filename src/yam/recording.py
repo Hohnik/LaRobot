@@ -19,7 +19,7 @@ this file does not have to guess at a format someone else is specifying:
 mistake step 5 was deferred to avoid.
 
 ⛔ THE RULE THIS FOLLOWS, AND IT IS WHY THERE ARE NO PRINTS AND NO ROBOT HANDLE HERE.
-*The class decides, the script narrates.* Same rule as `src/arm_session.py`. Every
+*The class decides, the script narrates.* Same rule as `src/yam/session.py`. Every
 decision below can therefore be proven with no arm plugged in, which matters on a rig
 where three changes have passed their tests and then failed on first contact with the
 hardware ([FINDINGS §11](../docs/FINDINGS.md)).
@@ -409,7 +409,7 @@ class Trajectory:
         ⛔ The class does not refuse a fast factor, because refusing is a session
         decision and this class has no way to know what the operator can see or reach.
         It gives the caller `max_joint_speed()` to check against instead. Same division
-        of labour as `src/arm_session.py`.
+        of labour as `src/yam/session.py`.
         """
         if factor <= 0:
             raise ValueError(f"factor must be positive, got {factor}")
@@ -507,7 +507,7 @@ def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: 
     """Advance a playback by one control cycle.
 
     ⭐ WHY A CLOCK AND NOT A DISTANCE ALONG THE PATH. The waypoint runner
-    (`src/motion.py`) walks a *shape* at a constant joint speed, which is right for a
+    (`src/yam/motion.py`) walks a *shape* at a constant joint speed, which is right for a
     planned move between saved poses. It is wrong here, because it discards the one thing
     hand-guiding provides: **human timing and hesitation**. Those are the signal
     ([ROADMAP.md](../docs/ROADMAP.md) §6.6), so the cursor is measured in seconds.
@@ -520,7 +520,7 @@ def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: 
 
     ⚠️ `held` is returned rather than acted on, because "the arm has been stuck for four
     seconds" is a *session* judgement: only the caller knows how long it has been true and
-    what to say about it. Same division of labour as `src/arm_session.py`.
+    what to say about it. Same division of labour as `src/yam/session.py`.
 
     `compare` lists which joint INDICES count towards the lag. Leave the grippers out: the
     jaws legitimately sit far from their commanded value while closing on an object, and

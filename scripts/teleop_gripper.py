@@ -55,15 +55,14 @@ import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
-from spacemouse import (  # noqa: E402
+from yam.inputs.spacemouse import (  # noqa: E402
     TwistReader,
     countdown_hands_off,
     describe,
     find_device,
     open_device,
 )
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     DEFAULT_ARM,
     YAM_BITRATE,

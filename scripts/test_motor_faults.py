@@ -13,7 +13,7 @@ healthy. That is how the evidence for arm G's red flashing lights was destroyed
 
 ⭐ These tests exercise the wrapper factories directly against a fake interface, so
 none of the vendored driver and no bus is needed. The factories are module-level in
-`src/yam_can.py` for exactly this reason.
+`src/yam/can.py` for exactly this reason.
 
 ⚠️ The one behaviour that must NEVER regress: the default policy is to clear. The
 chain interface's own motor-recovery routine (`dm_driver.py:639`) calls `clean_error`
@@ -27,9 +27,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     MOTOR_LED_FOR_ERROR,
     MotorFaultNotCleared,
     _wrap_clean_error,

@@ -27,7 +27,7 @@ Every cycle it prints what the puck reports **and how the arm would interpret it
 pushing the puck and reading "UP +0.074 m/s" is a complete test of the mapping,
 with nothing at risk.
 
-⚠️ It seizes the SpaceMouse from macOS while it runs (`src/spacemouse.py` explains
+⚠️ It seizes the SpaceMouse from macOS while it runs (`src/yam/inputs/spacemouse.py` explains
 why, and why the hands-off countdown is not optional). Your cursor will stop
 responding to the puck. That is intended, and it is restored on exit.
 """
@@ -42,9 +42,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from axis_map import (  # noqa: E402
+from yam.inputs.axis_map import (  # noqa: E402
     DEFAULT_ANGULAR_SCALE,
     DEFAULT_LINEAR_SCALE,
     N,
@@ -56,8 +55,8 @@ from axis_map import (  # noqa: E402
     ambiguity_note,
     axes_readout,
 )
-from keyboard import KeyReader  # noqa: E402
-from spacemouse import (  # noqa: E402
+from yam.inputs.keyboard import KeyReader  # noqa: E402
+from yam.inputs.spacemouse import (  # noqa: E402
     TwistReader,
     countdown_hands_off,
     open_device,
@@ -80,7 +79,7 @@ def reference_table() -> str:
     """What the six robot motions physically are — measured, not assumed.
 
     The numbers behind these labels were produced by integrating a unit twist in
-    simulation (see `src/axis_map.py`). "Forward" and "left" are deliberately not
+    simulation (see `src/yam/inputs/axis_map.py`). "Forward" and "left" are deliberately not
     claimed: they depend on how the arm is turned on the desk, which no file here
     records.
     """

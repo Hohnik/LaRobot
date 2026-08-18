@@ -32,11 +32,10 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from axis_map import AxisMap  # noqa: E402
-from teleop import CartesianTeleop, scripted_twist  # noqa: E402
+from yam.inputs.axis_map import AxisMap  # noqa: E402
+from yam.teleop import CartesianTeleop, scripted_twist  # noqa: E402
 
 CONTROL_HZ = 100.0
 # Full SpaceMouse deflection maps to these speeds. Deliberately gentle: these are
@@ -51,7 +50,7 @@ MAP_FILE = REPO / "config" / "spacemouse_map.json"
 def twist_from_axes(axes: list[float], axis_map: AxisMap) -> np.ndarray:
     """Scale six normalised SpaceMouse axes into a physical twist.
 
-    Decoding lives in `src/spacemouse.py:TwistReader` — one copy, shared with
+    Decoding lives in `src/yam/inputs/spacemouse.py:TwistReader` — one copy, shared with
     `scripts/teleop_gripper.py`. Only the scaling is a teleop concern.
 
     ⛔ THIS USED TO IGNORE THE AXIS MAP ENTIRELY, and that was the worst possible
@@ -60,7 +59,7 @@ def twist_from_axes(axes: list[float], axis_map: AxisMap) -> np.ndarray:
     costs a reprinted number instead of a joint slamming into its stop"* — and it
     was the one consumer that could not reproduce the mapping the real session
     uses, so an axis convention was the single thing it could NOT test. Exactly the
-    duplication trap that `src/spacemouse.py` was created to close.
+    duplication trap that `src/yam/inputs/spacemouse.py` was created to close.
     """
     mapped = axis_map.apply(axes)
     return np.array(
@@ -105,8 +104,7 @@ def main() -> int:
     handle = None
     reader = None
     if not args.demo:
-        sys.path.insert(0, str(REPO / "src"))
-        from spacemouse import (  # noqa: PLC0415
+        from yam.inputs.spacemouse import (  # noqa: PLC0415
             TwistReader,
             countdown_hands_off,
             find_device,

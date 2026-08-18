@@ -91,7 +91,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     YAM_BITRATE,
     add_i2rt_to_path,
@@ -157,7 +157,7 @@ def read_arm(arm: str, bitrate: int, registers: list[str]) -> tuple[dict[int, di
                     if motor_id == MOTOR_IDS[0]:
                         skipped.append(reg)
             numeric = [v for v in row.values() if v is not None]
-            # Defence in depth against the transmit-echo bug (src/yam_can.py):
+            # Defence in depth against the transmit-echo bug (src/yam/can.py):
             # decoding our own request yields a flawless set of zeros, which is
             # indistinguishable from a successful read unless it is called out.
             if numeric and all(v == 0 for v in numeric):
@@ -284,8 +284,7 @@ def compare_to_baseline(arms: dict[str, dict[int, dict]], baseline: dict) -> int
 
 def save_baseline(arms: dict[str, dict[int, dict]], registers: list[str], skipped: dict) -> None:
     """Write the full read to ``config/motor_registers.json``, with provenance."""
-    sys.path.insert(0, str(REPO / "src"))
-    from provenance import dt_now, git_commit  # noqa: PLC0415
+    from yam.provenance import dt_now, git_commit  # noqa: PLC0415
 
     payload = {
         "read_at": dt_now(),

@@ -136,12 +136,12 @@ def src_constants() -> dict[str, object]:
 
     ⛔⭐⭐ THIS GAP LET TWO DELIBERATELY BROKEN COMMANDS THROUGH ON THE FIRST
     FALSIFICATION RUN. `--arm` declares `choices=sorted(ARM_SERIALS)`, and `ARM_SERIALS`
-    is a dict literal in `src/yam_can.py`, not in the script. So the choices could not be
+    is a dict literal in `src/yam/can.py`, not in the script. So the choices could not be
     resolved, the check was silently skipped, and `--arm Q` was reported as fine.
 
     ⚠️ **A check that cannot resolve its data must not pass quietly**, and this one did.
     That is the same shape as the thermal guard treating an unreadable temperature as a
-    safe one (`src/yam_robot.py::ThermalGuard`) — the most dangerous kind of default.
+    safe one (`src/yam/robot.py::ThermalGuard`) — the most dangerous kind of default.
 
     ⭐ Arm names are the most frequently documented value in the whole repo, so this was
     not an edge case; it was the main case.
@@ -149,7 +149,7 @@ def src_constants() -> dict[str, object]:
     global _SRC_CONSTS  # noqa: PLW0603
     if _SRC_CONSTS is None:
         merged: dict[str, object] = {}
-        for f in sorted((REPO / "src").glob("*.py")):
+        for f in sorted((REPO / "src").rglob("*.py")):
             try:
                 merged.update(literal_constants(ast.parse(f.read_text())))
             except (OSError, SyntaxError):

@@ -16,7 +16,7 @@ from pathlib import Path
 import hid
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from spacemouse import (  # noqa: E402
+from yam.inputs.spacemouse import (  # noqa: E402
     VIDS as SPACEMOUSE_VIDS,
     countdown_hands_off,
     find_device,
@@ -59,7 +59,7 @@ def main() -> int:
         print("\nNo SpaceMouse interface. Is it plugged in?")
         return 1
 
-    # Device selection lives in src/spacemouse.py. It must NOT be reimplemented here:
+    # Device selection lives in src/yam/inputs/spacemouse.py. It must NOT be reimplemented here:
     # a blind `space[0]` fallback can select the C920 webcam, which shares Logitech's
     # VID 0x046D with legacy 3Dconnexion units and sits on this very dock.
     target = find_device()
@@ -71,7 +71,7 @@ def main() -> int:
         print("  ⚠️  not the multi-axis interface — motion will not appear.")
 
     # hidapi seizes the device on macOS; opening it mid-deflection strands the OS
-    # with a latched pointer delta. See src/spacemouse.py.
+    # with a latched pointer delta. See src/yam/inputs/spacemouse.py.
     countdown_hands_off(3)
 
     h = None

@@ -33,7 +33,7 @@ import mink
 import mujoco
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from yam import REPO_ROOT  # ⛔ anchored ONCE in yam/__init__.py, never per file
 I2RT_MODELS = REPO_ROOT / "third_party" / "i2rt" / "i2rt" / "robot_models" / "arm"
 
 # The 4310 gripper variant, matching the measured hardware (README §6.0), and the

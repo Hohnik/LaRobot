@@ -32,14 +32,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from yam_can import (
+from yam.can import (
     DEFAULT_ARM,
     add_i2rt_to_path,
     chain_channel,
     patch_dm_driver_for_gs_usb,
 )
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from yam import REPO_ROOT  # ⛔ anchored ONCE in yam/__init__.py, never per file
 GRIPPER_LIMITS_FILE = REPO_ROOT / "config" / "gripper_limits.json"
 
 #: ⭐⭐ THE CEILING ON EVERY COMMANDED JOINT SPEED, and the single most consequential
@@ -1060,7 +1060,7 @@ def check_grasp(commanded: float, measured: float, settled: bool,
       0.5 carries no information, which is what `closed_enough` guards.
     - ⛔ **It is meaningless before the jaws stop moving.** Mid-close looks identical to
       holding a wide object, so the caller must pass `settled=True` and it is the caller's
-      job to know. See `plan_gripper_stops` in `src/motion.py`, which is where a run waits.
+      job to know. See `plan_gripper_stops` in `src/yam/motion.py`, which is where a run waits.
 
     `hold_threshold` is 0.03 of a 96 mm stroke, so roughly 3 mm. Below that the gap is
     sensor noise and the controller's own steady-state error rather than an object.

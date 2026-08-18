@@ -4,7 +4,7 @@
 This is the first milestone of the teleop chain: prove the input device is readable
 and correctly decoded before anything is ever wired to a motor.
 
-    uv run src/spacemouse_live.py
+    uv run src/yam/inputs/spacemouse_live.py
 
 Ctrl-C to stop.
 
@@ -23,7 +23,7 @@ import struct
 import sys
 import time
 
-from spacemouse import countdown_hands_off, describe, find_device, is_multi_axis, open_device
+from yam.inputs.spacemouse import countdown_hands_off, describe, find_device, is_multi_axis, open_device
 
 FULL_SCALE = 350.0  # raw counts at full deflection; nominal, calibrate if it matters
 DEADZONE = 0.02

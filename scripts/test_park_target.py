@@ -20,10 +20,9 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
 
-from yam_robot import (  # noqa: E402
+from yam.robot import (  # noqa: E402
     advance_park_command,
     check_grasp,
     park_slots,

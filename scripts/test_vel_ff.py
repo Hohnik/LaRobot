@@ -34,11 +34,10 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from fake_arm import FakeArm  # noqa: E402
-from settings import LADDERS, LIVE_BOUNDS, LIVE_ORDER, TUNABLE, adjust  # noqa: E402
-from yam_robot import VEL_FF_CEILING, SafeRobot  # noqa: E402
+from yam.fake.arm import FakeArm  # noqa: E402
+from yam.settings import LADDERS, LIVE_BOUNDS, LIVE_ORDER, TUNABLE, adjust  # noqa: E402
+from yam.robot import VEL_FF_CEILING, SafeRobot  # noqa: E402
 
 N = 7  # 6 arm joints + the jaw, this stack's only real shape
 

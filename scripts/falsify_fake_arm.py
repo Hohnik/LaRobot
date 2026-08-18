@@ -9,7 +9,7 @@ signature produced three tests in a row that proved nothing: command counts a
 sequential park also satisfies, a "slow" follower that kept up, and an alignment where
 the leader closed the gap itself (docs/FINDINGS.md §57, §58).
 
-⭐ So this breaks `src/fake_arm.py` five different ways and insists the right test fails
+⭐ So this breaks `src/yam/fake/arm.py` five different ways and insists the right test fails
 each time. **It found a real blind test on its first run**: the lag-clip test asserted
 only `gap <= max_lag`, which an arm that is not blocked at all satisfies trivially, so
 it passed with the blocking code deleted. That test is two-sided now.
@@ -22,10 +22,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
-import fake_arm  # noqa: E402
+import yam.fake.arm as fake_arm  # noqa: E402
 import numpy as np  # noqa: E402
 import test_fake_arm as T  # noqa: E402
 

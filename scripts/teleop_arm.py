@@ -39,7 +39,7 @@ SAFETY ENVELOPE — added on top of everything the simulation already proved
   swings the wrist; a wrong translation sign moves it gently the wrong way.
 · **Abort** on joint-limit proximity or an IK solve that diverges.
 
-The loop itself is `src/teleop.py:CartesianTeleop` — the exact code validated in
+The loop itself is `src/yam/teleop.py:CartesianTeleop` — the exact code validated in
 simulation, unchanged. Only the robot behind it is different.
 """
 
@@ -53,12 +53,11 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
-from spacemouse import TwistReader, countdown_hands_off, find_device, open_device  # noqa: E402
-from teleop import CartesianTeleop  # noqa: E402
-from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
-from yam_robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
+from yam.inputs.spacemouse import TwistReader, countdown_hands_off, find_device, open_device  # noqa: E402
+from yam.teleop import CartesianTeleop  # noqa: E402
+from yam.can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
+from yam.robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
 
 CONTROL_HZ = 100.0
 N_ARM = 6

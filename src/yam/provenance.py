@@ -10,7 +10,7 @@ and the time it was made.
 
 Three separate things now record it — a recording, a playback's tracking log, and
 the motor-register baseline — which is the point at which a copied helper starts
-to drift. This repo has been bitten by copy-paste three times (``src/spacemouse.py``
+to drift. This repo has been bitten by copy-paste three times (``src/yam/inputs/spacemouse.py``
 exists because a device fix landed in only one of two copies), so the third caller
 gets a module instead of a third copy.
 
@@ -26,7 +26,9 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
+from yam import REPO_ROOT
+
+REPO = REPO_ROOT  # ⛔ anchored ONCE in yam/__init__.py — a per-file parent chain broke on the package move
 
 
 def git_commit() -> str:

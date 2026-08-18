@@ -44,7 +44,7 @@ the number to quote as "the gap", only as "at least this much".
 ⛔ FOUR THINGS IT DOES NOT MODEL, all of which make it optimistic in one specific way:
 
 1. ⛔ **The jaws are not posed.** The IK model's gripper joint is left at zero, exactly as
-   `src/teleop.py` does, so an open gripper's tips are in the wrong place by a few cm.
+   `src/yam/teleop.py` does, so an open gripper's tips are in the wrong place by a few cm.
 2. ⛔ **Nothing the arms are HOLDING exists.** A grasped object can be much larger than
    the gripper, and a two-arm handover is precisely when they are closest.
 3. ⛔ **The desk, the cameras' cables and the mounts are absent.**
@@ -65,7 +65,7 @@ import numpy as np
 
 #: ⭐ The reach limit each arm is already held to, read from the same constant the
 #: session enforces so the two can never drift apart.
-from teleop import DEFAULT_MODEL, N_ARM_JOINTS, REACH_LIMIT  # noqa: E402
+from yam.teleop import DEFAULT_MODEL, N_ARM_JOINTS, REACH_LIMIT  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -155,7 +155,7 @@ class ArmGeometry:
         """World positions of every body, for measured joint angles, in the BASE frame.
 
         ⚠️ Only the first `N_ARM_JOINTS` (6) are used and the gripper is left at zero,
-        which is exactly what `src/teleop.py` does. So the jaw tips are posed as if the
+        which is exactly what `src/yam/teleop.py` does. So the jaw tips are posed as if the
         gripper were closed however open it really is.
         """
         q = np.zeros(self.model.nq)

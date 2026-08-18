@@ -189,7 +189,7 @@ Then in the session, press **`v`** to cycle the control frame, or start with `--
 ```bash
 uv run scripts/probe_hardware.py        # enumerate HID, open the SpaceMouse, listen 5 s
 uv run scripts/probe_can.py             # listen-only CAN watch; the transceiver cannot even ACK
-uv run src/spacemouse_live.py --seconds 25 --until-complete   # live 6-axis readout
+uv run src/yam/inputs/spacemouse_live.py --seconds 25 --until-complete   # live 6-axis readout
 uv run scripts/map_axes.py              # ⭐ dial in the axis map. SpaceMouse only, no robot at all
 uv run scripts/teleop_sim.py --demo     # the FULL teleop loop against MuJoCo. No hardware at all
 uv run scripts/teleop_sim.py            # ...driven by the real SpaceMouse, still simulation only

@@ -1,6 +1,6 @@
 """Finding, opening and safely releasing the SpaceMouse on macOS.
 
-Shared by `scripts/probe_hardware.py` and `src/spacemouse_live.py`. It exists
+Shared by `scripts/probe_hardware.py` and `src/yam/inputs/spacemouse_live.py`. It exists
 because those two had their own copies of the device-selection logic, and the
 webcam bug fixed on 2026-08-08 was fixed in only one of them.
 

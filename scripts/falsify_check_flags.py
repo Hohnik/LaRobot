@@ -12,7 +12,7 @@ deliberately broken commands and insists each one is reported.
 
 | what was missed | why | the general lesson |
 |---|---|---|
-| `--arm Q` and `--arms B,Q` | `choices=sorted(ARM_SERIALS)` and `ARM_SERIALS` lives in `src/yam_can.py`, so the choices would not resolve and the check was **skipped in silence** | ⛔ **a check that cannot resolve its data must not pass quietly** |
+| `--arm Q` and `--arms B,Q` | `choices=sorted(ARM_SERIALS)` and `ARM_SERIALS` lives in `src/yam/can.py`, so the choices would not resolve and the check was **skipped in silence** | ⛔ **a check that cannot resolve its data must not pass quietly** |
 | nine FALSE positives on the real docs | the command pattern read `A && B --arm B --yes` as one command and blamed B's flags on A | ⚠️ noise gets a checker ignored, which is worse than not having one |
 | `--arm Q`, a second time | the placeholder rule counted any ALL-CAPS word as a placeholder, and arm names are single capitals | ⛔ **a rule added to remove a false positive can silently create a false negative** |
 
@@ -41,7 +41,7 @@ import check_flags  # noqa: E402
 CASES = [
     ("a flag that does not exist",
      "`uv run scripts/teleop_session.py --yes --arm B --turbo`", True),
-    ("an arm name outside choices, resolved from src/yam_can.py",
+    ("an arm name outside choices, resolved from src/yam/can.py",
      "`uv run scripts/teleop_session.py --yes --arm Q`", True),
     ("a start mode outside choices",
      "`uv run scripts/teleop_session.py --yes --arm B --start-mode flying`", True),

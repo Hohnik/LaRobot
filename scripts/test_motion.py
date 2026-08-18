@@ -22,9 +22,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from motion import JointPath, _dist, plan_gripper_stops  # noqa: E402
+from yam.motion import JointPath, _dist, plan_gripper_stops  # noqa: E402
 
 
 def corner_path(blend: float) -> JointPath:

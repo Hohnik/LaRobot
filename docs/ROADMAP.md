@@ -100,7 +100,7 @@ Sub-steps:
 | Gripper force limiter | `linear_4310.yml`'s clog-force thresholds; the safe way to close on an object |
 | `motor_offsets` / ±2π wrap fix | `get_yam_robot()` does this at init; hand-rolled control silently does not |
 
-**Approach.** Same shape as `patch_gs_usb_for_macos()`: a small, documented, verified monkeypatch in `src/yam_can.py` that makes `DMSingleMotorCanInterface` resolve to the gs_usb backend when handed an adapter index, so `DMChainCanInterface` and `get_yam_robot()` work unmodified. ⛔ Not a fork of the vendor tree — `third_party/i2rt` stays a clean upstream checkout that can be re-pulled.
+**Approach.** Same shape as `patch_gs_usb_for_macos()`: a small, documented, verified monkeypatch in `src/yam/can.py` that makes `DMSingleMotorCanInterface` resolve to the gs_usb backend when handed an adapter index, so `DMChainCanInterface` and `get_yam_robot()` work unmodified. ⛔ Not a fork of the vendor tree — `third_party/i2rt` stays a clean upstream checkout that can be re-pulled.
 
 **Done when:** `get_yam_robot(channel=<B>, sim=False)` returns a working robot and `get_joint_pos()` returns the same seven numbers `ping_motors.py` reports.
 
@@ -1043,7 +1043,7 @@ yam-robotics/
 
 1. ✅ Ratified 2026-08-18 ([FINDINGS §67.7](FINDINGS.md)). ⬜ Still unanswered, and only step 5 (the README rewrite) waits on them: one language? keep German docs? package name `yam`?
 2. ✅ **DONE 2026-08-18: `uv run scripts/run_tests.py`** — every test file as one suite with a total, three failure signals, and its own falsifier ([FINDINGS §70.4](FINDINGS.md)). No moves, just collection. ⛔ This step's old text said *"pytest already available"*; measured false ([§67.5](FINDINGS.md) and again at build time). The runner is zero-dependency on purpose; pytest is a step-3/4 decision beside LaRobot's layout.
-3. `src/yam/` package + import fixes, suite green.
+3. ✅ **DONE 2026-08-18 ([FINDINGS §70.7](FINDINGS.md)): `src/yam/` is an installed package** (uv's own `uv_build` backend, offline-safe), 17 modules moved by `git mv` into the §10.2/§10.6 layout, all 52 path hacks gone, `REPO_ROOT` anchored once in `yam/__init__.py`. Suite total unchanged at 705/705.
 4. `apps/` + `checks/` split, `check_flags` updated for new paths, docs updated the same commit.
 5. README rewrite as the day-one door; HANDOFF slims back to live-state.
 6. The one-page hardware bring-up checklist (§10.4).

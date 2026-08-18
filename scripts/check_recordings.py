@@ -23,9 +23,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from recording import Layout, Trajectory  # noqa: E402
+from yam.recording import Layout, Trajectory  # noqa: E402
 
 #: Above this, a tail is the §30.1 defect: it produced 1.8 to 4.4 s. Below it, a tail is
 #: the arm coming to rest before the key was pressed, which is not a fault and not

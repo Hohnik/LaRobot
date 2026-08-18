@@ -63,10 +63,9 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
-from yam_can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
-from yam_robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
+from yam.can import ARM_SERIALS, DEFAULT_ARM, YAM_JOINTS  # noqa: E402
+from yam.robot import build_robot, load_gripper_limits, shutdown_robot  # noqa: E402
 
 MOTOR_IDS = [1, 2, 3, 4, 5, 6, 7]
 DRIFT_WARN = 0.05   # rad — worth reporting

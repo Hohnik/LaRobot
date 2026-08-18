@@ -52,7 +52,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     YAM_BITRATE,
     YAM_JOINTS,
@@ -180,7 +180,7 @@ def main() -> int:
 
     try:
         # Open sequentially. Each open verifies the adapter serial after the fact
-        # (src/yam_can.py), which matters doubly here: GsUsb.start() resets its USB
+        # (src/yam/can.py), which matters doubly here: GsUsb.start() resets its USB
         # device, so enumeration order can shift between the two opens.
         for arm in arms:
             arm.iface = open_motor_interface(bitrate=args.bitrate, arm=arm.name, name=f"yam_{arm.name}")

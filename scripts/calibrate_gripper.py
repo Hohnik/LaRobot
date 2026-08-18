@@ -46,9 +46,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "third_party" / "i2rt"))
-from yam_can import (  # noqa: E402
+from yam.can import (  # noqa: E402
     ARM_SERIALS,
     DEFAULT_ARM,
     YAM_MOTOR_TYPES,
@@ -56,7 +55,7 @@ from yam_can import (  # noqa: E402
     chain_channel,
     patch_dm_driver_for_gs_usb,
 )
-from yam_robot import GENTLE_TEST_TORQUE, load_gripper_limits, save_gripper_limits  # noqa: E402
+from yam.robot import GENTLE_TEST_TORQUE, load_gripper_limits, save_gripper_limits  # noqa: E402
 
 MOTOR_IDS = [1, 2, 3, 4, 5, 6, 7]
 GRIPPER_INDEX = 6  # last entry in the motor list

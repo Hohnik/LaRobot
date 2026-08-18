@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for saved session defaults, `src/settings.py`. No hardware.
+"""Tests for saved session defaults, `src/yam/settings.py`. No hardware.
 
     uv run scripts/test_settings.py
 
@@ -22,9 +22,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from settings import (  # noqa: E402
+from yam.settings import (  # noqa: E402
     LADDERS,
     LIVE_BOUNDS,
     LIVE_ORDER,

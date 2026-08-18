@@ -36,7 +36,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-REPO = Path(__file__).resolve().parent.parent
+from yam import REPO_ROOT
+
+REPO = REPO_ROOT  # ⛔ anchored ONCE in yam/__init__.py — a per-file parent chain broke on the package move
 INCIDENT_DIR = REPO / "recordings" / "incidents"
 
 
@@ -89,7 +91,7 @@ def write_incident(reason: str, facts: dict, *, directory: Path | None = None) -
     ⛔ Never raises. The caller is on the shutdown path.
     """
     try:
-        from provenance import dt_now, git_commit
+        from yam.provenance import dt_now, git_commit
     except Exception:  # noqa: BLE001
         def dt_now() -> str:  # type: ignore[misc]
             return "unknown"
@@ -105,7 +107,7 @@ def write_incident(reason: str, facts: dict, *, directory: Path | None = None) -
             "reason": reason,
             "at": stamp,
             "commit": _safe("commit", git_commit),
-            "note": "Written by src/incident.py when a session stopped badly. Everything "
+            "note": "Written by src/yam/incident.py when a session stopped badly. Everything "
                     "here was read AFTER the motors were disabled, so a field may be "
                     "missing if the chain had already gone. See docs/FINDINGS.md §45.",
             **facts,

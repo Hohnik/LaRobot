@@ -116,11 +116,11 @@ The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three fact
 | `DMSingleMotorCanInterface` passes `bustype` straight through, so **`bustype="gs_usb"` reaches python-can untouched** | `dm_driver.py:135,142` |
 | The adapter **opens listen-only at 1 Mbit/s** on this Mac: `fclk=160 MHz`, timings computed by python-can, `listen_only_granted=True` | `uv run scripts/probe_can.py` |
 
-⚠️ **The one layer that does NOT work is the one the docs tell you to use.** `get_yam_robot()` → `DMChainCanInterface` selects the bus with `if "can" in channel:` and then **hardcodes `bustype="socketcan"`** (`dm_driver.py:409-417`). There is no argument that overrides it. So the high-level robot object is Linux-only as shipped; the motor-driver layer beneath it is not. Everything here goes through that lower layer, via [`src/yam_can.py`](src/yam_can.py).
+⚠️ **The one layer that does NOT work is the one the docs tell you to use.** `get_yam_robot()` → `DMChainCanInterface` selects the bus with `if "can" in channel:` and then **hardcodes `bustype="socketcan"`** (`dm_driver.py:409-417`). There is no argument that overrides it. So the high-level robot object is Linux-only as shipped; the motor-driver layer beneath it is not. Everything here goes through that lower layer, via [`src/yam/can.py`](src/yam/can.py).
 
 **Two macOS specifics worth knowing before they cost an hour:**
 - python-can's gs_usb backend takes an **adapter index (an int)**, not a `"can0"` string. Passing a name containing `"can"` is also exactly what routes I2RT's own code down the SocketCAN branch above.
-- `GsUsb.start()` calls `detach_kernel_driver(0)`, which on macOS fails with `USBError errno=13` even though nothing holds the device (measured: `is_kernel_driver_active(0)` is `False` and `claim_interface(0)` succeeds). `src/yam_can.py` suppresses only that error, on any platform where the detach genuinely matters it still runs.
+- `GsUsb.start()` calls `detach_kernel_driver(0)`, which on macOS fails with `USBError errno=13` even though nothing holds the device (measured: `is_kernel_driver_active(0)` is `False` and `claim_interface(0)` succeeds). `src/yam/can.py` suppresses only that error, on any platform where the detach genuinely matters it still runs.
 
 **This does not overturn §2's recommendation.** It makes the Mac enough for bring-up, reading state and hand-guiding. The 100 Hz closed loop still belongs on Linux — gs_usb over libusb has not been throughput-tested here, and 7 motors × 2 frames × 100 Hz is a real load.
 
@@ -141,7 +141,7 @@ The blocker was never CAN itself, it was I2RT's SocketCAN assumption. Three fact
 
 ```bash
 uv run scripts/probe_hardware.py    # enumerate everything, open the SpaceMouse, listen 5 s
-uv run src/spacemouse_live.py       # live 6-DoF bar readout — move the device and watch
+uv run src/yam/inputs/spacemouse_live.py       # live 6-DoF bar readout — move the device and watch
 uv run scripts/probe_can.py         # listen-only CAN watch — silent transceiver, cannot even ACK
 uv run scripts/ping_motors.py       # DRY RUN by default; --yes transmits (see §5)
 ```
@@ -152,7 +152,7 @@ uv run scripts/ping_motors.py       # DRY RUN by default; --yes transmits (see �
 
 - `scripts/probe_can.py` — **new 2026-08-10.** Watches the bus in `GS_CAN_MODE_LISTEN_ONLY`, so the transceiver drives no dominant bits at all and cannot even acknowledge a frame. It *verifies* the mode was granted and refuses to listen otherwise, rather than silently falling back to a mode that talks. **Verified: opens at 1 Mbit/s and reads 0 frames** — see the expectation note below.
 - `scripts/ping_motors.py` — **new 2026-08-10, and the only script here that can transmit.** Dry run unless given `--yes`. macOS port of I2RT's own `motor_config_tool/ping_motors.py`; the CAN traffic is identical.
-- `src/yam_can.py` — the macOS CAN layer (§2.1). Imported by both of the above.
+- `src/yam/can.py` — the macOS CAN layer (§2.1). Imported by both of the above.
 
 **The first three are strictly read-only. `ping_motors.py --yes` is not — see §5.**
 
@@ -232,7 +232,7 @@ Motor IDs are 1-7, master IDs 17-23 (`0x11`-`0x17`).
 - **`examples/`** — `minimum_gello`, `control_with_mujoco`, `control_with_viser`, `record_replay_trajectory`.
 - **Safety-relevant:** motors ship with a **400 ms command timeout**. I2RT's own warning is that without it a failed gravity-compensation loop can produce uncontrolled torque. **Leave it at the factory default.**
 
-**Do not `uv pip install -e third_party/i2rt`** — it pulls mujoco, viser, rerun and `ruckig` (sdist-only, compiles from source) for a motor poll that needs none of them. `src/yam_can.py` puts it on `sys.path` instead; the driver layer imports with just numpy, python-can, tyro, pydantic, packaging and crcmod. **Verified: it imports cleanly on macOS under Python 3.12**, despite the SDK's README saying 3.11 (`requires-python = ">=3.10"`).
+**Do not `uv pip install -e third_party/i2rt`** — it pulls mujoco, viser, rerun and `ruckig` (sdist-only, compiles from source) for a motor poll that needs none of them. `src/yam/can.py` puts it on `sys.path` instead; the driver layer imports with just numpy, python-can, tyro, pydantic, packaging and crcmod. **Verified: it imports cleanly on macOS under Python 3.12**, despite the SDK's README saying 3.11 (`requires-python = ">=3.10"`).
 
 ## 6.5 Why this is its own repo and not part of Mind Understanding
 
@@ -289,10 +289,10 @@ Julien's ask (2026-08-10): this work should end up in his friend's repo, **[gith
 
 | Piece | Why it is worth having |
 |---|---|
-| `src/yam_can.py` | The macOS/gs_usb path **and** the transmit-echo bug. That bug bites *any* non-SocketCAN transport, so it is useful to him even on Ubuntu if he ever uses a candleLight adapter |
+| `src/yam/can.py` | The macOS/gs_usb path **and** the transmit-echo bug. That bug bites *any* non-SocketCAN transport, so it is useful to him even on Ubuntu if he ever uses a candleLight adapter |
 | `scripts/identify_arm.py` | Platform-agnostic, and **safer than I2RT's own `ping_motors.py`** — identifies the arm without energising a motor |
 | `scripts/probe_can.py` | Listen-only bring-up probe; platform-agnostic |
-| `src/spacemouse.py` + `spacemouse_live.py` | Teleop input, directly on LaRobot's stated path. The macOS seize behaviour is Mac-only, the decode is not |
+| `src/yam/inputs/spacemouse.py` + `spacemouse_live.py` | Teleop input, directly on LaRobot's stated path. The macOS seize behaviour is Mac-only, the decode is not |
 | README §2.1 / §6.1 findings | The protocol pointer and the SocketCAN-assumption analysis |
 
 ⚠️ **Framing matters:** LaRobot targets Ubuntu, and `yam_can.py` is explicitly a macOS shim. It goes in as an **optional platform layer**, never as the main path — otherwise it reads as "here is my OS's problem, now it is yours."

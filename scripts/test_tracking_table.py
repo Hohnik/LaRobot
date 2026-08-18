@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "scripts"))
 
 from teleop_session import flat_joint_names, tracking_table  # noqa: E402
@@ -135,7 +134,7 @@ def test_the_note_STAYS_SHORT_because_the_screen_painter_truncates_it() -> None:
     """⛔⭐⭐ FOUND BY ACTUALLY RUNNING A `--sim` SESSION, and unfindable by reading.
 
     The first version listed every unmoved joint. In a simulated playback where nothing
-    moved, that was all fourteen names on one line, and `src/screen.py`'s painter cut it off
+    moved, that was all fourteen names on one line, and `src/yam/ui/screen.py`'s painter cut it off
     with an ellipsis: the log shows `B base_yaw, B shoulder_pit…` and nothing more. **A note
     whose entire job is to say which joints are missing, truncated before it says so, is
     worse than no note, because it looks answered.**

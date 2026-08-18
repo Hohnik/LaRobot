@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from yam import REPO_ROOT  # ⛔ anchored ONCE in yam/__init__.py, never per file
 I2RT_PATH = REPO_ROOT / "third_party" / "i2rt"
 
 # ─────────────────────────────────────────────────────────────────────────────

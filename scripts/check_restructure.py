@@ -53,7 +53,7 @@ MOVED_SO_FAR = [
     "hottest", "jaw_temp",
     # ⭐ Step 2 plumbing 3/8: this arm's axis map, and the copy `0` in CONTROLS reverts to.
     # Both are handed to the constructor rather than assigned afterwards, so they cannot be
-    # half-set — see the note in `src/arm_session.py`.
+    # half-set — see the note in `src/yam/session.py`.
     "axis_map", "axis_map_at_start",
     # ⭐ Step 2 plumbing 4/8 and 5/8: this arm's saved poses, and the puck that drives it.
     # ⚠️ `base_pose` and `slots` were `park` and `slots` as locals — renamed as well as

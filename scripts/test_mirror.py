@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for `src/mirror.py`. No hardware, no simulation, no device.
+"""Tests for `src/yam/mirror.py`. No hardware, no simulation, no device.
 
     uv run scripts/test_mirror.py
 
@@ -22,9 +22,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from mirror import (  # noqa: E402
+from yam.mirror import (  # noqa: E402
     MIRROR_SIGNS,
     STUCK_SPEED,
     MirrorLink,
@@ -387,7 +386,7 @@ def test_the_reason_and_the_detail_are_SEPARATE_so_neither_gets_truncated() -> N
 
 
 def test_ALIGNING_gives_up_instead_of_chasing_a_moving_leader() -> None:
-    """⛔⭐⭐ THE HEADER OF `src/mirror.py` CLAIMED THIS FROM 2026-08-11 AND THE CODE DID NOT DO
+    """⛔⭐⭐ THE HEADER OF `src/yam/mirror.py` CLAIMED THIS FROM 2026-08-11 AND THE CODE DID NOT DO
     IT. It said *"alignment reports its progress and gives up rather than chasing forever,
     exactly like PARK's stall detector"* — and the gap check only ever ran in the `following`
     state. A leader that kept moving during ALIGNING had the follower chasing it indefinitely.
@@ -514,8 +513,8 @@ def test_the_clamp_stays_well_under_SafeRobot_s_lag_limit() -> None:
     """⚠️ The bias makes the command sit further from the measured pose, which is exactly what
     `SafeRobot.max_lag` limits. If the clamp approached that, the correction would simply be
     clipped away and the feature would silently do nothing."""
-    from mirror import DEFAULT_MAX_BIAS
-    from yam_robot import SAFE_MAX_LAG
+    from yam.mirror import DEFAULT_MAX_BIAS
+    from yam.robot import SAFE_MAX_LAG
 
     assert DEFAULT_MAX_BIAS < SAFE_MAX_LAG * 0.5, (
         f"a {DEFAULT_MAX_BIAS} rad bias against a {SAFE_MAX_LAG} rad lag clip leaves too "
@@ -573,7 +572,7 @@ def test_a_bias_accumulated_while_SLOW_decays_once_the_leader_moves_fast() -> No
 def test_catchup_is_OFF_by_default() -> None:
     """⛔⭐ It changes what a 4.3 kg arm does, so it is opt-in. Julien raises limits and enables
     control changes; the agent adds the flag and recommends."""
-    from mirror import DEFAULT_CATCHUP
+    from yam.mirror import DEFAULT_CATCHUP
 
     assert DEFAULT_CATCHUP == 0.0
     assert MirrorLink().catchup == 0.0
@@ -608,7 +607,7 @@ def test_a_WRIST_gap_that_used_to_stop_it_now_does_not() -> None:
     """⛔⭐⭐ HIS EXACT STOP. Joint 5 fell 0.364 rad behind against a 0.35 threshold. Joint 5's
     own limit is 0.35 x 4.0 = 1.4, so that flick should no longer interrupt him."""
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     follower = np.zeros(7)
     target = np.zeros(7)
@@ -623,7 +622,7 @@ def test_the_SAME_gap_on_the_ELBOW_still_stops_it() -> None:
     """⛔⭐⭐ THE OTHER HALF, AND THE ONE THAT MATTERS FOR SAFETY. The elbow moves the tip
     0.418 m per radian, so it gets no extra rope at all."""
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     follower = np.zeros(7)
     target = np.zeros(7)
@@ -640,7 +639,7 @@ def test_it_names_the_joint_CLOSEST_TO_ITS_OWN_LIMIT_not_the_biggest_gap() -> No
     0.35. Reporting the largest raw gap would name the wrist and send him after the wrong
     flag."""
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     follower = np.zeros(7)
     target = np.zeros(7)
@@ -655,7 +654,7 @@ def test_the_weights_put_the_SHOULDER_JOINTS_at_about_1x() -> None:
     """⚠️ Joints 1-3 carry the arm through space, so their thresholds must be essentially
     unchanged from what he has been running. A silent loosening there would be the opposite of
     what this change is for."""
-    from mirror import GAP_WEIGHTS
+    from yam.mirror import GAP_WEIGHTS
 
     for j in range(3):
         assert GAP_WEIGHTS[j] <= 1.3, f"joint {j + 1} got {GAP_WEIGHTS[j]}x, which is a real loosening"
@@ -666,7 +665,7 @@ def test_the_wrist_multiplier_is_CAPPED_rather_than_following_the_measurement() 
     the wrong basis for task accuracy even though it is the right one for danger. 1.4 rad on
     the gripper twist is the gripper rotated 80° from where it should be, which ruins a grasp
     while barely moving the tip. So the cap is deliberate."""
-    from mirror import GAP_WEIGHTS
+    from yam.mirror import GAP_WEIGHTS
 
     assert max(GAP_WEIGHTS) <= 4.0, f"a multiplier of {max(GAP_WEIGHTS)}x is too much rope"
     assert GAP_WEIGHTS[5] == 4.0, "the gripper twist should be at the cap"
@@ -674,7 +673,7 @@ def test_the_wrist_multiplier_is_CAPPED_rather_than_following_the_measurement() 
 
 def test_an_all_zero_gap_stops_nothing() -> None:
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     j, g, limit = worst_scaled_joint(np.zeros(7), np.zeros(7), 0.35)
     assert g == 0.0 and g < limit
@@ -683,7 +682,7 @@ def test_an_all_zero_gap_stops_nothing() -> None:
 def test_a_SHORT_pose_vector_does_not_crash_the_check() -> None:
     """⚠️ A 6-DoF follower tracking a 7-DoF leader has bitten this file before."""
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     j, g, limit = worst_scaled_joint(np.zeros(3), np.zeros(3), 0.35)
     assert 0 <= j < 3 and limit > 0
@@ -694,7 +693,7 @@ def test_his_gripper_twist_stop_would_now_pass_at_the_DEFAULT_gap() -> None:
     then fell 1.369 behind anyway. At the DEFAULT 0.35 the wrist's own limit is 1.4, so the
     same flick passes without the elbow's threshold being touched at all."""
     import numpy as np
-    from mirror import worst_scaled_joint
+    from yam.mirror import worst_scaled_joint
 
     follower = np.zeros(7)
     target = np.zeros(7)

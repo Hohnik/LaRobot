@@ -61,7 +61,7 @@ sequencing, state machines, cursors, mode transitions and following-error handli
 which is where this week's defects actually lived.**
 
 ⭐⭐ IT WRAPS THE REAL `SafeRobot`, ON PURPOSE. `build_fake_robot()` returns
-`SafeRobot(FakeArm(...))` using the real class from `src/yam_robot.py`, not a
+`SafeRobot(FakeArm(...))` using the real class from `src/yam/robot.py`, not a
 reimplementation of its two limits. A copy of a safety limit tests the copy. ⚠️ That
 also means `SafeRobot`'s internal `time.perf_counter()` is in the loop, so a simulated
 robot driven by a simulated clock has one real-time component; `build_fake_robot` says
@@ -97,7 +97,7 @@ N_JOINTS = 7
 class FakeMotorState:
     """One motor's reading. ⭐ The field NAMES matter and are not arbitrary.
 
-    `src/yam_robot.py::motor_temperatures` reads `temp_mos` and `temp_rotor` through
+    `src/yam/robot.py::motor_temperatures` reads `temp_mos` and `temp_rotor` through
     `getattr(s, ..., 0)`, and `scripts/teleop_session.py` reads `pos` and `eff`. ⛔ A
     `getattr` default means a misspelled field here would read as **zero** rather than
     raising, and a zero temperature silently disarms the thermal guard — which is the
@@ -133,7 +133,7 @@ class FakeChain:
     ⭐ Two things the session asks of it, and both are failure paths worth simulating:
     `running` (a chain that dies mid-motion is what happened on 2026-08-14) and
     `read_states()` (whose failure makes the thermal guard blind, a path
-    `src/yam_robot.py::ThermalGuard` was specifically rewritten for).
+    `src/yam/robot.py::ThermalGuard` was specifically rewritten for).
     """
 
     def __init__(self, arm: FakeArm) -> None:
@@ -306,7 +306,7 @@ class FakeArm:
         ⛔ Do not compare a number from here with a real motor reading. It exists so
         the thermal guard's warn and stop thresholds can be crossed on demand, which
         on hardware means cooking a motor — and motor 7 has already been cooked three
-        times (`src/yam_robot.py::gripper_stall_release`).
+        times (`src/yam/robot.py::gripper_stall_release`).
         """
         # Torque in a position-controlled joint tracks the following error, so the
         # error is the heat source. 30 s time constant: slow enough to look like a
@@ -357,7 +357,7 @@ def build_fake_robot(
     tau: float = MEASURED_TAU_S,
     deadband: float = MEASURED_DEADBAND_RAD,
 ) -> tuple[Any, str]:
-    """`(robot, note)`, matching `src/yam_robot.py::build_robot`'s shape exactly.
+    """`(robot, note)`, matching `src/yam/robot.py::build_robot`'s shape exactly.
 
     ⭐ Returning the same tuple is what lets a session take either one, so the
     simulated path and the real path stay one code path rather than two.
@@ -373,7 +373,7 @@ def build_fake_robot(
     test about the rate limit specifically, drive `FakeArm` directly and construct
     `SafeRobot` around it knowingly, or use the real clock.
     """
-    from yam_robot import SAFE_MAX_LAG, SAFE_MAX_SPEED, SafeRobot
+    from yam.robot import SAFE_MAX_LAG, SAFE_MAX_SPEED, SafeRobot
 
     fake = FakeArm(n_joints, name=arm, start=start, clock=clock,
                    tau=tau, deadband=deadband)

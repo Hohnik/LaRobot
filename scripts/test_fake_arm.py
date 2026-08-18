@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the simulated arm, `src/fake_arm.py`. No hardware.
+"""Tests for the simulated arm, `src/yam/fake/arm.py`. No hardware.
 
     uv run scripts/test_fake_arm.py
 
@@ -24,16 +24,15 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from fake_arm import (  # noqa: E402
+from yam.fake.arm import (  # noqa: E402
     AMBIENT_C,
     MEASURED_DEADBAND_RAD,
     MEASURED_TAU_S,
     FakeArm,
     build_fake_robot,
 )
-from yam_robot import motor_temperatures  # noqa: E402
+from yam.robot import motor_temperatures  # noqa: E402
 
 
 class Clock:
@@ -196,7 +195,7 @@ def test_a_dead_chain_is_visible_the_way_the_session_checks_it() -> None:
 
 
 def test_an_unreadable_chain_makes_the_thermal_guard_BLIND() -> None:
-    """⭐ `src/yam_robot.py::ThermalGuard` was rewritten specifically because a failed
+    """⭐ `src/yam/robot.py::ThermalGuard` was rewritten specifically because a failed
     temperature read was being treated as a safe temperature. That path needed an
     unplugged cable to reach until now."""
     arm = FakeArm(clock=Clock())
@@ -306,7 +305,7 @@ def test_SafeRobot_s_lag_clip_holds_the_command_near_a_BLOCKED_arm() -> None:
 def test_the_default_limits_come_from_the_REAL_constants() -> None:
     """⚠️ A simulated session must be limited by the same numbers as a real one, or it
     clears runs that hardware would refuse."""
-    from yam_robot import SAFE_MAX_LAG, SAFE_MAX_SPEED
+    from yam.robot import SAFE_MAX_LAG, SAFE_MAX_SPEED
 
     robot, _ = build_fake_robot("B")
     assert robot.max_speed == SAFE_MAX_SPEED, "max_speed drifted from the real default"
@@ -351,7 +350,7 @@ def test_the_REAL_shutdown_path_disables_every_simulated_motor() -> None:
     ⚠️ Until now this path had only ever been exercised by Julien pressing Ctrl-C on a live
     arm, which is a poor way to test the code that decides whether 4.3 kg is released.
     """
-    from yam_robot import shutdown_robot
+    from yam.robot import shutdown_robot
 
     robot, _ = build_fake_robot("B")
     fake = robot._robot                          # noqa: SLF001
@@ -368,7 +367,7 @@ def test_the_chain_is_STOPPED_BEFORE_the_motors_are_disabled() -> None:
     """⛔ Order is the whole point of `shutdown_robot`, and its docstring says why: the
     control thread runs at 250 Hz and will otherwise be mid-`set_control` when the bus
     closes underneath it, which produced a thread-death traceback on the first real run."""
-    from yam_robot import shutdown_robot
+    from yam.robot import shutdown_robot
 
     robot, _ = build_fake_robot("B")
     fake = robot._robot                          # noqa: SLF001
@@ -390,7 +389,7 @@ def test_the_chain_is_STOPPED_BEFORE_the_motors_are_disabled() -> None:
 def test_a_still_puck_reports_no_deflection_and_the_button_field_exists() -> None:
     """⚠️ The session reads `read()` and a `buttons` attribute. A missing `buttons` would be
     read through `getattr(..., 0)` and so would not raise, which is why it is asserted."""
-    from fake_arm import StillPuck
+    from yam.fake.arm import StillPuck
 
     puck = StillPuck()
     assert puck.read() == [0.0] * 6

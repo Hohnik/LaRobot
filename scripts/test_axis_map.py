@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for `src/axis_map.py`. No hardware, no simulation, no device.
+"""Tests for `src/yam/inputs/axis_map.py`. No hardware, no simulation, no device.
 
     uv run scripts/test_axis_map.py
 
@@ -26,9 +26,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from axis_map import (  # noqa: E402
+from yam.inputs.axis_map import (  # noqa: E402
     GESTURE_HOLD_S,
     GESTURE_MIN,
     N,
@@ -656,7 +655,7 @@ def test_reassign_uses_the_last_push_direction_as_positive() -> None:
 
 def test_gesture_min_clears_the_deadzone() -> None:
     """The threshold must be a deliberate push, not a resting wobble."""
-    from spacemouse import DEFAULT_DEADZONE  # noqa: PLC0415
+    from yam.inputs.spacemouse import DEFAULT_DEADZONE  # noqa: PLC0415
 
     assert GESTURE_MIN > DEFAULT_DEADZONE * 3, (GESTURE_MIN, DEFAULT_DEADZONE)
 

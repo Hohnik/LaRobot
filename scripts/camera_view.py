@@ -1448,7 +1448,7 @@ def run_terminal(cap, args, label: str = "", cam: "MacCamera | None" = None) -> 
     people stop reaching for.
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
-    from keyboard import KeyReader  # noqa: PLC0415
+    from yam.inputs.keyboard import KeyReader  # noqa: PLC0415
 
     best, why = detect_term_mode()
     mode = best if args.term_mode == "auto" else args.term_mode

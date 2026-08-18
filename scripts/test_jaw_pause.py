@@ -16,9 +16,8 @@ from pathlib import Path
 import numpy as np
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-from arm_session import (  # noqa: E402
+from yam.session import (  # noqa: E402
     JAW_MIN_WAIT,
     JAW_SETTLE_SECONDS,
     JAW_TIMEOUT_SECONDS,

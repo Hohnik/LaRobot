@@ -21,9 +21,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "src"))
 
-import spacemouse  # noqa: E402
+import yam.inputs.spacemouse as spacemouse  # noqa: E402
 
 PUCK_A = {"path": b"DevSrvsID:1111", "vendor_id": 0x256F, "product_id": 0xC635}
 PUCK_B = {"path": b"DevSrvsID:2222", "vendor_id": 0x256F, "product_id": 0xC635}

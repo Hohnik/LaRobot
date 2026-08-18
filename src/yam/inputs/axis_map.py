@@ -16,7 +16,7 @@ device. Row-oriented indexing makes the flip keys keep that meaning under any
 permutation. Under the identity map the two indexings are numerically identical,
 which is why the old files keep working untouched (see `load`).
 
-⛔ WHY THIS IS ITS OWN MODULE, not inline in the session script. `src/spacemouse.py`
+⛔ WHY THIS IS ITS OWN MODULE, not inline in the session script. `src/yam/inputs/spacemouse.py`
 exists because device logic had been copy-pasted into two scripts and a bug fix
 landed in only one of them. The same trap was open here: `scripts/teleop_sim.py`
 had its own `twist_from_axes()` that applied **no** sign at all, so the simulator —
