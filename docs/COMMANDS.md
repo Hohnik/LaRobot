@@ -259,6 +259,7 @@ uv run scripts/teleop_session.py --sim --yes --arms B,G --start-mode hold
 ## ⭐ The checkers — no hardware, and they answer real questions
 
 ```bash
+uv run scripts/run_tests.py                          # ⭐⭐ EVERY test file as ONE suite, with a total
 uv run scripts/check_rig.py                          # what is on the USB bus. Never transmits
 uv run scripts/check_flags.py                        # do the commands in docs/ actually work?
 uv run scripts/check_links.py                        # every relative link and § reference
@@ -268,6 +269,8 @@ uv run scripts/check_collision.py --separation 0.9   # ⭐ how close can the two
 uv run scripts/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
 ```
 
+⭐⭐ **`run_tests.py` exists because two test files sat red for days with nobody able to see it** ([FINDINGS §67.5](FINDINGS.md)) — each file has its own `main()` and nothing ran them all. It fails a file on any of three signals (nonzero exit, no count line, passed < total) and prints a **grand total**: compare it against the last committed figure, because a total that DROPS while everything is green means a check was silently disarmed ([FINDINGS §59.1](FINDINGS.md), [§70.4](FINDINGS.md)).
+
 ⭐ **`check_collision.py` needs ONE tape-measure reading** — the metres between the two arm bases — because nothing in the repo records it and no software can derive it. Add `--yaw-b 180` if they face each other. ⭐⭐ **It may close the whole collision question in one line:** each arm is already held inside a 0.60 m sphere around its own base, so **beyond 1.20 m of base separation a collision is geometrically impossible** while that limit is enforced. ⛔ Except in GUIDE mode, where nothing can stop a hand. [ROADMAP §8.2](ROADMAP.md) item 25, [FINDINGS §59.3](FINDINGS.md).
 
 ⭐ **`check_flags.py` reads every `uv run` line in `docs/` and validates it against the real parser** — a flag that does not exist, a value outside `choices`, a value that will not parse as its type. `COMMANDS.md` had gone stale four times in two days before it existed, and one stale line recommended a command that drives the jaws into both stops ([FINDINGS §59.1](FINDINGS.md)).
@@ -275,6 +278,7 @@ uv run scripts/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end
 ### ⭐ Proving the checkers are not just green
 
 ```bash
+uv run scripts/falsify_run_tests.py      # 4 fixture suites: pass, assert-fail, crash, liar — 3 must be caught
 uv run scripts/falsify_fake_arm.py       # break the simulated arm 5 ways; each must be caught
 uv run scripts/falsify_check_flags.py    # 7 broken commands must be reported, 3 good ones not
 ```

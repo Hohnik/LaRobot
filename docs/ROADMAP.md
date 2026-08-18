@@ -1041,8 +1041,8 @@ yam-robotics/
 
 ### 10.5 Order of work (each step green before the next)
 
-1. His ratification of this section, and answers: one language? keep German docs? package name `yam`?
-2. `tests/` + one runner (pytest already available) — no moves yet, just collection.
+1. ✅ Ratified 2026-08-18 ([FINDINGS §67.7](FINDINGS.md)). ⬜ Still unanswered, and only step 5 (the README rewrite) waits on them: one language? keep German docs? package name `yam`?
+2. ✅ **DONE 2026-08-18: `uv run scripts/run_tests.py`** — every test file as one suite with a total, three failure signals, and its own falsifier ([FINDINGS §70.4](FINDINGS.md)). No moves, just collection. ⛔ This step's old text said *"pytest already available"*; measured false ([§67.5](FINDINGS.md) and again at build time). The runner is zero-dependency on purpose; pytest is a step-3/4 decision beside LaRobot's layout.
 3. `src/yam/` package + import fixes, suite green.
 4. `apps/` + `checks/` split, `check_flags` updated for new paths, docs updated the same commit.
 5. README rewrite as the day-one door; HANDOFF slims back to live-state.
