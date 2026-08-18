@@ -27,7 +27,9 @@
 >
 > ✅⭐⭐⭐ **VELOCITY FEEDFORWARD IS BUILT AND RAN ON HARDWARE — [FINDINGS §67.9](FINDINGS.md), [§67.10](FINDINGS.md).** `--vel-ff` / setting 9 on the `n` screen, OFF by default. The motors finally receive a velocity setpoint (this stack always sent zero, which IS the `0.033 s × speed` lag). His 0.25 verdict: *"feels different… more direct"*, so the **ceiling is 3 now at his ask** — 1 = exact command speed, above = labelled exaggeration, overshoot expected. ⬜ Owes a visible verdict: the same movement at 0 and at 2-3.
 >
-> ✅⭐⭐ **Third 2026-08-18 layer, from his evening bench session ([FINDINGS §67.10](FINDINGS.md)):** the **park spasm is CONFIRMED fixed** (the last unconfirmed motion fix) · the settings ladder proved itself on hardware · **item 43 closed** — every `-`/`+` press prints the live status rows, so tuning is no longer blind · `q` inside the settings screen now quits · the C920 comes later, camera capture queued behind it.
+> ✅⭐⭐ **Third 2026-08-18 layer, from his evening bench session ([FINDINGS §67.10](FINDINGS.md), [§67.11](FINDINGS.md)):** the **park spasm is CONFIRMED fixed** (the last unconfirmed motion fix) · the settings ladder proved itself on hardware · **items 43, 38, 21, 28 all closed** — tuning shows the live rows, the newest prompt cancels the older, SLOWED prints its measurement, TELEOP rows name their frame (`/w`·`/t`·`/c`) · `q` inside the settings screen now quits · the C920 comes later, camera capture queued behind it.
+>
+> ⬜⭐ **What remains in scope, in build order:** the speed-dial puck (item 13) · the jaw-pause finish + `check_grasp` wiring (items 3, 10) · collapse the two parks (item 23) · the [ROADMAP §10](ROADMAP.md) restructure (ratified, [§10.6](ROADMAP.md) explored) · the camera chain once the C920 is back (items 5, 6) · the data-collection features (7, 8, 9, 12) · the consolidation plan ([ROADMAP §8.5](ROADMAP.md)), the deliverable.
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
