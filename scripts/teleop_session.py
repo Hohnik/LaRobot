@@ -3306,10 +3306,18 @@ def main() -> int:  # noqa: PLR0915
                 # ⛔ Same rule for a playback in progress: leaving the mode abandons it.
                 # An arm resuming a recorded movement after the operator pressed HOLD is
                 # doing something nobody asked for.
-                # ⚠️ Session-level, because the playback cursor is: it is abandoned when NO
-                # arm is in replay any more. `l` refuses at N>1 until the two-arm recorder
-                # exists (ROADMAP §8.2 item 7), so today that is one arm leaving the mode.
-                if replay is not None and not any(one.mode == "replay" for one in arms):
+                # ⚠️ Session-level, because the playback cursor is.
+                # ⛔⭐⭐ ANY arm leaving replay ends the playback for EVERY replay arm
+                # (FINDINGS §69.1). This said "when NO arm is in replay" until 2026-08-18,
+                # and mode keys only re-mode the AIMED arm — so with a two-arm playback,
+                # `m` aimed at B left arm G a ZOMBIE: mode REPLAY, cursor frozen (the
+                # advance needs ALL replay arms in the mode), no message, for the rest of
+                # Julien's session. A playback is one thing; it ends as one thing, and
+                # the arms it releases go to HOLD through the class.
+                if replay is not None and any(one.mode != "replay" for one in replay_arms):
+                    for a2 in replay_arms:
+                        if a2.mode == "replay":
+                            a2.enter_hold()
                     left = replay.duration - replay_s
                     if replay_scrub:
                         # ⭐ Leaving a SCRUB via a mode key is its normal end, not an
@@ -3318,7 +3326,10 @@ def main() -> int:  # noqa: PLR0915
                               f"{replay.duration:.1f}s.\n")
                         replay_scrub = False
                     elif left > 0.05:
-                        print(f"\n  ⚠️  playback abandoned with {left:.1f}s left.\n")
+                        print(f"\n  ⚠️  playback abandoned with {left:.1f}s left"
+                              + ("" if len(replay_arms) < 2 else
+                                 " — every replay arm is HOLDING now")
+                              + ".\n")
                     replay = None
                     hint("")
                 if stop_reason:

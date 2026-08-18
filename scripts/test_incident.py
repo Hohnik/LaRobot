@@ -233,6 +233,23 @@ def test_a_dead_puck_parks_gracefully_instead_of_raising() -> None:
         "the graceful stop_reason for a dead puck is gone"
 
 
+def test_a_mode_key_ends_the_playback_for_EVERY_replay_arm() -> None:
+    """⛔⭐ FINDINGS §69.1: mode keys re-mode only the AIMED arm, and the playback cleanup
+    used to wait for NO arm to be in replay — so `m` aimed at B during a two-arm scrub
+    left arm G a ZOMBIE (mode REPLAY, cursor frozen, no message) for the rest of
+    Julien's session. Any arm leaving replay must end the playback for all of them,
+    and the released arms go to HOLD through the class."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    assert 'any(one.mode != "replay" for one in replay_arms)' in src, \
+        "the any-arm-left condition is gone — the zombie replay arm is back"
+    assert 'not any(one.mode == "replay" for one in arms)' not in src, \
+        "the old wait-for-everyone condition is back (the zombie's cause)"
+    at = src.find('any(one.mode != "replay" for one in replay_arms)')
+    tail = src[at:at + 400]
+    assert "a2.enter_hold()" in tail, \
+        "released replay arms are no longer put into HOLD through the class"
+
+
 def test_liveness_is_captured_BEFORE_the_motors_are_disabled() -> None:
     """⛔⭐ FINDINGS §58.45: `chain_alive` was read AFTER `shutdown_robot()`, so every
     incident file ever written said False and the field measured nothing. The fix is an
