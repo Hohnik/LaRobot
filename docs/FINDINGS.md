@@ -4543,3 +4543,49 @@ ARM B GRIPPER STALLED — released to 0.304, 0.311, 0.314, 0.315, 0.315, 0.315, 
 ### 66.4 ⭐⭐ THE TEAM-HANDOVER PLAN LIVES IN [ROADMAP §10](ROADMAP.md)
 
 ⭐ His ask: *"we need to fully clean up the repo and have a clear plan of what the repo should look like when my team wants to recreate it."* The plan is written as a proposal for his ratification, **not executed** — a restructure is exactly the kind of consequential, hard-to-reverse change that gets ratified first, and doing it at the end of a nearly-full context would be doing it carelessly.
+
+## 67 ⭐⭐⭐ 2026-08-18 — HIS RULING RESCOPES THE PROJECT: A FINISHED WALKTHROUGH FOR A FROM-SCRATCH REBUILD. PLUS THREE BENCH RESULTS
+
+### 67.0 ⭐⭐⭐ THE RULING, and it filters every open list in this repo
+
+His words, 2026-08-18: *"whatever we're doing here is only supposed to be a finished walkthrough of where this should go, and then my team and I will rebuild everything from scratch. But for that to work, we need a fully complete and finished version of the interface… I don't need to have anything measured out because it's not finished yet… make sure that they're all only tasks we need to do to finish all of the features and finish the whole setup so that we can then consolidate everything and build a full plan of how to build this kind of thing, what is necessary, all of the problems to run into."*
+
+⭐⭐ **What that means, concretely:**
+
+1. **This repo is the reference implementation.** Its job is to prove every feature once and to carry the findings. The team rebuilds from scratch against the consolidation plan, and **the plan is the deliverable** ([ROADMAP §8.5](ROADMAP.md), [§10.4](ROADMAP.md)).
+2. **In scope:** everything needed to finish the features and the setup — the camera chain (items 5–8), the jaw-pause completion (items 3, 10), the code-truthfulness fixes (items 23, 21, 28, 31, 43, 45), and the consolidation plan itself.
+3. **Out of scope, by this ruling:** anything that measures or hardens THIS physical bench as if it were final — the desk height (item 22), the scaling-limit verification (item 18), the powered hub as a *task* (item 20 becomes a plan note: a problem the rebuild team must expect), and finer collision geometry (item 35 — his standing ruling is manual avoidance, so the proximity warning it enables is not a feature of this rig; the rebuild plan carries it instead).
+4. ⭐ [ROADMAP §8.4](ROADMAP.md)'s earlier ruling said the same thing from the hardware side (*"we will still move everything around… some type of guiding system that we can then work towards when we reimplement the whole thing from scratch"*). **This ruling extends that filter from the hardware measurements to the whole task list.**
+
+⚠️ [ROADMAP §8.2](ROADMAP.md) stays the single tracked list. Out-of-scope rows are **marked, never deleted** — "we decided not to, and why" is exactly the kind of information the plan must carry.
+
+⭐ **On cameras, his operating rule for the walkthrough:** *"try everything you can do with one"* D405, and if something is *"unnecessarily hard work to do with one that you could just do with two much easier"*, say so and he gets the second one. The C920 is available as the scene camera on request. So: build the capture chain against one D405 + the C920; item 5 (telling two identical D405s apart) genuinely needs the second D405 attached and waits for it.
+
+### 67.1 ✅⏸ MIRROR-CATCHUP RAN, AND HIS VERDICT IS THAT THE FEATURE IS WEAK — closes [§65.2](FINDINGS.md)'s wait, item 39
+
+His report, 2026-08-18: the higher the catchup number, the more jittery the follower. At 20 it *"starts to move into directions and then it starts to shake"*. At low values (*"two or something"*) the follower is *"still kind of just moving around slowly"*. His summary: *"the feature isn't that great… it doesn't really work that well as far as I understand."*
+
+⭐ **Both behaviours are what the mechanism predicts, so the feature is working as designed and the design is the limit.** The catchup term is an integrator: it accumulates the leader-minus-follower gap into a bias added to the command. At high gain the bias overshoots, the overshoot becomes new gap with the opposite sign, and the loop shakes. At low gain it slowly integrates droop AND sensor noise, which reads as aimless drift. An integrator aimed at a moving, noisy target does both of these things.
+
+⛔ **The real fix for the droop it was built to cancel is velocity feedforward** ([§66.1](FINDINGS.md), [ROADMAP §8.2](ROADMAP.md) item 44): attack the cause (a PD position controller makes no torque without error) rather than integrate the symptom.
+
+✅ **His ruling on the ceiling, same report: the 20 stays.** *"It could stay that way"* — it is a backstop, not a working value. Item 42 is answered by the same words: no ceiling is lowered.
+
+**Item 39 closes as: ran, works poorly, default stays OFF, superseded by item 44 as the real path.**
+
+### 67.2 ✅ THE JAW BLOCK IS CONFIRMED ON HARDWARE — the stall fires once
+
+His report, 2026-08-18: mirror with an object in the follower's grip *"worked out fine"*, and *"the block only shows once. That should be fine."* That is [§63.1](FINDINGS.md)'s fix (the 3% clearing margin) doing its job on the arm, and it also confirms the message rationing from [§58.2](FINDINGS.md) in the same run. **Item 29's hardware confirmation is done.**
+
+⚠️ One phrase in his report could not be parsed from the transcript — *"it's just that the camp would like to go slower"* — recorded here verbatim so it is not lost. Asked in chat; if it was a real observation (the arm should move slower while gripping?), it gets its own row.
+
+### 67.3 ⚠️ THE RIG AS READ ON 2026-08-18 — a dated reading; run `check_rig.py`
+
+Both CAN adapters on the bus running firmware, no DFU. Two SpaceMice. ⛔ **ONE camera: the D405 `255323071773`. No C920 and no second D405 on the bus at reading time** — although he reports having plugged "the other cameras" in at some earlier point, so the bench has changed again since whatever session that was. The capture work (item 6) needs the C920 replugged; item 5 additionally needs the second D405.
+
+### 67.4 ⬜ WHAT REMAINS OWED AT THE BENCH, complete as of 2026-08-18
+
+1. ⬜ **The park-spasm resync, 30 seconds** ([§66.0](FINDINGS.md)): start a session, `q` · `g` · move an arm by hand · `p`. Before the fix the arm jerked for ~0.1 s toward its pre-guide pose; now the park should start smoothly from where the arm actually is.
+2. ⬜ **Replug the C920** (and the second D405 whenever convenient) so the camera chain can be built and run. ⛔ Camera *commands* are permanently his to run — macOS grants camera access per parent app and an agent shell can never have it ([§61.3](FINDINGS.md)).
+
+Everything else on the owed list is now confirmed: catchup ([§67.1](FINDINGS.md)), the jaw block ([§67.2](FINDINGS.md)), the two-arm playback ([§60.0](FINDINGS.md)).

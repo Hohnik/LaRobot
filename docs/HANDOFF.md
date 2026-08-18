@@ -15,6 +15,14 @@
 >
 > ⚠️ **The session log at §7 is 51 rows long. Do not read it front to back.** Its rows are dated and each one names the FINDINGS sections it produced; use it to answer *"when did X change and why"*, not to get oriented.
 >
+> ## ⭐⭐⭐ 2026-08-18 — THE GOAL IS RESCOPED, AND THIS IS THE CURRENT LAYER. Read [FINDINGS §67](FINDINGS.md) before anything below
+>
+> ⭐⭐⭐ **His ruling: this repo is a finished WALKTHROUGH.** The team rebuilds everything from scratch; what this repo owes is every feature finished and proven once, the findings recorded, and then **one consolidation plan** ([ROADMAP §8.5](ROADMAP.md), [§10](ROADMAP.md)) his team can rebuild from. Nothing on this bench needs measuring or hardening as if it were final. **The filtered task list is at the top of [ROADMAP §8.2](ROADMAP.md)** — in-scope features, truthfulness fixes, his open one-liners, and what the ruling parked.
+>
+> ✅ **Confirmed on hardware since the block below was written:** the two-arm playback ([FINDINGS §60.0](FINDINGS.md)) · MIRROR at speed ([§62.0](FINDINGS.md)) · the jaw block firing once ([§67.2](FINDINGS.md)) · mirror-catchup ran and is **weak** — jitter at high values, drift at low, his verdict *"doesn't really work that well"*; the real path is velocity feedforward, item 44 ([§67.1](FINDINGS.md)).
+>
+> ⬜ **Owed at the bench, complete list ([FINDINGS §67.4](FINDINGS.md)):** the 30-second park-spasm check (`q` · `g` · move an arm by hand · `p` — it must not jerk), and replugging the C920 (plus the second D405 whenever convenient) for the camera chain. ⚠️ The rig as read on 2026-08-18: both adapters healthy, two SpaceMice, **one D405, no C920** ([§67.3](FINDINGS.md)).
+>
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
 > ⭐⭐ **Run this before anything else. It answers "what state is the rig in?", which is the right first question here:**
@@ -58,7 +66,7 @@
 >
 > ⭐⭐⭐ **FOUR SPEED LIMITS SIT IN SERIES AND THE SMALLEST BINDS** — `--linear-scale` (m/s, the TIP), `--teleop-speed` (rad/s, one joint), `--max-speed` (rad/s, below all logic), `--max-lag` (rad, **not a speed**: how far the command may run ahead of where the arm IS, which makes a far target a ratchet and bounds the push on a blocked joint). ⛔ **If raising a speed changes nothing you are raising the wrong one — check `linear` first.** The plan prints all four with their meanings now ([FINDINGS §65.0](FINDINGS.md)).
 >
-> ⭐⭐⭐ **THE MIRRORED ARM SAT ~2 cm OFF AND THE CAUSE IS SETTLED** ([FINDINGS §64.0](FINDINGS.md)): the follower is position-controlled so it always settles SHORT of its command, and nothing in software read that back. **`--mirror-catchup 3` is the fix and it is UNRUN.** ⭐⭐ **And the mirror gap is PER JOINT now** — the gripper twist is 6.6x less dangerous than the elbow and was held to the same number, which is why he kept raising `--mirror-gap` ([FINDINGS §64.1](FINDINGS.md)).
+> ⭐⭐⭐ **THE MIRRORED ARM SAT ~2 cm OFF AND THE CAUSE IS SETTLED** ([FINDINGS §64.0](FINDINGS.md)): the follower is position-controlled so it always settles SHORT of its command, and nothing in software read that back. **`--mirror-catchup` RAN on 2026-08-18 and is weak — see [FINDINGS §67.1](FINDINGS.md); item 44 is the real path.** ⭐⭐ **And the mirror gap is PER JOINT now** — the gripper twist is 6.6x less dangerous than the elbow and was held to the same number, which is why he kept raising `--mirror-gap` ([FINDINGS §64.1](FINDINGS.md)).
 >
 > ✅⭐⭐⭐ **MIRROR WORKS AT SPEED, AND THE ANSWER WAS THE TOLERANCE RATHER THAN THE SPEED: `--mirror-gap 2`.** Confirmed on hardware 2026-08-17: *`FOLLOWING (copy) — tracking 0.012 rad behind`* through 83.8° of hand-guided drift ([FINDINGS §62.0](FINDINGS.md)). ⭐⭐ **Joint 6, `gripper_twist`, physically tops out near 2.6 rad/s** — measured, follower allowed 10 and managing 2.64 — so more `--max-speed` cannot help past that. ⚠️ **His hand reaches 5.66-6.83 rad/s**, not the 2.4-3.7 this repo used to claim. ⛔ `--max-lag` still does not affect the mirror stop at all.
 >
