@@ -130,6 +130,7 @@ from recording import (  # noqa: E402
     TrackingLog,
     Trajectory,
     replay_step,
+    scrub_step,
     safe_time_scale,
 )
 from screen import StatusLine, display_width  # noqa: E402
@@ -1228,6 +1229,10 @@ def main() -> int:  # noqa: PLR0915
     replay_speed = 1.0
     replay_progress_t = 0.0             # last cycle in which the clock actually moved
     replay_slot = "?"                   # which saved recording is being played
+    # ⭐ SCRUB (item 13, ROADMAP §7.6): the puck is the playback clock — push forward to
+    # play, pull back to rewind, release to freeze. Chosen with `j` at the play prompt,
+    # never the default, because a long unattended playback must not need a held hand.
+    replay_scrub = False
     # ⛔⭐⭐ INITIALISED HERE BECAUSE IT WAS NOT, AND THAT CRASHED A SESSION. `replace_slot`
     # is assigned only inside the overwrite-guard branch, and the save handler reads it on
     # EVERY keypress at the save prompt. So the very first save of a session — the guard
@@ -1776,7 +1781,8 @@ def main() -> int:  # noqa: PLR0915
                 note = (f" ⚠️ taught {taught:.1f} rad/s exceeds the "
                         f"{args.teleop_speed:.1f} allowed, so 1.00x will lag")
             return (f"PLAY {replay_slot} · {replay_pending.duration:.1f}s taught at "
-                    f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go")
+                    f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go "
+                    f"· j=puck scrub")
 
         def begin_path(one: ArmSession, legs: list, what: str,
                        for_replay: bool = False) -> None:
@@ -2402,7 +2408,24 @@ def main() -> int:  # noqa: PLR0915
                             replay_speed = max(0.05, replay_speed / 1.25)
                             hint(replay_plan_line()); continue
                         pending = None
+                        if k == "j" and replay_pending is not None:
+                            # ⭐ SCRUB (item 13): the same park-to-start safety flow as
+                            # Enter, but once the recording begins the PUCK is the clock.
+                            # A mode entered on purpose, never the default (ROADMAP §7.6's
+                            # design caution: a long unattended playback must not need a
+                            # held hand — this one is FOR the hand).
+                            replay_scrub = True
+                            start = list(replay_pending.start_pose() or ())
+                            for one in replay_arms:
+                                begin_path(one, [("recording start",
+                                                  start[replay_layout.slice_for(one.name)])],
+                                           f"arm {one.name}'s start pose in recording "
+                                           f"{replay_slot}", for_replay=True)
+                            print("     then the PUCK scrubs it: push forward to play, pull "
+                                  "back to rewind,\n     let go to freeze. h or t ends it.\n")
+                            continue
                         if k in ("\r", "\n", " ") and replay_pending is not None:
+                            replay_scrub = False
                             # ⛔⭐ PARK TO THE START POSE FIRST, AND THIS IS THE SAFETY
                             # POINT OF THE WHOLE FEATURE. Playback commands poses the arm
                             # is known to reach, because a hand physically put it there.
@@ -3255,7 +3278,13 @@ def main() -> int:  # noqa: PLR0915
                 # exists (ROADMAP §8.2 item 7), so today that is one arm leaving the mode.
                 if replay is not None and not any(one.mode == "replay" for one in arms):
                     left = replay.duration - replay_s
-                    if left > 0.05:
+                    if replay_scrub:
+                        # ⭐ Leaving a SCRUB via a mode key is its normal end, not an
+                        # abandonment — the scrub has no finish line of its own.
+                        print(f"\n  ⭐ scrub ended at {replay_s:.1f}s of "
+                              f"{replay.duration:.1f}s.\n")
+                        replay_scrub = False
+                    elif left > 0.05:
                         print(f"\n  ⚠️  playback abandoned with {left:.1f}s left.\n")
                     replay = None
                     hint("")
@@ -3717,10 +3746,19 @@ def main() -> int:  # noqa: PLR0915
                                         tracking = TrackingLog(replay.n_joints)
                                         for a in replay_arms:
                                             a.mode = "replay"
-                                        print(f"\n▶  PLAYING {replay.duration:.1f}s of "
-                                              f"recorded movement on "
-                                              f"{'+'.join(a.name for a in replay_arms)} at "
-                                              f"{replay_speed:.2f}x. Press h or t to stop.\n")
+                                        if replay_scrub:
+                                            print(f"\n▶  SCRUB: {replay.duration:.1f}s of "
+                                                  f"recorded movement on "
+                                                  f"{'+'.join(a.name for a in replay_arms)}."
+                                                  f" The puck is the clock — push forward "
+                                                  f"to play, pull back to rewind, let go to "
+                                                  f"freeze. h or t ends it.\n")
+                                        else:
+                                            print(f"\n▶  PLAYING {replay.duration:.1f}s of "
+                                                  f"recorded movement on "
+                                                  f"{'+'.join(a.name for a in replay_arms)} "
+                                                  f"at {replay_speed:.2f}x. "
+                                                  f"Press h or t to stop.\n")
                             elif leg == "blocked":
                                 # ⛔ Never spin silently. If the arm has stopped closing the
                                 # gap the honest thing is to say so and hold, not to keep
@@ -3761,9 +3799,23 @@ def main() -> int:  # noqa: PLR0915
                     # vector. Jaws legitimately sit far from their commanded value while
                     # closing on an object, and counting that as lag would stall every
                     # playback that grips anything.
-                    rs = replay_step(replay, replay_s, measured, real_dt, speed=replay_speed,
-                                     max_lag=MAX_CURSOR_LAG,
-                                     compare=replay_layout.tracked_indices(N_ARM))
+                    if replay_scrub:
+                        # ⭐ SCRUB: the puck is the clock. EITHER puck works — during
+                        # playback nobody's hand is driving an arm, so whichever hand is
+                        # free is the deadman. The forward/back axis (index 1) is the
+                        # natural "push to play" gesture; largest deflection wins.
+                        defl = 0.0
+                        for a2 in arms:
+                            ax = getattr(a2, "raw_axes", None)
+                            if ax and abs(ax[1]) > abs(defl):
+                                defl = float(ax[1])
+                        rs = scrub_step(replay, replay_s, measured, real_dt, defl,
+                                        max_lag=MAX_CURSOR_LAG,
+                                        compare=replay_layout.tracked_indices(N_ARM))
+                    else:
+                        rs = replay_step(replay, replay_s, measured, real_dt,
+                                         speed=replay_speed, max_lag=MAX_CURSOR_LAG,
+                                         compare=replay_layout.tracked_indices(N_ARM))
                     replay_s = rs.cursor
                     for a in replay_arms:
                         piece = np.asarray(rs.target[replay_layout.slice_for(a.name)],

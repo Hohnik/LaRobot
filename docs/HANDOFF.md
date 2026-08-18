@@ -29,7 +29,9 @@
 >
 > ✅⭐⭐ **Third 2026-08-18 layer, from his evening bench session ([FINDINGS §67.10](FINDINGS.md), [§67.11](FINDINGS.md)):** the **park spasm is CONFIRMED fixed** (the last unconfirmed motion fix) · the settings ladder proved itself on hardware · **items 43, 38, 21, 28 all closed** — tuning shows the live rows, the newest prompt cancels the older, SLOWED prints its measurement, TELEOP rows name their frame (`/w`·`/t`·`/c`) · `q` inside the settings screen now quits · the C920 comes later, camera capture queued behind it.
 >
-> ⬜⭐ **What remains in scope, in build order:** the speed-dial puck (item 13) · the jaw-pause finish + `check_grasp` wiring (items 3, 10) · collapse the two parks (item 23) · the [ROADMAP §10](ROADMAP.md) restructure (ratified, [§10.6](ROADMAP.md) explored) · the camera chain once the C920 is back (items 5, 6) · the data-collection features (7, 8, 9, 12) · the consolidation plan ([ROADMAP §8.5](ROADMAP.md)), the deliverable.
+> ⬜⭐ **What remains in scope, in build order:** the jaw-pause finish + `check_grasp` wiring (items 3, 10) · collapse the two parks (item 23) · the [ROADMAP §10](ROADMAP.md) restructure (ratified, [§10.6](ROADMAP.md) explored) · the camera capture tooling (item 6 — write now, he runs it when the C920 is replugged) · the data-collection features (7, 8, 9, 12) · the consolidation plan ([ROADMAP §8.5](ROADMAP.md)), the deliverable.
+>
+> ⭐⭐ **Fourth 2026-08-18 layer:** ⛔ **NO SECOND D405 — his ruling** ([FINDINGS §67.12](FINDINGS.md)): the walkthrough's cameras are one D405 + the C920; item 5 moves into the plan as the rebuild's first camera task. ✅ **The PUCK SCRUB is built** ([FINDINGS §67.13](FINDINGS.md)): `j` at the play prompt — forward plays, back rewinds, release freezes; deadman by spring centre; 702 checks green. ⬜ Owes one feel-run.
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >

@@ -4664,3 +4664,29 @@ His explanation, 2026-08-18, after being asked about an unparseable phrase: *"I'
 3. ✅ **Item 28, the control frame on the row:** `[B TELEOP/w]` · `/t` · `/c` for world · tool · camera, padded to CONTROLS' 8 columns so nothing misaligns. `v` aims at one arm, so two arms can be driven in different frames at once, and until now nothing on screen said which was which.
 
 ✅ Verified: 696 checks across 27 files all green, the sim drive 25/25 (its script now also walks `vel_ff` live on the settings screen).
+
+### 67.12 ⭐⭐ HIS RULING: NO SECOND D405 — the walkthrough's camera set is ONE D405 plus the C920
+
+His words, 2026-08-18: *"I will not get the second camera, so just work without it for now. Let me know if you desperately need it for something."*
+
+⭐ **What that rescopes, checked against every camera item:**
+
+1. ⛔ **Item 5 (telling two identical D405s apart) leaves the walkthrough** — the problem cannot exist with one D405, because a D405 and a C920 are different models with different names. **It becomes a consolidation-plan note for the rebuild**, which per [Setup-Anleitung.md](Setup-Anleitung.md) B3 wants 2× D405 on the wrists: the two D405s DO carry distinct USB serials readable with no root ([§34.5](FINDINGS.md) — the docs once assumed otherwise), and the unsolved half is mapping a serial to an OpenCV index. The runtime fallback that always works: capture from each index and have the operator cover one lens.
+2. ✅ **Item 6 (timestamped multi-camera capture) stays fully buildable**: two cameras (D405 + C920) exercise every multi-camera problem except identical-device identity — alignment to joint data, differing latencies, differing frame rates. The capture tooling gets written against LaRobot's dual-timestamp `Frame` shape ([ROADMAP §10.6](ROADMAP.md)) so the team lifts it unchanged.
+3. ⚠️ **Nothing is desperately blocked.** The one thing a second D405 would enable is developing the serial→index mapping against real duplicated hardware; the plan carries it as the rebuild's first camera task instead.
+
+⚠️ The C920 is also still to be replugged (his word: *"later"*); the capture tooling can be WRITTEN before it arrives, since the agent can never run cameras anyway ([§61.3](FINDINGS.md)) — he runs one command when it is in.
+
+### 67.13 ✅⭐⭐ THE PUCK SCRUB IS BUILT — item 13, his idea, top-ranked version. UNRUN ON HARDWARE
+
+✅ **What exists:** at the play prompt (`l` then a slot), **`j`** starts the recording as a PUCK SCRUB instead of a fixed-speed run. Push forward to play, pull back to rewind, let go to freeze. Either puck works (largest deflection wins — during playback nobody's hand is driving, so whichever hand is free is the deadman). `h` or `t` ends it; the end message reports where the cursor stood. [COMMANDS.md](COMMANDS.md) documents it beside `l`.
+
+⭐⭐ **The design decisions, each from [ROADMAP §7.6](ROADMAP.md):**
+1. **A mode entered on purpose (`j`), never the default** — §7.6's caution: a long unattended playback must not need a held hand; this mode exists FOR the hand.
+2. **The spring centre is the deadman**: `scrub_rate` has its own deadband on top of the reader's hardware deadzone, so a released puck always means a frozen cursor and a holding arm.
+3. **Backwards is safe by the same argument forwards is**: every pose at every cursor value is one a hand physically put the arm in ([§57.1](FINDINGS.md)'s park-to-start flow still runs first, unchanged).
+4. **The pace caps at 1.5× in both directions** — the same ceiling a plain playback may reach, so scrubbing can never ask for a speed `l` could not, and SafeRobot still binds underneath.
+5. **The lag hold works in both directions**: an arm `MAX_CURSOR_LAG` behind freezes the cursor exactly as in a normal playback.
+6. ⭐ **The "third puck role" worry dissolved**: the dial is not a device role but a *playback behaviour* reading the already-assigned pucks, which are idle during replay. No assignment logic changed at all.
+
+✅ **Verified:** `scripts/test_scrub.py` 6/6 (deadman freeze · forward/backward symmetry · linear-past-deadband capped rate · clamps at both ends, never finishes · bidirectional lag hold · grippers excludable from the lag check), full sweep **702 checks across 28 files**, sim drive 25/25, `check_flags` ✓. ⬜ **Owes one hardware feel-run**: `l` a recording, `j`, scrub it both ways.

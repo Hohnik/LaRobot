@@ -28,11 +28,13 @@ hardware ([FINDINGS §11](../docs/FINDINGS.md)).
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
 __all__ = ["Sample", "Trajectory", "ReplayStep", "replay_step", "safe_time_scale",
+           "scrub_rate", "scrub_step",
            "TrackingLog"]
 
 # ⚠️ Radians, rounded on save. 1e-5 rad is 0.0006°, which is roughly a thousand times
@@ -546,6 +548,63 @@ def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: 
         finished=moved >= traj.duration,
         held=held,
     )
+
+
+#: ⭐ The scrub dial (ROADMAP §7.6, item 13 — his idea, built 2026-08-18). Deflection below
+#: this is treated as "hands off", ON TOP of the reader's own hardware deadzone, because the
+#: scrub must freeze the instant the hand leaves the puck — that release-to-stop property is
+#: the whole safety argument for the feature on a rig with no e-stop.
+SCRUB_DEADBAND = 0.15
+
+#: ⭐ Full deflection scrubs at 1.5× the recorded pace, either direction. Deliberately at the
+#: same ceiling `safe_time_scale` would allow a normal playback, so scrubbing can never ask
+#: the arm for speeds a plain `l` run could not — and SafeRobot still binds underneath.
+SCRUB_MAX_RATE = 1.5
+
+
+def scrub_rate(deflection: float, deadband: float = SCRUB_DEADBAND,
+               max_rate: float = SCRUB_MAX_RATE) -> float:
+    """Puck deflection (−1..1) → signed playback rate, in recording-seconds per second.
+
+    ⭐ Push forward = the recording runs forward; pull back = it runs backwards; let go =
+    it freezes. A SpaceMouse is spring-centred, so the neutral state is STOPPED and the
+    dial is a deadman by construction (ROADMAP §7.6). The response is linear past the
+    deadband, so half a push is half the pace — a scrub wheel, not a switch.
+    """
+    d = float(deflection)
+    if abs(d) <= deadband:
+        return 0.0
+    span = min(1.0, (abs(d) - deadband) / (1.0 - deadband))
+    return math.copysign(span * max_rate, d)
+
+
+def scrub_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
+               deflection: float, max_lag: float = 0.15,
+               compare: Sequence[int] | None = None) -> ReplayStep:
+    """One control cycle of PUCK-SCRUBBED playback: the hand is the clock.
+
+    The same shape as `replay_step`, with three deliberate differences:
+
+    1. **The cursor moves at `scrub_rate(deflection)` and can run BACKWARDS.** The pose
+       at every cursor value is one a hand physically put the arm in, so playing the
+       samples in reverse commands only poses the recording already proved reachable.
+    2. **It clamps at both ends and never finishes.** Reaching the end of the recording
+       under a scrub means "the dial hit the last frame", not "the run is over" — the
+       operator decides when it is over, by leaving the mode. `finished` is always False.
+    3. **The lag hold works in both directions.** If the arm falls `max_lag` behind the
+       commanded pose, the cursor freezes exactly as in a normal playback, whichever way
+       the hand is dragging it.
+    """
+    if not traj.samples:
+        raise ValueError("cannot scrub an empty recording")
+    target = traj.pose_at(cursor)
+    usable = min(len(target), len(measured))
+    idx = range(usable) if compare is None else [i for i in compare if i < usable]
+    lag = max((abs(target[i] - measured[i]) for i in idx), default=0.0)
+    held = lag >= max_lag
+    moved = cursor if held else min(traj.duration,
+                                    max(0.0, cursor + dt * scrub_rate(deflection)))
+    return ReplayStep(cursor=moved, target=target, lag=lag, finished=False, held=held)
 
 
 class TrackingLog:
