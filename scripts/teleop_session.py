@@ -115,7 +115,7 @@ from spacemouse import (  # noqa: E402
     open_device,
     pick_device_by_wiggle,
 )
-from arm_session import ArmSelector, ArmSession, parse_arms  # noqa: E402
+from arm_session import ArmSelector, ArmSession, ParkLeg, parse_arms  # noqa: E402
 from incident import describe, write_incident  # noqa: E402
 from mirror import (  # noqa: E402
     DEFAULT_ALIGN_SPEED,
@@ -124,7 +124,7 @@ from mirror import (  # noqa: E402
     MirrorLink,
     pick_pair,
 )
-from motion import EASINGS, JointPath, easing_factor  # noqa: E402
+from motion import EASINGS, easing_factor  # noqa: E402
 from recording import (  # noqa: E402
     Layout,
     describe_slot,
@@ -1814,29 +1814,15 @@ def main() -> int:  # noqa: PLR0915
                 replay_ready = set()
                 print("\n  ⚠️  playback cancelled — a new park replaced the drive to its "
                       "start pose.\n")
-            targets = []
-            for _, pose in legs:
-                tgt, warn = park_target_from(one.robot.get_joint_pos(), pose,
-                                             gripper_index=N_ARM, clamp=clamp_gripper)
-                if warn:
-                    print(f"\n  ⚠️  {warn}.")
-                targets.append(tgt)
-            start = np.asarray(one.robot.get_joint_pos(), dtype=float)
-            one.park_path = JointPath([start, *targets], blend=BLEND_MODES[blend_idx][1])
-            one.park_marks = list(zip([n for n, _ in legs], one.park_path.arrival_lengths()[1:]))
-            one.park_s = 0.0
-            one.park_target = targets[-1]
-            one.park_cmd = start.copy()
-            # ⛔ THE ORDER MATTERS. `ArmSession.enter_hold()` seeds the command at the
-            # measured pose AND sets mode="hold", so PARK is written AFTER it — the
-            # reverse order was the §52.1 trap: a park running while the screen said
-            # HOLD. This was the site the item-23 audit flagged; the reorder is the fix.
-            one.enter_hold()
-            one.mode = "park"
-            one.park_best_err = float(np.max(np.abs(one.park_target - start)))
-            one.park_progress_t = t
-            one.park_leg_t = t
-            one.park_start_t = t
+            # ⭐ item 23 group ④: the CLASS builds and runs the park now — the tested
+            # `begin_path`/`step_path` pair with its 48 tests is finally the code that
+            # moves the arm. The session's live dials are copied on at start, and the
+            # `e` key keeps `easing` current mid-park.
+            one.blend = BLEND_MODES[blend_idx][1]
+            one.easing = EASINGS[ease_idx]
+            for warn in one.begin_path([ParkLeg(n, list(pose)) for n, pose in legs], t,
+                                       smooth=not args.no_smooth):
+                print(f"\n  ⚠️  {warn}.")
             # The plan has become the thing happening; the progress readout replaces it.
             hint("")
             print(f"\n⭐ MODE: PARK → {what}, {one.park_path.length:.2f} rad of travel at "
@@ -2555,6 +2541,8 @@ def main() -> int:  # noqa: PLR0915
                             # reason. The two differ only in what they show — the whole
                             # plan while choosing, just the profile otherwise.
                             ease_idx = (ease_idx + 1) % len(EASINGS)
+                            for one in arms:
+                                one.easing = EASINGS[ease_idx]
                             hint(park_plan_line(edit_arm)); continue
 
                     if pending == "park":
@@ -3186,6 +3174,10 @@ def main() -> int:  # noqa: PLR0915
                         # effect you cannot see has to say where its effect lives, every
                         # time it is touched.
                         ease_idx = (ease_idx + 1) % len(EASINGS)
+                        # ⭐ Pushed onto the class, where step_path reads it per cycle —
+                        # the script no longer owns the easing (item 23 group ④).
+                        for one in arms:
+                            one.easing = EASINGS[ease_idx]
                         hint(ease_note(EASINGS[ease_idx].name, edit_arm.park_ramp))
                     elif k == "r":
                         rotation = not rotation
@@ -3702,169 +3694,111 @@ def main() -> int:  # noqa: PLR0915
                             one.prev_q = full[:N_ARM].copy()
 
                     elif one.mode == "park" and one.park_path is not None and one.park_target is not None:
-                        q = np.asarray(one.robot.get_joint_pos(), dtype=float)
-                        # ⭐ Completion is judged from the MEASURED pose, never from the
-                        # command — the command always arrives first, so testing it would
-                        # declare success while the arm was still travelling.
-                        err = float(np.max(np.abs(one.park_target - q)))
-                        lag = float(np.max(np.abs(one.park_cmd - q))) if one.park_cmd is not None else 0.0
-                        at_end = one.park_s >= one.park_path.length
-
-                        # ⛔ ARRIVAL IS GATED ON THE CURSOR REACHING THE END, not on the
-                        # error alone. A run like `p 1 2 1` finishes where it started, so
-                        # the error to the FINAL target is small at t=0 too — judging on it
-                        # would declare the whole sequence complete before moving.
-                        if not at_end:
-                            # Hold the cursor if the arm has fallen behind. The trajectory
-                            # is a SHAPE now; a command racing ahead while the arm cuts its
-                            # own corner is not the shape anyone chose.
-                            advanced = False
-                            if lag < MAX_CURSOR_LAG:
-                                ramp = easing_factor(
-                                    EASINGS[ease_idx], one.park_s, one.park_path.length - one.park_s,
-                                    0.0 if args.no_smooth else one.park_ramp)
-                                one.park_s = min(one.park_path.length,
-                                             one.park_s + one.park_speed * ramp * dt)
-                                advanced = True
-                            one.park_cmd = one.park_path.point_at(one.park_s)
-                            one.robot.command_joint_pos(one.park_cmd)
-
-                            # Progress is "the cursor moved OR the arm closed the gap".
-                            # Without the first half, a legitimately slow leg looks stalled;
-                            # without the second, an arm pinned against something never does.
-                            if advanced or err < one.park_best_err - PARK_PROGRESS_EPS:
-                                one.park_best_err = min(one.park_best_err, err)
-                                one.park_progress_t = t
-                            if t - one.park_progress_t > PARK_STALL_SECONDS:
-                                one.enter_hold(); hint("")
-                                print(f"\n⛔ PARK BLOCKED — the arm stopped following "
-                                      f"{lag:.3f} rad behind the path, no progress for "
-                                      f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                            elif one.park_marks and one.park_s >= one.park_marks[0][1]:
+                        # ⭐⭐ item 23 group ④ (2026-08-18): the CLASS advances the park.
+                        # `ArmSession.step_path` owns the cursor, the lag hold, the easing,
+                        # the stall guard and the verdict — 48 tests. This branch only
+                        # narrates the ParkStep it returns and performs the handovers,
+                        # which is the split the whole restructure was for: the class
+                        # decides, the script narrates.
+                        ps = one.step_path(t, dt)
+                        if ps.verdict == "moving":
+                            if ps.leg_passed is not None:
                                 # ⭐ Time each waypoint. Julien: *"you can't really see how
-                                # long each parking section took, you can only see the park
-                                # itself."* Now each leg reports its own seconds as it is
-                                # passed, which is also the number to watch when tuning
-                                # speed and corner radius.
-                                name, _ = one.park_marks.pop(0)
-                                print(f"  ⭐ slot {name} in {t - one.park_leg_t:.1f}s"
-                                      + (f" → next {one.park_marks[0][0]}" if one.park_marks else ""))
-                                one.park_leg_t = t
+                                # long each parking section took."* The class stamps the
+                                # leg clock; this line only prints it.
+                                print(f"  ⭐ slot {ps.leg_passed} in {ps.leg_seconds:.1f}s"
+                                      + (f" → next {ps.next_leg}" if ps.next_leg else ""))
                             elif t >= next_park_report:
                                 next_park_report = t + 1.0
-                                # ⛔ A HINT, NOT THE STATUS ROW — same fix as the sequence
-                                # echo. Routed through `screen.set` this replaced the
-                                # temperature heartbeat with the progress readout, so during
-                                # the one motion where an operator most wants to see a
-                                # temperature climbing, it was the line that had been
-                                # painted over.
-                                hint(f"  moving… {one.park_path.length - one.park_s:.2f} rad of path "
-                                     f"left, {err:.3f} to the final pose, {lag:.3f} behind")
-                        else:
-                            leg = park_verdict(err, t - one.park_progress_t > PARK_STALL_SECONDS,
-                                               PARK_TOLERANCE, PARK_SETTLED,
-                                               stopped_briefly=t - one.park_progress_t
-                                               > PARK_SETTLE_SECONDS)
-                            if leg in ("arrived", "settled"):
-                                extra = ("" if leg == "arrived" else
-                                         " — as close as the arm holds itself under load")
-                                one.enter_hold()
-                                hint("")        # the progress readout has nothing left to say
-                                # ⛔ `park_start_t`, NOT `park_leg_t`. The last leg's mark is
-                                # passed at the end of the path, which resets the leg clock
-                                # moments before arrival — so this line used to report a 4.4 s
-                                # park as "reached in 0.0s". FINDINGS §34.3.
-                                # ⭐ Both numbers are shown because they answer different
-                                # questions: the total is what changes when speed, corner
-                                # radius or the ease ramp is tuned, and the settling time is
-                                # how long the arm took to close the last of the gap after the
-                                # commanded path had already run out.
-                                total = t - one.park_start_t
-                                settling = t - one.park_leg_t
-                                tail = (f", {settling:.1f}s of that settling"
-                                        if 0.05 < settling < total - 0.05 else "")
-                                print(f"⭐ PARK reached in {total:.1f}s{tail} "
-                                      f"({err:.3f} rad off{extra}) → HOLD")
-                                # ⛔⭐⭐ THE ARRIVAL CLEARS ITS OWN PATH, AND THIS IS THE FIX
-                                # FOR THE BUG THAT KILLED THE FIRST TWO-ARM PLAYBACK.
-                                #
-                                # The generic "leaving PARK abandons the run" block below runs
-                                # once a cycle and fires for any arm whose mode is no longer
-                                # `park` while `park_path` is still set. An ARRIVAL sets the
-                                # mode to `hold` and used to leave the path in place, so on
-                                # the next cycle that block treated a COMPLETED park as an
-                                # abandoned one — and cancelled `replay_pending`, the pending
-                                # playback the park existed to reach.
-                                #
-                                # ⚠️ It never showed with one arm, because the handover
-                                # happened in the same cycle as the arrival, so
-                                # `replay_pending` was already None when the block ran. With
-                                # two arms the first arrival WAITS for the second, so the
-                                # pending playback is still set and gets cancelled. Julien's
-                                # own log: *"arm B is at the start pose; waiting for G"*
-                                # immediately followed by *"playback cancelled — it never
-                                # reached the start pose"*. FINDINGS §57.1.
-                                one.park_path, one.park_marks = None, []
-                                # ⭐ The handover from "drive to the start pose" to "play the
-                                # recording". It lives HERE, in the arrival branch, so a park
-                                # that was blocked or interrupted can never roll into a
-                                # playback: only a park that actually arrived does.
-                                if replay_pending is not None and one in replay_arms:
-                                    # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each
-                                    # one parks a different distance and therefore finishes at
-                                    # a different moment. Starting the clock on the first
-                                    # arrival would have the second arm still parking while
-                                    # the recording ran, and a two-arm demonstration whose
-                                    # halves are seconds apart is not the one that was taught.
-                                    replay_ready.add(one.name)
-                                    waiting = [a.name for a in replay_arms
-                                               if a.name not in replay_ready]
-                                    if waiting:
-                                        print(f"     arm {one.name} is at the start pose; "
-                                              f"waiting for {', '.join(waiting)}.")
+                                # ⛔ A HINT, NOT THE STATUS ROW — routed through screen.set
+                                # this once painted over the temperature heartbeat during
+                                # the exact motion where it matters most.
+                                hint(f"  moving… {ps.remaining:.2f} rad of path "
+                                     f"left, {ps.err:.3f} to the final pose, "
+                                     f"{ps.lag:.3f} behind")
+                        elif ps.verdict in ("arrived", "settled"):
+                            extra = ("" if ps.verdict == "arrived" else
+                                     " — as close as the arm holds itself under load")
+                            one.enter_hold()
+                            hint("")    # the progress readout has nothing left to say
+                            # ⭐ Total and settling answer different questions: the total
+                            # is what speed/corner/ease tuning changes, and the settling
+                            # is how long the arm closed the last gap after the commanded
+                            # path ran out. The class stamps both from the right clocks —
+                            # park_start_t, NOT park_leg_t, for the total (FINDINGS §34.3).
+                            tail = (f", {ps.settling_seconds:.1f}s of that settling"
+                                    if 0.05 < ps.settling_seconds < ps.total_seconds - 0.05
+                                    else "")
+                            print(f"⭐ PARK reached in {ps.total_seconds:.1f}s{tail} "
+                                  f"({ps.err:.3f} rad off{extra}) → HOLD")
+                            # ⛔⭐⭐ THE ARRIVAL CLEARS ITS OWN PATH — the fix for the bug
+                            # that killed the first two-arm playback. The generic "leaving
+                            # PARK abandons the run" block fires for any arm whose mode is
+                            # no longer `park` while `park_path` is still set; an ARRIVAL
+                            # used to leave the path in place, so with two arms the FIRST
+                            # arrival (which waits for the second) had its pending playback
+                            # cancelled as "abandoned". FINDINGS §57.1.
+                            one.park_path, one.park_marks = None, []
+                            # ⭐ The handover from "drive to the start pose" to "play the
+                            # recording" lives HERE, in the arrival branch, so a park that
+                            # was blocked or interrupted can never roll into a playback:
+                            # only a park that actually arrived does.
+                            if replay_pending is not None and one in replay_arms:
+                                # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each one
+                                # parks a different distance and finishes at a different
+                                # moment; starting on the first arrival would have the
+                                # second arm still parking while the recording ran.
+                                replay_ready.add(one.name)
+                                waiting = [a.name for a in replay_arms
+                                           if a.name not in replay_ready]
+                                if waiting:
+                                    print(f"     arm {one.name} is at the start pose; "
+                                          f"waiting for {', '.join(waiting)}.")
+                                else:
+                                    replay = replay_pending
+                                    replay_pending = None
+                                    replay_t0, replay_s = t, 0.0
+                                    replay_progress_t = t
+                                    replay_held_s, replay_worst_lag = 0.0, 0.0
+                                    scrub_ref_t, scrub_ref_s, scrub_ref_h = t, 0.0, 0.0
+                                    replay_prev_target = list(replay.start_pose() or ())
+                                    tracking = TrackingLog(replay.n_joints)
+                                    for a in replay_arms:
+                                        a.mode = "replay"
+                                    if replay_scrub:
+                                        print(f"\n▶  SCRUB: {replay.duration:.1f}s of "
+                                              f"recorded movement on "
+                                              f"{'+'.join(a.name for a in replay_arms)}."
+                                              f" The puck is the clock — push forward "
+                                              f"to play, pull back to rewind, let go to "
+                                              f"freeze.\n     Full push = "
+                                              f"{args.scrub_max:g}x the recording "
+                                              f"(-/+ changes it). h or t ends it.\n")
                                     else:
-                                        replay = replay_pending
-                                        replay_pending = None
-                                        replay_t0, replay_s = t, 0.0
-                                        replay_progress_t = t
-                                        replay_held_s, replay_worst_lag = 0.0, 0.0
-                                        scrub_ref_t, scrub_ref_s, scrub_ref_h = t, 0.0, 0.0
-                                        replay_prev_target = list(replay.start_pose() or ())
-                                        tracking = TrackingLog(replay.n_joints)
-                                        for a in replay_arms:
-                                            a.mode = "replay"
-                                        if replay_scrub:
-                                            print(f"\n▶  SCRUB: {replay.duration:.1f}s of "
-                                                  f"recorded movement on "
-                                                  f"{'+'.join(a.name for a in replay_arms)}."
-                                                  f" The puck is the clock — push forward "
-                                                  f"to play, pull back to rewind, let go to "
-                                                  f"freeze.\n     Full push = "
-                                                  f"{args.scrub_max:g}x the recording "
-                                                  f"(-/+ changes it). h or t ends it.\n")
-                                        else:
-                                            print(f"\n▶  PLAYING {replay.duration:.1f}s of "
-                                                  f"recorded movement on "
-                                                  f"{'+'.join(a.name for a in replay_arms)} "
-                                                  f"at {replay_speed:.2f}x. "
-                                                  f"Press h or t to stop.\n")
-                            elif leg == "blocked":
-                                # ⛔ Never spin silently. If the arm has stopped closing the
-                                # gap the honest thing is to say so and hold, not to keep
-                                # printing a number that is not changing — which is exactly
-                                # how the old treadmill bug hid for two sessions.
-                                one.enter_hold(); hint("")
-                                print(f"\n⛔ PARK BLOCKED — {err:.3f} rad still to go and no "
-                                      f"progress for {PARK_STALL_SECONDS:.0f}s.")
-                                print(f"   The command ran {lag:.3f} rad ahead of the arm; "
-                                      f"SafeRobot limited "
+                                        print(f"\n▶  PLAYING {replay.duration:.1f}s of "
+                                              f"recorded movement on "
+                                              f"{'+'.join(a.name for a in replay_arms)} "
+                                              f"at {replay_speed:.2f}x. "
+                                              f"Press h or t to stop.\n")
+                        else:
+                            # ⛔ BLOCKED. Never spin silently: say so and hold. The wording
+                            # keeps the old two shapes — mid-path (the arm stopped
+                            # following) and at the end (it stopped closing) — decided by
+                            # the remaining path, which the ParkStep carries.
+                            one.enter_hold()
+                            hint("")
+                            if ps.remaining > 1e-9:
+                                print(f"\n⛔ PARK BLOCKED — the arm stopped following "
+                                      f"{ps.lag:.3f} rad behind the path, no progress "
+                                      f"for {PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
+                            else:
+                                print(f"\n⛔ PARK BLOCKED — {ps.err:.3f} rad still to go "
+                                      f"and no progress for {PARK_STALL_SECONDS:.0f}s.")
+                                print(f"   The command ran {ps.lag:.3f} rad ahead of the "
+                                      f"arm; SafeRobot limited "
                                       f"{getattr(one.robot, 'limited_cycles', 0)} cycles.")
                                 print("   Something is blocking it, or the pose is "
                                       "unreachable. Now HOLDING.\n")
-                            else:
-                                one.robot.command_joint_pos(one.park_cmd)
-                                if err < one.park_best_err - PARK_PROGRESS_EPS:
-                                    one.park_best_err, one.park_progress_t = err, t
 
                 # ---- 4a. the playback: ONE cursor, every arm it was recorded from ----
                 #

@@ -804,6 +804,16 @@ class ArmSession:
         verdict = park_verdict(err, t - self.park_progress_t > stall_seconds,
                                tolerance, settled,
                                stopped_briefly=t - self.park_progress_t > settle_seconds)
+        if verdict not in ("arrived", "settled", "blocked"):
+            # ⭐ THE SETTLE PHASE STILL COMMANDS AND STILL CREDITS PROGRESS — merged from
+            # the script on 2026-08-18 (item 23 group ④), which had learned both after
+            # this class was written. Re-sending the final point keeps the velocity
+            # feedforward decaying to zero instead of freezing at its last value, and
+            # crediting an err improvement keeps a slowly-settling arm from being
+            # declared blocked at the stall timeout while it is still visibly closing.
+            self.robot.command_joint_pos(self.park_cmd)
+            if err < self.park_best_err - progress_eps:
+                self.park_best_err, self.park_progress_t = err, t
         return result(verdict)
 
     def abandon_path(self) -> float:

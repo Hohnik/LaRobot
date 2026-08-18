@@ -335,6 +335,57 @@ def test_park_with_no_target_refuses_rather_than_crashing() -> None:
     assert arm.step_path(0.0, 0.01).verdict == "blocked"
 
 
+class SlowlySettlingRobot(FakeRobot):
+    """An arm that closes a fraction of its remaining gap per command — an honest,
+    slow settle, so the cursor ends while real error is still left to close."""
+
+    def __init__(self, q=None, closing=0.2):  # noqa: ANN001
+        super().__init__(q=q)
+        self.closing = closing
+
+    def command_joint_pos(self, q) -> None:  # noqa: ANN001
+        q = np.asarray(q, dtype=float)
+        self.commands.append(q.copy())
+        self.q = self.q + self.closing * (q - self.q)
+
+
+def test_the_settle_phase_still_commands_the_final_point() -> None:
+    """⭐ Merged from the script, item 23 group ④ (2026-08-18). After the cursor runs
+    out, the final point must keep being commanded: with velocity feedforward on, a
+    frozen last command leaves a stale nonzero setpoint standing at the motor, and the
+    smoothed decay to zero only happens across repeated commands."""
+    robot = SlowlySettlingRobot(q=[0.5] * 6 + [0.5], closing=0.05)
+    arm = ArmSession(robot, name="B")
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
+    t, ended, terminal = 0.0, None, None
+    while t < 10.0 and terminal is None:
+        st = arm.step_path(t, 0.01)
+        if ended is None and arm.park_s >= arm.park_path.length:
+            ended = len(robot.commands)
+        if ended is not None and st.verdict in ("arrived", "settled", "blocked"):
+            terminal = len(robot.commands)
+        t += 0.01
+    assert ended is not None, "the cursor never finished — lengthen the run"
+    assert terminal is not None and terminal > ended, \
+        "commands stopped when the cursor ended — the settle phase went silent"
+    for _ in range(5):
+        arm.step_path(t, 0.01)
+        t += 0.01
+    assert len(robot.commands) == terminal, \
+        "a TERMINAL verdict must stop the commands — arrival is the end of the run"
+
+
+def test_a_slowly_settling_arm_is_not_declared_blocked() -> None:
+    """⭐ The other half of the same merge: an arm still visibly closing its error after
+    the cursor ends must keep earning progress, never hit the stall timer."""
+    robot = SlowlySettlingRobot(q=[0.6] * 6 + [0.5])
+    arm = ArmSession(robot, name="B")
+    arm.begin_path(to([0.0] * 6 + [0.5]), t=0.0)
+    verdict, err, _ = run_park(arm, robot, seconds=30.0)
+    assert verdict in ("arrived", "settled"), \
+        f"a slow but honest settle ended as {verdict} at {err:.3f} rad"
+
+
 # ---------------------------------------------- one blended path, N waypoints ----
 
 

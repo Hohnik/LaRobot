@@ -44,8 +44,7 @@ TARGET = REPO / "scripts" / "teleop_session.py"
 #: check keeps proving that earlier groups have not regressed.
 MOVED_SO_FAR = [
     "prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since",
-    "park_path", "park_s", "park_marks", "park_target", "park_cmd", "park_best_err",
-    "park_progress_t", "park_leg_t", "park_start_t", "park_speed", "park_ramp",
+    "park_path", "park_s", "park_marks", "park_target", "park_speed", "park_ramp",
     "thermal", "teleop", "mode",
     # ⭐ Step 2c, 2026-08-14: this cycle's temperatures. They were session locals, so they
     # were one arm's reading available to whichever row was being painted — and the status
@@ -84,6 +83,19 @@ MOVED_SO_FAR = [
 #:   * `mode` is read by `build_robot()` to decide `zero_gravity`, before the robot and
 #:     therefore the ArmSession exist. The script keeps a local `mode` for that decision.
 STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
+
+#: ⭐⭐ Fields the CLASS owns end to end since item 23 group ④ (2026-08-18): the script
+#: neither holds them as locals nor reads them — `ArmSession.begin_path`/`step_path` are
+#: their whole lifecycle, and the script narrates the returned ParkStep instead.
+#:
+#: ⛔ This is a TIGHTER rule than MOVED_SO_FAR, not an exemption: any `arm.x`/`one.x`
+#: access to one of these in the script is a fault, because it re-opens the §52.1 split
+#: (script-side behavior beside the class's tested copy). The no-bare-local rule still
+#: applies too. ⚠️ `park_path`/`park_marks`/`park_s`/`park_target` stay in MOVED_SO_FAR:
+#: the script legitimately guards on them, clears them on arrival, and prints the length.
+CLASS_INTERNAL = [
+    "park_cmd", "park_best_err", "park_progress_t", "park_leg_t", "park_start_t",
+]
 
 #: ⛔⭐ SESSION-LEVEL NAMES THAT WERE DELETED RATHER THAN MOVED, and must not come back.
 #:
@@ -165,10 +177,13 @@ def run(moved: list[str]) -> int:
     print(f"main() : lines {fn.lineno}-{fn.end_lineno} ({span} lines)\n")
 
     # 1. No moved name may survive as a bare local, in code OR in a declaration.
+    #    ⛔ CLASS_INTERNAL names obey this rule too — going class-internal never licenses
+    #    a bare local coming back.
+    guarded = list(moved) + [n for n in CLASS_INTERNAL if n not in moved]
     bare = sorted({(n.lineno, n.id) for n in ast.walk(fn)
-                   if isinstance(n, ast.Name) and n.id in moved})
+                   if isinstance(n, ast.Name) and n.id in guarded})
     decl = sorted({(n.lineno, nm) for n in ast.walk(fn)
-                   if isinstance(n, (ast.Nonlocal, ast.Global)) for nm in n.names if nm in moved})
+                   if isinstance(n, (ast.Nonlocal, ast.Global)) for nm in n.names if nm in guarded})
     if bare:
         faults += len(bare)
         print(f"⛔ {len(bare)} bare reference(s) to a moved name still in main():")
@@ -206,6 +221,23 @@ def run(moved: list[str]) -> int:
     if missing:
         faults += len(missing)
         print(f"⛔ moved but never read through `arm`: {missing} — did the field get dropped?")
+
+    # 2b. ⛔⭐ CLASS-INTERNAL fields may not be touched by the script AT ALL (item 23
+    #     group ④). `begin_path`/`step_path` are their whole lifecycle; a script access
+    #     re-opens the §52.1 split — behavior in the script beside the class's tested
+    #     copy — which is the exact defect the park merge closed.
+    touched = sorted({(node.lineno, node.attr) for node in ast.walk(fn)
+                      if isinstance(node, ast.Attribute) and node.attr in CLASS_INTERNAL
+                      and isinstance(node.value, ast.Name) and node.value.id in holders})
+    if touched:
+        faults += len(touched)
+        print(f"⛔ the script touches CLASS-INTERNAL park state (the class owns these "
+              f"end to end since group ④):")
+        for lineno, name in touched:
+            print(f"     line {lineno}: .{name}")
+    else:
+        print(f"✓ class-internal park state untouched by the script: "
+              f"{', '.join(CLASS_INTERNAL)}")
 
     # 3. ⛔⭐⭐ ORDERING: nothing may touch `arm` before `arm` is constructed.
     #
