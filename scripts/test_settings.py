@@ -25,6 +25,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from settings import (  # noqa: E402
+    LADDERS,
     LIVE_BOUNDS,
     LIVE_ORDER,
     TUNABLE,
@@ -245,12 +246,38 @@ def test_a_file_whose_values_all_match_the_builtins_still_says_it_was_read() -> 
 # ------------------------------------------------------------- the live editor
 
 
-def test_a_press_moves_a_speed_by_a_RATIO_not_a_fixed_amount() -> None:
-    """⭐ 0.1 → 0.125 and 8 → 10 are the same FELT step. A fixed increment cannot be both,
-    and a setting that spans two orders of magnitude needs the ratio."""
-    assert adjust("max_speed", 4.0, True) == 5.0
-    assert adjust("max_speed", 4.0, False) == 3.2
+def test_a_press_walks_a_LADDER_of_round_numbers() -> None:
+    """⭐ FINDINGS §64.2: the 1.25 ratio produced 1.953, 7.451 — values nobody would
+    choose, and 2, 4 and 10 were unreachable by key. Each press now moves one rung of a
+    ladder of round numbers, and the flag values Julien actually uses are all rungs.
+    ⚠️ This test replaced one that pinned the RATIO and sat red, unnoticed, after the
+    ladder landed — there is no single runner, so a stale test looks like a green one."""
+    assert adjust("max_speed", 4.0, True) == 6.0
+    assert adjust("max_speed", 4.0, False) == 3.0
     assert adjust("max_speed", 0.4, True) == 0.5
+    for used_by_flag in (1.0, 1.5, 2.0, 4.0, 10.0):
+        assert used_by_flag in LADDERS["max_speed"], \
+            f"{used_by_flag} left the ladder; a value he types must stay reachable by key"
+
+
+def test_a_value_BETWEEN_rungs_moves_to_the_nearest_rung_in_the_pressed_direction() -> None:
+    """⚠️ A flag can set any value. The first press must not jump past the neighbouring
+    rung: 0.9 steps down to 0.8, not to 0.5."""
+    assert adjust("max_speed", 0.9, False) == 0.5  # ladder has no 0.8; nearest below is 0.5
+    assert adjust("max_speed", 0.9, True) == 1.0
+    assert adjust("max_speed", 7.0, True) == 8.0
+    assert adjust("max_speed", 7.0, False) == 6.0
+
+
+def test_a_press_PAST_the_ladder_end_never_moves_the_value_the_wrong_way() -> None:
+    """⛔ THE REGRESSION THE OLD FALLBACK HID: a value OUTSIDE the ladder's ends (legal via
+    flag or saved default) was snapped to the far rung — `+` on floor 0.5 DROPPED it to
+    0.1, `-` on max_speed 0.1 RAISED it to 0.25. A press up must never lower a limit and
+    a press down must never raise one; the press does nothing and `at_bound` says why."""
+    assert adjust("floor", 0.5, True) == 0.5
+    assert adjust("max_speed", 0.1, False) == 0.1
+    assert adjust("floor", 0.5, False) == 0.1  # down FROM above the top rung still works
+    assert adjust("max_speed", 0.1, True) == 0.25  # up from below the bottom rung too
 
 
 def test_the_FLOOR_steps_additively_because_it_crosses_zero() -> None:

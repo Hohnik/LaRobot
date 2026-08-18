@@ -204,10 +204,37 @@ def test_the_script_still_spells_the_rule_the_same_way() -> None:
 def test_a_dead_chain_cannot_be_parked_and_the_docs_say_so() -> None:
     """⛔⭐ THE LIMIT OF THE FEATURE, and it is the case that prompted it. All seven
     motors latched `0xD loss of communication`, so the CAN link was gone and no command
-    could reach the arm. `chain_alive()` gates the park for exactly that reason."""
+    could reach the arm. Liveness gates the park for exactly that reason.
+
+    ⚠️ Updated 2026-08-18: the N-arm rewrite made the gate per-arm — `live` is the list
+    of arms still answering, and only those are parked. The old pinned string
+    (`chain_alive(robot) and …`) had been gone for days while this test sat red,
+    unnoticed, because no single runner runs these files (ROADMAP §10.5 step 2)."""
     src = (REPO / "scripts" / "teleop_session.py").read_text()
-    assert "chain_alive(robot) and (interrupted or unplanned)" in src, \
+    assert "live = [one for one in arms if one.alive()]" in src, \
+        "the per-arm liveness list is gone"
+    assert "if live and (interrupted or unplanned)" in src, \
         "the park is no longer gated on the chain being alive"
+
+
+def test_liveness_is_captured_BEFORE_the_motors_are_disabled() -> None:
+    """⛔⭐ FINDINGS §58.45: `chain_alive` was read AFTER `shutdown_robot()`, so every
+    incident file ever written said False and the field measured nothing. The fix is an
+    ordering fact, and this file cannot execute the teardown, so it pins the ORDER in
+    the source: the capture must appear before the first `shutdown_robot(` call, and the
+    incident dict must use the captured value rather than a fresh `alive()` read."""
+    src = (REPO / "scripts" / "teleop_session.py").read_text()
+    capture = src.find("alive_at_teardown = {")
+    disable = src.find("disabled = shutdown_robot(")
+    assert capture != -1, "the pre-shutdown liveness capture is gone"
+    assert disable != -1, "the shutdown call moved; update this test with care"
+    assert capture < disable, \
+        "liveness is captured AFTER shutdown_robot(), so the field is meaningless again"
+    assert '"chain_alive_at_teardown": alive_at_teardown.get(' in src, \
+        "the incident dict no longer records the pre-shutdown reading"
+    assert '"chain_alive": _safe_fact(lambda one=one: bool(one.alive()))' not in src, \
+        "the old post-shutdown read is back; it is always False (FINDINGS §58.45)"
+
 
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]

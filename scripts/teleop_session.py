@@ -4127,6 +4127,15 @@ def main() -> int:  # noqa: PLR0915
         # build failed still disables the first arm here.
         if arms:
             _SHUTTING_DOWN["yes"] = True
+            # ⭐ Capture each arm's liveness BEFORE the motors are disabled. The incident
+            # block below runs after `shutdown_robot()` on purpose, so a read taken down
+            # there is False for every arm on every path and says nothing — which is how
+            # every incident file ever written carried the same value (FINDINGS §58.45,
+            # ROADMAP §8.2 item 31). This local is the last moment the answer to "was the
+            # chain alive when the teardown began?" still exists. That distinction is the
+            # one that decided whether a park was possible on 2026-08-14 (FINDINGS §46.0).
+            alive_at_teardown = {one.name: _safe_fact(lambda one=one: bool(one.alive()))
+                                 for one in arms}
             for one in arms:
                 try:
                     disabled = shutdown_robot(one.robot)
@@ -4200,7 +4209,12 @@ def main() -> int:  # noqa: PLR0915
                             "last_torques_nm": _safe_fact(
                                 lambda one=one: [round(float(getattr(s, "eff", float("nan"))), 3)
                                                  for s in one.states]),
-                            "chain_alive": _safe_fact(lambda one=one: bool(one.alive())),
+                            # ⭐ Read at the top of the teardown, never here: after the
+                            # disable loop above, `one.alive()` is False on every path.
+                            # The key is renamed on purpose, so old incident files (whose
+                            # `chain_alive` was always the meaningless post-shutdown read)
+                            # cannot be confused with files carrying the real measurement.
+                            "chain_alive_at_teardown": alive_at_teardown.get(one.name, False),
                         }
                         for one in arms
                     ],

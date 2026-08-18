@@ -273,10 +273,20 @@ def adjust(name: str, value: float, up: bool) -> float:
     rungs = LADDERS[name]
     low, high = LIVE_BOUNDS[name]
     eps = 1e-9
+    # ⛔ No rung left in the pressed direction → the value stays EXACTLY where it is.
+    # The old fallback (`rungs[-1]` / `rungs[0]`) moved a value the WRONG WAY when it sat
+    # outside the ladder's ends, which flags and saved defaults can legitimately do:
+    # `+` on floor 0.5 dropped it to 0.1, `-` on max_speed 0.1 raised it to 0.25. A press
+    # up must never lower a limit and a press down must never raise one — on a rig with
+    # no e-stop, "the key moved a safety limit the way the operator did not ask" is the
+    # exact class of surprise this editor must not produce. `at_bound` already tells the
+    # operator why the press did nothing.
     if up:
-        nxt = next((r for r in rungs if r > value + eps), rungs[-1])
+        nxt = next((r for r in rungs if r > value + eps), None)
     else:
-        nxt = next((r for r in reversed(rungs) if r < value - eps), rungs[0])
+        nxt = next((r for r in reversed(rungs) if r < value - eps), None)
+    if nxt is None:
+        return float(value)
     return float(min(high, max(low, nxt)))
 
 
