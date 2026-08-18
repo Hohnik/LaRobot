@@ -4782,3 +4782,37 @@ His ask: set the scrub's top speed *"before… or while I start the scrub… so 
 ⭐ **Deliberately NOT merged: `park_arms`** (the quit/Ctrl-C/auto-park). Both halves of §52.1's complaint are false for it — it is tested (14 tests) AND it is the code that runs — and it survives teardown states the in-session park never sees.
 
 ✅ **Verified:** 714 checks across 28 files, `drive_sim_session` 25/25 plain AND with `--vel-ff 0.5` (records, replays, parks and tears down through the new path), `check_restructure` coherent, 1066/1066 links. ⬜ **Owes the item-23 bench pass: every mode once on the arm — GUIDE, TELEOP, CONTROLS, a `p 1 2 3` run, a playback, `q q`.** Nothing builds on the merge until that has run (his rule 11 checkpoint). The jaw pause (items 3, 10) is the first thing waiting behind it.
+
+## 69 ⭐⭐⭐ 2026-08-18, LATE NIGHT — THE BENCH PASS CONFIRMS THE PARK MERGE, ONE ZOMBIE FOUND AND FIXED, AND THE 2 cm IS THE FRICTION FLOOR
+
+### 69.0 ✅✅⭐⭐⭐ THE ITEM-23 BENCH PASS RAN, AND THE MERGE IS CONFIRMED ON HARDWARE
+
+His verdict: *"everything really feels exactly as before. It seems really good."* His four sessions exercised, on the merged code: every mode entry (HOLD/TELEOP/GUIDE on one arm, on aimed arms, on BOTH) · two recordings saved with the overwrite guard · a three-waypoint run **`p 4 5 6` with per-leg timings (3.8 s → 1.5 s → 3.6 s) and the settle note** — the merged park narrating `ParkStep` on real hardware · a playback to completion with the full per-joint tracking table · a scrub · CONTROLS opened and left · `q q` and Ctrl-C shutdowns, all parks 0.019-0.033 rad. **Item 23 is CLOSED. The jaw pause (items 3, 10) and the §10 restructure are unblocked.**
+
+✅ **Also confirmed in the same runs:** the puckless arm joining (§68.5) · the shared puck following the selection, including BOTH driving both arms from one mouse (§68.8) · MIRROR working with one puck · the mirror stop message naming both remedies with live numbers · the new SLOWED/frame/scrub readouts. ⚠️ Two transient `USBError [Errno 19]` at build (the §35.5 DFU family — retry worked both times; the powered-hub note in the plan stands).
+
+### 69.1 ⛔✅⭐⭐ THE ZOMBIE REPLAY ARM — found by his pass, fixed the same hour
+
+⛔ **What his log shows:** during a two-arm scrub he pressed `m` (CONTROLS). B left replay; **arm G stayed `[G REPLAY]` for the rest of the session** — cursor frozen (the advance needs ALL replay arms in the mode), no message, no exit. Mode keys re-mode only the AIMED arm, and the cleanup waited for NO arm to be in replay, so the zombie satisfied neither side. ✅ **Fixed: ANY arm leaving replay ends the playback for EVERY replay arm** — the released arms go to HOLD through the class, the message says so, and a source-pin forbids the old wait-for-everyone condition from returning. A playback is one thing; it ends as one thing.
+
+### 69.2 ⭐⭐⭐ THE 2 cm MIRROR OFFSET IS THE STATIC-FRICTION FLOOR — the naive story refuted by the vendor's own code, and the honest option list
+
+⭐ **His question:** the arms position exactly under the mouse, so why does the mirror follower sit ~2 cm off? *"It really shouldn't be an issue."*
+
+⛔ **The obvious story is WRONG, and the vendor's code proves it.** The obvious story: a PD position controller must keep a standing error to hold against gravity (error = gravity ÷ kp), so send gravity as a feedforward torque. **But `motor_chain_robot.py` line 366 already does that**: `motor_torques = joint_commands.torques + g * gravity_comp_factor + friction_comp` — gravity compensation is added to EVERY command, position mode included. The droop survives it.
+
+⭐⭐ **What the offset actually is: static friction (stiction).** A joint does not move until `kp × error` exceeds its breakaway friction, so every stop leaves each joint up to `friction ÷ kp` short, in whatever direction it was last moving. The numbers close: item 11's measured constant droop is **0.037 rad (stiff joints) to 0.080 rad (soft)**, and §64.1's measured tip-metres-per-radian (elbow 0.418 m/rad) turns 0.037 rad into **~15 mm at the tip** — his 2 cm sphere, from the measured constants, with no new hypothesis. ⚠️ The vendor's `friction_comp` is velocity-based, so it is zero at standstill — it never helps break the LAST bit of stiction.
+
+⭐⭐ **Why teleop feels exact anyway: HIS EYES close the loop.** In teleop he pushes until the ARM is where he wants — the command quietly sits beyond it, absorbing the friction band. In mirror, nobody closes the loop: the follower's command IS the leader's pose, and the friction band stands exposed. The same floor shows everywhere nobody compensates: every park settles *"0.019-0.033 rad off — as close as the arm holds itself under load"*.
+
+⭐ **The options, ranked honestly:**
+1. **Raise `kp`** — the one real lever: error = friction ÷ kp, so double stiffness halves the floor. It is item 17 with its standing caveats (stiffer joints hit harder; the SPEED argument for it was refuted once). A bench decision, his.
+2. ⛔ **Integral action is measured out** — that WAS `mirror_catchup`, and his verdict stands: it integrates noise and wanders (§67.1).
+3. ⛔ **Dither** (a tiny oscillating torque to keep joints unstuck) trades the offset for a permanent buzz — the §68.6 stepping, deliberately.
+4. **Accept it as the repeatability floor and STATE it**: ~0.02-0.08 rad per joint, ~1-2 cm at the tip, a property of PD control on friction-heavy geared motors. The rebuild plan carries it as a hardware characteristic, next to the kp option.
+
+**Recommendation: 4 now, 1 if a use-case needs sub-centimetre following — and nothing in the data-collection goal does: a demonstration's value is the trajectory, and ±1 cm of follower offset is far below the noise a learned policy tolerates.**
+
+### 69.3 ✅⭐ ALL THREE CAMERAS ARE ON THE BUS — the camera chain is fully unblocked
+
+`check_rig.py`, 2026-08-18 late (dated reading): **two D405s** (`260323072846` new, `255323071773` the arm-B one, distinct serials, no root needed) **and the C920**. So item 5 (telling identical D405s apart) is buildable again after all — his earlier no-second-camera ruling was overtaken by him plugging it in — and item 6 (timestamped capture) has its full hardware. ⛔ The permanent constraint stands: **the agent can never run a camera** (macOS per-app permission, §61.3) — the tooling gets written headless with synthetic tests, and he runs one command.
