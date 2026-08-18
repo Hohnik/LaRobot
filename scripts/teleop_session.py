@@ -3812,7 +3812,12 @@ def main() -> int:  # noqa: PLR0915
                             # as a stall.
                             if ps.jaw_started:
                                 hint("")
-                                print(f"\n  ⏸ {ps.jaw_name}: only the jaws move — going "
+                                # ⭐ The settled offset is the miss-diagnosis number: at
+                                # the friction floor (~0.02-0.04 rad) a missed grab means
+                                # the POSE was taught off; well above it, the arm never
+                                # got there (FINDINGS §70.5).
+                                print(f"\n  ⏸ {ps.jaw_name}: only the jaws move (arm "
+                                      f"settled {ps.jaw_arm_off:.3f} rad off) — going "
                                       f"to {ps.jaw_target:.2f} and waiting for them to "
                                       "stop.")
                             elif ps.jaw_done:

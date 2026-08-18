@@ -310,6 +310,10 @@ class ParkStep:
     jaw_done: bool = False           # True exactly once, on the cycle the run resumes
     jaw_timed_out: bool = False      # the pause ended by timeout, not by measured stillness
     grasp: GraspCheck | None = None  # on jaw_done: did the jaws close on something? (item 10)
+    jaw_arm_off: float | None = None # on jaw_started: how far the ARM settled from the split
+                                     # waypoint before the jaws were allowed to move — the
+                                     # number that diagnoses a missed grab (friction floor
+                                     # vs a badly taught pose)
 
 
 class ArmSession:
@@ -482,6 +486,12 @@ class ArmSession:
         self.park_jaw_t = 0.0                   # when the pause began
         self.park_jaw_still_t = 0.0             # since when the jaws have not moved
         self.park_jaw_prev: float | None = None # last cycle's measured jaw, for stillness
+        # ⭐ The settle-gate before a jaw pause: the cursor finishing is not the arm
+        # arriving, and jaws that close while the arm creeps its last millimetres close
+        # in the wrong place (his 2026-08-18 grab missed exactly this way). `None` means
+        # no gate is open; a value is the best arm lag seen since the gate opened.
+        self.park_gate_best: float | None = None
+        self.park_gate_t = 0.0                  # when that best last improved
         self.park_best_err = float("inf")
         self.park_progress_t = 0.0
         # ⛔ TWO CLOCKS. `park_leg_t` resets at every waypoint so each leg reports its own
@@ -794,6 +804,7 @@ class ArmSession:
             path, marks = built(seg)
             self.park_queue.append((float(poses[seg[0]][N_ARM]), names[seg[0]], path, marks))
         self.park_jaw, self.park_jaw_name, self.park_jaw_prev = None, None, None
+        self.park_gate_best = None
 
         self.park_s = 0.0
         self.park_target = targets[-1]
@@ -986,15 +997,30 @@ class ArmSession:
 
         # ---- the cursor has finished this segment ----
         if self.park_queue:
-            # ⭐ A jaws-only leg is next: open the pause. The arm keeps holding the
-            # segment's end pose; the jaw command starts on the next cycle so the pause
-            # clocks and the first command share one timestamp.
+            # ⭐⭐ LET THE ARM SETTLE BEFORE THE JAWS MOVE. The cursor finishing is not
+            # the arm arriving — the arm still trails by its friction floor, and jaws
+            # that close while it creeps close in the wrong place. His 2026-08-18 bench
+            # pass measured exactly this: the grab missed by millimetres while the run
+            # read clean. So the split pose keeps being commanded until the arm is
+            # within `tolerance` or has stopped improving for `settle_seconds` — the
+            # same two exits the final settle has — and only then do the jaws move.
+            # Costs at most about half a second per stop; `jaw_arm_off` reports the
+            # offset the arm actually settled at, which is the number that tells a
+            # friction-floor miss from a badly taught pose.
+            self._command_park(self.park_cmd)
+            if self.park_gate_best is None:
+                self.park_gate_best, self.park_gate_t = lag, t
+            elif lag < self.park_gate_best - progress_eps:
+                self.park_gate_best, self.park_gate_t = lag, t
+            if lag >= tolerance and t - self.park_gate_t < settle_seconds:
+                return result("moving")
             jaw, name, _, _ = self.park_queue[0]
             self.park_jaw, self.park_jaw_name = jaw, name
             self.park_jaw_t, self.park_jaw_still_t = t, t
             self.park_jaw_prev = float(q[N_ARM]) if len(q) > N_ARM else None
-            self._command_park(self.park_cmd)
-            return result("jaws", jaw_name=name, jaw_target=jaw, jaw_started=True)
+            self.park_gate_best = None
+            return result("jaws", jaw_name=name, jaw_target=jaw, jaw_started=True,
+                          jaw_arm_off=lag)
 
         verdict = park_verdict(err, t - self.park_progress_t > stall_seconds,
                                tolerance, settled,
@@ -1028,5 +1054,6 @@ class ArmSession:
         self.park_path, self.park_marks = None, []
         self.park_queue = []
         self.park_jaw, self.park_jaw_name, self.park_jaw_prev = None, None, None
+        self.park_gate_best = None
         self.park_s = 0.0
         return left

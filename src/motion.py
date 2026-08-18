@@ -325,7 +325,7 @@ def plan_gripper_stops(poses, gripper_index: int,
             warnings.append(
                 f"leg {i}→{i + 1} moves the arm AND the gripper together, so the jaws "
                 "travel while the arm does. Save a waypoint where only the jaws change "
-                "if you meant to grip something."
+                "if you meant to grip something"
             )
             current.append(i + 1)
         else:

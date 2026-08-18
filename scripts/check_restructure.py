@@ -103,7 +103,7 @@ STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 CLASS_INTERNAL = [
     "park_cmd", "park_best_err", "park_progress_t", "park_leg_t", "park_start_t",
     "park_s", "park_queue", "park_jaw", "park_jaw_name", "park_jaw_t",
-    "park_jaw_still_t", "park_jaw_prev",
+    "park_jaw_still_t", "park_jaw_prev", "park_gate_best", "park_gate_t",
 ]
 
 #: ⛔⭐ SESSION-LEVEL NAMES THAT WERE DELETED RATHER THAN MOVED, and must not come back.

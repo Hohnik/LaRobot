@@ -43,7 +43,8 @@ class JawRobot:
     `jaw_floor` is an object between the jaws: the measured jaw can never go below it, exactly like a physical grab. `jitter=True` makes the jaw wobble for ever after arriving, which is the only way to reach the pause timeout.
     """
 
-    def __init__(self, q=None, jaw_rate=2.0, jaw_floor=None, jitter=False):  # noqa: ANN001
+    def __init__(self, q=None, jaw_rate=2.0, jaw_floor=None, jitter=False,
+                 arm_rate=None, arm_floor=0.0):  # noqa: ANN001
         self.q = np.array(q if q is not None else [0.0] * 7, dtype=float)
         self.commands: list[np.ndarray] = []
         self.motor_chain = FakeChain()
@@ -51,6 +52,11 @@ class JawRobot:
         self.jaw_floor = jaw_floor
         self.jitter = jitter
         self._flip = 1.0
+        # ⭐ The arm side can trail too: `arm_rate` (rad/s, None = follows exactly) and
+        # `arm_floor` (each joint sticks once within this of its command — stiction, the
+        # measured 0.02-0.08 rad floor of FINDINGS §69.2 in its simplest form).
+        self.arm_rate = arm_rate
+        self.arm_floor = arm_floor
 
     def get_joint_pos(self):  # noqa: ANN201
         return self.q.copy()
@@ -58,7 +64,13 @@ class JawRobot:
     def command_joint_pos(self, cmd) -> None:  # noqa: ANN001
         cmd = np.asarray(cmd, dtype=float)
         self.commands.append(cmd.copy())
-        self.q[:N_ARM] = cmd[:N_ARM]
+        if self.arm_rate is None and self.arm_floor == 0.0:
+            self.q[:N_ARM] = cmd[:N_ARM]
+        else:
+            delta = cmd[:N_ARM] - self.q[:N_ARM]
+            rate = self.arm_rate if self.arm_rate is not None else 1e9
+            step = np.clip(delta, -rate * DT, rate * DT)
+            self.q[:N_ARM] += np.where(np.abs(delta) > self.arm_floor, step, 0.0)
         if len(cmd) > N_ARM and len(self.q) > N_ARM:
             gap = cmd[N_ARM] - self.q[N_ARM]
             step = np.clip(gap, -self.jaw_rate * DT, self.jaw_rate * DT)
@@ -275,6 +287,42 @@ def test_mixed_leg_advice_can_be_silenced_for_replay_parks() -> None:
     without = arm2.begin_path(legs, t=0.0, mixed_leg_advice=False)
     assert not any("moves the arm AND the gripper" in w for w in without), \
         "a replay park cannot act on waypoint advice, so it must not print it"
+
+
+def test_the_jaws_wait_for_a_trailing_arm_to_settle() -> None:
+    """His 2026-08-18 grab missed by millimetres: the jaws closed while the arm was still creeping. With a trailing arm, the pause must not open until the arm is within tolerance of the split waypoint, and the reported offset must say where it actually settled."""
+    robot = JawRobot(q=[0] * 6 + [0.9], arm_rate=0.5)
+    arm = make_arm(robot)
+    arm.begin_path(GRAB_LEGS, t=0.0)
+    _, first, _ = drive(arm, 0.0, lambda p: p.jaw_started)
+    assert first.jaw_arm_off is not None and first.jaw_arm_off < 0.02, \
+        f"the jaws started while the arm was {first.jaw_arm_off} rad from the split pose"
+
+
+def test_a_sticking_arm_does_not_gate_the_jaws_for_ever() -> None:
+    """Stiction leaves each joint short of its command permanently. The gate must give up after the settle window and report the offset honestly, never hang the run."""
+    robot = JawRobot(q=[0] * 6 + [0.9], arm_rate=2.0, arm_floor=0.04)
+    arm = make_arm(robot)
+    arm.begin_path(GRAB_LEGS, t=0.0)
+    t, first, _ = drive(arm, 0.0, lambda p: p.jaw_started)
+    assert first.jaw_arm_off is not None and 0.02 <= first.jaw_arm_off <= 0.05, \
+        f"a sticking arm should report its floor as the offset, got {first.jaw_arm_off}"
+    _, end, _ = drive(arm, t, lambda p: p.verdict in ("arrived", "settled", "blocked"))
+    assert end.verdict == "settled", \
+        f"a floor inside the settled band must still finish the run, got {end.verdict}"
+
+
+def test_an_exact_arm_pays_nothing_for_the_gate() -> None:
+    """An arm already at the split pose must start the jaws on the very next cycle after the cursor finishes — the gate is free when there is nothing to settle."""
+    robot = JawRobot(q=[0] * 6 + [0.9])
+    arm = make_arm(robot)
+    arm.begin_path(GRAB_LEGS, t=0.0)
+    _, _, steps = drive(arm, 0.0, lambda p: p.jaw_started)
+    mark_i = max(i for i, p in enumerate(steps) if p.leg_passed == "2")
+    start_i = len(steps) - 1
+    assert start_i - mark_i <= 1, \
+        f"{start_i - mark_i} cycles between the split waypoint and the jaws starting"
+    assert steps[-1].jaw_arm_off is not None and steps[-1].jaw_arm_off < 1e-6
 
 
 def test_a_first_leg_that_only_moves_the_jaws_pauses_immediately() -> None:
