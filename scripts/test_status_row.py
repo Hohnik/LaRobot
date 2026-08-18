@@ -56,6 +56,9 @@ class FakeTeleop:
         self._lead = lead
         self.speed_scale = speed_scale
         self.max_lead_m, self.max_lead_rad = 0.05, 0.25
+        # The SLOWED message prints the MEASURED pair (item 21): the joint rate the IK
+        # asked for against the cap. 7.9 over 1.5 matches the FINDINGS §41.2 episode.
+        self.requested_rate, self.max_joint_rate = 7.9, 1.5
 
     def ee_position(self):  # noqa: ANN201
         return self._ee.copy()
@@ -151,9 +154,26 @@ def test_a_stuck_solver_is_named_rather_than_left_as_odd_behaviour() -> None:
     assert "STUCK lead" in status_row(arm, "", 0.60, 0.0)
 
 
-def test_a_throttled_twist_says_so() -> None:
+def test_a_throttled_twist_says_so_with_the_measured_numbers() -> None:
+    """⛔ Item 21: the old message asserted "near the reach limit" as the cause while the
+    arm stood in a comfortable pose (FINDINGS §41.2). The row now prints what was
+    actually measured — the joint rate the IK asked for, against the cap — and must
+    never name an unmeasured cause again."""
     arm = arm_in("teleop", speed_scale=0.19)
-    assert "SLOWED to 19%" in status_row(arm, "", 0.60, 0.0)
+    row = status_row(arm, "", 0.60, 0.0)
+    assert "SLOWED to 19%" in row
+    assert "asked for 7.9 rad/s, cap 1.5" in row, "the measured pair is gone"
+    assert "reach limit" not in row, "a guessed cause is back in the SLOWED message"
+
+
+def test_teleop_rows_name_their_control_frame() -> None:
+    """⭐ Item 28: `v` aims at one arm, so two arms can be driven in different frames and
+    nothing on screen said which was which. TELEOP carries `/w`·`/t`·`/c` in its bracket,
+    padded to the same 8 columns as CONTROLS so the rows stay aligned."""
+    arm = arm_in("teleop")
+    assert "[B TELEOP/w" in status_row(arm, "", 0.60, 0.0)
+    arm.frame = "tool"
+    assert "[B TELEOP/t" in status_row(arm, "", 0.60, 0.0)
 
 
 def test_the_session_facts_appear_once_across_several_rows() -> None:

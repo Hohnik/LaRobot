@@ -4656,3 +4656,11 @@ His explanation, 2026-08-18, after being asked about an unparseable phrase: *"I'
 ⚠️ **Also in his message: the C920 comes later** — *"I'll plug in the Logitech later so that you can have access to that when you need it."* Camera capture stays queued behind that.
 
 ⬜ **What feedforward still owes: a verdict he can see.** Next bench run: same gentle movement at `--vel-ff 0` and then at 2 or 3, watching the FOLLOWING numbers — exaggeration exists precisely so the difference stops being subtle.
+
+### 67.11 ✅⭐ THREE MORE TRUTHFULNESS ITEMS CLOSED THE SAME EVENING — 38, 21, 28
+
+1. ✅ **Item 38, the two-prompt overlap, his ruling "do that sensibly": the newest prompt cancels the older one, said out loud.** The structural fact that makes one check enough: button learning (`b`) can only be ARMED while no keyboard prompt is open, because prompt handlers consume every key including `b`. So whenever both are armed, the keyboard prompt is the newer one — a per-cycle check where the puck buttons are read cancels the learning with a printed line.
+2. ✅ **Item 21, the SLOWED message: it prints the measured pair now, never a guessed cause.** `SLOWED to 19% (joints asked for 7.9 rad/s, cap 1.5)`. The throttle's real trigger is the IK asking for more joint speed than the cap; "near the reach limit" was one possible cause asserted as fact and once wrong on a comfortable pose ([§41.2](FINDINGS.md)). Reading the pair: spikes only when extended = a singular pose; high everywhere = the linear setting outruns the joints. `CartesianTeleop` stores `requested_rate` for exactly this line, and a test forbids a guessed cause from returning.
+3. ✅ **Item 28, the control frame on the row:** `[B TELEOP/w]` · `/t` · `/c` for world · tool · camera, padded to CONTROLS' 8 columns so nothing misaligns. `v` aims at one arm, so two arms can be driven in different frames at once, and until now nothing on screen said which was which.
+
+✅ Verified: 696 checks across 27 files all green, the sim drive 25/25 (its script now also walks `vel_ff` live on the settings screen).

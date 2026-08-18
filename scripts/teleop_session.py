@@ -870,15 +870,16 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
         lead_m, lead_r = one.teleop.lead()
         if lead_m > 0.8 * one.teleop.max_lead_m or lead_r > 0.8 * one.teleop.max_lead_rad:
             extra += f"  ⚠️ STUCK lead {lead_m * 100:.0f}cm/{np.degrees(lead_r):.0f}°"
-        # ⭐ Say WHY the arm feels slow. Near the workspace edge the solver needs several
-        # rad/s per joint for the same tip speed, so the twist gets throttled — and without
-        # this line that reads as unexplained sluggishness.
-        # ⚠️ The message names the reach limit as the cause and the data does not always
-        # support that: at sigma_min 0.1713, which the throttle's own docstring calls
-        # comfortable, it printed "SLOWED to 19%" (FINDINGS §41.2). Tracked as ROADMAP
-        # §8.2 item 21; the wording is not fixed here because the fix is a measurement.
+        # ⭐ Say WHY the arm feels slow — with the MEASURED numbers, never a guessed cause
+        # (item 21, closed 2026-08-18). The old wording asserted "near the reach limit"
+        # while the arm stood in a comfortable pose (FINDINGS §41.2). What the throttle
+        # actually measures is the joint rate the IK asked for versus the cap, so that
+        # pair is what prints. Reading it: spikes only when extended = a singular pose;
+        # high everywhere = the linear speed is set faster than the joints can serve.
         if one.teleop.speed_scale < 0.95:
-            extra += f"  ⚠️ SLOWED to {one.teleop.speed_scale * 100:.0f}% (near the reach limit)"
+            extra += (f"  ⚠️ SLOWED to {one.teleop.speed_scale * 100:.0f}% (joints asked "
+                      f"for {one.teleop.requested_rate:.1f} rad/s, cap "
+                      f"{one.teleop.max_joint_rate:.1f})")
     # ⭐ `jaw` is shown separately from `hottest` on purpose. Watching this number plateau
     # is the actual test of the 2π gripper frame fix; watching `hottest` is not, because
     # the shoulder sits hotter than the gripper all session.
@@ -902,7 +903,14 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
     # cannot live on either.
     if note:
         extra = f"  {note}{extra}"
-    label = "CONTROLS" if one.mode == "map" else one.mode.upper()
+    # ⭐ TELEOP carries its control frame in the bracket (item 28, closed 2026-08-18):
+    # `v` aims at ONE arm, so two arms can be driven in different frames at once and
+    # nothing on screen said which was which. `TELEOP/w`·`/t`·`/c` = world·tool·camera,
+    # exactly 8 characters like CONTROLS, so the columns stay aligned.
+    if one.mode == "teleop":
+        label = f"TELEOP/{one.frame[0]}"
+    else:
+        label = "CONTROLS" if one.mode == "map" else one.mode.upper()
     return (f"[{one.name} {label:8}]{lead}  {therm}"
             f"  q {np.round(q[:N_ARM], 2)}{extra}   ")
 
@@ -3342,6 +3350,17 @@ def main() -> int:  # noqa: PLR0915
                     pressed = buttons & ~one.buttons_prev              # rising edge only
                     one.buttons_prev = buttons
 
+                    if one.learn_button is not None and pending is not None:
+                        # ⭐ TWO PROMPTS NEVER STAY OPEN AT ONCE — the newest wins (item 38,
+                        # FINDINGS §63.3, his ruling "do that sensibly"). Button learning
+                        # can only be ARMED while no keyboard prompt is open (prompt
+                        # handlers consume every key, b included), so if both are armed
+                        # the keyboard prompt came second and the learning yields. Without
+                        # this, a puck press he made for the prompt era was consumed by
+                        # the learner and silently rebound a gripper button.
+                        one.learn_button = None
+                        print(f"\n  ⚠️ the gripper-button learning on arm {one.name} is "
+                              f"CANCELLED — another prompt opened. Press b to restart it.\n")
                     if one.learn_button is not None and pressed:
                         warn = one.axis_map.learn_button(one.learn_button, pressed)
                         if warn:

@@ -139,6 +139,12 @@ class CartesianTeleop:
         # than becoming part of normal operation.
         self.max_joint_rate = max_joint_rate
         self.speed_scale = 1.0
+        #: ⭐ The joint rate the last IK step ASKED for, before throttling — the measured
+        #: quantity behind any SLOWED message. The old message asserted "near the reach
+        #: limit" as the cause and was wrong on a comfortable pose (FINDINGS §41.2);
+        #: showing this number instead lets the operator tell a singular pose (spikes
+        #: only when extended) from an over-eager linear speed (high everywhere).
+        self.requested_rate = 0.0
 
         self.target: mink.SE3 | None = None
 
@@ -154,6 +160,7 @@ class CartesianTeleop:
         q[:n] = np.asarray(q_arm)[:n]
         self.configuration.update(q)
         self.speed_scale = 1.0        # a mode change must not inherit a throttle
+        self.requested_rate = 0.0
         self.posture_task.set_target_from_configuration(self.configuration)
         self.target = self.configuration.get_transform_frame_to_world(self.ee_site, "site")
 
@@ -237,6 +244,7 @@ class CartesianTeleop:
         if dt <= 0:
             return
         requested = float(np.max(np.abs(joint_step))) / dt
+        self.requested_rate = requested
         if requested > self.max_joint_rate:
             self.speed_scale = max(0.05, self.speed_scale * self.max_joint_rate / requested)
         elif self.speed_scale < 1.0:
