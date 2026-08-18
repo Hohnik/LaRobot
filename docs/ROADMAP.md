@@ -1045,8 +1045,8 @@ yam-robotics/
 2. ✅ **DONE 2026-08-18: `uv run checks/run_tests.py`** — every test file as one suite with a total, three failure signals, and its own falsifier ([FINDINGS §70.4](FINDINGS.md)). No moves, just collection. ⛔ This step's old text said *"pytest already available"*; measured false ([§67.5](FINDINGS.md) and again at build time). The runner is zero-dependency on purpose; pytest is a step-3/4 decision beside LaRobot's layout.
 3. ✅ **DONE 2026-08-18 ([FINDINGS §70.7](FINDINGS.md)): `src/yam/` is an installed package** (uv's own `uv_build` backend, offline-safe), 17 modules moved by `git mv` into the §10.2/§10.6 layout, all 52 path hacks gone, `REPO_ROOT` anchored once in `yam/__init__.py`. Suite total unchanged at 705/705.
 4. ✅ **DONE 2026-08-19 ([FINDINGS §70.8](FINDINGS.md)):** 59 scripts `git mv`-ed into `apps/`·`checks/`·`tests/`, both pre-analysed traps resolved as written, 106 documented command lines re-validated — ⭐ and the split itself produced the live specimen of §59.1: `check_flags`' hardcoded `scripts/` pattern went green-while-blind and only its falsifier's catch-count saw it.
-5. README rewrite as the day-one door; HANDOFF slims back to live-state.
-6. The one-page hardware bring-up checklist (§10.4).
+5. ✅ **DONE 2026-08-19: the README is the day-one door** — what this is (the walkthrough ruling), the three proof commands, safety in one place, the layout map, all in English per his ruling; the early-history sections stay below a banner because the rebuild needs their reasoning (§2.1 especially). ⚠️ "HANDOFF slims back to live-state" is deliberately NOT done in the same pass — its layered history is load-bearing for the consolidation plan and gets distilled INTO the plan instead.
+6. ✅ **DONE 2026-08-19, folded into the README door:** the hardware bring-up checklist — LED table, read-fault-before-power-cycle, DFU vs mains recovery, per-session ±2π jaw shift, calibrate-per-arm, empty-serial devices and the wiggle, per-app camera permission, the powered-hub rule.
 
 ### 10.6 ⭐⭐ What the colleagues' LaRobot branches show — explored 2026-08-18, his instruction
 
