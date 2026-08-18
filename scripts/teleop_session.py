@@ -1757,9 +1757,15 @@ def main() -> int:  # noqa: PLR0915
             """
             seq = " → ".join(park_sequence) if park_sequence else "0"
             name, radius = BLEND_MODES[blend_idx]
+            # ⭐ A grab is visible BEFORE Enter (ROADMAP §6.6.2 item 4): a leg where only
+            # the jaws move splits the run and pauses it, and the count says so here,
+            # while the sequence is still being typed.
+            legs, _ = resolve_park_legs(park_sequence[:] or ["0"], one.base_pose, one.slots)
+            stops = one.count_gripper_stops([ParkLeg(n, list(p)) for n, p in legs]) if legs else 0
+            stop_note = f" · ⏸ {stops} jaw stop{'s' if stops != 1 else ''}" if stops else ""
             # ⭐ ONE line, so changing a knob repaints instead of appending. Six taps
             # on `+` should leave one line showing the final speed, not six blocks.
-            return (f"RUN {seq} · speed {one.park_speed:.2f} (-/+) · corners {name} "
+            return (f"RUN {seq}{stop_note} · speed {one.park_speed:.2f} (-/+) · corners {name} "
                     f"{radius:.2f} (,/.) · ease {EASINGS[ease_idx].name} over "
                     f"{one.park_ramp:.2f} (e, ö/ä) · Enter=go")
 
@@ -1821,13 +1827,18 @@ def main() -> int:  # noqa: PLR0915
             one.blend = BLEND_MODES[blend_idx][1]
             one.easing = EASINGS[ease_idx]
             for warn in one.begin_path([ParkLeg(n, list(pose)) for n, pose in legs], t,
-                                       smooth=not args.no_smooth):
+                                       smooth=not args.no_smooth,
+                                       mixed_leg_advice=not for_replay):
                 print(f"\n  ⚠️  {warn}.")
             # The plan has become the thing happening; the progress readout replaces it.
             hint("")
-            print(f"\n⭐ MODE: PARK → {what}, {one.park_path.length:.2f} rad of travel at "
-                  f"{one.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}. "
-                  "Press h or t to stop.\n")
+            # ⭐ Total travel counts every queued segment, and a run that will pause for
+            # the jaws says so up front — the pause must never read as a stall.
+            stop_note = (f", pausing {one.park_stops}× for the jaws"
+                         if one.park_stops else "")
+            print(f"\n⭐ MODE: PARK → {what}, {one.park_total_length:.2f} rad of travel at "
+                  f"{one.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}"
+                  f"{stop_note}. Press h or t to stop.\n")
 
         # ⭐ Each arm enters its start mode, per arm. It used to run once, after the single
         # build, reading the one `robot` local.
@@ -3273,12 +3284,14 @@ def main() -> int:  # noqa: PLR0915
                 for one in arms:
                     if one.mode == "park" or one.park_path is None:
                         continue
-                    left = one.park_path.length - one.park_s
+                    # ⭐ Through the class, so queued segments and a jaw pause in progress
+                    # are dropped AND counted — clearing only `park_path` here would leave
+                    # a stale queue behind and under-report what was cancelled.
+                    left = one.abandon_path()
                     unfinished = left > PARK_TOLERANCE
                     if unfinished:
                         print(f"\n  ⚠️  arm {one.name}: run abandoned with {left:.2f} rad of "
                               "path left — leaving PARK cancels the rest.\n")
-                    one.park_path, one.park_marks = None, []
                     # ⛔ A park that was interrupted must not hand over to a playback. The
                     # handover lives in the arrival branch, but this is the second gate:
                     # pressing h or t while driving to the start pose cancels the whole
@@ -3791,6 +3804,37 @@ def main() -> int:  # noqa: PLR0915
                                               f"{'+'.join(a.name for a in replay_arms)} "
                                               f"at {replay_speed:.2f}x. "
                                               f"Press h or t to stop.\n")
+                        elif ps.verdict == "jaws":
+                            # ⭐⭐ THE JAW PAUSE (items 3 + 10): the run split at a
+                            # waypoint where only the jaws move. The class holds the arm,
+                            # drives the jaws and measures when they are done; this
+                            # branch only says what is happening, so a pause never reads
+                            # as a stall.
+                            if ps.jaw_started:
+                                hint("")
+                                print(f"\n  ⏸ {ps.jaw_name}: only the jaws move — going "
+                                      f"to {ps.jaw_target:.2f} and waiting for them to "
+                                      "stop.")
+                            elif ps.jaw_done:
+                                note = (" ⚠️ timed out still moving — continuing anyway"
+                                        if ps.jaw_timed_out else "")
+                                print(f"  ⭐ jaws done in {ps.jaw_seconds:.1f}s{note}"
+                                      + (f" → next {ps.next_leg}" if ps.next_leg else ""))
+                                # ⭐ item 10: `check_grasp` grades a CLOSING leg from
+                                # where the jaws stopped. It stays silent when it cannot
+                                # know (an opening leg, a timeout) — `confident` is the
+                                # gate, and printing a guess would be the §0 pattern.
+                                if ps.grasp is not None and ps.grasp.confident:
+                                    if ps.grasp.holding:
+                                        print("     ✋ holding something — the jaws "
+                                              f"stopped {ps.grasp.gap:.3f} of the stroke "
+                                              "short of closed.")
+                                    else:
+                                        print("     ∅ the jaws closed onto themselves — "
+                                              "nothing gripped.")
+                            elif t >= next_park_report:
+                                next_park_report = t + 1.0
+                                hint(f"  ⏸ waiting for the jaws… {ps.jaw_seconds:.1f}s")
                         else:
                             # ⛔ BLOCKED. Never spin silently: say so and hold. The wording
                             # keeps the old two shapes — mid-path (the arm stopped

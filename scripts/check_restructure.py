@@ -44,7 +44,7 @@ TARGET = REPO / "scripts" / "teleop_session.py"
 #: check keeps proving that earlier groups have not regressed.
 MOVED_SO_FAR = [
     "prev_q", "guide_ref", "home_ee", "gripper_value", "stall_since",
-    "park_path", "park_s", "park_marks", "park_target", "park_speed", "park_ramp",
+    "park_path", "park_marks", "park_target", "park_speed", "park_ramp",
     "thermal", "teleop", "mode",
     # ⭐ Step 2c, 2026-08-14: this cycle's temperatures. They were session locals, so they
     # were one arm's reading available to whichever row was being painted — and the status
@@ -91,10 +91,19 @@ STILL_TO_MOVE: list[str] = []   # ⭐ step 1 is COMPLETE
 #: ⛔ This is a TIGHTER rule than MOVED_SO_FAR, not an exemption: any `arm.x`/`one.x`
 #: access to one of these in the script is a fault, because it re-opens the §52.1 split
 #: (script-side behavior beside the class's tested copy). The no-bare-local rule still
-#: applies too. ⚠️ `park_path`/`park_marks`/`park_s`/`park_target` stay in MOVED_SO_FAR:
+#: applies too. ⚠️ `park_path`/`park_marks`/`park_target` stay in MOVED_SO_FAR:
 #: the script legitimately guards on them, clears them on arrival, and prints the length.
+#:
+#: ⭐ `park_s` graduated with the jaw pause (items 3+10, 2026-08-18): the script's last
+#: read of it was `left = park_path.length - park_s` in the abandon block, which had to
+#: become `abandon_path()` anyway — a queued run's dropped distance spans segments the
+#: script cannot see. Same rule as the five below: any script access re-opens the split.
+#: The jaw-pause state (`park_queue`, `park_jaw*`) was born class-internal and is listed
+#: for the same reason.
 CLASS_INTERNAL = [
     "park_cmd", "park_best_err", "park_progress_t", "park_leg_t", "park_start_t",
+    "park_s", "park_queue", "park_jaw", "park_jaw_name", "park_jaw_t",
+    "park_jaw_still_t", "park_jaw_prev",
 ]
 
 #: ⛔⭐ SESSION-LEVEL NAMES THAT WERE DELETED RATHER THAN MOVED, and must not come back.

@@ -111,9 +111,11 @@ from typing import Any
 
 import numpy as np
 
-from motion import EASINGS, Easing, JointPath, easing_factor
+from motion import EASINGS, Easing, JointPath, easing_factor, plan_gripper_stops
 from yam_robot import (
+    GraspCheck,
     ThermalGuard,
+    check_grasp,
     motor_temperatures,
     park_target_from,
     park_verdict,
@@ -141,6 +143,19 @@ MAX_CURSOR_LAG = 0.15       # rad — past this the cursor waits for the arm
 GRIPPER_STALL_TORQUE = 1.0    # Nm
 GRIPPER_STALL_VEL = 0.05      # rad/s
 GRIPPER_STALL_SECONDS = 0.4
+
+#: ⭐⭐ THE JAW PAUSE (ROADMAP §6.6.2, items 3 + 10). A run splits wherever only the jaws
+#: move, the arm holds at the split, and the run resumes when the jaws are DONE — which is
+#: measured, never timed, because "how long the jaws take" is not a preference. A jaw that
+#: stalls on an object counts as done: stopped-on-the-object IS the grab succeeding.
+#:
+#: ⚠️ All four are in NORMALISED jaw units (0 closed, 1 open) and seconds, because the pause
+#: watches `get_joint_pos()[6]`, which is normalised. The raw-rad stall constants above watch
+#: a different instrument (torque + raw velocity from the chain read) and stay separate.
+JAW_STILL_RATE = 0.3        #: below this, in stroke/s, a cycle counts as "the jaws are still"
+JAW_SETTLE_SECONDS = 0.35   #: the jaws must be still this long before the run resumes
+JAW_MIN_WAIT = 0.25         #: never resume before this — pre-command stillness must not count
+JAW_TIMEOUT_SECONDS = 3.0   #: a jaw still moving after this stops gating the run (it is said, not hidden)
 
 
 def parse_arms(single: str | None, spec: str | None,
@@ -275,15 +290,26 @@ class ParkStep:
     instead of printing is the whole reason this class can be proven without an arm.
     """
 
-    verdict: str                 # moving · arrived · settled · blocked
-    err: float                   # distance from the FINAL target, MEASURED
-    lag: float                   # how far the arm trails the commanded point
-    remaining: float             # rad of path still ahead of the cursor
+    verdict: str                 # moving · jaws · arrived · settled · blocked
+    err: float                   # ARM distance from the FINAL target, MEASURED (jaw excluded)
+    lag: float                   # how far the ARM trails the commanded point (jaw excluded)
+    remaining: float             # rad of path still ahead of the cursor, queued segments included
     leg_passed: str | None       # a waypoint the cursor reached on THIS cycle
     next_leg: str | None         # the waypoint after it, for "→ next 3"
     leg_seconds: float           # since the previous waypoint was passed
     total_seconds: float         # since the whole park began
     settling_seconds: float      # since the cursor finished the path
+
+    # ⭐ The jaw pause (verdict "jaws"): the run is split at a waypoint where only the jaws
+    # move, the arm holds, and these narrate the wait. All defaulted so the original
+    # nine-field constructions above stay valid.
+    jaw_name: str | None = None      # the waypoint whose jaw value is being waited on
+    jaw_target: float | None = None  # the commanded (clamped) jaw value, 0 closed to 1 open
+    jaw_seconds: float = 0.0         # how long the pause has been running
+    jaw_started: bool = False        # True exactly once, on the pause's first cycle
+    jaw_done: bool = False           # True exactly once, on the cycle the run resumes
+    jaw_timed_out: bool = False      # the pause ended by timeout, not by measured stillness
+    grasp: GraspCheck | None = None  # on jaw_done: did the jaws close on something? (item 10)
 
 
 class ArmSession:
@@ -445,6 +471,17 @@ class ArmSession:
         self.park_marks: list[tuple[str, float]] = []   # waypoint name → arc length
         self.park_target: np.ndarray | None = None      # the FINAL pose of the run
         self.park_cmd: np.ndarray | None = None
+        # ⭐⭐ THE JAW PAUSE QUEUE (ROADMAP §6.6.2). `plan_gripper_stops` splits a run
+        # wherever only the jaws move; the first segment goes into `park_path` and each
+        # later one waits here as (jaw target, waypoint name, its path, its marks). The
+        # pause itself lives in `park_jaw`: None means the cursor is driving, a value means
+        # the arm is holding at a split while the jaws travel toward it.
+        self.park_queue: list[tuple[float, str, JointPath, list[tuple[str, float]]]] = []
+        self.park_jaw: float | None = None      # the jaw value being waited on
+        self.park_jaw_name: str | None = None
+        self.park_jaw_t = 0.0                   # when the pause began
+        self.park_jaw_still_t = 0.0             # since when the jaws have not moved
+        self.park_jaw_prev: float | None = None # last cycle's measured jaw, for stillness
         self.park_best_err = float("inf")
         self.park_progress_t = 0.0
         # ⛔ TWO CLOCKS. `park_leg_t` resets at every waypoint so each leg reports its own
@@ -701,13 +738,28 @@ class ArmSession:
 
     # -------------------------------------------------------------- park ----
 
-    def begin_path(self, legs: list[ParkLeg], t: float, smooth: bool = True) -> list[str]:
-        """Start ONE continuous motion through every leg. Returns any target warnings.
+    def begin_path(self, legs: list[ParkLeg], t: float, smooth: bool = True,
+                   mixed_leg_advice: bool = True) -> list[str]:
+        """Start a run through every leg, split wherever only the jaws move. Returns warnings.
 
         ⛔ Every waypoint goes through `park_target_from`, so the gripper clamp and the
         6-versus-7-joint reconciliation apply to all of them. A length mismatch on one
         leg once raised mid-park and dropped the arm (FINDINGS §11), and that path
         reaches every leg here, not only the first.
+
+        ⭐⭐ THE SPLIT IS THE GRAB FEATURE (ROADMAP §6.6.2, item 3). A blended corner
+        between "at the object, open" and "at the object, closed" closes the jaws during
+        the descent, so `plan_gripper_stops` breaks the run at every jaws-only leg: one
+        blended `JointPath` per segment, and between segments the arm holds while the
+        jaws are commanded and WAITED FOR (see `step_path`'s jaw phase). A run with no
+        jaws-only leg produces exactly one segment and behaves as it always has.
+
+        ⚠️ A leg that moves the arm AND the jaws together is reported in the returned
+        warnings rather than split — only the operator knows which he meant, and both
+        readings are defensible. That rule and its reasoning live on `plan_gripper_stops`.
+        `mixed_leg_advice=False` drops that advice (never the target warnings): a drive
+        to a recording's start pose is one positioning move whose destination nobody can
+        re-save, so "save a waypoint where only the jaws change" would be noise there.
 
         ⚠️ `smooth=False` is the caller's `--no-smooth`: the path is still blended, and
         only the easing ramp is switched off. Blending is the *shape*; easing is the
@@ -722,20 +774,92 @@ class ArmSession:
                 warnings.append(warn)
             targets.append(target)
         start = np.asarray(self.robot.get_joint_pos(), dtype=float)
-        self.park_path = JointPath([start, *targets], blend=self.blend)
-        self.park_marks = list(zip([leg.name for leg in legs],
-                                   self.park_path.arrival_lengths()[1:]))
+        poses = [start, *targets]
+        names = ["start", *[leg.name for leg in legs]]
+        plan = plan_gripper_stops(poses, N_ARM)
+        if mixed_leg_advice:
+            warnings.extend(plan.warnings)
+
+        def built(seg: list[int]) -> tuple[JointPath, list[tuple[str, float]]]:
+            path = JointPath([poses[j] for j in seg], blend=self.blend)
+            marks = list(zip([names[j] for j in seg[1:]], path.arrival_lengths()[1:]))
+            return path, marks
+
+        self.park_path, self.park_marks = built(plan.segments[0])
+        # ⭐ Each queued entry starts at a waypoint whose ARM pose the previous segment
+        # already reached, so the jaw value of its FIRST waypoint is what the pause
+        # drives the jaws to, and that waypoint's name is what the pause reports.
+        self.park_queue = []
+        for seg in plan.segments[1:]:
+            path, marks = built(seg)
+            self.park_queue.append((float(poses[seg[0]][N_ARM]), names[seg[0]], path, marks))
+        self.park_jaw, self.park_jaw_name, self.park_jaw_prev = None, None, None
+
         self.park_s = 0.0
         self.park_target = targets[-1]
         self.park_cmd = start.copy()
         self.enter_hold()
         self.mode = "park"
         self._smooth = smooth
-        self.park_best_err = float(np.max(np.abs(self.park_target - start)))
+        self.park_best_err = self._arm_err(self.park_target, start)
         self.park_progress_t = t
         self.park_leg_t = t
         self.park_start_t = t
         return warnings
+
+    @staticmethod
+    def _arm_err(a: np.ndarray, b: np.ndarray) -> float:
+        """Worst ARM joint distance — the jaw is deliberately excluded.
+
+        ⛔ The jaw legitimately sits far from its command whenever it holds an object
+        (that is what a successful grab IS), so counting it would stall the cursor and
+        fail the arrival verdict on every run that grips anything. Jaw completion has
+        its own measured judgement in the jaw phase. Same rule, same reason, as the
+        playback's by-index gripper exclusion in `teleop_session.py`.
+        """
+        return float(np.max(np.abs(a[:N_ARM] - b[:N_ARM])))
+
+    def _command_park(self, cmd: np.ndarray) -> None:
+        """Send a park command with the jaw routed through the block latch.
+
+        ⛔⭐ THIS CLOSES A REAL HOLE: the park used to command the saved jaw value raw,
+        every cycle, so a park whose pose closes the jaws onto an object would push into
+        it at 90 Hz for the rest of the run — the stall guard latched a block and the
+        park ignored it, the exact §58.2 shape one layer down. `hold_jaw` honours the
+        latch (keep the grip, stop the push) and clears it on a deliberate open.
+        """
+        if len(cmd) > N_ARM:
+            held = self.hold_jaw(float(cmd[N_ARM]))
+            if held != float(cmd[N_ARM]):
+                cmd = cmd.copy()
+                cmd[N_ARM] = held
+        self.robot.command_joint_pos(cmd)
+
+    @property
+    def park_total_length(self) -> float:
+        """Travel still planned: the live segment plus every queued one, in rad."""
+        live = self.park_path.length if self.park_path is not None else 0.0
+        return live + sum(path.length for _, _, path, _ in self.park_queue)
+
+    @property
+    def park_stops(self) -> int:
+        """Gripper pauses not yet completed in the current run."""
+        return len(self.park_queue)
+
+    def count_gripper_stops(self, legs: list[ParkLeg]) -> int:
+        """How many times a run through these legs would pause for the jaws.
+
+        ⭐ For the plan line, BEFORE Enter: a grab should be visible while the sequence
+        is still being typed (ROADMAP §6.6.2 item 4). Same clamping and reconciliation
+        as `begin_path`, so the count cannot disagree with the run.
+        """
+        q = self.robot.get_joint_pos()
+        poses = [np.asarray(q, dtype=float)]
+        for leg in legs:
+            target, _ = park_target_from(q, leg.pose,
+                                         gripper_index=N_ARM, clamp=self.clamp_gripper)
+            poses.append(target)
+        return len(plan_gripper_stops(poses, N_ARM).gripper_legs)
 
     def step_path(self, t: float, dt: float,
                   tolerance: float = PARK_TOLERANCE,
@@ -760,6 +884,20 @@ class ArmSession:
         chose. Progress means "the cursor moved OR the arm closed the gap": without the
         first half a legitimately slow leg looks stalled, and without the second an arm
         pinned against something never does.
+
+        ⭐⭐ THE JAW PHASE (verdict "jaws"). At the end of every segment but the last the
+        arm holds still, the next waypoint's jaw value is commanded (through the block
+        latch), and the run resumes when the jaws are DONE — measured as "still for
+        `JAW_SETTLE_SECONDS` after at least `JAW_MIN_WAIT`", never as a dwell time. A jaw
+        stalled on an object is still, so a successful grab resumes the run by the same
+        rule as an empty close. `JAW_TIMEOUT_SECONDS` bounds a jaw that never settles, so
+        a jammed gripper cannot stop the run for ever; a timeout is reported, not hidden.
+        On the resume cycle `check_grasp` grades a closing leg (item 10) and rides along
+        on the step.
+
+        ⛔ `err` and `lag` are ARM-ONLY — see `_arm_err`. A held object parks the jaw a
+        finger's width from its command for the whole rest of the run, and counting that
+        would freeze the cursor and turn every successful grab into a "blocked" park.
         """
         blocked = ParkStep("blocked", float("inf"), 0.0, 0.0, None, None,
                            t - self.park_leg_t, t - self.park_start_t,
@@ -768,15 +906,60 @@ class ArmSession:
             return blocked
 
         q = np.asarray(self.robot.get_joint_pos(), dtype=float)
-        err = float(np.max(np.abs(self.park_target - q)))
-        lag = float(np.max(np.abs(self.park_cmd - q)))
+        err = self._arm_err(self.park_target, q)
+        lag = self._arm_err(self.park_cmd, q)
         length = self.park_path.length
+        queued = sum(path.length for _, _, path, _ in self.park_queue)
 
         def result(verdict: str, leg_passed: str | None = None,
-                   next_leg: str | None = None) -> ParkStep:
-            return ParkStep(verdict, err, lag, max(0.0, length - self.park_s),
+                   next_leg: str | None = None, **jaw: Any) -> ParkStep:
+            return ParkStep(verdict, err, lag,
+                            max(0.0, length - self.park_s) + queued,
                             leg_passed, next_leg, t - self.park_leg_t,
-                            t - self.park_start_t, t - self.park_leg_t)
+                            t - self.park_start_t, t - self.park_leg_t, **jaw)
+
+        # ---- the jaw phase: the arm holds, the jaws travel, the wait is measured ----
+        if self.park_jaw is not None:
+            jaw_now = float(q[N_ARM]) if len(q) > N_ARM else None
+            cmd = self.park_cmd.copy()
+            if len(cmd) > N_ARM:
+                cmd[N_ARM] = self.park_jaw
+            self._command_park(cmd)
+
+            moved = (jaw_now is not None and self.park_jaw_prev is not None
+                     and abs(jaw_now - self.park_jaw_prev) > JAW_STILL_RATE * max(dt, 1e-9))
+            if moved:
+                self.park_jaw_still_t = t
+            self.park_jaw_prev = jaw_now
+            waited = t - self.park_jaw_t
+            done = (waited >= JAW_MIN_WAIT
+                    and t - self.park_jaw_still_t >= JAW_SETTLE_SECONDS)
+            timed_out = not done and waited >= JAW_TIMEOUT_SECONDS
+            if not (done or timed_out):
+                return result("jaws", jaw_name=self.park_jaw_name,
+                              jaw_target=self.park_jaw, jaw_seconds=waited)
+
+            # The pause is over: grade the grasp, swap in the next segment, resume.
+            # ⚠️ The step is built BEFORE the pop so its `remaining` still counts the
+            # segment about to become current (`length - park_s` is 0 here, the queue
+            # carries everything left); `next_leg` peeks at that segment's first mark.
+            grasp = None
+            if jaw_now is not None:
+                grasp = check_grasp(self.park_jaw, jaw_now, settled=done)
+            nxt = self.park_queue[0][3]
+            step = result("jaws", leg_passed=self.park_jaw_name,
+                          next_leg=nxt[0][0] if nxt else None,
+                          jaw_name=self.park_jaw_name, jaw_target=self.park_jaw,
+                          jaw_seconds=waited, jaw_done=True, jaw_timed_out=timed_out,
+                          grasp=grasp)
+            _, _, path, marks = self.park_queue.pop(0)
+            self.park_path, self.park_marks = path, marks
+            self.park_s = 0.0
+            self.park_cmd = path.point_at(0.0)
+            self.park_jaw, self.park_jaw_name, self.park_jaw_prev = None, None, None
+            self.park_leg_t = t
+            self.park_progress_t = t
+            return step
 
         if self.park_s < length:
             advanced = False
@@ -786,7 +969,7 @@ class ArmSession:
                 self.park_s = min(length, self.park_s + self.park_speed * ramp * dt)
                 advanced = True
             self.park_cmd = self.park_path.point_at(self.park_s)
-            self.robot.command_joint_pos(self.park_cmd)
+            self._command_park(self.park_cmd)
 
             if advanced or err < self.park_best_err - progress_eps:
                 self.park_best_err = min(self.park_best_err, err)
@@ -801,6 +984,18 @@ class ArmSession:
                 return step
             return result("moving")
 
+        # ---- the cursor has finished this segment ----
+        if self.park_queue:
+            # ⭐ A jaws-only leg is next: open the pause. The arm keeps holding the
+            # segment's end pose; the jaw command starts on the next cycle so the pause
+            # clocks and the first command share one timestamp.
+            jaw, name, _, _ = self.park_queue[0]
+            self.park_jaw, self.park_jaw_name = jaw, name
+            self.park_jaw_t, self.park_jaw_still_t = t, t
+            self.park_jaw_prev = float(q[N_ARM]) if len(q) > N_ARM else None
+            self._command_park(self.park_cmd)
+            return result("jaws", jaw_name=name, jaw_target=jaw, jaw_started=True)
+
         verdict = park_verdict(err, t - self.park_progress_t > stall_seconds,
                                tolerance, settled,
                                stopped_briefly=t - self.park_progress_t > settle_seconds)
@@ -811,7 +1006,7 @@ class ArmSession:
             # feedforward decaying to zero instead of freezing at its last value, and
             # crediting an err improvement keeps a slowly-settling arm from being
             # declared blocked at the stall timeout while it is still visibly closing.
-            self.robot.command_joint_pos(self.park_cmd)
+            self._command_park(self.park_cmd)
             if err < self.park_best_err - progress_eps:
                 self.park_best_err, self.park_progress_t = err, t
         return result(verdict)
@@ -823,8 +1018,15 @@ class ArmSession:
         something nobody asked for. Returning the distance rather than a waypoint count
         is deliberate: with one blended path there are no separate legs left to count,
         and "1.8 rad of path abandoned" is what an operator can actually picture.
+
+        ⭐ Queued segments and a pause in progress are part of the run, so they are
+        dropped — and counted — here too. A latched jaw block survives on purpose: it
+        describes the object still between the jaws, not the abandoned motion.
         """
         left = 0.0 if self.park_path is None else max(0.0, self.park_path.length - self.park_s)
+        left += sum(path.length for _, _, path, _ in self.park_queue)
         self.park_path, self.park_marks = None, []
+        self.park_queue = []
+        self.park_jaw, self.park_jaw_name, self.park_jaw_prev = None, None, None
         self.park_s = 0.0
         return left
