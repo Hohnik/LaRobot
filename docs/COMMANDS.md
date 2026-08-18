@@ -152,7 +152,10 @@ uv run apps/camera_view.py --list                  # names, indices, and the che
 uv run apps/probe_camera_pixels.py --index 0       # ⭐ depth or photograph? from the PIXELS
 uv run apps/camera_view.py --camera c920 --term    # ⭐ by NAME, drawn in this terminal
 uv run apps/camera_view.py --camera c920 --big     # by name, in a window
+uv run apps/capture_probe.py --cameras d405,c920 --seconds 10   # ⭐⭐ what do they DELIVER together?
 ```
+
+⭐⭐ **`capture_probe.py` is the capture chain's measurement** ([ROADMAP §8.2](ROADMAP.md) item 6): it reads every named camera in its own thread (the viewer's own confirmed `FrameGrabber`) and samples them together at the control loop's 90 Hz, then reports per camera the achieved fps, how many samples were fresh, and the mean and worst blind gap between frames. ⛔ **Several cameras exhausting one USB tree shows up ONLY here** — as a low fps and long gaps, never as an error ([FINDINGS §34.5](FINDINGS.md)). `--save` writes a JSON report plus one PNG per camera under `recordings/cameras/`. `--indices 0,1` opens raw indices, which is the only way to open two D405s knowingly (cover a lens once to learn which is which). It moves nothing, so it has no `--yes`.
 
 ⭐ **Select by name, not by index.** The index is an AVFoundation artefact that moves on replug; the name does not. `--camera` takes any part of the name plus the aliases `d405`, `realsense`, `c920`, `iphone`, `builtin`, or a `vid:pid`. It **refuses** when a name matches nothing or matches more than one camera, and never falls back to index 0.
 

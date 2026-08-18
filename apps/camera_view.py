@@ -73,6 +73,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
+
+# ⭐ Moved to the library on 2026-08-19 (ROADMAP §8.2 item 6): one copy, hardware-
+# confirmed HERE, now shared with the capture layer. The API this file calls is
+# unchanged — see yam/cameras/grabber.py for the move note.
+from yam.cameras.grabber import FrameGrabber, fourcc_name  # noqa: E402
 import numpy as np
 
 MAX_PROBE_INDEX = 6
@@ -688,6 +693,14 @@ def list_cameras() -> None:
             usb = f"   USB {cam.usb}" if cam.usb else ""
             modes = f"   {len(cam.modes)} modes" if cam.modes else "   (no mode list)"
             print(f"    {cam.short:<28s}{modes}{usb}".rstrip())
+            # ⭐ The uniqueID is printed for ROADMAP §8.2 item 5's open hypothesis: if a
+            # D405's AVFoundation uniqueID embeds its USB locationID (0x01220000 and
+            # 0x01210000 for the two D405s measured in FINDINGS §70.6), then
+            # serial→locationID→uniqueID→index closes identical-camera identification
+            # with no root and no lens-covering. One glance at this line with both
+            # D405s attached answers it.
+            if cam.unique_id:
+                print(f"        uniqueID {cam.unique_id}")
         print()
     else:
         print("⚠️  macOS reported no cameras at all.\n")
@@ -802,88 +815,6 @@ def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201
         cap.release()
         return None
     return configure_camera(cap, width, height, fps)
-
-
-class FrameGrabber:
-    """Reads the camera in a background thread and keeps only the newest frame.
-
-    ⛔⭐ THE BUG THIS REPLACES, because it is a good lesson and it was mine.
-
-    The previous version tried to avoid stale frames by "draining the queue":
-
-        cap.grab()                    # cheap, no decode
-        for _ in range(4):            # drain whatever else is waiting
-            if not cap.grab(): break
-        ok, frame = cap.retrieve()    # decode only the newest
-
-    That is correct on Linux/V4L2, where `grab()` returns immediately when no frame
-    is waiting. **On macOS/AVFoundation `grab()` BLOCKS until the next frame
-    arrives.** So the loop did not drain a queue — it *waited for five more frames*.
-    At 30 fps that is 5 x 33 ms = 167 ms per displayed frame, i.e. **6 fps**.
-    Julien measured 5.
-
-    ⚠️ And the reason it survived: `--probe` measured with `cap.read()` while the
-    viewer used the drain loop, so the probe reported a healthy 30 fps for code the
-    viewer never ran. **A measurement that does not exercise the real path measures
-    nothing.** `--measure` now runs through this exact class.
-
-    The right way to get "newest frame, no waiting" on a blocking backend is to move
-    the blocking somewhere it does not matter: a thread reads continuously at the
-    camera's own rate, and each new frame simply overwrites the last. The display
-    loop then takes whatever is currently there and never blocks, so it shows the
-    most recent frame captured and old frames are dropped by being overwritten
-    rather than by being read and thrown away.
-    """
-
-    def __init__(self, cap):  # noqa: ANN001
-        self._cap = cap
-        self._lock = threading.Lock()
-        self._frame = None
-        self._seq = 0
-        self._running = True
-        self._captured = 0
-        self._t0 = time.perf_counter()
-        self._thread = threading.Thread(target=self._run, name="camera", daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        while self._running:
-            ok, frame = self._cap.read()
-            if not ok:
-                time.sleep(0.005)
-                continue
-            with self._lock:
-                self._frame = frame
-                self._seq += 1
-                self._captured += 1
-
-    def newest(self):  # noqa: ANN201
-        """The most recent frame and its sequence number. Never blocks."""
-        with self._lock:
-            return self._frame, self._seq
-
-    def capture_fps(self) -> float:
-        dt = time.perf_counter() - self._t0
-        return self._captured / dt if dt > 0 else 0.0
-
-    def pixel_format(self) -> str:
-        """The four-letter format the camera is delivering, or "?" if it will not say.
-
-        ⭐ Added 2026-08-13 to settle whether the D405's 848x480 mode is a different format
-        from the modes that produce a clean photograph. See `fourcc_name`.
-        """
-        try:
-            return fourcc_name(int(self._cap.get(cv2.CAP_PROP_FOURCC)))
-        except Exception:  # noqa: BLE001
-            return "?"
-
-    def stop(self) -> None:
-        """⚠️ Always call this. A daemon thread holding the camera open keeps the
-        device busy for the next process, and Julien asked specifically that every
-        test be quittable."""
-        self._running = False
-        self._thread.join(timeout=1.0)
-        self._cap.release()
 
 
 UPPER_HALF = "\u2580"   # ▀ — foreground paints the top pixel, background the bottom
@@ -1053,27 +984,6 @@ def useful_image_width(cols: int, capture_width: int, cell: CellSize) -> int:
 # ⭐ How many consecutive over-budget frames it takes to shrink the image. Two, so a single
 # hiccup cannot ratchet the picture down for the rest of the session.
 SHRINK_AFTER = 2
-
-
-def fourcc_name(code: int) -> str:
-    """The four letters of a pixel format code, as the camera reports it.
-
-    ⭐⭐ WHY THIS IS ON SCREEN NOW. Julien's D405 produced a clean photograph at 640x480
-    and at 1280x720, and diagonal coloured bands at **848x480**, on 2026-08-13. Smooth
-    diagonal banding with cycling colour is the signature of **16-bit data being read as
-    8-bit BGR triplets**: 848 pixels of 16-bit is 1696 bytes a row, read as 848x3 it wants
-    2544, and the mismatch shears every row sideways while the byte pairs cycle through
-    blue, green and red.
-
-    ⭐ If that is right, then **848x480 is the D405's depth stream**, reachable over plain
-    UVC with no SDK at all, which is an open question in [FINDINGS §28.2](../docs/FINDINGS.md).
-    ⚠️ It is an inference from an image plus arithmetic, not a measurement. The pixel format
-    is the number that settles it, so it is now displayed: if 848x480 reports a different
-    format from the modes that work, the inference holds.
-    """
-    if code <= 0:
-        return "?"
-    return "".join(chr((code >> (8 * i)) & 0xFF) for i in range(4)).strip() or "?"
 
 
 def tune_image_width(width: float, draw_ms: float, target_ms: float, over: int,
