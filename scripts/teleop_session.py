@@ -1002,6 +1002,16 @@ def main() -> int:  # noqa: PLR0915
                          f"to catch up. That is how you get faster tracking AND how you get a "
                          f"harder hit. Raise it in small steps (0.25 → 0.35) and watch what the "
                          f"arm does when it meets something")
+    ap.add_argument("--vel-ff", type=float, default=0.0, metavar="GAIN",
+                    help="⭐ velocity feedforward gain, 0..1 (default 0 = off, item 44). "
+                         "The motors' MIT-mode frame carries a velocity setpoint and this "
+                         "stack always sent zero, so all torque came from position error — "
+                         "the measured 0.033 s × speed lag is that (FINDINGS §66.1). At "
+                         "GAIN > 0 each motor also receives GAIN × the rate-limited "
+                         "command's own derivative, so torque flows before error builds. "
+                         "Start at 0.25 and raise slowly; a too-eager feedforward "
+                         "oscillates. The jaw never gets feedforward. Live: setting 9 on "
+                         "the n screen.")
     ap.add_argument("--mirror-catchup", type=float, default=DEFAULT_CATCHUP,
                     metavar="PER_SECOND",
                     help="⭐ how fast MIRROR corrects the follower's STANDING offset. 0 = off "
@@ -1327,6 +1337,12 @@ def main() -> int:  # noqa: PLR0915
         # nobody can see on startup is one nobody can rule out later.
         print(f"  mirror fix  : ON at {args.mirror_catchup:g}/s — corrects the follower's "
               f"standing offset while the leader is slow, clamped to 0.06 rad")
+    if args.vel_ff > 0.0:
+        # ⭐ Same rule as mirror-catchup: a control term that changes what the arm does is
+        # named in the plan, so it can be ruled out (or blamed) later.
+        print(f"  feedforward : ON at {min(args.vel_ff, 1.0):g} — motors also receive that "
+              f"fraction of the command's own speed, so torque starts before error builds "
+              f"(item 44; jaw excluded)")
     lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
     # ⭐⭐ THE PLAN NOW SAYS WHAT EACH LIMIT DOES, NOT JUST ITS VALUE. Julien, 2026-08-17:
     # *"I want to understand what MaxLag exactly does. I think I understand Max speed… but then
@@ -1535,6 +1551,9 @@ def main() -> int:  # noqa: PLR0915
                 robot, note = build_robot(name, zero_gravity=(start_mode == "guide"),
                                           with_gripper=not args.no_gripper,
                                           max_speed=args.max_speed, max_lag=args.max_lag)
+            # ⭐ On the SafeRobot in both modes, so a simulated session exercises the same
+            # feedforward plumbing the arm gets (the fake records the setpoints, item 44).
+            robot.vel_ff = args.vel_ff
             print(f"  {note}\n")
 
             arm = ArmSession(robot, name=name, frame=start_frame,
@@ -2188,6 +2207,8 @@ def main() -> int:  # noqa: PLR0915
                                     one_arm.robot.max_speed = value
                                 elif name == "max_lag":
                                     one_arm.robot.max_lag = value
+                                elif name == "vel_ff":
+                                    one_arm.robot.vel_ff = value
                             if name == "mirror_gap" and mirror_link is not None:
                                 mirror_link.max_gap = value
                             if name == "mirror_catchup" and mirror_link is not None:
@@ -2223,7 +2244,7 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  ⭐ SETTINGS closed. The values are live; press n then s "
                                   "to write them to the file.\n")
                             continue
-                        elif k in "12345678":
+                        elif k in "123456789":
                             idx = int(k) - 1
                             if idx < len(LIVE_ORDER):
                                 settings_pick = LIVE_ORDER[idx]
@@ -2265,7 +2286,7 @@ def main() -> int:  # noqa: PLR0915
                             # screen is noise; "left/right arrow" is information.
                             shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
                                 k, repr(k) if k.isprintable() else "that key")
-                            print(f"\n  ({shown} does nothing here — 1-8 or up/down to pick, "
+                            print(f"\n  ({shown} does nothing here — 1-9 or up/down to pick, "
                                   f"-/+ to change, 0 revert, s save, n or t/g/h to leave)\n")
                         if show_all or k == "0":
                             for line in live_lines(

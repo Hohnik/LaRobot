@@ -212,6 +212,9 @@ class FakeArm:
         self.blocked: dict[int, tuple[float, float]] = {}
 
         self.commands: list[np.ndarray] = []
+        #: ⭐ Every velocity setpoint received via `command_joint_state` (item 44), so a
+        #: test can assert the feedforward plumbing end to end.
+        self.commanded_vels: list[np.ndarray] = []
         self.cycles = 0
         self._last_t: float | None = None
 
@@ -247,6 +250,21 @@ class FakeArm:
         dt = 0.01 if self._last_t is None else min(0.05, max(1e-4, now - self._last_t))
         self._last_t = now
         self.step(dt)
+
+    def command_joint_state(self, joint_state: dict) -> None:
+        """Accept the pos+vel form the real `MotorChainRobot` offers (item 44).
+
+        ⭐ The velocity setpoint is RECORDED so a test can assert the feedforward
+        plumbing, and the physics then runs exactly as for a plain position command.
+        ⚠️ Deliberately so: how much feedforward actually tightens tracking is a
+        property of the real motors, and a constant for it here would be invented
+        rather than measured — the exact defect class FINDINGS §33.3 exists for. When
+        the real arm is measured with feedforward on, the fitted law belongs here.
+        """
+        vel = joint_state.get("vel")
+        self.commanded_vels.append(
+            np.zeros(self.n) if vel is None else np.asarray(vel, dtype=float).copy())
+        self.command_joint_pos(joint_state["pos"])
 
     def close(self) -> None:
         self.motor_chain.close()

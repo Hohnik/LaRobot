@@ -77,9 +77,12 @@ def main() -> int:
         print(f"cleared {stale}")
 
     master, slave = pty.openpty()
+    # ⭐ Anything on THIS script's command line is passed through to the session, so any
+    # new session flag can be sim-driven end to end without editing this file:
+    #     uv run scripts/drive_sim_session.py --vel-ff 0.5
     proc = subprocess.Popen(
         ["uv", "run", "scripts/teleop_session.py", "--sim", "--yes",
-         "--arms", "B,G", "--start-mode", "hold"],
+         "--arms", "B,G", "--start-mode", "hold", *sys.argv[1:]],
         cwd=REPO, stdin=slave, stdout=slave, stderr=slave, close_fds=True,
     )
     os.close(slave)

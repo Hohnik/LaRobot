@@ -856,6 +856,14 @@ class SafeRobot:
         self._robot = robot
         self.max_speed = max_speed   # rad/s, per joint
         self.max_lag = max_lag       # rad, command vs measured
+        # ⭐ Velocity feedforward gain, 0.0 = OFF = exactly the old behaviour
+        # (ROADMAP §8.2 item 44, FINDINGS §66.1). At f > 0 the motors are sent
+        # `f ×` the rate-limited command's own derivative as their velocity
+        # setpoint, so torque flows before position error builds. ⛔ OFF by
+        # default because it changes what 4.3 kg does; Julien enables and
+        # tests it slowly (his go, 2026-08-18). Live-editable like max_speed.
+        self.vel_ff = 0.0
+        self._ff_warned = False
         self._last_cmd: Any = None
         self._last_t: float | None = None
         self.limited_cycles = 0      # how often a limit actually bit
@@ -884,8 +892,35 @@ class SafeRobot:
         if not np.allclose(limited, q, atol=1e-6):
             self.limited_cycles += 1
 
+        prev_cmd = self._last_cmd
         self._last_cmd = limited
-        self._robot.command_joint_pos(limited)
+
+        # ⭐ Velocity feedforward (ROADMAP §8.2 item 44). The DM motors' MIT-mode frame
+        # carries a velocity setpoint and this stack always sent zero, so all torque had
+        # to come from position error — the measured `0.033 s × speed` lag is that,
+        # structurally (FINDINGS §66.1). ⭐ The derivative of the LIMITED command is used,
+        # never the caller's raw target, so the feedforward can never ask for a speed the
+        # rate limiter above just refused: |vel| ≤ max_speed × vel_ff by construction.
+        ff = min(float(self.vel_ff), 1.0)
+        if ff <= 0.0:
+            self._robot.command_joint_pos(limited)
+            return
+        vel = (limited - prev_cmd) / dt * ff
+        # ⛔ The jaw (index 6 in this stack) NEVER gets feedforward. On a jaw squeezing an
+        # object the extra torque pushes harder into it, which is how motor 7 was cooked.
+        vel[6:] = 0.0
+        send = getattr(self._robot, "command_joint_state", None)
+        if send is None:
+            # ⚠️ Said ONCE rather than silently dropped: a set gain that quietly does
+            # nothing is the fails-by-lying pattern (FINDINGS §0). The arm still moves,
+            # position-only, exactly as with vel_ff = 0.
+            if not self._ff_warned:
+                self._ff_warned = True
+                print("⚠️  vel_ff is set but this robot has no command_joint_state — "
+                      "feedforward is OFF for it, position-only commands continue.")
+            self._robot.command_joint_pos(limited)
+            return
+        send({"pos": limited, "vel": vel})
 
     def resync(self) -> None:
         """Forget the command history and re-anchor to the measured position.

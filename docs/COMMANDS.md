@@ -224,6 +224,16 @@ uv run scripts/teleop_session.py --arms B,G --start-mode hold --max-speed 4 --te
 
 ⚠️⭐ **IF RAISING A SPEED CHANGES NOTHING, YOU ARE RAISING THE WRONG ONE.** At 2.0 m/s of tip demand with a 0.4 m lever the joints only need ~5 rad/s, so a `--teleop-speed` of 15 is never reached. ⭐ **Check `linear` first** — the session's plan now prints all four with what each one does. [FINDINGS §65.0](FINDINGS.md).
 
+### ⭐⭐ `--vel-ff` — velocity feedforward, the real answer to the lag (item 44)
+
+```bash
+uv run scripts/teleop_session.py --yes --arms B,G --vel-ff 0.25
+```
+
+⭐ **What it is:** the motors' MIT-mode frame carries a velocity setpoint, and this stack always sent zero — so all torque came from position error, which is the measured `0.033 s × speed` lag ([FINDINGS §66.1](FINDINGS.md)). With `--vel-ff` each motor also receives that fraction of the rate-limited command's own speed, so torque starts flowing before error builds. **0 = off (the default) · start at 0.25 and raise slowly · 1 = the full command speed.** Live: setting 9 on the `n` screen.
+
+⛔ **Bounded by construction:** the setpoint is the derivative of the command the rate limiter itself produced, so it can never ask for speed past `--max-speed`. ⛔ **The jaw never gets feedforward** — extra torque on a squeezing jaw pushes into the object, which is how motor 7 was cooked. ⚠️ A too-eager feedforward oscillates; if the arm buzzes or overshoots, press `n`, `9`, `-`.
+
 ### ⭐⭐ `n` — the SETTINGS screen, live
 
 Press `n` in any session. It lists the six limits with their current values:

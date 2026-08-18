@@ -4587,6 +4587,7 @@ Both CAN adapters on the bus running firmware, no DFU. Two SpaceMice. ⛔ **ONE 
 
 1. ⬜ **The park-spasm resync, 30 seconds** ([§66.0](FINDINGS.md)): start a session, `q` · `g` · move an arm by hand · `p`. Before the fix the arm jerked for ~0.1 s toward its pre-guide pose; now the park should start smoothly from where the arm actually is.
 2. ⬜ **Replug the C920** (and the second D405 whenever convenient) so the camera chain can be built and run. ⛔ Camera *commands* are permanently his to run — macOS grants camera access per parent app and an agent shell can never have it ([§61.3](FINDINGS.md)).
+3. ⬜ **Velocity feedforward, gently** ([§67.9](FINDINGS.md), added later on 2026-08-18): a normal session with `--vel-ff 0.25`, drive TELEOP slowly, watch for buzz or overshoot (`n` · `9` · `-` backs it off live). If it feels right, raise it and watch the FOLLOWING numbers shrink.
 
 Everything else on the owed list is now confirmed: catchup ([§67.1](FINDINGS.md)), the jaw block ([§67.2](FINDINGS.md)), the two-arm playback ([§60.0](FINDINGS.md)).
 
@@ -4620,3 +4621,18 @@ Everything else on the owed list is now confirmed: catchup ([§67.1](FINDINGS.md
 His explanation, 2026-08-18, after being asked about an unparseable phrase: *"I'm currently using the voice command input feature… my vocal speaking gets first transferred to text by probably some mediocre speech to text model, and then you get whatever the speech to text model understood."* ⛔ **He does not see the transcription himself** (*"I don't even know what that sentence is supposed to mean"*).
 
 ⭐⭐ **The rule he asked for:** whenever a phrase reads garbled, incoherent, or has weird words in weird places, **quote it back with its surrounding context and ask** — he can usually reconstruct what he meant from where it happened. Never silently guess a reading and act on it; a mis-heard word about a safety limit or an arm name is exactly how a wrong instruction becomes motion. Now working-contract rule 12 in [HANDOFF §4](HANDOFF.md).
+
+### 67.9 ✅⭐⭐⭐ VELOCITY FEEDFORWARD IS BUILT — item 44, his "especially" of 2026-08-18. UNRUN ON HARDWARE
+
+✅ **What exists now:** `SafeRobot.vel_ff` (0.0 = OFF = exactly the old behaviour), the `--vel-ff` flag, **setting 9 on the `n` screen** (ladder 0 · 0.25 · 0.5 · 0.75 · 1.0, savable), and a plan line naming it whenever it is on. At `vel_ff > 0` each command goes out via I2RT's `command_joint_state` carrying `vel_ff ×` **the rate-limited command's own derivative** as the velocity setpoint. [COMMANDS.md](COMMANDS.md) has the operator's version.
+
+⭐⭐ **The three design decisions, each load-bearing:**
+1. **The setpoint is the derivative of the LIMITED command, never the caller's raw target** — so `|vel| ≤ max_speed × vel_ff` *by construction*, and the feedforward can never ask for a speed the rate limiter just refused. No new safety surface.
+2. ⛔ **The jaw (index 6) never gets feedforward.** On a jaw squeezing an object the extra torque pushes harder into it, which is how motor 7 was cooked three times.
+3. **A wrapped robot without `command_joint_state` falls back to position-only and warns exactly once** — a set gain that silently does nothing is the fails-by-lying pattern ([§0](FINDINGS.md)).
+
+⭐ **No vendor patching:** I2RT's `MotorChainRobot.command_joint_state({"pos", "vel"})` existed all along, one function below the `command_joint_pos` this stack always called; the velocity remap in its `JointMapper` is linear, so a zero stays a zero through the jaw's normalised map. **`FakeArm` grew `command_joint_state` too: it RECORDS the setpoints (so tests assert the plumbing) and deliberately does not model the tracking benefit** — that constant must come from the arm, not from imagination ([§33.3](FINDINGS.md)).
+
+✅ **Verified:** `scripts/test_vel_ff.py`, 8 tests (off-is-identical · exact first-cycle setpoint · jaw exclusion · limiter bound over 50 runaway cycles · gain clamp above 1 · fallback warns once · the setting's ladder reaches both ends · positions identical with ff on/off). Full sweep 694/694 across 27 files, and `drive_sim_session.py --vel-ff 0.5` runs the whole loop **25/25 with feedforward on** (the driver now passes extra flags through to the session). ⭐ Mirror benefits twice, since leader-to-follower stacks two copies of the physical lag ([§66.1](FINDINGS.md)).
+
+⬜ **The hardware run it owes, low speed first:** `--vel-ff 0.25`, drive TELEOP gently, watch for buzz or overshoot (`n` · `9` · `-` backs it off live), then raise toward 1.0 and compare the FOLLOWING readings against the `0.033 s × speed` law — the speed-proportional term should visibly shrink while the 0.04-0.10 rad droop stays.

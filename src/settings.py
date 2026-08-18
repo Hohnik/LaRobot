@@ -67,6 +67,10 @@ TUNABLE: dict[str, tuple[type, bool, str | None]] = {
     #: ⭐ Not a bound but a control gain, so `is_a_safety_limit` is False. ⚠️ It still changes
     #: what the arm does, which is why it defaults to OFF rather than to a value.
     "mirror_catchup": (float, False, None),
+    #: ⭐ Velocity feedforward gain, 0..1 (item 44): the motors receive this fraction of the
+    #: rate-limited command's own derivative as their velocity setpoint. Same family as
+    #: `mirror_catchup`: a gain, defaults OFF, and 0 must stay reachable by key.
+    "vel_ff": (float, False, None),
 }
 
 
@@ -210,7 +214,7 @@ def describe(saved: dict[str, Any], rejected: list[str], loose: list[str],
 #: it in the control panel area?"* ⭐ He is right: it is one of the three limits in series, and
 #: leaving it off this screen made it the invisible one.
 LIVE_ORDER = ("max_speed", "teleop_speed", "max_lag", "mirror_gap", "reach", "floor",
-              "mirror_catchup", "linear_scale")
+              "mirror_catchup", "linear_scale", "vel_ff")
 
 #: ⛔⭐ BOUNDS FOR THE LIVE EDITOR, and every one is a backstop rather than a policy. A key
 #: that repeats when held reached `lin 19.852 m/s` on 2026-08-17 because the linear-speed
@@ -229,6 +233,10 @@ LIVE_BOUNDS: dict[str, tuple[float, float]] = {
     #: whose step has to be able to get there. `adjust` special-cases it for that reason.
     "mirror_catchup": (0.0, 20.0),
     "linear_scale": (0.03, 15.0),
+    #: ⭐ Capped at 1.0 BY DESIGN, not generosity: 1.0 sends exactly the command's own
+    #: derivative, and anything above would ask for more speed than the rate limiter
+    #: allows — feedforward overshoot is how a wrong gain oscillates ([FINDINGS §66.1]).
+    "vel_ff": (0.0, 1.0),
 }
 
 #: ⛔⭐⭐⭐ A LADDER OF ROUND NUMBERS, BECAUSE THE RATIO STEP PRODUCED UNUSABLE VALUES.
@@ -255,6 +263,7 @@ LADDERS: dict[str, tuple[float, ...]] = {
     "reach": (0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2),
     "floor": (-0.1, -0.05, -0.02, -0.01, -0.005, 0.0, 0.005, 0.01, 0.02, 0.05, 0.1),
     "mirror_catchup": (0.0, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0),
+    "vel_ff": (0.0, 0.25, 0.5, 0.75, 1.0),
     #: ⭐ The CARTESIAN speed a full puck deflection asks for. Its default is 0.12 m/s and it
     #: spans two orders of magnitude, so the low rungs are fine and the high ones are coarse.
     "linear_scale": (0.03, 0.06, 0.12, 0.2, 0.3, 0.5, 0.8, 1.2, 2.0, 3.0, 5.0, 8.0, 12.0, 15.0),
@@ -322,7 +331,7 @@ def live_lines(values: dict[str, Any], selected: str | None,
                    f"{base}{'  ⚠️ ' + edge if edge else ''}")
     out += [
         "",
-        "   1-8 pick a setting   - / +  change it   0  back to how this session started",
+        "   1-9 pick a setting   - / +  change it   0  back to how this session started",
         "   s   SAVE these to config/session_defaults.json for every later session",
         "   t / g / h  leave                                        ?  this help",
         "",
