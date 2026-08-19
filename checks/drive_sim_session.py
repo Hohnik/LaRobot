@@ -62,6 +62,17 @@ SCRIPT = [
     (1.0, "7"),         # ...HIS REAL two-arm recording, on simulated arms
     (1.0, "\r"),        # confirm -> parks both arms, then plays
     (16.0, ""),         # let the park and the 5.2s playback run
+    # ⭐ COMPOSITE RUN (ROADMAP §6.6.1a): pose 1 → play take 8 → pose 1 again. Slot 1 is
+    # a real saved waypoint on arm B (G skips it with a note); take 8 is the two-arm sim
+    # recording made above. Three legs, two handover kinds, one completion line.
+    (2.0, "p"),
+    (0.8, "1"),
+    (0.8, "w"),         # arms "next digit is a take"
+    (0.8, "8"),
+    (0.8, "1"),
+    (0.8, "\r"),        # first Enter shows the plan (3 entries = confirm step)
+    (0.8, "\r"),        # second Enter runs it
+    (30.0, ""),         # park → take → park, all three legs
     (1.0, "q"),         # quit
     (1.5, "q"),         # park + disable
     (16.0, ""),         # let the park finish
@@ -157,6 +168,10 @@ def main() -> int:
         ("real recording found from sim", r"saved: 8\(sim\)"),
         ("arm G's rows are named too", r"\bG base_yaw\b"),
         ("no anonymous rows", r"^(?!.*\bjoint  +worst lag)"),
+        ("composite run announced with its leg count", r"COMPOSITE RUN: 3 leg"),
+        ("the take leg parked to the recording's start", r"start pose in recording 8"),
+        ("the queue narrated between legs", r"composite: \d+ leg\(s\) still queued"),
+        ("composite completed", r"COMPOSITE RUN complete — all 3 leg"),
         ("both arms parked", r"arm G PARKED"),
         ("motors reported disabled", r"motors confirmed disabled: \[1, 2, 3, 4, 5, 6, 7\]"),
     ]

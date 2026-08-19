@@ -1305,6 +1305,17 @@ def main() -> int:  # noqa: PLR0915
     pending: str | None = None
     park_sequence: list[str] = []      # "3" = pose slot, "w3" = recording (take) slot
     park_take_next = False             # w inside the p prompt arms "the next digit is a take"
+    # ⭐⭐ COMPOSITE RUNS (ROADMAP §6.6.1a): the queue of legs still to run. Entries are
+    # ["poses", [digits]] — consecutive poses group into ONE blended park, exactly like a
+    # plain `p` run — or ("take", slot, Trajectory, Layout, arms). Takes are validated at
+    # Enter, BEFORE any motion, so a bad take refuses the whole run instead of stranding
+    # it halfway. `composite_wait` holds the arm names whose pose-park arrival is awaited;
+    # `composite_total` > 0 means a composite is active even while its queue is empty
+    # (the last leg is still running).
+    composite_queue: list = []
+    composite_wait: set[str] = set()
+    composite_total = 0
+    composite_aimed: list[ArmSession] = []
     angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
     # ⚠️ CONTROLS mode's memory of "the control you just used" — `last_active_axis`,
@@ -1806,7 +1817,7 @@ def main() -> int:  # noqa: PLR0915
                     f"· j=puck scrub")
 
         def begin_path(one: ArmSession, legs: list, what: str,
-                       for_replay: bool = False) -> None:
+                       for_replay: bool = False, for_composite: bool = False) -> None:
             """Start ONE continuous motion through every leg — the whole run, blended.
 
             ⭐ THE CORRECTION THIS IMPLEMENTS. The previous version ran each leg as a
@@ -1835,6 +1846,12 @@ def main() -> int:  # noqa: PLR0915
                 replay_ready = set()
                 print("\n  ⚠️  playback cancelled — a new park replaced the drive to its "
                       "start pose.\n")
+            # ⭐ Same rule one level up (ROADMAP §6.6.1a trap ①): a park the COMPOSITE did
+            # not start replaces the composite. Its own pose legs pass for_composite=True
+            # and its take legs pass for_replay=True, so only operator-initiated parks
+            # land here — which is exactly who may abandon a queued run.
+            if not for_replay and not for_composite:
+                abandon_composite("a new park replaced it")
             # ⭐ item 23 group ④: the CLASS builds and runs the park now — the tested
             # `begin_path`/`step_path` pair with its 48 tests is finally the code that
             # moves the arm. The session's live dials are copied on at start, and the
@@ -1854,6 +1871,151 @@ def main() -> int:  # noqa: PLR0915
             print(f"\n⭐ MODE: PARK → {what}, {one.park_total_length:.2f} rad of travel at "
                   f"{one.park_speed:.2f} rad/s, corners {BLEND_MODES[blend_idx][0]}"
                   f"{stop_note}. Press h or t to stop.\n")
+
+        def load_take(slot: str):  # noqa: ANN202
+            """Load recording `slot` and check it fits this session. None = refused, said why.
+
+            ⭐ THE LAYOUT COMES FROM THE FILE. `Layout.from_meta` also reads recordings
+            made before two arms existed — Julien has several in slots 1-6 — so they stay
+            playable on the arm they name. Shared by the `l` prompt and by composite runs,
+            which validate EVERY take at Enter, before any motion.
+            """
+            path = slot_for_reading(slot)
+            if not path.is_file():
+                print(f"\n  ⚠️  nothing saved in recording {slot} — press w to record one.\n")
+                return None
+            loaded = Trajectory.load(path)
+            layout = Layout.from_meta(loaded.meta, loaded.n_joints)
+            by_name = {one.name: one for one in arms}
+            missing = [n for n in layout.arms if n not in by_name]
+            if missing:
+                print(f"\n  ⚠️  recording {slot} was made with arm(s) "
+                      f"{', '.join(layout.arms)} and this session has "
+                      f"{', '.join(by_name)}. Missing: {', '.join(missing)}.")
+                print("     Start the session with those arms to play it.\n")
+                return None
+            if layout.n_joints != loaded.n_joints:
+                print(f"\n  ⚠️  recording {slot} says {layout.n_joints} joints in its "
+                      f"metadata and holds {loaded.n_joints}. Refusing rather "
+                      "than guessing which is right.\n")
+                return None
+            return loaded, layout, [by_name[n] for n in layout.arms]
+
+        def park_to_take_start() -> None:
+            """Every replay arm parks to its own slice of the pending take's start pose.
+
+            ⛔⭐ THIS IS THE SAFETY POINT OF PLAYBACK. A recording commands poses a hand
+            physically put the arm in, so the only dangerous command is the FIRST one:
+            if the arm is somewhere else right now, the recording's opening pose is a
+            jump across whatever separates them. The existing, tested, interruptible
+            park drives there, and the ARRIVAL branch — never an interruption — hands
+            over to the playback (FINDINGS §57.1).
+            """
+            start = list(replay_pending.start_pose() or ())
+            for one in replay_arms:
+                begin_path(one, [("recording start",
+                                  start[replay_layout.slice_for(one.name)])],
+                           f"arm {one.name}'s start pose in recording "
+                           f"{replay_slot}", for_replay=True)
+
+        def start_take(slot: str, loaded, layout, take_arms) -> None:  # noqa: ANN001
+            """A composite take-leg begins: exactly the `l` Enter flow, minus the prompt."""
+            nonlocal replay_pending, replay_layout, replay_arms, replay_ready, \
+                replay_slot, replay_speed, replay_scrub
+            replay_pending, replay_layout, replay_arms = loaded, layout, take_arms
+            replay_ready, replay_slot, replay_scrub = set(), slot, False
+            replay_speed = min(1.0, safe_time_scale(loaded.joint_speed(99),
+                                                    args.teleop_speed))
+            park_to_take_start()
+
+        def abandon_composite(why: str) -> None:
+            """Drop every queued leg, once, with a count. No-op when nothing is queued.
+
+            ⛔ ONE function called from every exit — mode keys, a blocked park, a blocked
+            or abandoned playback, an operator-started park — because the exit that gets
+            forgotten is the one that matters (the same one-place rule as leaving PARK).
+            """
+            nonlocal composite_queue, composite_wait, composite_total
+            if not (composite_queue or composite_wait or composite_total):
+                return
+            left = len(composite_queue)
+            composite_queue, composite_wait, composite_total = [], set(), 0
+            print(f"\n  ⚠️  composite run abandoned ({why}) — "
+                  f"{left} queued leg(s) dropped.\n")
+
+        def start_next_composite_entry() -> None:
+            """Pop and start the next leg. Pose entries park every composite arm; a take
+            entry re-enters the confirmed `l` flow. Runs in arrival/completion branches
+            only — never in a key branch (the §57.1 rule)."""
+            nonlocal composite_wait
+            while composite_queue:
+                entry = composite_queue.pop(0)
+                left = len(composite_queue)
+                if entry[0] == "poses":
+                    wanted = entry[1]
+                    composite_wait = set()
+                    for one in composite_aimed:
+                        legs, missing = resolve_park_legs(wanted, one.base_pose, one.slots)
+                        if missing:
+                            print(f"\n  ⚠️  arm {one.name}: skipping empty slot(s) "
+                                  f"{', '.join(missing)}.\n")
+                        if legs:
+                            begin_path(one, legs, " → ".join(n for n, _ in legs),
+                                       for_composite=True)
+                            composite_wait.add(one.name)
+                    if composite_wait:
+                        print(f"  ▶ composite: {left} leg(s) still queued after this one.")
+                        return
+                    continue    # every slot empty on every arm — fall through to the next leg
+                slot, loaded, layout, take_arms = entry[1], entry[2], entry[3], entry[4]
+                start_take(slot, loaded, layout, take_arms)
+                print(f"  ▶ composite: {left} leg(s) still queued after this one.")
+                return
+            composite_leg_done()
+
+        def composite_leg_done() -> None:
+            """A leg finished. Start the next, or declare the run complete."""
+            nonlocal composite_total
+            if composite_queue:
+                start_next_composite_entry()
+            elif composite_total:
+                done, composite_total = composite_total, 0
+                hint("")
+                print(f"\n⭐ COMPOSITE RUN complete — all {done} leg(s) done.\n")
+
+        def begin_composite(wanted: list[str]) -> None:
+            """Group the typed entries, validate every take, then start leg one.
+
+            ⛔ Validation happens HERE, before any motion: a composite that discovers a
+            missing take at leg three has already moved the arm twice for nothing, and
+            "refuse loudly at Enter" is this repo's cheapest safety pattern.
+            """
+            nonlocal composite_queue, composite_total, composite_aimed
+            entries: list = []
+            for e in wanted:
+                if e.startswith("w"):
+                    entries.append(("take", e[1:]))
+                elif entries and entries[-1][0] == "poses":
+                    entries[-1][1].append(e)
+                else:
+                    entries.append(["poses", [e]])
+            resolved: list = []
+            for entry in entries:
+                if entry[0] == "take":
+                    got = load_take(entry[1])
+                    if got is None:
+                        print("     the whole composite run is refused — nothing has "
+                              "moved. Fix the take and retype it.\n")
+                        return
+                    resolved.append(("take", entry[1], *got))
+                else:
+                    resolved.append(entry)
+            composite_queue = resolved
+            composite_total = len(resolved)
+            composite_aimed = list(aimed)
+            print(f"\n⭐ COMPOSITE RUN: {composite_total} leg(s) — poses park, takes "
+                  "play, h or t abandons the rest.\n")
+            start_next_composite_entry()
 
         # ⭐ Each arm enters its start mode, per arm. It used to run once, after the single
         # build, reading the one `robot` local.
@@ -2356,32 +2518,13 @@ def main() -> int:  # noqa: PLR0915
                         if not k.isdigit():
                             print("\n  play cancelled.\n")
                             continue
-                        path = slot_for_reading(k)
-                        if not path.is_file():
-                            print(f"\n  ⚠️  nothing saved in recording {k} — "
-                                  "press w to record one.\n")
+                        got = load_take(k)   # validation shared with composite runs
+                        if got is None:
                             continue
-                        loaded = Trajectory.load(path)
-                        # ⭐ THE LAYOUT COMES FROM THE FILE. `Layout.from_meta` also reads
-                        # recordings made before two arms existed — Julien has several in
-                        # slots 1-6 — so they stay playable on the arm they name.
-                        layout = Layout.from_meta(loaded.meta, loaded.n_joints)
-                        by_name = {one.name: one for one in arms}
-                        missing = [n for n in layout.arms if n not in by_name]
-                        if missing:
-                            print(f"\n  ⚠️  recording {k} was made with arm(s) "
-                                  f"{', '.join(layout.arms)} and this session has "
-                                  f"{', '.join(by_name)}. Missing: {', '.join(missing)}.")
-                            print("     Start the session with those arms to play it.\n")
-                            continue
-                        if layout.n_joints != loaded.n_joints:
-                            print(f"\n  ⚠️  recording {k} says {layout.n_joints} joints in its "
-                                  f"metadata and holds {loaded.n_joints}. Refusing rather "
-                                  "than guessing which is right.\n")
-                            continue
+                        loaded, layout, take_arms = got
                         replay_pending = loaded
                         replay_layout = layout
-                        replay_arms = [by_name[n] for n in layout.arms]
+                        replay_arms = take_arms
                         replay_ready = set()
                         replay_slot = k
                         # ⭐⭐ 1.00x IS THE TAUGHT SPEED, AND THE DEFAULT IS WHATEVER THE ARM
@@ -2426,12 +2569,7 @@ def main() -> int:  # noqa: PLR0915
                             # design caution: a long unattended playback must not need a
                             # held hand — this one is FOR the hand).
                             replay_scrub = True
-                            start = list(replay_pending.start_pose() or ())
-                            for one in replay_arms:
-                                begin_path(one, [("recording start",
-                                                  start[replay_layout.slice_for(one.name)])],
-                                           f"arm {one.name}'s start pose in recording "
-                                           f"{replay_slot}", for_replay=True)
+                            park_to_take_start()
                             print("     then the PUCK scrubs it: push forward to play, pull "
                                   "back to rewind,\n     let go to freeze. h or t ends it.\n")
                             continue
@@ -2450,12 +2588,7 @@ def main() -> int:  # noqa: PLR0915
                             # playback commands poses a hand physically put the arm in, and
                             # the only dangerous command is the FIRST one, which would jump
                             # from wherever the arm is now.
-                            start = list(replay_pending.start_pose() or ())
-                            for one in replay_arms:
-                                begin_path(one, [("recording start",
-                                                  start[replay_layout.slice_for(one.name)])],
-                                           f"arm {one.name}'s start pose in recording "
-                                           f"{replay_slot}", for_replay=True)
+                            park_to_take_start()
                             print("     then it plays the recording. Press h or t to stop.\n")
                         else:
                             replay_pending = None
@@ -2612,9 +2745,7 @@ def main() -> int:  # noqa: PLR0915
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
                             if any(e.startswith("w") for e in wanted):
-                                print("\n  ▶ composite runs (poses + takes in one run) are "
-                                      "not wired yet — this lands next commit. Play the "
-                                      "take with l for now.\n")
+                                begin_composite(wanted)
                                 continue
                             # ⭐ EACH SELECTED ARM RUNS ITS OWN SEQUENCE, resolved against
                             # its own slots. Two arms driving to their own saved poses at the
@@ -2647,9 +2778,7 @@ def main() -> int:  # noqa: PLR0915
                             wanted = park_sequence[:]
                             park_sequence.clear()
                             if any(e.startswith("w") for e in wanted):
-                                print("\n  ▶ composite runs (poses + takes in one run) are "
-                                      "not wired yet — this lands next commit. Play the "
-                                      "take with l for now.\n")
+                                begin_composite(wanted)
                                 continue
                             ran = False
                             for one in aimed:
@@ -3354,6 +3483,7 @@ def main() -> int:  # noqa: PLR0915
                     if unfinished:
                         print(f"\n  ⚠️  arm {one.name}: run abandoned with {left:.2f} rad of "
                               "path left — leaving PARK cancels the rest.\n")
+                        abandon_composite("a park leg was abandoned")
                     # ⛔ A park that was interrupted must not hand over to a playback. The
                     # handover lives in the arrival branch, but this is the second gate:
                     # pressing h or t while driving to the start pose cancels the whole
@@ -3406,6 +3536,7 @@ def main() -> int:  # noqa: PLR0915
                                  " — every replay arm is HOLDING now")
                               + ".\n")
                     replay = None
+                    abandon_composite("the playback was abandoned")
                     hint("")
                 if stop_reason:
                     break
@@ -3825,6 +3956,14 @@ def main() -> int:  # noqa: PLR0915
                             # arrival (which waits for the second) had its pending playback
                             # cancelled as "abandoned". FINDINGS §57.1.
                             one.park_path, one.park_marks = None, []
+                            # ⭐ Composite (ROADMAP §6.6.1a): a pose-leg's park arrived.
+                            # The leg is done when EVERY awaited arm has arrived; only
+                            # then does the queue advance — in the ARRIVAL branch, never
+                            # a key branch, which is the §57.1 rule.
+                            if one.name in composite_wait:
+                                composite_wait.discard(one.name)
+                                if not composite_wait:
+                                    composite_leg_done()
                             # ⭐ The handover from "drive to the start pose" to "play the
                             # recording" lives HERE, in the arrival branch, so a park that
                             # was blocked or interrupted can never roll into a playback:
@@ -3909,6 +4048,7 @@ def main() -> int:  # noqa: PLR0915
                             # the remaining path, which the ParkStep carries.
                             one.enter_hold()
                             hint("")
+                            abandon_composite("a park leg was blocked")
                             if ps.remaining > 1e-9:
                                 print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                       f"{ps.lag:.3f} rad behind the path, no progress "
@@ -4107,6 +4247,7 @@ def main() -> int:  # noqa: PLR0915
                                 print(f"     ⚠️  could not save the tracking table: "
                                       f"{type(exc).__name__}: {exc}")
                         replay = None
+                        composite_leg_done()
                     elif t - replay_progress_t > PARK_STALL_SECONDS:
                         # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
                         # and wrong for ever: an arm that cannot catch up is blocked, and a
@@ -4120,6 +4261,7 @@ def main() -> int:  # noqa: PLR0915
                               f"{rs.lag:.3f} rad behind the recording, no progress for "
                               f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
                         replay = None
+                        abandon_composite("the playback was blocked")
                     elif t >= next_park_report:
                         next_park_report = t + 1.0
                         # ⭐ A scrub is a POSITION, never a countdown — it goes both ways,
