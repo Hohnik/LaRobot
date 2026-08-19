@@ -59,7 +59,7 @@ SCRIPT = [
     (2.5, "w"),         # stop recording
     (1.0, "8"),         # save to slot 8 (goes to recordings/sim/)
     (2.0, "l"),         # play...
-    (1.0, "7"),         # ...HIS REAL two-arm recording, on simulated arms
+    (1.0, "0"),         # ...the synthetic two-arm recording this driver writes itself
     (1.0, "\r"),        # confirm -> parks both arms, then plays
     (16.0, ""),         # let the park and the 5.2s playback run
     # ⭐ COMPOSITE RUN (ROADMAP §6.6.1a): pose 1 → play take 8 → pose 1 again. Slot 1 is
@@ -79,6 +79,45 @@ SCRIPT = [
 ]
 
 
+def write_synthetic_take(path: pathlib.Path) -> None:
+    """A two-arm recording with real movement in BOTH arms, written from scratch.
+
+    Both arms have to move, and faster than the tracking table's 0.01 rad/s floor, because
+    the checks assert that the table names rows for arm B *and* arm G — the defect that
+    produced those rows anonymously is [FINDINGS §60.1](../docs/FINDINGS.md). The shape is a
+    slow sine so the simulated arm can follow it: ~0.3 rad of travel over 3 s is 0.2-0.6
+    rad/s per joint, well inside every clamp and well above the floor.
+
+    ⚠️ Stamped `simulated: true` and written under `recordings/sim/`, the same two independent
+    marks a sim take gets when the session saves one ([FINDINGS §60.2](../docs/FINDINGS.md)),
+    so this file can never be mistaken for a demonstration.
+    """
+    import math
+    import sys as _sys
+
+    _sys.path.insert(0, str(pathlib.Path(REPO) / "src"))
+    from yam.recording import Trajectory
+
+    take = Trajectory(meta={
+        "arms": ["B", "G"], "joints_per_arm": 7,
+        "method": "sim:synthetic (written by drive_sim_session, not a demonstration)",
+        "simulated": True,
+        "why": "this driver must not depend on rig-local recordings — FINDINGS §75.1",
+    })
+    hz, seconds = 90.0, 3.0
+    for i in range(int(hz * seconds) + 1):
+        t_s = i / hz
+        wave = 0.3 * math.sin(2 * math.pi * t_s / seconds)
+        b = [wave * (1 + j * 0.1) for j in range(6)] + [0.3]
+        g = [-wave * (1 + j * 0.1) for j in range(6)] + [0.5]
+        take.append(t_s, b + g)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    take.save(path)
+    print(f"wrote a synthetic two-arm take to {path.relative_to(pathlib.Path(REPO))} "
+          f"({take.duration:.1f}s, {len(take)} samples, peak "
+          f"{take.max_joint_speed():.2f} rad/s)")
+
+
 def main() -> int:
     # ⭐ Clear this driver's OWN artifact first. Leaving it triggers the session's
     # overwrite guard, which asks for a confirming keypress this script does not send, and
@@ -88,6 +127,19 @@ def main() -> int:
     if stale.is_file():
         stale.unlink()
         print(f"cleared {stale}")
+
+    # ⛔⭐ WHY THIS DRIVER WRITES ITS OWN RECORDING (FINDINGS §75.1). It used to play slot 7,
+    # one of Julien's real hand-guided takes — and `recordings/` is gitignored, so on the
+    # Linux PC's fresh clone slot 7 did not exist. The playback then had nothing to move, and
+    # two checks failed with a message about unnamed table rows that pointed nowhere near the
+    # cause. **A checker that depends on data it does not create goes blind on a new machine**,
+    # which is the same class of defect as a checker that validates nothing (§70.8).
+    #
+    # Slot 0 is used because it is the one slot his rig leaves free, and because a sim
+    # recording SHADOWS a real one of the same number (`slot_for_reading`) — writing slot 7
+    # here would have quietly replaced the real take on the Mac and removed the very thing
+    # that made this check interesting there.
+    write_synthetic_take(pathlib.Path(REPO) / "recordings" / "sim" / "0.json")
 
     master, slave = pty.openpty()
     # ⭐ Anything on THIS script's command line is passed through to the session, so any
@@ -165,7 +217,7 @@ def main() -> int:
         ("playback finished", r"PLAYBACK finished"),
         ("tracking table printed", r"how well each joint kept up"),
         ("rows name their arm", r"\bB base_yaw\b"),
-        ("real recording found from sim", r"saved: 8\(sim\)"),
+        ("a recording is listed from the sim folder", r"saved: 0\(sim\), 8\(sim\)"),
         ("arm G's rows are named too", r"\bG base_yaw\b"),
         ("no anonymous rows", r"^(?!.*\bjoint  +worst lag)"),
         ("composite run announced with its leg count", r"COMPOSITE RUN: 3 leg"),
