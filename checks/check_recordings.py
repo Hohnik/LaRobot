@@ -116,6 +116,16 @@ def jpeg_size(path: Path) -> tuple[int, int] | None:
 #: was in the saved file the entire time: frames ÷ duration. Now it is on screen.
 THIN_FPS = 20.0
 
+#: The exact wording of the count-mismatch fault, so the summary can tell WHICH of the three
+#: camera faults occurred without a second return value.
+#:
+#: ⛔ WHY IT MATTERS: the sidecar advice below only explains a count MISMATCH. Printing it for
+#: a zero-frame or thin-rate fault sends the reader to look for `._*` files that have nothing
+#: to do with either, which is misdirected advice in a tool whose whole job today is to stop
+#: giving that ([FINDINGS §76.5](../docs/FINDINGS.md) is the last time this checker named the
+#: wrong defect).
+MISMATCH_PHRASE = "these frames are not the recording's own"
+
 
 def frames_verdict(meta_cameras: dict, recording_dir: Path,
                    duration_s: float = 0.0) -> tuple[str, list[str]]:
@@ -146,7 +156,7 @@ def frames_verdict(meta_cameras: dict, recording_dir: Path,
             piece += "⛔"
             faults.append(f"{name}: meta says {want} frame(s) were written and "
                           f"{cam_dir.relative_to(recording_dir)} holds {on_disk} — "
-                          "these frames are not the recording's own.")
+                          f"{MISMATCH_PHRASE}.")
         # ⛔ ZERO FRAMES IS A FAULT even when the meta agrees, and this is the case that
         # started FINDINGS §76: a camera was named on the command line, opened, reported
         # "delivering 1280x720", and wrote nothing. Meta said 0, disk held 0, they agreed,
@@ -239,6 +249,7 @@ def main() -> int:
     # worse than one that says nothing, because somebody acts on it.
     label_faults: list[str] = []
     frame_faults: list[str] = []
+    saw_mismatch = False       # ⭐ only a COUNT mismatch earns the sidecar advice
     for path in files:
         try:
             traj = Trajectory.load(path)
@@ -280,6 +291,8 @@ def main() -> int:
         if traj.meta.get("cameras"):
             line, cam_faults = frames_verdict(traj.meta["cameras"], folder, traj.duration)
             print(line)
+            if any(MISMATCH_PHRASE in f for f in cam_faults):
+                saw_mismatch = True
             for fault in cam_faults:
                 if path.name not in frame_faults:
                     frame_faults.append(path.name)
@@ -309,10 +322,14 @@ def main() -> int:
         print("   Three different things land here, and the per-camera lines above say which:")
         print("   a count that disagrees with the directory · a camera that recorded ZERO")
         print("   frames · a camera whose frames-per-second is far under 30.")
-        print("   ⭐ FIRST THING TO RULE OUT, because it caused every instance of this so far:")
-        print("   macOS sidecar files. If the folder was hand-copied from the Mac, every picture")
-        print("   arrived with a `._`-prefixed twin and the count came out at exactly double.")
-        print("   This checker now skips them, so a doubled count here means something else.")
+        if saw_mismatch:
+            # ⛔ Only for a COUNT MISMATCH. This advice used to print for all three kinds,
+            # which sent a reader chasing sidecar files over a camera that simply ran slowly.
+            print("   ⭐ For the count mismatch, FIRST THING TO RULE OUT, because it caused")
+            print("   every instance so far: macOS sidecar files. A folder hand-copied from the")
+            print("   Mac arrives with a `._`-prefixed twin per picture and the count comes out")
+            print("   at exactly double. This checker skips them, so a doubled count here now")
+            print("   means something else.")
         print()
 
     # ⛔ This pass RE-LOADS every file and had no error guard, while the table above did.
