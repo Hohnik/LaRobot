@@ -14,12 +14,13 @@
 > - Composite runs: waypoints and recorded movements in one sequence.
 > - Mirror mode (one arm follows the other), saved per-session settings, a simulator that lags like the real hardware and runs the whole loop with nothing attached, and safe-stop plus incident recording.
 >
-> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md)** (the rebuild plan, the deliverable this repo exists to produce) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system is shaped and why, one level down from the plan) → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state; its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2).
+> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md)** (the rebuild plan, the deliverable this repo exists to produce) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system is shaped and why, one level down from the plan) → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state; its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2). **Running it on the Linux station: [docs/LINUX.md](docs/LINUX.md)** (the connection, the packages, and which parts of the port are proven).
 >
 > ## Day one: prove the rig works, in three commands
 >
 > ```bash
 > uv sync                                      # installs everything, including the yam package
+> uv run checks/check_platform.py              # ⭐ which machine is this, and what is missing?
 > uv run checks/check_rig.py                   # what is on the USB bus — never transmits
 > uv run apps/ping_motors.py --arm B --yes     # motor health: temps, faults, jaw shift
 > uv run apps/teleop_session.py --arm B        # NO --yes: prints the full plan, moves nothing

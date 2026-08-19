@@ -275,6 +275,29 @@ uv run apps/export_episode.py --slot 7 --left G --right B --top c920 --left-wris
 
 ⭐⭐ **`export_episode.py` writes the [Setup-Anleitung.md](Setup-Anleitung.md) C3 shape exactly**: the eight state/action topics with their 6+1 dimensions per side, every stream on the 33,333,333 ns tick, joint-space actions ([FINDINGS §70.13](FINDINGS.md)). Labels, provenance, the arm mapping and the action policy ride in `/episode-meta`. ⛔ **`--left`/`--right` are REQUIRED** — the sides are bench positions nothing in a recording can derive, and a defaulted wrong side mirrors every episode silently. ⛔ **The camera roles work the same way**: a recording that carries frames refuses to export until `--top`/`--left-wrist`/`--right-wrist` say which recorded camera stood where; the frames then ride the same 30 Hz ticks as the joint streams, nearest-stamp joined ([FINDINGS §71.2](FINDINGS.md)). ⛔ Single-arm recordings are refused (an ABC episode needs both sides), and simulated recordings export with their `simulated` stamp and a warning. ⚠️ **The Anleitung's own C4 gate stands: verify a mini-sample against ABC's loader before collecting for real** — this output is the contract as written, not yet verified ABC input.
 
+## ⭐⭐ The training format papers use — one directory per episode
+
+```bash
+uv run apps/export_dataset.py --slot 5 --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773
+uv run checks/check_dataset.py                     # ⭐ re-read every episode and check the contract
+uv run checks/falsify_check_dataset.py             # prove that checker can still see a break
+```
+
+⭐⭐ **Two exports exist and they are different things.** `apps/export_episode.py` writes the C3 **log** (one MCAP file, every stream on the 33,333,333 ns tick). `apps/export_dataset.py` writes the C4 **training set**: `episode_<id>/` holding `states_actions.bin` (`(num_steps, 28)` float64, 14 state then 14 action, columns named in the metadata), `combined_camera-images-rgb.mp4` (the views stacked vertically, 224×224 each by default), and `episode_metadata.json`. One shared row builder feeds both, so the log and the training set can never describe a demonstration differently ([FINDINGS §74.1](FINDINGS.md)).
+
+⛔⭐ **Why the video encoding is strict, and why it is checked rather than trusted: the trainer does not decode the video to find frame k, it computes where frame k is.** So the file must make that arithmetic true — 30 fps, timebase 1/15360, PTS exactly 512·k, a keyframe every 30 frames with scene detection off, no B-frames, faststart. A file that gets this wrong plays perfectly and trains wrongly, and the guide measured a **~70× slower** loader from it. `check_dataset.py` asks ffprobe what actually landed, frame by frame (17 checks on a three-camera episode), and `falsify_check_dataset.py` breaks it five plausible ways to prove the checker is not merely green. ⚠️ Needs `ffmpeg`/`ffprobe` on PATH (macOS: `brew install ffmpeg` · Ubuntu: `sudo apt install ffmpeg`).
+
+⚠️ **Two open contract questions, both the team's, both written into every episode's metadata rather than guessed**: the per-view size (the guide says 224×224, the team's own simulation renders 224×168) and the gripper unit (normalised 0..1 here, metres in their `Observation`). Every episode also carries `verified_against_abc_loader: false`, so nothing downstream can mistake "matches the published spec" for "the loader accepted it".
+
+## ⭐⭐ Which machine is this? — before anything else on a new one
+
+```bash
+uv run checks/check_platform.py            # tools, groups, CAN links, cameras, puck, clocks
+uv run checks/check_platform.py --raw      # ⭐ also dump the raw text it parsed
+```
+
+⭐⭐ **The first command to run on the Linux PC** ([docs/LINUX.md](LINUX.md)). It reports what the machine provides and what is missing, names every fix that needs `sudo` as the operator's, and with `--raw` prints the exact device listings it parsed — so its first run either confirms the Linux device-naming code or shows precisely how the machine differs ([FINDINGS §74.0](FINDINGS.md)). It also MEASURES whether `perf_counter` and `monotonic` share an epoch, which is the assumption the camera-to-joint join rests on. It transmits nothing and opens no camera.
+
 ## ⭐ The checkers — no hardware, and they answer real questions
 
 ```bash

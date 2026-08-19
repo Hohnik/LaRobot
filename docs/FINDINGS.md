@@ -5176,3 +5176,60 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 **From the team:** ABC's `export_mcap.py` or the `abc_minimal` repo — the C4 gate, the one thing between today's episodes and Gate C, plus the gripper-unit question ([§72.4](FINDINGS.md)).
 
 **Standing:** the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
+
+## 74 ⭐⭐⭐ 2026-08-19, EVENING — THE LINUX PORT IS WRITTEN, THE PAPER-FORMAT EXPORT IS BUILT AND VERIFIED ON REAL DATA, AND THE REMOTE PATH IS PREPARED
+
+> ⭐ **His three asks, in his own order:** get the whole thing running on the team's Linux PC (he sent the ZeroTier download page and will supply the network ID) · convert recordings into "the correct file format that is used for all of the robotics papers", with the timecodes aligned · then fix everything macOS-specific so it runs on Linux, once he has plugged the arms and cameras into the PC. This section is what got done without him and exactly where each thread stops.
+
+### 74.0 ✅⭐⭐ THE LINUX PORT — one module branches, and Linux answers most questions more simply than macOS did
+
+✅ **What exists: `src/yam/platform.py`, the ONLY place in the repo that branches on the operating system.** It answers two questions per platform: which SocketCAN interface carries which arm (from the adapter's USB serial in sysfs), and which `/dev/videoN` is which camera (from `/dev/v4l/by-id`, whose names carry model and serial). Plus `platform_note()` and `camera_permission_note()` so any tool can say where it is running and who may open a camera. 10 tests.
+
+⭐⭐ **The seam that made the arm side a one-site change: `yam/can.py::chain_channel`.** Every whole-arm caller in the repo already went through it (`yam/robot.py` ×3, `apps/read_arm_state.py`, `apps/calibrate_gripper.py`), so teaching THAT function about Linux ported the entire arm stack. It now returns a SocketCAN interface name on Linux and `gsusb<N>` on macOS. ⭐ And the vendor code needs no patch at all on Linux: `dm_driver.py` branches on `if "can" in channel` and hands anything matching to SocketCAN, which on Linux is exactly right — the macOS `gsusb` name was chosen back in August precisely to FAIL that test, and that choice is what makes both platforms work through one interface today.
+
+⭐⭐ **THE CAMERA PROBLEM LARGELY DISSOLVES ON LINUX, and it is worth understanding why before anyone ports the macOS workaround across.** On macOS, OpenCV exposes no camera identity, its index order is not any macOS list order ([§22](FINDINGS.md)), and two identical D405s share every capture mode — so this repo built the uniqueID chain ([§70.15](FINDINGS.md)), a hint file, and a model check to defend a stale hint ([§71.5](FINDINGS.md)). **On Linux the kernel publishes the answer**: `/dev/v4l/by-id/usb-<vendor>_<model>_<serial>-video-index0` symlinks to `/dev/videoN`, and N is exactly what `cv2.VideoCapture(N)` opens. So serial → index is a symlink read: no hint file, no mode probe, no lens-covering, and two identical cameras separate by serial. `yam/cameras/identity.py::linux_camera_for_spec` takes the same three spellings the Mac takes (`c920`, `d405:2603`, a raw index) and REFUSES on ambiguity rather than picking the first, and the recorded camera NAMES are byte-identical across platforms, so a Mac recording and a Linux recording export with the same role flags.
+
+⭐ **A second real difference, with a consequence for how sessions get run: Linux has no per-app camera permission.** macOS grants capture per application, which is why every camera measurement in this repo was a command handed to Julien ([§61.3](FINDINGS.md)). On Linux the gate is membership of the `video` group, so **an agent on the PC can open cameras itself.** The hand-it-over dance disappears for cameras; the rule that an agent never sends a setpoint is unchanged and stands on its own reasoning.
+
+⛔⭐⭐ **WHAT IS PROVEN AND WHAT IS NOT, stated the way this repo requires.** The suite (764 checks) and everything OS-independent runs today. **Every Linux device-naming path is DESIGNED AND UNVERIFIED**: it was written from the documented formats of `ip -details link show`, sysfs and `/dev/v4l/by-id`, and no Linux machine had been reached when it was written. The fixtures in `tests/test_platform.py` say **HAND-WRITTEN, NOT CAPTURED** in their own comments, and the module docstring says it too. ✅ **The remedy is one command, and it is why `checks/check_platform.py` exists**: `--raw` prints the exact text it parsed beside the parse, so its first run on the real PC either confirms the formats or shows precisely how they differ. It also reports tools, group membership, per-interface CAN state with the `sudo` command to fix it, the camera listing, the SpaceMouse, and pyrealsense2. Run on this Mac it correctly describes the Mac, which is how a report proves it is not simply printing hopes.
+
+⭐ **One check in it is subtler than the rest and worth keeping: the clock check.** A recording stamps joint samples with `perf_counter` and camera frames with `monotonic_ns`, and `yam/episode.py` joins them by SUBTRACTING one from the other — which is only valid if the two share an epoch. On this Mac they are literally the same clock ([§71.2](FINDINGS.md)). On Linux both are documented as `CLOCK_MONOTONIC`, and documented is not measured, so `check_platform.py` measures the difference and BLOCKS if it is not ~0. Without that, a Linux port could silently pair every image with the wrong joints.
+
+### 74.1 ✅✅⭐⭐⭐ THE PAPER-STANDARD EXPORT IS BUILT AND VERIFIED ON HIS OWN RECORDING — 17/17 contract checks, 5/5 falsified
+
+✅ **What "the format used for robotics papers" means here, concretely.** The team's own guide already specifies it, and this repo now writes both halves. C3 is the LOG: one MCAP file, eight state/action topics plus camera topics, every stream on the 33,333,333 ns tick (`yam/episode.py`, built [§70.13](FINDINGS.md)). **C4 is the TRAINING SET**, and it is what a training run actually reads:
+
+    episode_<id>/
+      states_actions.bin              (num_steps, 28) float64 = 14 state + 14 action
+      combined_camera-images-rgb.mp4  the camera views stacked vertically, 30 fps
+      episode_metadata.json
+
+⛔⭐⭐ **WHY THE ENCODING IS STRICT, and it is the whole reason this is a real piece of work rather than a file write: the trainer does not decode the video to find frame k, it COMPUTES where frame k is.** So the file has to make that arithmetic true — constant 30 fps, timebase 1/15360, PTS exactly 512·k, a keyframe every 30 frames with scene-cut detection OFF so nothing moves them, and no B-frames (they reorder presentation against decode order and break the mapping). The guide's own measured warning: a wrongly encoded file makes the loader **~70× slower**. A file that gets this wrong plays perfectly and trains wrongly, which is [§0](FINDINGS.md)'s pattern in video form.
+
+✅ **Verified on real data, not synthetic**: his slot 5 (the recorded park run, three cameras) exported as `recordings/datasets/episode_slot5_firstproof` — 268 steps, three views stacked 224×224 each into 224×672 — and `checks/check_dataset.py` passed **17/17**: codec, pixel format, timebase 1/15360, frame rate 30/1, `has_b_frames == 0`, no B-frame anywhere, PTS exactly 512·k on every frame, keyframes exactly on k%30==0, `moov` before `mdat`, the video's frame count equal to the table's row count, the `.bin` exactly 268×28×8 bytes of finite float64, and **the action policy checked in the actual bytes** (action row k equals state row k+1). A frame extracted from the finished video shows the three views stacked in role order, which is the consequence-level check no property test replaces.
+
+✅⭐ **The falsifier proves the checker can still see breaks: 5/5** (`checks/falsify_check_dataset.py`). It re-encodes the good video with B-frames and the default GOP, with the wrong timescale, truncates the table, rewrites the metadata to claim a shape the bytes do not have, and rolls the action columns by three ticks. Every one is caught, and each is a *plausible* pipeline mistake rather than an invented one. ⭐ **One function feeds both exporters** (`yam/episode.py::state_action_rows`), so the C3 log and the C4 training set can never describe the same demonstration differently.
+
+⚠️⚠️ **TWO CONTRACT QUESTIONS THAT ARE THE TEAM'S, both named in the output rather than guessed:**
+1. **The per-view size.** The guide writes "3 views vertically stacked, 224×224", which reads as each view 224×224. **But the team's own simulation renders its cameras at 224×168.** Both cannot be right. 224 square is the default because the guide says so, `--view-width/--view-height` override it, and the number used is written into every episode's metadata so a loader mismatch points straight at it.
+2. **The gripper unit.** This repo's episodes carry the jaw NORMALISED 0..1; LaRobot's `Observation` carries it in METRES; C3 gives the ee dimension without a unit ([§72.4](FINDINGS.md)). Recorded in the metadata under `states_actions.units`, flagged in [PLAN.md](PLAN.md) §4, and adjudicated by ABC's own `export_mcap.py` at the C4 gate.
+
+⛔ **What remains genuinely theirs:** the guide says *"do not encode it yourself, ABC's export_mcap.py does it right"*, and that file is not in this repo. So what is verifiable here is that the output matches **the published spec**, property by property. Whether the published spec is COMPLETE only ABC's loader can say. Every episode's metadata carries `verified_against_abc_loader: false` so no downstream tool can mistake one for the other.
+
+### 74.2 ⬜⭐⭐ THE REMOTE PATH IS PREPARED AND BLOCKS ON HIM — [docs/LINUX.md](LINUX.md) §1 is the whole procedure
+
+⬜ **What only he can do** (his account, his hands, his password — and per the standing rules an agent never handles a credential): create or open a ZeroTier network and copy its 16-hex **network ID** · run the one-line installer on the PC and the PKG on the Mac · `sudo zerotier-cli join <ID>` on both · **approve both machines in the ZeroTier web console** (a joined-but-unapproved device looks exactly like a broken network, which is the trap worth knowing in advance) · `sudo apt install openssh-server` and enable it · read the PC's ZeroTier IP from `sudo zerotier-cli listnetworks` · make a dedicated key with `ssh-keygen -t ed25519 -f ~/.ssh/yam_linux` and copy it over with `ssh-copy-id` (the one moment his PC password is typed, by him).
+
+⭐ **Then three facts unblock everything: the PC's ZeroTier IP, his username on it, and where the repo should live.** [LINUX.md](LINUX.md) §2 is what happens next, in order: an SSH config entry, clone from `Hohnik/LaRobot` branch `julien/yam-teleop-wip` (which is current), `uv sync`, then `check_platform.py --raw` as the first real command, then the suite, then hardware in the README's existing bring-up order.
+
+⚠️ **A simpler fallback, said once so it is not rediscovered:** if the Mac and the PC are on the same office network, plain `ssh user@<local-ip>` needs no ZeroTier at all. ZeroTier earns its keep by reaching the bench from home.
+
+### 74.3 ⬜ THE HIS-LIST, current — supersedes [§73.3](FINDINGS.md)
+
+**Blocking, and only he can do it:** ① the ZeroTier + SSH steps of [LINUX.md](LINUX.md) §1, ending in the PC's IP, his username, and the repo location. ② plugging the arms and cameras into the PC (his own plan), and `sudo ip link set can0 up type can bitrate 1000000` per adapter, since bringing a CAN interface up needs root.
+
+**Not blocking, whenever he wants:** the noise bound for varied replays ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · framing the top camera at the WORKSPACE before real collection ([§73.2](FINDINGS.md): it currently films a close-up of arm G) · the kp lever for sub-centimetre grabs (item 17).
+
+**From the team:** ABC's `export_mcap.py` or the `abc_minimal` repo — it settles the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
+
+**Standing:** the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
