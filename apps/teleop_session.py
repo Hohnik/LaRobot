@@ -954,6 +954,22 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
         name = camera_dir_name(f"{model_word}:{cam.serial}" if cam.serial else model_word)
         if name in grabbers:
             raise SystemExit(f"⛔ --cameras names {name!r} twice.")
+        # ⛔⭐ A metadata node opens fine and delivers nothing (FINDINGS §75.6), so refuse
+        # one outright rather than recording a camera that produces no frames. `cam.index`
+        # is already a capture node when udev could be asked; this guards the explicit
+        # `--cameras <N>` spelling, where the operator picks the number.
+        if cam.capture_nodes and cam.index not in cam.capture_nodes:
+            raise SystemExit(
+                f"⛔ {spec}: /dev/video{cam.index} is not a CAPTURE node on this camera "
+                f"(its capture nodes are {list(cam.capture_nodes)}).\n"
+                "  A metadata node opens successfully and delivers no frames, which is why "
+                "this refuses instead of recording nothing."
+            )
+        if len(cam.capture_nodes) > 1:
+            print(f"  ⚠️ {cam.model[:26]} has capture nodes {list(cam.capture_nodes)} "
+                  f"(depth, infrared, colour). Opening {cam.index}; if the frames are not "
+                  "colour,\n     pass the node directly, e.g. --cameras "
+                  f"{cam.capture_nodes[-1]} (FINDINGS §75.6).")
         cap = cv2.VideoCapture(cam.index)
         if not cap.isOpened():
             cap.release()

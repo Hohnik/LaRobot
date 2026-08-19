@@ -76,10 +76,13 @@ Then `ssh yam-pc uname -a` proves the path end to end without touching anything 
 
 **Packages:**
 
+⛔ **Every command in this section runs ON THE PC.** They are written wrapped in `ssh -t yam-pc` so they can be pasted straight into the Mac's terminal, which is where Julien types — a bare `sudo apt` block was once pasted on the Mac and failed with `apt: command not found` ([FINDINGS §75.6](FINDINGS.md)). `-t` is what lets `sudo` prompt for the password over SSH.
+
 ```bash
-sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils git curl
-curl -LsSf https://astral.sh/uv/install.sh | sh
+ssh -t yam-pc 'sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils git curl'
 ```
+
+(`uv` and `git` are already installed on this station; on a fresh machine add `curl -LsSf https://astral.sh/uv/install.sh | sh`.)
 
 `ffmpeg` is not optional any more: the training-episode export encodes video with it, and `checks/check_dataset.py` verifies the result with `ffprobe`. `v4l-utils` and `can-utils` are for looking at cameras and CAN by hand when something is odd.
 
@@ -104,9 +107,10 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 **The CAN adapters** appear as network interfaces on Linux, and each must be brought up with the bitrate before anything can talk to a motor. This needs `sudo`, so it stays your step:
 
 ```bash
-sudo ip link set can0 up type can bitrate 1000000
-sudo ip link set can1 up type can bitrate 1000000
+ssh -t yam-pc 'sudo ip link set can0 up type can bitrate 1000000 && sudo ip link set can1 up type can bitrate 1000000'
 ```
+
+⭐ Measured on this station 2026-08-19: **`can0` is arm G and `can1` is arm B**, resolved from the adapters' USB serials in sysfs, and both come up DOWN after every boot ([FINDINGS §75.5](FINDINGS.md)).
 
 `uv run checks/check_platform.py` names which interface belongs to which arm, by reading the adapter's USB serial out of sysfs, and it prints this command for any interface that is still down. To make it survive a reboot, a systemd-networkd file or a udev rule does the same thing permanently, and that is worth doing once the ports are settled.
 

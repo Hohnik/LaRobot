@@ -22,7 +22,7 @@ from pathlib import Path
 __all__ = [
     "IS_MACOS", "IS_LINUX", "platform_name", "platform_note",
     "CanLink", "parse_can_links", "read_can_links",
-    "V4lCamera", "parse_v4l_by_id", "read_v4l_cameras",
+    "V4lCamera", "parse_v4l_by_id", "read_v4l_cameras", "udev_capture_nodes",
     "camera_permission_note",
 ]
 
@@ -190,6 +190,14 @@ class V4lCamera:
     #: which node carries COLOUR on Linux. Carrying the whole list is what makes that
     #: question askable instead of invisible ([FINDINGS §75.5](../../docs/FINDINGS.md)).
     nodes: tuple[int, ...] = ()
+    #: ⛔⭐ The subset of `nodes` that can actually CAPTURE, from udev's own
+    #: `ID_V4L_CAPABILITIES` (readable with no root and no `video` group). MEASURED on the
+    #: station: a D405's six nodes are three capture streams each paired with a METADATA
+    #: node, and a metadata node **opens successfully and delivers nothing** — the silent
+    #: wrong answer this repo exists to refuse. Empty when udev could not be asked, in which
+    #: case `index` falls back to the first node and says so
+    #: ([FINDINGS §75.6](../../docs/FINDINGS.md)).
+    capture_nodes: tuple[int, ...] = ()
 
 
 #: A `/dev/v4l/by-id` entry: `usb-<vendor>_<model>_<serial>-video-index<N>`. The serial is the
@@ -198,10 +206,11 @@ class V4lCamera:
 _BY_ID = re.compile(r"^usb-(?P<body>.+?)-video-index(?P<node>\d+)$")
 
 
-def parse_v4l_by_id(listing: dict[str, str]) -> list[V4lCamera]:
+def parse_v4l_by_id(listing: dict[str, str],
+                    capture_nodes: set[int] | None = None) -> list[V4lCamera]:
     """Turn a `{by-id name: symlink target}` mapping into cameras. Pure and order-stable.
 
-    ⛔ Only `-video-index0` entries are returned. A UVC camera exposes several video nodes and only the first is the capture node; the others are metadata streams that open successfully and deliver nothing — a silent-wrong-answer trap of exactly this repo's favourite kind.
+    ⛔⭐ `capture_nodes` is the set of `/dev/videoN` numbers udev marks as capture-capable. When it is given, `index` is the first node **in that set** rather than simply the first node — because a UVC camera's other nodes are metadata streams that open successfully and deliver nothing, which is the silent-wrong-answer trap of exactly this repo's favourite kind. When it is omitted (udev unavailable), `index` falls back to the first node and `capture_nodes` stays empty so a caller can tell the two situations apart.
     """
     # ⭐ Group by DEVICE first (the body of the by-id name), because one physical camera
     # publishes several nodes and the old version silently kept only the first — which
@@ -220,7 +229,12 @@ def parse_v4l_by_id(listing: dict[str, str]) -> list[V4lCamera]:
     cameras: list[V4lCamera] = []
     for body, found in per_device.items():
         found.sort()
-        first_index, first_node, first_name = found[0]
+        mine = tuple(i for i, _, _ in found)
+        capture = tuple(i for i in mine if capture_nodes and i in capture_nodes)
+        # ⭐ Prefer a capture node; fall back to the first node only when udev said nothing.
+        chosen = capture[0] if capture else found[0][0]
+        first_index, first_node, first_name = next(
+            entry for entry in found if entry[0] == chosen)
         # The serial is the trailing field when it looks like one: cameras that report no
         # serial simply end with the model, and inventing a serial from a model word would
         # be the wrong-identity failure this module exists to prevent.
@@ -229,7 +243,7 @@ def parse_v4l_by_id(listing: dict[str, str]) -> list[V4lCamera]:
         cameras.append(V4lCamera(device=f"/dev/{first_node}", index=first_index,
                                  model=(model or body) if serial else body,
                                  serial=serial, by_id=first_name,
-                                 nodes=tuple(i for i, _, _ in found)))
+                                 nodes=mine, capture_nodes=capture))
     return sorted(cameras, key=lambda c: c.index)
 
 
@@ -243,6 +257,33 @@ def _plausible_serial(text: str) -> bool:
     return len(text) >= 6 and any(ch.isdigit() for ch in text) and "_" not in text
 
 
+def udev_capture_nodes() -> set[int]:
+    """Which `/dev/videoN` numbers udev marks as CAPTURE-capable. `set()` when it cannot say.
+
+    ⭐ Read from the udev database with `udevadm info`, which needs **no root and no `video`
+    group** — so this question is answerable before any permission is granted, which is
+    exactly when it is needed. The property is `ID_V4L_CAPABILITIES`: `:capture:` for a real
+    stream, a bare `:` for the metadata node that accompanies it.
+    """
+    if not IS_LINUX:
+        return set()
+    found: set[int] = set()
+    for node in sorted(Path("/dev").glob("video*")):
+        digits = "".join(ch for ch in node.name if ch.isdigit())
+        if not digits:
+            continue
+        try:
+            out = subprocess.run(["udevadm", "info", "--query=property",
+                                  f"--name={node}"],
+                                 capture_output=True, text=True, check=False, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return set()
+        for line in out.stdout.splitlines():
+            if line.startswith("ID_V4L_CAPABILITIES=") and "capture" in line:
+                found.add(int(digits))
+    return found
+
+
 def read_v4l_cameras(root: Path | None = None) -> list[V4lCamera]:
     """Every camera on THIS machine, from `/dev/v4l/by-id`. Linux only; `[]` elsewhere."""
     if not IS_LINUX and root is None:
@@ -252,4 +293,4 @@ def read_v4l_cameras(root: Path | None = None) -> list[V4lCamera]:
         entries = {p.name: str(p.readlink()) for p in by_id_dir.iterdir() if p.is_symlink()}
     except OSError:
         return []
-    return parse_v4l_by_id(entries)
+    return parse_v4l_by_id(entries, udev_capture_nodes() or None)

@@ -136,6 +136,32 @@ def test_the_c920s_absent_serial_stays_absent() -> None:
     assert c920.index == 0
 
 
+def test_metadata_nodes_are_never_chosen_when_udev_can_say() -> None:
+    """⛔ MEASURED on the station (FINDINGS §75.6): a D405's six nodes are three capture
+    streams each paired with a METADATA node, and a metadata node opens successfully and
+    delivers nothing. udev knows which is which, with no root and no `video` group, so the
+    chosen index must come from that set."""
+    capture = {0, 2, 4, 6}
+    cams = {c.serial or "c920": c for c in parse_v4l_by_id(BY_ID_FIXTURE, capture)}
+    d405 = cams["260323072846"]
+    assert d405.capture_nodes == (2, 4, 6), "three capture streams: depth, infrared, colour"
+    assert d405.index == 2 and d405.index in d405.capture_nodes
+    assert cams["c920"].capture_nodes == (0,) and cams["c920"].index == 0
+    # Without udev the fallback is the first node, and capture_nodes stays EMPTY so a caller
+    # can tell "udev said this is capture" from "nobody asked".
+    blind = {c.serial or "c920": c for c in parse_v4l_by_id(BY_ID_FIXTURE)}
+    assert blind["260323072846"].capture_nodes == ()
+    assert blind["260323072846"].index == 2
+
+
+def test_a_camera_whose_only_capture_node_is_not_the_first_is_still_found() -> None:
+    # The guard that matters: if udev marks only node 4 as capture, node 2 must NOT be
+    # chosen, however first it comes.
+    cams = {c.serial or "c920": c for c in parse_v4l_by_id(BY_ID_FIXTURE, {4})}
+    assert cams["260323072846"].index == 4, \
+        "the chosen index must come from the capture set, not from the node order"
+
+
 def test_one_camera_per_device_with_every_node_it_publishes() -> None:
     """⛔ The capture corrected this: a D405 publishes SIX nodes, not one. Keeping the whole
     list is what makes "which node is colour?" an askable question rather than a silent

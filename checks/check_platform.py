@@ -197,18 +197,26 @@ def main() -> int:
             print(f"  ✓ index {cam.index:<3} {cam.model[:40]:<40} "
                   f"serial {cam.serial or '(none reported)'}")
             if len(cam.nodes) > 1:
-                print(f"      ⚠️ this camera exposes {len(cam.nodes)} video nodes "
-                      f"{list(cam.nodes)} — colour, depth, infrared and metadata all live")
-                print(f"         under one device. Index {cam.index} is the FIRST node, "
-                      "which is a CHOICE, not a")
-                print("         measurement: nobody has confirmed yet which node carries "
-                      "COLOUR on Linux.")
-                notes.append(
-                    f"{cam.model[:28]} has {len(cam.nodes)} video nodes {list(cam.nodes)}. "
-                    "Confirm which one is colour before recording a dataset: "
-                    "`v4l2-ctl --device /dev/videoN --list-formats` (needs v4l-utils), or "
-                    "open each with apps/probe_camera_pixels.py once the video group is set "
-                    "(FINDINGS §75.5).")
+                caps = list(cam.capture_nodes) or "unknown (udev could not be asked)"
+                print(f"      nodes {list(cam.nodes)} · CAPTURE nodes {caps}")
+                if len(cam.capture_nodes) > 1:
+                    print(f"      ⚠️ {len(cam.capture_nodes)} capture streams under one "
+                          "device (a D405 publishes depth, infrared and colour).")
+                    print(f"         Index {cam.index} is the FIRST of them, and which one "
+                          "is COLOUR is still unconfirmed.")
+                    print(f"         Settle it: v4l2-ctl --device /dev/video"
+                          f"{cam.capture_nodes[-1]} --list-formats  (YUYV/MJPG = colour, "
+                          "Z16/Y16 = depth or infrared)")
+                    notes.append(
+                        f"{cam.model[:26]} has {len(cam.capture_nodes)} capture nodes "
+                        f"{list(cam.capture_nodes)} and colour is probably the LAST "
+                        f"(/dev/video{cam.capture_nodes[-1]}), because the device's USB "
+                        "interfaces run Depth, Depth, infrared, RGB in that order. Confirm "
+                        "with v4l2-ctl before recording a dataset, and pass the node "
+                        "directly (--cameras <N>) until then (FINDINGS §75.6).")
+                elif cam.capture_nodes:
+                    print("      ✓ exactly one capture node, so the metadata nodes cannot "
+                          "be opened by mistake")
         if cams:
             print("\n  ⭐ On Linux these indices come from the by-id symlinks, so they ARE "
                   "OpenCV's\n     indices. No hint file and no lens-covering "

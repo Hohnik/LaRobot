@@ -5294,14 +5294,28 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⚠️ **One D405 only.** At capture time the station had the C920 and the `260323072846` D405 (the arm-G one); `255323071773` was still on the Mac's hub. Nothing is wrong, and a three-camera session on the PC needs it moved across.
 
+### 75.6 ✅⭐⭐ THE METADATA-NODE TRAP IS CLOSED WITH NO PERMISSIONS AT ALL, and the colour question is narrowed to one command
+
+⛔ **The command handed over in chat was run on the MAC and failed with `sudo: apt: command not found`.** It was a bare `sudo apt …` block with no `ssh` in front of it, so it was pasted where he types, which is the Mac. **That is the THIRD instance of the same lesson in three days** — [§71.1](FINDINGS.md) (a placeholder where a value belonged), [§72.0](FINDINGS.md) #5 (`--slot <3>` typed with the brackets), and now a command on the wrong machine. ⭐ **The rule, stated properly this time: a command handed to Julien must be runnable verbatim IN THE PLACE HE WILL PASTE IT. If it belongs on another machine, it ships wrapped in the `ssh` that takes it there.** [docs/LINUX.md](LINUX.md) is corrected the same way.
+
+✅⭐⭐ **While waiting, three free probes narrowed the colour question a long way, all with no root and no `video` group:**
+1. `/sys/class/video4linux/videoN/name` — useless here: all six D405 nodes report the same truncated string.
+2. `/sys/bus/usb/devices/*/interface` — **the device's four USB interfaces are named `Depth`, `Depth`, `Y` (infrared) and `RGB`.** So the camera definitely publishes a colour stream, and the streams come in that order. ⚠️ The video nodes' own `device` symlinks all point at the control interface (`:1.0`), so this does not by itself say which NODE is which stream.
+3. ⭐⭐ **`udevadm info --query=property --name=/dev/videoN` — decisive, and it needs no permissions whatsoever.** `ID_V4L_CAPABILITIES` reads `:capture:` on video2, video4 and video6 and a bare `:` on video3, video5 and video7. **So the six nodes are THREE capture streams each paired with a metadata node.** The C920 shows the same pattern (video0 capture, video1 metadata).
+
+✅ **What that fixed, and it was a real trap: a metadata node opens successfully and delivers nothing.** The resolver now takes its index from udev's capture set, never simply the first node, so a metadata node can no longer be chosen by accident; the session additionally REFUSES an explicitly-passed metadata node rather than recording nothing. When udev cannot be asked, `capture_nodes` stays empty and the fallback says so, which keeps "udev confirmed this" distinguishable from "nobody asked".
+
+⚠️ **What is still one command from settled: which of the three capture nodes is COLOUR.** The USB interface order (Depth, Depth, infrared, RGB) makes `/dev/video6` the likely answer, and *likely* is not what this repo ships. `v4l2-ctl --device /dev/video6 --list-formats` decides it: YUYV or MJPG is colour, Z16 or Y16 is depth or infrared. Until then `--cameras 6` passes a node directly, and the session prints the capture list every time it opens a multi-stream camera.
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
-**On the PC, needs his sudo (one block, ~1 minute):**
+**On the PC, needs his sudo (one block, ~1 minute). ⛔ Wrapped in `ssh -t` because he pastes on the MAC and this belongs on the PC — the [§75.6](FINDINGS.md) lesson:**
 
 ```bash
-sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils
-sudo usermod -aG video $USER        # then log out and back in, or the group does not apply
+ssh -t yam-pc 'sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils && sudo usermod -aG video lavita && v4l2-ctl --device /dev/video6 --list-formats'
 ```
+
+That last part answers [§75.6](FINDINGS.md)'s remaining question in the same breath: YUYV or MJPG means `/dev/video6` is the colour stream, Z16 or Y16 means it is depth or infrared and the answer is another capture node (2 or 4).
 
 **Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.
 
