@@ -80,6 +80,48 @@ def nearest_frame_per_tick(entries: list[list[int]], mono0_ns: int, t0: float,
     return out
 
 
+#: ⭐⭐ THE COLUMN LAYOUT OF ONE TRAINING ROW, and it is the C3 topic order flattened
+#: ([Setup-Anleitung.md](../../docs/Setup-Anleitung.md) C4: "(num_steps, 28) float64 = 14
+#: state + 14 action"). Written into every episode's metadata as well, because a dataset
+#: whose column order is only known to the code that wrote it cannot be checked by anyone
+#: else — and a silently transposed pair of arms is exactly the poison C4 exists to catch.
+ROW_COLUMNS = tuple(
+    [f"state.{side}.{part}" for side in ("left", "right")
+     for part in [f"arm{i}" for i in range(ARM_DIM)] + ["ee"]]
+    + [f"action.{side}.{part}" for side in ("left", "right")
+       for part in [f"arm{i}" for i in range(ARM_DIM)] + ["ee"]]
+)
+
+
+def state_action_rows(traj: Trajectory, layout: Any, left: str, right: str,
+                      ticks: int, t0: float, duration: float) -> list[list[float]]:
+    """One `(ticks, 28)` table of states and actions, on the contract's exact tick grid.
+
+    ⭐⭐ ONE FUNCTION, BOTH EXPORTERS. The MCAP writer (C3) and the training-directory writer
+    (C4, `yam/dataset.py`) both call this, so the two outputs cannot drift apart — and if the
+    column order or the action policy is ever wrong, it is wrong once, in one place, for both.
+    That matters more than it sounds: the C3 file and the C4 directory describe the same
+    demonstration, and a dataset where they disagree is worse than either alone.
+
+    The action at tick k is the state at tick k+1 — the standard demonstrated-action
+    construction, and the only honest one for a hand-taught demo, where GUIDE has no command
+    stream because the hand IS the controller ([FINDINGS §70.13](../../docs/FINDINGS.md)).
+    Both clocks are clamped to the recording's end, so the final action drives to the true
+    final pose rather than past it.
+    """
+    rows: list[list[float]] = []
+    for k in range(ticks):
+        t = min(t0 + k * CONTRACT_TICK_NS / 1e9, t0 + duration)
+        t_next = min(t0 + (k + 1) * CONTRACT_TICK_NS / 1e9, t0 + duration)
+        state, action = traj.pose_at(t), traj.pose_at(t_next)
+        row: list[float] = []
+        for values in (state, action):
+            for arm in (left, right):
+                row.extend(float(v) for v in values[layout.slice_for(arm)])
+        rows.append(row)
+    return rows
+
+
 def load_frame_index(recording_path: Path, meta_cameras: dict[str, Any],
                      name: str) -> tuple[Path, dict[str, Any]]:
     """One camera's frames directory and its `index.json`, verified against the meta.
@@ -256,24 +298,23 @@ def export_episode(traj: Trajectory, left: str, right: str, out_path: Path,
                                      log_time=k * CONTRACT_TICK_NS,
                                      publish_time=k * CONTRACT_TICK_NS, sequence=k)
 
-        for k in range(ticks):
+        # ⭐ The rows come from `state_action_rows`, the same function the C4 training export
+        # uses, so the MCAP file and the training directory can never describe the demo
+        # differently. Each 28-wide row unflattens back into the eight contract topics.
+        rows = state_action_rows(traj, layout, left, right, ticks, t0, duration)
+        for k, row in enumerate(rows):
             log_time = k * CONTRACT_TICK_NS
-            t = min(t0 + k * CONTRACT_TICK_NS / 1e9, t0 + duration)
-            t_next = min(t0 + (k + 1) * CONTRACT_TICK_NS / 1e9, t0 + duration)
-            state, action = traj.pose_at(t), traj.pose_at(t_next)
-            for side, arm in (("left", left), ("right", right)):
-                sl = layout.slice_for(arm)
-                s7, a7 = list(state[sl]), list(action[sl])
-                for topic, values in (
-                    (f"/{side}-arm-state", s7[:ARM_DIM]),
-                    (f"/{side}-ee-state", s7[ARM_DIM:]),
-                    (f"/{side}-arm-action", a7[:ARM_DIM]),
-                    (f"/{side}-ee-action", a7[ARM_DIM:]),
-                ):
-                    writer.write_message(topic, vec_schema,
-                                         {"data": [float(v) for v in values]},
-                                         log_time=log_time, publish_time=log_time,
-                                         sequence=k)
+            for offset, kind in ((0, "state"), (14, "action")):
+                for i, side in enumerate(("left", "right")):
+                    seven = row[offset + i * 7:offset + i * 7 + 7]
+                    for topic, values in (
+                        (f"/{side}-arm-{kind}", seven[:ARM_DIM]),
+                        (f"/{side}-ee-{kind}", seven[ARM_DIM:]),
+                    ):
+                        writer.write_message(topic, vec_schema,
+                                             {"data": [float(v) for v in values]},
+                                             log_time=log_time, publish_time=log_time,
+                                             sequence=k)
         writer.finish()
 
     return ExportReport(path=out_path, ticks=ticks, duration_s=duration,
