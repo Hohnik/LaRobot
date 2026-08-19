@@ -1303,7 +1303,8 @@ def main() -> int:  # noqa: PLR0915
     mirror_follower: ArmSession | None = None
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
-    park_sequence: list[str] = []
+    park_sequence: list[str] = []      # "3" = pose slot, "w3" = recording (take) slot
+    park_take_next = False             # w inside the p prompt arms "the next digit is a take"
     angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
     # ⚠️ CONTROLS mode's memory of "the control you just used" — `last_active_axis`,
@@ -1743,6 +1744,11 @@ def main() -> int:  # noqa: PLR0915
             """
             return Layout(tuple(one.name for one in arms), arms[0].robot.num_dofs())
 
+        def park_seq_shown() -> str:
+            """The typed sequence as the operator should read it: `1 -> >2 -> 3`."""
+            return " → ".join(("▶" + e[1:]) if e.startswith("w") else e
+                              for e in park_sequence)
+
         def park_plan_line(one: ArmSession) -> str:
             """The one line showing what a run will do and how it will feel.
 
@@ -1755,14 +1761,23 @@ def main() -> int:  # noqa: PLR0915
             resolves it follows ROADMAP §6: the knob keys aim at the selection, exactly
             like the mode keys. Not implemented while two arms cannot run.
             """
-            seq = " → ".join(park_sequence) if park_sequence else "0"
+            seq = park_seq_shown() if park_sequence else "0"
             name, radius = BLEND_MODES[blend_idx]
             # ⭐ A grab is visible BEFORE Enter (ROADMAP §6.6.2 item 4): a leg where only
             # the jaws move splits the run and pauses it, and the count says so here,
             # while the sequence is still being typed.
-            legs, _ = resolve_park_legs(park_sequence[:] or ["0"], one.base_pose, one.slots)
+            # ⚠️ Take legs (`w<digit>`, ROADMAP §6.6.1a) are counted separately: their
+            # jaw motion is whatever the hand taught, so no stop-counting applies.
+            poses = [e for e in (park_sequence[:] or ["0"]) if not e.startswith("w")]
+            takes = [e[1:] for e in park_sequence if e.startswith("w")]
+            if poses:
+                legs, _ = resolve_park_legs(poses, one.base_pose, one.slots)
+            else:
+                legs = []
             stops = one.count_gripper_stops([ParkLeg(n, list(p)) for n, p in legs]) if legs else 0
             stop_note = f" · ⏸ {stops} jaw stop{'s' if stops != 1 else ''}" if stops else ""
+            if takes:
+                stop_note += " · ▶ play " + ", ".join(takes)
             # ⭐ ONE line, so changing a knob repaints instead of appending. Six taps
             # on `+` should leave one line showing the final speed, not six blocks.
             return (f"RUN {seq}{stop_note} · speed {one.park_speed:.2f} (-/+) · corners {name} "
@@ -2557,16 +2572,31 @@ def main() -> int:  # noqa: PLR0915
                             hint(park_plan_line(edit_arm)); continue
 
                     if pending == "park":
+                        if k == "w":
+                            # ⭐⭐ COMPOSITE RUNS (ROADMAP §6.6.1a, his idea): inside a run,
+                            # `w` then a digit names a RECORDING as a leg — `p 1 w2 3` means
+                            # pose 1, then PLAY take 2, then pose 3. Precision lands where
+                            # the task needs it (the taught take) and variation where it
+                            # tolerates it (the planned poses). The two-key idiom matches
+                            # `s <digit>` and `l <digit>`.
+                            park_take_next = True
+                            hint(f"  park sequence: {park_seq_shown()}   "
+                                 "▶ next digit names a RECORDING to play as a leg")
+                            continue
                         if k.isdigit():
-                            park_sequence.append(k)
+                            if park_take_next:
+                                park_take_next = False
+                                park_sequence.append("w" + k)
+                            else:
+                                park_sequence.append(k)
                             # ⛔ A HINT, NOT THE STATUS ROW. This used to `print(…,
                             # end="")`, which the shadowed print routes to `screen.set`
                             # — the heartbeat row. So the echo of what you were typing
                             # replaced the temperature readout and was then wiped by
                             # the next once-a-second repaint: the one piece of feedback
                             # in a modal state that drives 4.3 kg, flickering.
-                            hint(f"  park sequence: {' → '.join(park_sequence)}"
-                                 f"   (another digit, or Enter)")
+                            hint(f"  park sequence: {park_seq_shown()}"
+                                 f"   (another digit, w+digit for a take, or Enter)")
                             continue
                         if k in ("\r", "\n", " ", "p"):
                             # ⭐ ONE pose runs immediately, so `p Enter` for the base and
@@ -2581,6 +2611,11 @@ def main() -> int:  # noqa: PLR0915
                             pending = None
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
+                            if any(e.startswith("w") for e in wanted):
+                                print("\n  ▶ composite runs (poses + takes in one run) are "
+                                      "not wired yet — this lands next commit. Play the "
+                                      "take with l for now.\n")
+                                continue
                             # ⭐ EACH SELECTED ARM RUNS ITS OWN SEQUENCE, resolved against
                             # its own slots. Two arms driving to their own saved poses at the
                             # same time is what a two-arm waypoint run means.
@@ -2611,6 +2646,11 @@ def main() -> int:  # noqa: PLR0915
                         if k in ("\r", "\n", " ", "p"):
                             wanted = park_sequence[:]
                             park_sequence.clear()
+                            if any(e.startswith("w") for e in wanted):
+                                print("\n  ▶ composite runs (poses + takes in one run) are "
+                                      "not wired yet — this lands next commit. Play the "
+                                      "take with l for now.\n")
+                                continue
                             ran = False
                             for one in aimed:
                                 legs, missing = resolve_park_legs(wanted, one.base_pose,
