@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Measure what the attached cameras actually deliver, sampled the way the control loop will.
 
-    uv run apps/capture_probe.py --cameras d405,c920 --seconds 10
-    uv run apps/capture_probe.py --indices 0,1 --seconds 10 --save
+    uv run apps/capture_probe.py --cameras d405 c920 --seconds 10
+    uv run apps/capture_probe.py --indices 0 1 2 --seconds 10 --save
+
+⚠️ `--indices 0 1 2` and `--indices 0,1,2` both parse. They did NOT always: the flag took one comma-joined string, the his-list said only "the three indices", and the 2026-08-19 bench pass lost its measurement to three refused spellings in a row (FINDINGS §71.1). Accepting every natural spelling is the fix.
 
 ⭐ WHY THIS EXISTS (ROADMAP §8.2 item 6): a dataset needs frames that line up with joint data, and the number that decides whether that is possible is not in any spec sheet — it is what each camera ACTUALLY delivers while the others are streaming on the same USB tree. Bandwidth exhaustion shows up as a low frame rate and long blind gaps, never as an error (FINDINGS §34.5), so it has to be measured, not assumed.
 
@@ -26,6 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 from camera_view import CameraLookupError, open_camera, resolve_camera  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
+from yam.cameras.specs import flatten_tokens, parse_indices  # noqa: E402
 from yam.provenance import git_commit  # noqa: E402
 
 SAVE_DIR = REPO / "recordings" / "cameras"
@@ -35,19 +38,24 @@ def open_named(args) -> dict[str, tuple[int, object]]:  # noqa: ANN001
     """name → (index, configured capture), refusing loudly rather than guessing."""
     out: dict[str, tuple[int, object]] = {}
     if args.indices:
-        for part in args.indices.split(","):
-            idx = int(part.strip())
+        try:
+            indices = parse_indices(args.indices)
+        except ValueError as e:
+            raise SystemExit(f"⛔ {e}") from e
+        for idx in indices:
             cap = open_camera(idx, args.width, args.height, args.fps)
             if cap is None:
                 raise SystemExit(f"⛔ index {idx} would not open. `uv run apps/camera_view.py --list` shows what is there.")
             out[f"cam{idx}"] = (idx, cap)
         return out
-    for spec in args.cameras.split(","):
-        spec = spec.strip()
+    for spec in flatten_tokens(args.cameras):
         try:
-            idx, cam, _ = resolve_camera(spec)
+            idx, cam, found_cap = resolve_camera(spec)
         except CameraLookupError as e:
             raise SystemExit(f"⛔ {e}") from e
+        # ⛔ The resolver may hand the device back ALREADY OPEN (find_camera_index keeps it open to save the caller a multi-second reopen). Discarding that handle without releasing it leaks the device, and the configured reopen below then finds it busy — release first, reopen with the asked-for mode.
+        if found_cap is not None:
+            found_cap.release()
         cap = open_camera(idx, args.width, args.height, args.fps)
         if cap is None:
             raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open.")
@@ -57,10 +65,12 @@ def open_named(args) -> dict[str, tuple[int, object]]:  # noqa: ANN001
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1].strip())
-    ap.add_argument("--cameras", default="d405",
-                    help="comma list of camera names to resolve by measurement (default: d405)")
-    ap.add_argument("--indices", default="",
-                    help="comma list of raw OpenCV indices instead — the only way to open two D405s knowingly")
+    ap.add_argument("--cameras", nargs="*", default=["d405"],
+                    help="camera names to resolve by measurement, space- or comma-separated "
+                         "(default: d405)")
+    ap.add_argument("--indices", nargs="*", default=[],
+                    help="raw OpenCV indices instead, space- or comma-separated — the only "
+                         "way to open two D405s knowingly")
     ap.add_argument("--seconds", type=float, default=10.0, help="how long to sample (default 10)")
     ap.add_argument("--hz", type=float, default=90.0,
                     help="sampling rate, default 90 — the control loop's own rate")

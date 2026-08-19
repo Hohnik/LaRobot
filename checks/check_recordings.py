@@ -24,6 +24,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
+from yam.cameras.specs import camera_dir_name  # noqa: E402
 from yam.recording import Layout, Trajectory  # noqa: E402
 
 #: Above this, a tail is the §30.1 defect: it produced 1.8 to 4.4 s. Below it, a tail is
@@ -78,6 +79,58 @@ def label_verdict(method: str, modes: list[str] | None, peak_speed: float) -> tu
     if words and words <= {"hold"} and peak_speed > HOLD_SPEED_S:
         return f"{text}  ⛔ implausible", "implausible"
     return text, None
+
+
+def frames_verdict(meta_cameras: dict, recording_dir: Path) -> tuple[str, list[str]]:
+    """Measure a recording's camera frames against what its meta claims (item 48 ③).
+
+    Returns ``(one display line, fault lines)``. The counting is the point: the meta's numbers were written at save time and the JPEGs sit on disk, so agreement is evidence the frames belong to this file and disagreement means the directory was moved, half-copied or edited — the same measure-don't-assert rule as the padding column above.
+    """
+    faults: list[str] = []
+    parts: list[str] = []
+    base = recording_dir / str(meta_cameras.get("dir", ""))
+    for name, counts in meta_cameras.get("per_camera", {}).items():
+        cam_dir = base / camera_dir_name(name)
+        on_disk = len(list(cam_dir.glob("*.jpg"))) if cam_dir.is_dir() else 0
+        want = int(counts.get("written", 0))
+        piece = f"{name}:{on_disk}"
+        if on_disk != want:
+            piece += "⛔"
+            faults.append(f"{name}: meta says {want} frame(s) were written and "
+                          f"{cam_dir.relative_to(recording_dir)} holds {on_disk} — "
+                          "these frames are not the recording's own.")
+        if counts.get("dropped", 0):
+            piece += f" ({counts['dropped']} dropped)"
+        if counts.get("write_errors", 0):
+            piece += f" ({counts['write_errors']} write error(s))"
+        parts.append(piece)
+    return "  📷 " + " · ".join(parts), faults
+
+
+def orphaned_frames(recording_dir: Path, files: list[Path]) -> list[str]:
+    """Frame directories no recording accounts for — dead sessions and stale slots.
+
+    A `pending_*` directory is a take whose session died before the save digit; a slot directory whose `.json` is missing or frameless is debris from an overwritten or deleted recording. Both would read as belonging to something, which is why the checker names them instead of leaving them plausible.
+    """
+    frames_root = recording_dir / "frames"
+    if not frames_root.is_dir():
+        return []
+    claimed = set()
+    for path in files:
+        try:
+            info = Trajectory.load(path).meta.get("cameras") or {}
+        except Exception:  # noqa: BLE001 — an unreadable file is already reported above
+            continue
+        if info.get("dir"):
+            claimed.add((recording_dir / info["dir"]).resolve())
+    out = []
+    for child in sorted(frames_root.iterdir()):
+        if child.is_dir() and child.resolve() not in claimed:
+            kind = ("a session died before the save digit"
+                    if child.name.startswith("pending_")
+                    else "no recording claims it")
+            out.append(f"{child.relative_to(recording_dir)} — {kind}; safe to delete.")
+    return out
 
 
 def main() -> int:
@@ -136,6 +189,20 @@ def main() -> int:
               f"{str(traj.meta.get('recorded_at', '?'))[:16]:>17} "
               f"{traj.duration:6.2f}s {pad:8.2f}s {share:5.1f}% "
               f"{traj.joint_speed(99):8.2f}{flag}  {method:<22}")
+        # ⭐ item 48: a recording that carries camera frames says so on its own second line, counted from disk rather than trusted from meta.
+        if traj.meta.get("cameras"):
+            line, frame_faults = frames_verdict(traj.meta["cameras"], folder)
+            print(line)
+            for fault in frame_faults:
+                contradictory.append(path.name)
+                print(f"      ⛔ {fault}")
+
+    orphans = orphaned_frames(folder, files)
+    if orphans:
+        print()
+        print(f"⚠️ {len(orphans)} frame director(ies) no recording accounts for:")
+        for line in orphans:
+            print(f"   {line}")
 
     print()
     if contradictory:

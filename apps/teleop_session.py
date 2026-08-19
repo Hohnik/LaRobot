@@ -144,6 +144,16 @@ from yam.teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
+from yam.cameras.capture import CaptureSet  # noqa: E402
+from yam.cameras.grabber import FrameGrabber  # noqa: E402
+from yam.cameras.specs import camera_dir_name, flatten_tokens, sim_camera_error  # noqa: E402
+from yam.cameras.writer import (  # noqa: E402
+    FrameSink,
+    attach_frames_to_slot,
+    clear_slot_frames,
+    discard_frames,
+    pending_frames_dir,
+)
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
 from yam.settings import (  # noqa: E402
     LIVE_ORDER,
@@ -917,6 +927,64 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
             f"  q {np.round(q[:N_ARM], 2)}{extra}   ")
 
 
+def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
+    """Open every `--cameras` spec, or refuse loudly before anything is energised.
+
+    ⭐ ROADMAP §8.2 item 48 ①: each spec resolves through the machinery that already exists — a raw index opens directly, a model name resolves by MEASUREMENT (`camera_view`'s confirmed mode probe), and `model:serial` resolves through the FINDINGS §70.15 identity chain (serial → ioreg locationID → uniqueID) plus the hint file, which is the only way to name ONE of two identical D405s.
+
+    ⛔ Runs in the operator's own terminal because macOS grants camera capture per app (FINDINGS §61.3) — an agent shell can never hold this permission, which is why every failure message below tells the operator what to run rather than retrying.
+    """
+    from camera_view import (  # noqa: PLC0415 — OpenCV + AVFoundation load only when cameras are asked for
+        CameraLookupError,
+        hinted_index,
+        open_camera,
+        resolve_camera,
+    )
+    from yam.cameras.identity import unique_id_for_serial  # noqa: PLC0415
+
+    grabbers: dict[str, FrameGrabber] = {}
+    for spec in flatten_tokens([specs_text]):
+        name = camera_dir_name(spec)
+        if name in grabbers:
+            raise SystemExit(f"⛔ --cameras names {spec!r} twice.")
+        if spec.isdigit():
+            idx = int(spec)
+        elif ":" in spec:
+            _, serial = spec.split(":", 1)
+            uid = unique_id_for_serial(serial.strip())
+            if uid is None:
+                raise SystemExit(
+                    f"⛔ {spec}: no USB device carries serial {serial.strip()!r} right now "
+                    "— `uv run checks/check_rig.py` shows what is attached."
+                )
+            idx = hinted_index(uid)
+            if idx is None:
+                raise SystemExit(
+                    f"⛔ {spec}: the serial resolves (uniqueID {uid}) but no confirmed "
+                    "OpenCV index is on file for it. Two identical D405s cannot be told "
+                    "apart by any measurement (FINDINGS §67.12), so the mapping needs one "
+                    "physical confirmation per port arrangement: run `uv run "
+                    "apps/capture_probe.py --indices 1 2 --seconds 3 --save`, look at the "
+                    "two saved pictures, and record which index shows which view — "
+                    "config/camera_index_hint.json then pins it (FINDINGS §70.15)."
+                )
+        else:
+            try:
+                idx, _, found_cap = resolve_camera(spec)
+            except CameraLookupError as e:
+                raise SystemExit(f"⛔ {e}") from e
+            # The resolver may hand the device back already open, unconfigured. Release it and reopen below with the recording mode, so every camera goes through ONE configuration path.
+            if found_cap is not None:
+                found_cap.release()
+        cap = open_camera(idx, 1280, 720, 30)
+        if cap is None:
+            raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open. "
+                             "`uv run apps/camera_view.py --list` shows what is there.")
+        grabbers[name] = FrameGrabber(cap)
+        print(f"  📷 {name} open on index {idx} (asked for 1280x720@30).")
+    return CaptureSet(grabbers), list(grabbers)
+
+
 def main() -> int:  # noqa: PLR0915
     ap = argparse.ArgumentParser(description="Interactive YAM session: guide, teleop, park.")
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
@@ -1048,6 +1116,13 @@ def main() -> int:  # noqa: PLR0915
                          f"SafeRobot clips every command to 0.25 rad from the measured "
                          f"position. Loosening this lets the copy lag further behind rather "
                          f"than stopping; it does not make the follower faster")
+    ap.add_argument("--cameras", default=None, metavar="SPEC[,SPEC]",
+                    help="⭐ record camera frames while a take records (ROADMAP §8.2 item "
+                         "48): comma- or space-separated specs — c920 · a raw index like 2 "
+                         "· d405:<USB serial>. Cameras open at session start, in YOUR "
+                         "terminal because macOS grants capture per app (FINDINGS §61.3); "
+                         "frames land beside the recording under recordings/frames/<slot>/. "
+                         "⛔ Refused with --sim, and never saved by --save-defaults")
     ap.add_argument("--fork-map", action="store_true",
                     help="give THIS arm its own axis map, copied from the one it uses now. "
                          "Without this, both arms share one map and editing changes both")
@@ -1090,6 +1165,9 @@ def main() -> int:  # noqa: PLR0915
     args = ap.parse_args()
     if args.fork_map and args.share_map:
         ap.error("--fork-map and --share-map are opposites; pass at most one")
+    cam_error = sim_camera_error(args.sim, args.cameras)
+    if cam_error:
+        ap.error(cam_error)
 
     # ⭐⭐ THE LIST OF ARMS THIS SESSION DRIVES. ROADMAP §6.1 step 2.
     #
@@ -1232,6 +1310,32 @@ def main() -> int:  # noqa: PLR0915
     take_t0 = 0.0
     take_modes: list[str] = []          # every mode the current recording passed through
     take_label = "good"                 # the label in force while recording — k toggles it
+    # ⭐ Item 48's per-take camera state. `frame_sink` exists exactly while `take` does; the frozen tuple travels with `take_to_save` the same way the trajectory itself does, so the save digit can attach frames whose recording already stopped. `take_mono0` is `time.monotonic_ns()` at the `w` keypress — the SAME instant as `take_t0`, which is what puts frame stamps and sample times on one axis (both clocks are mach_absolute_time on this Mac; yam/episode.py::nearest_frame_per_tick is the consumer).
+    frame_sink: FrameSink | None = None       # writing frames right now, or None
+    take_mono0 = 0                            # monotonic_ns at the w keypress
+    pending_frames: Path | None = None        # where the current/frozen take's frames sit
+    take_frames: dict[str, Any] | None = None   # frozen per-camera indexes + mono0, or None
+
+    def stop_take_frames(keep: bool) -> None:
+        """Stop the take's frame writers, flushing their indexes (item 48's teardown rule).
+
+        `keep=True` freezes the per-camera results beside `take_to_save`, so the save digit can attach them; `keep=False` discards the frames of a recording that was aborted — images belonging to a take that no longer exists are exactly the stale-but-plausible debris this repo keeps finding.
+        """
+        nonlocal frame_sink, take_frames, pending_frames
+        if frame_sink is None:
+            return
+        reports = frame_sink.stop()
+        frame_sink = None
+        if not keep:
+            discard_frames(pending_frames)
+            pending_frames = None
+            return
+        take_frames = {"mono0_ns": take_mono0, "per_camera": reports}
+        for cam_name, rep in reports.items():
+            drop = f", {rep['dropped']} dropped" if rep["dropped"] else ""
+            err = f", {rep['write_errors']} write error(s)" if rep["write_errors"] else ""
+            flush = "" if rep["flushed"] else " ⚠️ writer did not flush"
+            print(f"  📷 {cam_name}: {rep['written']} frame(s){drop}{err}{flush}.")
     replay: Trajectory | None = None    # being played back right now, or None
     replay_t0 = 0.0
     replay_s = 0.0                      # seconds into the recording, held back on lag
@@ -1435,6 +1539,13 @@ def main() -> int:  # noqa: PLR0915
     if not args.yes:
         print("DRY RUN — nothing transmitted, nothing energised. Re-run with --yes.")
         return 0
+
+    # ⭐ Cameras open FIRST, before the puck wiggle and before anything can energise: a camera refusal here costs nothing, while the same refusal after the wiggle would waste the operator's assignment gesture. `capture` outlives every take (opening costs seconds per device); the per-take writers below are the cheap part.
+    capture: CaptureSet | None = None
+    capture_names: list[str] = []
+    if args.cameras:
+        print("opening cameras (this holds the macOS capture permission of THIS terminal):")
+        capture, capture_names = open_session_cameras(args.cameras)
 
     # ⚠️ ONE PUCK, and with two arms this becomes arm call per arm with `exclude=` holding
     # the ones already taken — `pick_device_by_wiggle` already supports that and it is
@@ -2362,6 +2473,8 @@ def main() -> int:  # noqa: PLR0915
                             continue
                         if action[0] == "discard":
                             take_to_save = None
+                            discard_frames(pending_frames)
+                            pending_frames, take_frames = None, None
                             if action[1] is not None:
                                 print(f"\n  kept recording {action[1]}; the new one is "
                                       "discarded.\n")
@@ -2371,6 +2484,22 @@ def main() -> int:  # noqa: PLR0915
                         if k.isdigit() and take_to_save is not None:
                             takes_dir.mkdir(parents=True, exist_ok=True)
                             path = takes_dir / f"{k}.json"
+                            # ⭐ Item 48 ③: the frames move under their slot and the recording's own meta names them, with the counts — so the file carries everything the episode export and `check_recordings` need, and a moved frames directory is detectable. The stale-frames clear on the frameless path matters just as much: a slot's OLD images beside a NEW recording would be attributed to it.
+                            if take_frames is not None and pending_frames is not None:
+                                attach_frames_to_slot(TAKES_DIR, pending_frames, k)
+                                take_to_save.meta["cameras"] = {
+                                    "dir": f"frames/{k}",
+                                    "mono0_ns": take_frames["mono0_ns"],
+                                    "per_camera": {
+                                        cam_name: {key: rep[key] for key in
+                                                   ("written", "dropped", "write_errors")}
+                                        for cam_name, rep in
+                                        take_frames["per_camera"].items()},
+                                }
+                                pending_frames, take_frames = None, None
+                            elif not args.sim and clear_slot_frames(TAKES_DIR, k):
+                                print(f"  📷 removed slot {k}'s stale frames — this "
+                                      "recording carries none.")
                             # ⭐ The commit goes in at SAVE time, not at load time. Julien
                             # on provenance: he wants *"being able to reproduce everything
                             # and connect it to other research papers."* Which version of
@@ -2381,9 +2510,13 @@ def main() -> int:  # noqa: PLR0915
                             take_to_save.meta["recorded_at"] = dt_now()
                             take_to_save.save(path)
                             print(f"\n  ✓ recording {k} saved: {take_to_save.duration:.1f}s, "
-                                  f"{len(take_to_save)} samples → {path.name}")
+                                  f"{len(take_to_save)} samples → {path.name}"
+                                  + (f" + frames/{k}/" if "cameras" in take_to_save.meta
+                                     else ""))
                             print(f"     (l then {k} plays it back)\n")
                         else:
+                            discard_frames(pending_frames)
+                            pending_frames, take_frames = None, None
                             print("\n  recording discarded.\n")
                         take_to_save = None
                         continue
@@ -3222,10 +3355,18 @@ def main() -> int:  # noqa: PLR0915
                             take_t0 = t
                             take_label = "good"   # every recording starts good; k marks bad
                             take_modes = [f"{one.name}:{one.mode}" for one in arms]
+                            # ⭐ Item 48: frame writers live per take. `take_mono0` is stamped at the SAME instant as `take_t0` so frames and samples share one time axis; the pending directory gets the slot's name only at the save digit, because the slot is not known yet.
+                            if capture is not None:
+                                take_mono0 = time.monotonic_ns()
+                                pending_frames = pending_frames_dir(
+                                    TAKES_DIR, datetime.now().strftime("%Y%m%d_%H%M%S"))
+                                frame_sink = FrameSink(pending_frames, capture_names)
                             print("\n⏺  RECORDING " + " · ".join(
                                 f"{one.name} {one.mode.upper()}" for one in arms)
-                                + f"  ({sample_layout().n_joints} joints per sample). "
-                                "Press w again to stop, k to mark a bad stretch.\n")
+                                + f"  ({sample_layout().n_joints} joints per sample)."
+                                + (f"  📷 {len(capture_names)} camera(s)."
+                                   if capture is not None else "")
+                                + " Press w again to stop, k to mark a bad stretch.\n")
                         else:
                             # ⛔⭐ STOP MEANS STOP, AND THIS WAS A REAL BUG FOUND ON THE ARM
                             # ON 2026-08-13. `take` was left in place while the "which slot?"
@@ -3241,6 +3382,8 @@ def main() -> int:  # noqa: PLR0915
                             # Moving it to a second name is the whole fix: the sampler stops
                             # on this line, and the prompt then saves something frozen.
                             take_to_save, take = take, None
+                            # ⭐ The frame writers stop on the SAME line the sampler does (the §30.1 rule extended to images): frames captured while the save prompt waits would belong to no recording.
+                            stop_take_frames(keep=True)
                             # ⭐ Stamp what the recording actually WAS, now that it is over.
                             # `method` was written at the keypress and can only name the mode
                             # it started in; a hand-guided movement begun from HOLD came out
@@ -3271,6 +3414,8 @@ def main() -> int:  # noqa: PLR0915
                             n, secs = len(take_to_save), take_to_save.duration
                             if n < 2:
                                 take_to_save = None
+                                discard_frames(pending_frames)
+                                pending_frames, take_frames = None, None
                                 print("\n  nothing recorded (too short) — discarded.\n")
                             else:
                                 pending = "take_save"
@@ -3594,7 +3739,12 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")
                         take = None
+                        # An aborted recording's frames belong to nothing — discard, never keep.
+                        stop_take_frames(keep=False)
                     else:
+                        # ⭐ Item 48 ②: frames ride ONLY while a take does. `CaptureSet.sample()` never blocks and the sink forwards only frames whose sequence advanced, so this line costs a few dict lookups per cycle and the JPEG work happens in the writer threads.
+                        if frame_sink is not None and capture is not None:
+                            frame_sink.offer(capture.sample())
                         # ⚠️ A bound, because this grows in memory for as long as it runs and
                         # nothing else would ever stop it. 100 000 samples is ~16 minutes at
                         # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
@@ -3603,6 +3753,7 @@ def main() -> int:  # noqa: PLR0915
                         if len(take) >= MAX_TAKE_SAMPLES:
                             # Freeze it the same way `w` does, or the limit would not be one.
                             take_to_save, take = take, None
+                            stop_take_frames(keep=True)
                             pending = "take_save"
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
                                   f"limit ({take_to_save.duration:.0f}s).")
@@ -4521,6 +4672,17 @@ def main() -> int:  # noqa: PLR0915
         try:
             for one_puck in pucks.values():
                 one_puck["handle"].close()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        # ⭐ Item 48 teardown: stop the readers so no daemon thread keeps a camera busy for the next process (the grabber docstring's warning), and discard frames that never reached a slot — a quit with the save prompt open, or Ctrl-C mid-recording. Wrapped like the puck close: camera cleanup must never stand between the motors and their disable below.
+        try:
+            if frame_sink is not None:
+                frame_sink.stop()
+            if capture is not None:
+                capture.stop()
+            if pending_frames is not None:
+                discard_frames(pending_frames)
+                print("  📷 unsaved take frames discarded.")
         except Exception:  # noqa: BLE001, S110
             pass
         # ⛔ DO NOT make this an unconditional save again.

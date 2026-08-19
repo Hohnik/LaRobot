@@ -537,6 +537,15 @@ def _save_hint(unique_id: str, index: int) -> None:
         pass          # a hint that cannot be written just makes the next run slower
 
 
+def hinted_index(unique_id: str) -> int | None:
+    """The remembered OpenCV index for one uniqueID, or None.
+
+    ⚠️ A place to look first, never a verified answer (see find_camera_index) — except for two identical D405s, where NO measurement can verify and one physical confirmation per port arrangement is what pins the entry (FINDINGS §70.15). `teleop_session --cameras d405:<serial>` reads it through this function and refuses when no entry exists, with the instruction for establishing one.
+    """
+    idx = _load_hints().get(unique_id)
+    return int(idx) if isinstance(idx, int) else None
+
+
 def find_camera_index(cam: MacCamera, others: list[MacCamera],
                       limit: int = MAX_PROBE_INDEX) -> tuple[int | None, list[str]]:
     """Which index is **this one** camera? Fast path for `--camera`.

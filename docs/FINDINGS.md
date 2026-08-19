@@ -3323,20 +3323,11 @@ Three names, computed once per keypress: `aimed` (every selected arm), `edit_arm
 uv run checks/check_rig.py && uv run apps/ping_motors.py --arm B --yes && uv run apps/ping_motors.py --arm G --yes
 ```
 
-✅⭐ **THAT PING WAS RUN BY THE AGENT ON 2026-08-14 AT NIGHT, and all 14 motors answered:**
-no arm holding a fault, error clearing OFF so a latched fault would have been named rather
-than erased, temperatures **32-36 °C** against a 55 °C warning, every motor at rest.
+✅⭐ **THAT PING WAS RUN BY THE AGENT ON 2026-08-14 AT NIGHT, and all 14 motors answered:** no arm holding a fault, error clearing OFF so a latched fault would have been named rather than erased, temperatures **32-36 °C** against a 55 °C warning, every motor at rest.
 
-⭐⭐ **And it produced one fact worth having before the run: the two arms need OPPOSITE
-gripper shifts tonight.** Arm B reconciles with **−2π** (closed +0.198 → open −5.052) and arm
-G with **+2π** (closed +6.425 → open +1.197). ⚠️ **Both are handled automatically** by
-`build_robot()`'s reconciliation, and this is exactly what [§40](FINDINGS.md) established:
-**the ±2π shift is a property of the session, not of the arm.** Do not write either direction
-into a config file; run the ping.
+⭐⭐ **And it produced one fact worth having before the run: the two arms need OPPOSITE gripper shifts tonight.** Arm B reconciles with **−2π** (closed +0.198 → open −5.052) and arm G with **+2π** (closed +6.425 → open +1.197). ⚠️ **Both are handled automatically** by `build_robot()`'s reconciliation, and this is exactly what [§40](FINDINGS.md) established: **the ±2π shift is a property of the session, not of the arm.** Do not write either direction into a config file; run the ping.
 
-⚠️ **One thing he will see and should not read as a fault: arm B's jaws are 3.6% open**, so
-the ping warns that almost no closing travel is left. The script says it itself — *"Harmless,
-and it looks like a fault if unexpected."*
+⚠️ **One thing he will see and should not read as a fault: arm B's jaws are 3.6% open**, so the ping warns that almost no closing travel is left. The script says it itself — *"Harmless, and it looks like a fault if unexpected."*
 
 **Then the run itself. Desk clear, gripper enabled, hand near the mains:**
 
@@ -4715,8 +4706,7 @@ His report: at gain 3 the arm *"moves as long as I'm holding the mouse, but then
 
 ✅⭐⭐ **Mitigation built the same evening, both halves in `SafeRobot` ([§68.3](FINDINGS.md)-adjacent code, tests in `test_vel_ff.py`):**
 1. ⛔ **A joint already past its command gets ZERO push, immediately** — the crossing stops the drive instead of fighting through it. At gains ≤ 1 the gate almost never engages, so the physically-exact setting is unchanged.
-2. ⭐ **The setpoint is smoothed over ~2 cycles** — the 90 Hz stepped derivative no longer arrives as jerk, and a release decays the push over a few cycles instead of cutting it (the sub-1 "latent movement"). ⚠️ The smoothing constant is a tuning choice, not a measurement — verify on the arm. `resync()` clears the smoothed state, so no mode change inherits it (the park-spasm family, one layer down).
-⬜ **Owes a re-run at gain 2-3: the jitter and the pull-back should both be visibly smaller.**
+2. ⭐ **The setpoint is smoothed over ~2 cycles** — the 90 Hz stepped derivative no longer arrives as jerk, and a release decays the push over a few cycles instead of cutting it (the sub-1 "latent movement"). ⚠️ The smoothing constant is a tuning choice, not a measurement — verify on the arm. `resync()` clears the smoothed state, so no mode change inherits it (the park-spasm family, one layer down). ⬜ **Owes a re-run at gain 2-3: the jitter and the pull-back should both be visibly smaller.**
 
 ### 68.2 ⛔⭐⭐⭐ AN UNPLUGGED SPACEMOUSE DROPPED THE ARMS — fixed: a dead puck now parks gracefully
 
@@ -4980,7 +4970,7 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 
 Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as he said; nothing currently built needs the second — it returns only when simultaneous two-hand teleop demos are wanted) · both D405s and the C920, same serials and ports as [§70.6](FINDINGS.md). ⛔ **No motor replies on either arm** (`online motors: []`, both) — the adapters run from USB, the motors from the wall, so the first suspect by this repo's own table is that **the arms' mains power is not on yet**. Nothing was retried past one ping per arm; mains is a physical action and is his. ⚠️ The register diff (`check_arms_match`) is queued behind mains for the same reason.
 
-### 70.17 ⬜⭐⭐ THE CONSOLIDATED LIST OF EVERYTHING THAT IS HIS — supersedes [§70.11](FINDINGS.md)'s list, current as of the 2026-08-19 reconnection sweep
+### 70.17 ⬜⭐⭐ THE CONSOLIDATED LIST OF EVERYTHING THAT IS HIS — ⚠️ SUPERSEDED by [§71.3](FINDINGS.md) after his bench pass ran items 1-3 on 2026-08-19
 
 > Everything agent-runnable from the reconnected rig has been run ([§70.15](FINDINGS.md), [§70.16](FINDINGS.md)). What follows is his, in the order that unblocks the most. The second SpaceMouse is NOT needed — nothing built requires it; it returns only when simultaneous two-hand teleop demos are wanted.
 
@@ -4996,5 +4986,53 @@ Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as 
 **Decisions, minutes each:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · which arm stands on the bench's LEFT (the episode exporter requires it) · ⭐ **read [docs/PLAN.md](PLAN.md)** — his ratification turns the draft into the team's deliverable.
 
 **From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (to match the episode encoding byte for byte), else the C4 mini-sample gate adjudicates.
+
+**Standing, unchanged:** a private remote for this repo (needs his GitHub, ~5 minutes together) · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2, open since 2026-08-06).
+
+## 71 ⭐⭐⭐ 2026-08-19 — THE ARMS ARE BACK ON MAINS AND HIS PASS RAN CLEAN, ONE MEASUREMENT WAS LOST TO ARGUMENT FORMAT, AND ITEM 48 IS BUILT
+
+### 71.0 ✅⭐⭐ HIS BENCH PASS: every motor healthy, the register diff byte-identical to the baseline, and the camera indices measured
+
+✅ **Mains is on and both arms answer** — closes [§70.16](FINDINGS.md)'s blocker, exactly as diagnosed (adapters ran from USB, motors from the wall). His pings: **all 14 motors**, temperatures **26-28 °C** against the 55 °C warning, every motor at rest (worst velocity 3 quantisation steps from zero), **no latched fault on either arm with error clearing OFF** — so that is a real reading, not an erased one ([§39.1](FINDINGS.md)'s fix doing its job). Jaws: B reconciles with the usual −2π shift and sits 3.6% open; G needs no shift and sits 2.7% open. ⚠️ Both "only N% of closing travel left" warnings are the harmless nearly-closed case the tool itself names — the jaws were simply left closed.
+
+✅ **The register diff is clean**: 140 reads, only `inertia` and `flux` differ (per-unit measured data, as established in [§38](FINDINGS.md)), and **every register on every motor reads exactly what the 2026-08-14 baseline recorded** — nothing has been written to any motor's flash in five days of sessions.
+
+✅⭐ **The camera indices are measured for today's port arrangement**: C920 = **0**, MacBook = **3**, iPhone = **4** — and indices **1 and 2 are the two D405s BY ELIMINATION** (macOS lists five devices, five indices exist, three are identified by their unique modes, and both leftovers delivered 1280x720 colour). ⭐ **The [§70.6](FINDINGS.md) glance is CLOSED**: his `--list` output printed the uniqueID lines and they match [§70.15](FINDINGS.md)'s arithmetic digit for digit (`0x122000080860b5b` / `0x121000080860b5b` / `0x1141000046d08e5`). ⬜ **The one remaining unknown is which D405 serial is index 1 and which is 2** — and the probe's `--save` PNGs answer it by VIEWPOINT (one camera rides arm G), no lens-covering needed. [§71.3](FINDINGS.md) item 1 carries it.
+
+### 71.1 ⛔⭐ THE BANDWIDTH MEASUREMENT WAS LOST TO ARGUMENT FORMAT — three refused spellings in a row, and the defect was the doc AND the parser together
+
+⛔ **What happened, verbatim from his terminal**: `--indices 0, 1, 2` → `error: unrecognized arguments: 1, 2` · `--indices 0 1 2` → the same · `--indices <0, 1, 2>` → the shell ate the brackets. The flag took ONE comma-joined string (`0,1,2`), [§70.17](FINDINGS.md) item 3 said only *"--indices <the three indices>"*, and he dictates commands through speech-to-text — so every spelling he would naturally produce was refused, and the bench minute was spent on argparse instead of on the measurement.
+
+✅ **Fixed at the parser, not the docs**: `--indices` and `--cameras` now take space- AND comma-separated forms alike (`yam/cameras/specs.py::flatten_tokens`, tested with his three spellings verbatim), and a non-numeric token is refused BY NAME. Proven by running all three of his exact command lines from the agent shell: each now parses and proceeds to the open step, which only his terminal can pass ([§61.3](FINDINGS.md)).
+
+⭐ **The meta-lesson, one sentence**: a command handed to Julien must be PRE-FILLED VERBATIM — `<the three indices>` was a placeholder in exactly the position where a copy-paste command belongs, and his global working-contract rule 8 (pre-filled command blocks) already said so.
+
+⛔ **Fixed in passing, found by reading**: `resolve_camera()` can hand back an ALREADY-OPEN capture (kept open to save a reopen), and `capture_probe.py` discarded that handle without releasing it — the configured reopen would then find the device busy. His owed `--cameras` run would have hit it; `--indices` never took that path.
+
+### 71.2 ✅⭐⭐⭐ ITEM 48 IS BUILT — camera frames ride recordings, and a recording becomes an episode WITH images. The last named gap in the walkthrough is code now
+
+✅ **What exists, exactly the [ROADMAP §8.2](ROADMAP.md) item 48 design ①-④**: a `--cameras` session flag (specs: `c920` by measurement · a raw index · `d405:<serial>` through the [§70.15](FINDINGS.md) identity chain + the hint file, refusing with the establishment instruction when no hint exists) · while `w` records, the loop samples `CaptureSet` and one writer thread per camera JPEG-writes `recordings/frames/<slot>/<camera>/<seq>.jpg` plus an `index.json` of `(seq, host_stamp_ns)` (`yam/cameras/writer.py`) · the recording's meta names the directory, the clock epoch and the per-camera counts, and `check_recordings.py` RE-COUNTS the frames from disk and flags orphaned directories · `yam/episode.py` joins frames to the 30 Hz ticks by nearest stamp and writes C3's `/top-camera` `/left-wrist-camera` `/right-wrist-camera`, with the role mapping REQUIRED exactly like the arm sides (`--top`/`--left-wrist`/`--right-wrist` on `export_episode.py`).
+
+⭐⭐ **The traps, handled as named**: ① the writer never blocks the loop — hand-off by reference, drop-OLDEST on backpressure with a count that lands in the index, the meta, the stop line and the export warnings (a silent drop is the [§0](FINDINGS.md) pattern; dropping newest would pair current joints with stale pixels). ② `--sim` refuses `--cameras` as a pure tested function. ③ teardown flushes every index before the summary — the writer thread's loop shape IS the flush (it exits only on stop-AND-empty). Beyond the design: frames freeze on the SAME line the sampler stops ([§30.1](FINDINGS.md)'s rule extended to images), a discarded/aborted/quit take's frames are DELETED on every path, and a frameless save CLEARS the slot's stale frames so old images can never sit beside a new recording.
+
+⭐ **The clock fact that makes the join exact, measured on this Mac**: `time.perf_counter` (the loop and sample clock) and `time.monotonic_ns` (the frame stamps) are the SAME clock (`mach_absolute_time()`), so `take_mono0`, stamped on the `w` keypress line, puts frames and samples on one axis with no cross-clock arithmetic. `yam/episode.py::nearest_frame_per_tick` is pure and tested against a non-zero epoch, so an absolute-time bug cannot pass.
+
+✅ **Verified**: suite **743/743 across 33 files** — up from 730/730, and the 13 reconcile exactly (8 `test_frame_writer.py` + 5 new episode tests, including a REAL-JPEG round trip, deterministic drop-oldest arithmetic under a blocked encoder, and read-back of camera topics from a real MCAP file). `drive_sim_session` 29/29 unchanged (the frameless path is the sim path, by ②). `check_flags` green over the updated docs. `check_recordings` runs clean over the real 9 recordings.
+
+⬜⛔ **What only the bench can say (design ⑤, unchanged)**: the encode+write cost of 3 cameras at ~30 fps against the 90 Hz loop (the writer reports drops honestly, the loop-rate warning already exists), whether the D405s deliver beside the C920 on one USB tree ([§34.5](FINDINGS.md)), and the first real camera-carrying take. **Then the pipeline is complete to C4's doorstep**: record with frames → label → export with roles → the team's loader adjudicates the encoding.
+
+### 71.3 ⬜⭐⭐ THE HIS-LIST, current — supersedes [§70.17](FINDINGS.md) after his pass closed its items 1-3
+
+**At the bench, ~15 minutes total:**
+
+1. ⭐ **The bandwidth measurement, now unblocked**: `uv run apps/capture_probe.py --indices 0 1 2 --seconds 10 --save` (today's measured indices: 0 = C920, 1 and 2 = the two D405s). It answers [§70.9](FINDINGS.md)'s three-camera question, and the two saved 1280x720 PNGs show which D405 is which by viewpoint — **say which index shows the arm-G view**, and the agent pins `config/camera_index_hint.json` so `--cameras d405:<serial>` works from then on.
+2. **The first camera-carrying take**: `uv run apps/teleop_session.py --yes --arms B,G --cameras c920 --start-mode hold` · `w` · move · `w` · save to a slot · then `uv run checks/check_recordings.py` shows the 📷 line and `uv run apps/export_episode.py --slot <n> --left <arm> --right <arm> --top c920` writes the first episode WITH images. (All three cameras once step 1 has pinned the D405 hints.)
+3. **The grab re-run** on the Lego piece ([§70.3](FINDINGS.md) sequence): the pause line now prints *"arm settled X rad off"* — at the friction floor (~0.02-0.04 rad) the pose was taught short, so re-save the two at-object waypoints a few millimetres further and it grips.
+4. **One labelled recording:** `w` · move · `k` · move · `k` · `w` · save — then `uv run checks/check_recordings.py` shows the bad stretch ([§70.10](FINDINGS.md)).
+5. **One composite grab:** save poses around the object, record the grab as a take, then `p <pose> w<take> <pose>` Enter Enter ([§70.12](FINDINGS.md)).
+
+**Decisions, minutes each:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · which arm stands on the bench's LEFT (the episode exporter requires it) · ⭐ **read [docs/PLAN.md](PLAN.md)** — his ratification turns the draft into the team's deliverable.
+
+**From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (to match the episode encoding byte for byte — now including the camera-topic encoding), else the C4 mini-sample gate adjudicates.
 
 **Standing, unchanged:** a private remote for this repo (needs his GitHub, ~5 minutes together) · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2, open since 2026-08-06).
