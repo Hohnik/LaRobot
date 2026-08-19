@@ -15,10 +15,20 @@ REPO = Path(__file__).resolve().parent.parent
 
 from yam.cameras.identity import (  # noqa: E402
     devices_matching_serial,
+    linux_camera_for_spec,
     parse_ioreg,
     unique_id_for_serial,
     usb_unique_id,
 )
+from yam.platform import parse_v4l_by_id  # noqa: E402
+
+#: ⚠️ HAND-WRITTEN from the documented `/dev/v4l/by-id` format, NOT captured — no Linux
+#: machine has been reached yet (FINDINGS §74.0). The serials inside it ARE real (§70.6).
+LINUX_BY_ID = {
+    "usb-Intel_R__RealSense_TM__Depth_Camera_405_255323071773-video-index0": "../../video2",
+    "usb-Intel_R__RealSense_TM__Depth_Camera_405_260323072846-video-index0": "../../video4",
+    "usb-046d_HD_Pro_Webcam_C920-video-index0": "../../video0",
+}
 
 #: Trimmed from the live `ioreg -p IOUSB -w0 -l` of 2026-08-19: both D405s (distinct
 #: serials, distinct ports) and the C920 (⛔ NO serial line — that is the real device's
@@ -87,6 +97,40 @@ def test_a_serial_prefix_selects_exactly_one_device_or_none() -> None:
     assert devices_matching_serial("9", devs) == []
     assert devices_matching_serial("", devs) == [], \
         "an empty prefix must never select everything — the C920 has an empty serial"
+
+
+def test_the_linux_resolver_takes_the_same_three_spellings() -> None:
+    """⭐ The session's `--cameras` specs must mean the same thing on both platforms, or a
+    command that works on the Mac would open the wrong camera on the Linux PC."""
+    cams = parse_v4l_by_id(LINUX_BY_ID)
+    assert linux_camera_for_spec("c920", cams).index == 0
+    assert linux_camera_for_spec("d405:2603", cams).serial == "260323072846"
+    assert linux_camera_for_spec("d405:2553", cams).serial == "255323071773"
+    assert linux_camera_for_spec("2", cams).index == 2, "a raw index still works"
+    # ⭐ The Linux win in one line: two IDENTICAL cameras separated with no hint file and
+    # no lens-covering, because the by-id name carries the serial AND the index.
+    assert (linux_camera_for_spec("d405:2603", cams).index
+            != linux_camera_for_spec("d405:2553", cams).index)
+
+
+def test_the_linux_resolver_refuses_ambiguity_instead_of_picking_one() -> None:
+    cams = parse_v4l_by_id(LINUX_BY_ID)
+    for spec, expect in (("d405", "matches 2 cameras"),
+                         ("d405:9999", "no camera matches"),
+                         ("nikon", "no camera matches"),
+                         ("77", "no camera is at index 77")):
+        try:
+            linux_camera_for_spec(spec, cams)
+        except ValueError as e:
+            assert expect in str(e), f"{spec}: wanted {expect!r} in {e}"
+        else:
+            raise AssertionError(f"{spec!r} must refuse rather than pick the first match")
+    try:
+        linux_camera_for_spec("c920", [])
+    except ValueError as e:
+        assert "by-id" in str(e)
+    else:
+        raise AssertionError("an empty listing must refuse")
 
 
 def main() -> int:

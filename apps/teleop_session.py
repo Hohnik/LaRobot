@@ -931,6 +931,47 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
             f"  q {np.round(q[:N_ARM], 2)}{extra}   ")
 
 
+def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]:
+    """`--cameras` on Linux: every spec resolved through `/dev/v4l/by-id`.
+
+    ⭐⭐ SHORTER THAN THE macOS PATH BY DESIGN, and the reason is worth reading once (ROADMAP §8.2 item 49). On Linux the kernel already publishes what macOS made this repo measure: the by-id name carries the camera's MODEL and its USB SERIAL, and the symlink points at `/dev/videoN`, which is exactly what `cv2.VideoCapture(N)` opens. So there is no index hint to store, no mode probe to run, and no stale-hint model check to defend against ([FINDINGS §71.5](../docs/FINDINGS.md) was a macOS-only hazard) — the identity comes from the same string that gives the index.
+
+    ⭐ The recorded camera NAME is built exactly as on macOS (model word + full serial, e.g. `d405-260323072846`), so a recording made on the Linux PC and one made on the Mac name their cameras identically and the episode exporter's role flags are unchanged across platforms.
+    """
+    import cv2  # noqa: PLC0415
+
+    from yam.cameras.identity import linux_camera_for_spec  # noqa: PLC0415
+    from yam.platform import read_v4l_cameras  # noqa: PLC0415
+
+    listed = read_v4l_cameras()
+    grabbers: dict[str, FrameGrabber] = {}
+    for spec in flatten_tokens([specs_text]):
+        try:
+            cam = linux_camera_for_spec(spec, listed)
+        except ValueError as e:
+            raise SystemExit(f"⛔ {spec}: {e}") from e
+        model_word = spec.partition(":")[0]
+        name = camera_dir_name(f"{model_word}:{cam.serial}" if cam.serial else model_word)
+        if name in grabbers:
+            raise SystemExit(f"⛔ --cameras names {name!r} twice.")
+        cap = cv2.VideoCapture(cam.index)
+        if not cap.isOpened():
+            cap.release()
+            raise SystemExit(
+                f"⛔ {spec} resolved to {cam.device} (index {cam.index}) and would not open.\n"
+                "  On Linux this is almost always group membership: the user must be in "
+                "`video`.\n  Check with `id`, and see docs/LINUX.md."
+            )
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        grabbers[name] = FrameGrabber(cap)
+        print(f"  📷 {name} open on {cam.device} (index {cam.index}), delivering "
+              f"{got[0]}x{got[1]}.")
+    return CaptureSet(grabbers), list(grabbers)
+
+
 def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
     """Open every `--cameras` spec, or refuse loudly before anything is energised.
 
@@ -940,6 +981,11 @@ def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
 
     ⛔ Runs in the operator's own terminal because macOS grants camera capture per app (FINDINGS §61.3) — an agent shell can never hold this permission, which is why every failure message below tells the operator what to run rather than retrying.
     """
+    from yam.platform import IS_LINUX  # noqa: PLC0415
+
+    if IS_LINUX:
+        return _open_session_cameras_linux(specs_text)
+
     from camera_view import (  # noqa: PLC0415 — OpenCV + AVFoundation load only when cameras are asked for
         CameraLookupError,
         hinted_index,

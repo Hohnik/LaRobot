@@ -84,3 +84,62 @@ def devices_matching_serial(prefix: str, devices: list[dict]) -> list[dict]:
     return [d for d in devices
             if d["serial"] and d["serial"].startswith(prefix)
             and d["vid"] is not None and d["pid"] is not None]
+
+
+# ------------------------------------------------------ the same question, on Linux ----
+# ⭐⭐ On Linux the chain above is unnecessary: `/dev/v4l/by-id` already names every camera by
+# model AND serial and points straight at `/dev/videoN`, which is OpenCV's index. So the
+# Linux resolver is a match against that listing, and the two identical D405s that cost this
+# repo days on macOS ([FINDINGS §70.15](../../../docs/FINDINGS.md)) separate by serial with no
+# hint file, no mode probe and no lens-covering. ROADMAP §8.2 item 49.
+
+#: Words a person types that do not appear literally in a by-id name. The D405 calls itself
+#: "Intel_R__RealSense_TM__Depth_Camera_405", so `d405` has to reach it through `405`.
+LINUX_ALIASES = {"d405": "405", "realsense": "realsense", "intel": "realsense",
+                 "c920": "c920", "logitech": "c920", "webcam": "webcam"}
+
+
+def _flat(text: str) -> str:
+    return "".join(ch for ch in text.lower() if ch.isalnum())
+
+
+def linux_camera_for_spec(spec: str, cameras: list) -> object:
+    """The one `V4lCamera` a `--cameras` spec names, or `ValueError` saying why not.
+
+    Accepted spellings, the same three the session takes on macOS:
+      * ``2``                 — a raw OpenCV index, matched against the by-id device node
+      * ``c920``              — a model word (aliases above), which must match exactly one camera
+      * ``d405:2603``         — model plus any unique SERIAL PREFIX; Julien dictates commands,
+                                so a speakable prefix has to work ([FINDINGS §71.5](../../../docs/FINDINGS.md))
+
+    ⛔ Refuses on zero matches AND on more than one. Never picks the first: with two identical
+    D405s attached, "pick the first" is a 50% chance of recording the wrong arm's view under
+    the right name, which is this stack's signature failure mode ([FINDINGS §0](../../../docs/FINDINGS.md)).
+    """
+    spec = spec.strip()
+    if not cameras:
+        raise ValueError("no cameras are listed in /dev/v4l/by-id — is anything plugged in? "
+                         "`uv run checks/check_platform.py` prints the raw listing.")
+    if spec.isdigit():
+        want = int(spec)
+        hit = [c for c in cameras if c.index == want]
+        if not hit:
+            listing = "\n".join(f"    {c.index}: {c.model} {c.serial}" for c in cameras)
+            raise ValueError(f"no camera is at index {want}. Present:\n{listing}")
+        return hit[0]
+
+    model_part, _, serial_prefix = spec.partition(":")
+    want_model = _flat(LINUX_ALIASES.get(_flat(model_part), model_part))
+    matches = [c for c in cameras if want_model in _flat(c.model)]
+    if serial_prefix:
+        matches = [c for c in matches if c.serial.startswith(serial_prefix.strip())]
+    if not matches:
+        listing = "\n".join(f"    {c.model}  serial {c.serial or '(none reported)'}  "
+                            f"index {c.index}" for c in cameras)
+        raise ValueError(f"no camera matches {spec!r}. Present:\n{listing}")
+    if len(matches) > 1:
+        listing = "\n".join(f"    {c.model}  serial {c.serial or '(none reported)'}  "
+                            f"index {c.index}" for c in matches)
+        raise ValueError(f"{spec!r} matches {len(matches)} cameras:\n{listing}\n"
+                         "  Add more of the serial to pick one.")
+    return matches[0]

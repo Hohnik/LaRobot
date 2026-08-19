@@ -437,17 +437,88 @@ _chain_patched = False
 GS_USB_CHANNEL_PREFIX = "gsusb"
 
 
+def resolve_arm_socketcan(arm: str = DEFAULT_ARM) -> str:
+    """The SocketCAN interface carrying `arm`, on Linux. Refuses rather than guessing.
+
+    ⭐⭐ THE LINUX PATH, and it is simpler than the macOS one in a way worth understanding
+    (ROADMAP §8.2 item 49). A candleLight adapter on Linux is a kernel CAN device, so it
+    appears as ``can0``/``can1`` and sysfs carries its USB SERIAL right beside it. The join
+    ``arm → serial → interface`` is therefore direct: there is no adapter index to guess and
+    nothing to verify after opening, which is the whole class of mistake `_verify_serial`
+    exists to catch on macOS.
+
+    ⛔ Two refusals, both because the alternative is driving the wrong arm or a silent
+    no-op: an interface whose serial does not match ANY known arm is never used, and an
+    interface that exists but is **DOWN** is refused with the command that brings it up.
+    Presence is not readiness — this repo has paid for that distinction already
+    ([FINDINGS §33.0](../../docs/FINDINGS.md)).
+    """
+    from yam.platform import CAN_BITRATE, read_can_links  # noqa: PLC0415 — Linux only
+
+    serial = ARM_SERIALS.get(arm, arm)
+    links = read_can_links()
+    if not links:
+        raise RuntimeError(
+            "No SocketCAN interface is present.\n"
+            "  A candleLight adapter should appear as can0/can1 once plugged in.\n"
+            "  Check with:  ip -details link show type can\n"
+            "  If nothing is listed, the gs_usb kernel module may not have bound the\n"
+            "  adapter, or it is in its bootloader (see docs/LINUX.md)."
+        )
+    known = {v: k for k, v in ARM_SERIALS.items()}
+    for link in links:
+        if link.serial == serial:
+            if link.state != "UP":
+                raise RuntimeError(
+                    f"{link.interface} carries arm {arm!r} (serial {serial}) but is "
+                    f"{link.state}.\n"
+                    f"  Bring it up first (needs sudo, so it is the operator's step):\n"
+                    f"    sudo ip link set {link.interface} up type can "
+                    f"bitrate {CAN_BITRATE}"
+                )
+            if link.bitrate not in (None, CAN_BITRATE):
+                raise RuntimeError(
+                    f"{link.interface} is up at {link.bitrate} bit/s and every YAM motor "
+                    f"expects {CAN_BITRATE}.\n"
+                    f"  Reconfigure:  sudo ip link set {link.interface} down && "
+                    f"sudo ip link set {link.interface} up type can bitrate {CAN_BITRATE}"
+                )
+            return link.interface
+    listing = "\n".join(
+        f"    {l.interface}  serial {l.serial or '(unreadable)'}  {l.state}"
+        f"  ({known.get(l.serial, 'unknown adapter')})" for l in links)
+    raise RuntimeError(
+        f"No CAN interface carries arm {arm!r} (serial {serial}).\n"
+        f"  {len(links)} interface(s) present:\n{listing}\n"
+        "  ⚠️ An empty serial means sysfs did not expose one — run "
+        "`uv run checks/check_platform.py`, which prints the raw paths."
+    )
+
+
 def chain_channel(arm: str = DEFAULT_ARM) -> str:
     """The channel string to hand `DMChainCanInterface` / `get_yam_robot()`.
 
-    Returns e.g. ``"gsusb1"`` — the gs_usb adapter *index* for `arm`, resolved by
-    serial (never by position), wrapped in a form the vendor code will accept.
+    ⭐⭐ THE ONE SEAM BOTH PLATFORMS GO THROUGH. Every whole-arm caller in the repo
+    (`yam/robot.py` ×3, `apps/read_arm_state.py`, `apps/calibrate_gripper.py`) asks this
+    function for its channel, so making it platform-aware ports the entire arm stack at one
+    site rather than five.
 
-    ⚠️ The name is load-bearing and must not contain the substring ``"can"``.
-    `dm_driver.py:409` branches on ``if "can" in channel:`` and hands anything
-    matching straight to SocketCAN, which does not exist here. ``"gsusb1"`` is
-    chosen precisely because it fails that test.
+    **On Linux** it returns a SocketCAN interface name (``"can0"``), resolved from the arm's
+    USB serial through sysfs and refused if the link is down. The vendor code then takes its
+    own native branch: ``dm_driver.py`` tests ``if "can" in channel`` and hands anything
+    matching to SocketCAN, which on Linux is exactly right and needs no patch at all.
+
+    **On macOS** it returns ``"gsusb1"`` — the gs_usb adapter *index* for `arm`, resolved by
+    serial (never by position) and re-verified after opening.
+
+    ⚠️ The macOS name is load-bearing and must not contain the substring ``"can"``, precisely
+    because of the vendor branch above: on a Mac there is no SocketCAN to hand it to.
+    ``"gsusb1"`` is chosen to fail that test.
     """
+    from yam.platform import IS_LINUX  # noqa: PLC0415 — cheap, and keeps the branch in one place
+
+    if IS_LINUX:
+        return resolve_arm_socketcan(arm)
     index, _ = resolve_arm(arm)
     return f"{GS_USB_CHANNEL_PREFIX}{index}"
 
