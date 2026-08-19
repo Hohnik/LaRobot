@@ -5464,20 +5464,30 @@ The session's Linux camera path was then written with three bare `set()` calls a
 
 ### 76.2 ✅⛔⭐⭐⭐ CAUSE TWO: THE D405 ACCEPTS 1280x720 AND DELIVERS NOTHING AT IT, AND THIS IS BELOW OPENCV
 
-Measured on the station, each with a hard timeout so it could not hang the investigation:
+⛔⭐⭐⭐ **CORRECTED THE SAME EVENING, AND THE CORRECTION IS THE MORE USEFUL FINDING.** This section first said the D405 delivers nothing at 1280x720, full stop. **That claim was true when measured and is false now.** The mode has been measured **dead twice and alive twice on the same camera within four hours**, and 848x480 and below have never once failed. Writing the flat version down would have been this repo's own signature failure committed into its own evidence file.
 
-| size asked of `/dev/video6` | frames dequeued by `v4l2-ctl --stream-mmap` |
-|---|---|
-| 1280x720 YUYV | **none, ever** (the first attempt blocked for four minutes) |
-| 848x480 YUYV | 5 of 5, then 200 at 89.88 fps |
-| 640x480 YUYV | 5 of 5 |
-| 424x240 YUYV | 5 of 5 |
+Measured on the station, in order, each with a hard timeout so it could not hang the investigation:
 
-⭐ **Three explanations are ruled out by measurement rather than by argument:**
+| # | size asked of `/dev/video6` | result |
+|---|---|---|
+| 1 | 1280x720 YUYV | **zero frames.** `v4l2-ctl --stream-mmap` blocked for four minutes and was killed |
+| 2 | 1280x720 YUYV | **zero frames** again, on a timed 5-frame retry |
+| 3 | 848x480 YUYV | 5 of 5, and later 200 frames at **89.88 fps** |
+| 4 | 640x480 YUYV | 5 of 5 |
+| 5 | 424x240 YUYV | 5 of 5 |
+| 6 | *(librealsense opened the camera at 1280x720 colour and streamed it at 30.0 fps — [§76.10](FINDINGS.md))* | |
+| 7 | 1280x720 YUYV | **30.01 fps**, and 165 frames in 6 s through OpenCV in a separate process |
+| 8 | 1280x720 MJPG via `open_measured` | **30.0 fps**, no step-down needed |
 
-- **Not OpenCV.** `v4l2-ctl` gets nothing either, and it is the reference tool.
+⚠️ **WHAT CHANGED BETWEEN 5 AND 7 IS NOT ESTABLISHED, and saying so is the point.** The single new variable was librealsense opening and configuring the camera, and the mode has worked in every plain-V4L2 process since. That is an inference from one before-and-after pair, never proof. ⛔ **The alternative nobody can rule out from here:** attempt 1 was killed with `pkill` while blocked, which may have left that one mode wedged in the driver until something re-initialised it, in which case attempts 2 through 5 were measuring the wreckage of attempt 1. Settling it needs a cold replug or a reboot, and both are physical.
+
+⭐⭐ **AN INTERMITTENT MODE IS A STRONGER ARGUMENT FOR THE FIX THAN A DEAD ONE.** A size that works today and not tomorrow is exactly what a screen message built from `cap.get` hides perfectly, and exactly what reading a real frame catches every single time. It also means the ladder in [§76.3](FINDINGS.md) is not a workaround for one broken camera; it is the correct shape for hardware whose modes come and go.
+
+⭐ **Three explanations are ruled out by measurement rather than by argument, and they stay ruled out for the failing case:**
+
+- **Not OpenCV.** `v4l2-ctl` got nothing either, and it is the reference tool.
 - **Not the advertised format.** `v4l2-ctl --list-formats-ext -d /dev/video6` lists YUYV 1280x720 at 30, 15 and 5 fps. The mode is offered.
-- **Not USB bandwidth.** `lsusb -t` puts the D405 alone on bus 002 at **5000M**. YUYV 720p30 needs about 442 Mbit/s.
+- **Not USB bandwidth.** `lsusb -t` puts the D405 alone on bus 002 at **5000M**, and `usb_type_descriptor` reads `3.2`. YUYV 720p30 needs about 442 Mbit/s.
 
 ⚠️ **And the mode that works on Linux is the mode that was BROKEN on macOS.** [§63.0](FINDINGS.md) recorded that Julien's D405 gave a clean photograph at 640x480 and at 1280x720 and diagonal coloured bands at 848x480. On Linux it is the exact inverse: 848x480 and below stream, 1280x720 does not. **A camera's usable modes are a property of the camera plus the platform, never of the camera alone.** Nothing may hard-code a size for a camera it has not measured.
 
@@ -5568,10 +5578,121 @@ The port is confirmed further than [§75.10](FINDINGS.md) left it. From the same
 
 ⚠️ **One number to keep an eye on rather than act on:** the loop printed `⚠️ 83Hz` during the replay with two cameras open, against 87-90 Hz measured without them ([§31.1](FINDINGS.md)). Two JPEG encoders in-process cost a few Hz. Everything below is written against measured `dt`, so nothing is biased by it.
 
-### 76.9 ⬜⭐⭐ WHAT IS NOW OPEN, and the one thing only he can do
+### 76.9 ⬜ WHAT WAS OPEN BEFORE THE FAST-FORWARD LANDED — superseded by [§76.14](FINDINGS.md)
 
 1. ⭐ **The station's clone needs one fast-forward, and then one camera session to confirm the fix on the real cameras.** The code is committed on the Mac and the bundle is already at `/tmp/yam.bundle` on the station. The `git` write there needs his approval. What to look for afterwards: `measured 1280x720 at 29.9 fps in MJPG` for the C920, and `measured 848x480 at ~30 fps` plus a stepped-down warning for the D405.
 2. **Re-record anything on the station made before this commit.** Those recordings carry a third of the images they appear to, and their D405 directory is empty.
 3. **Delete the 813 sidecars** on the station: `find ~/yam-robotics/recordings -name '._*' -delete`. Nothing needs them, and they will keep confusing anything that lists files.
 4. ⬜ **Whether to install librealsense on the station**, which needs root and is therefore his. It is the only way to know whether Intel's own library streams the D405 at 1280x720 there, and it is the only route to depth on either platform ([§63.0](FINDINGS.md), [§75.7](FINDINGS.md)). ⚠️ Note that the C4 export shrinks every view to 224x224, so 848x480 is already far more than the training format uses. **Nothing needs 1280x720 from a wrist camera.**
 5. ⬜ **The falsifiers should join the one-command suite** (see [§76.7](FINDINGS.md)).
+
+### 76.10 ✅✅⭐⭐⭐ librealsense NEEDS NO ROOT AT ALL, streams the D405 at 1280x720, and brings DEPTH with it
+
+⛔ **This corrects a two-week-old assumption, and the assumption was expensive.** Every plan in this repo has treated librealsense as an `apt install` that needs Julien's password ([PLAN.md](PLAN.md) Phase B3, [LINUX.md](LINUX.md) §5). **It is a pip wheel.** One command, no root, nothing compiled, nothing installed system-wide:
+
+```bash
+uv run --with pyrealsense2 python -c "import pyrealsense2 as rs; print([d.get_info(rs.camera_info.name) for d in rs.context().devices])"
+```
+
+That downloaded 12.4 MB, took seconds, and saw the camera. **So every question about librealsense has been answerable by an agent, without Julien, since the station existed.** ⚠️ The general shape, and it is the third instance in this project: *when a capability looks like it needs permission, check which half of it actually does* ([§70.16](FINDINGS.md) split camera ENUMERATION from CAPTURE the same way).
+
+⭐ **What it measured, all on the station's D405 (`pyrealsense2` 2.58.3, firmware 5.15.1.55):**
+
+| question | plain V4L2 / OpenCV | librealsense |
+|---|---|---|
+| colour at 1280x720 | intermittent, see [§76.2](FINDINGS.md) | **30.0 fps steady** (90 frames in 3.0 s, after a 20-frame warm-up) |
+| colour at 848x480 | works, up to 89.88 fps | 90/60/30/15/5 fps offered |
+| depth | ⛔ nothing, on either platform ([§63.0](FINDINGS.md), [§75.7](FINDINGS.md)) | ✅ **z16 up to 1280x720**, and it streams alongside colour: 21.5 fps colour with both enabled |
+| stream kinds offered | one node per stream, picked by pixel format | 140 colour profiles, 200 infrared, 29 depth, all named |
+
+⭐ **So depth is available on this station today, for the first time in this project**, and the only cost is a capture backend that talks to librealsense instead of OpenCV.
+
+⬜⭐⭐ **THE DECISION THIS OPENS, and it is a real one rather than a formality.** Nothing needs it yet:
+
+- **Nothing needs 1280x720 from a wrist camera.** `yam/dataset.py` shrinks every view to 224x224 before stacking it ([§74.1](FINDINGS.md)), so 848x480 is already more than four times the training format's resolution.
+- **The step-down ladder handles the intermittency** and turns it into a visible, working camera either way.
+- **A second backend is real work**: a grabber with librealsense's own frame type, identity by a different serial ([§76.11](FINDINGS.md) is why that matters), and the writer path. It is the right build the moment depth is wanted for the policy, and busywork before then.
+
+⚠️ **One caveat if anyone does build it.** `uv run --with` is a throwaway environment. Making it permanent means `uv add pyrealsense2`, which puts it in `pyproject.toml` and `uv.lock` for **both** machines, and there is no macOS arm64 wheel to satisfy it. It would need a platform marker, the same shape as `pyobjc-framework-avfoundation ; sys_platform == 'darwin'` already in there.
+
+### 76.11 ⛔⭐⭐⭐ THE SAME CAMERA HAS TWO SERIAL NUMBERS, AND THIS REPO USES THE OTHER ONE
+
+Asked of one physically attached D405, in one process:
+
+```
+name                 RealSense D405
+serial_number        260522273162      ← what librealsense calls "the serial"
+asic_serial_number   260323072846      ← what the USB descriptor exposes
+```
+
+`/dev/v4l/by-id` carries `..._260323072846`, `/sys/bus/usb/devices/2-2/serial` reads `260323072846`, and every camera name in this repo's recordings, configs and export flags is built from that number (`d405-260323072846`). **librealsense would name the same camera `d405-260522273162`.**
+
+⛔ **The consequence, spelled out because it is silent.** Switch the capture backend to librealsense and key identity on `serial_number`, and:
+
+- every `--top` / `--left-wrist` / `--right-wrist` flag in [COMMANDS.md](COMMANDS.md) and [PLAN.md](PLAN.md) stops matching,
+- `config/camera_index_hint.json`'s rows stop matching,
+- a recording made after the switch cannot be joined to one made before it by camera name,
+
+and **none of that raises anything**. It reads as "the camera is not attached", which sends you to the cable.
+
+✅ **The fix is one line and it is written down here rather than in code, because no code needs it yet:** a librealsense backend keys on `rs.camera_info.asic_serial_number`, never on `serial_number`. ⚠️ Two same-model cameras still cannot be told apart by anything they photograph ([§67.12](FINDINGS.md)); this changes nothing about that.
+
+### 76.12 ⛔⭐⭐⭐ THE FIX'S OWN RATE MEASUREMENT WAS WRONG, AND ONLY THE REAL CAMERAS COULD SHOW IT
+
+`open_measured` shipped in `950a3fa` measuring the frame rate over a single 0.7 s window starting the instant the format was set. Run against the station's cameras it reported:
+
+```
+c920: measured 1280x720 at 8.6 fps in MJPG   (6 frames)
+d405 colour: measured 1280x720 at 8.6 fps in YUYV   (6 frames)
+```
+
+**Both cameras run at 30.** The window was mostly the camera starting up: the D405's first frame arrives **0.56 s** after the format is set, so the "window" contained about 0.14 s of streaming. And `SLOW_FPS` is 20, so **the "this camera is too slow" warning would have fired on every healthy camera in every session** — the cry-wolf failure, shipped in the same commit as a document explaining why cry-wolf checkers are worthless.
+
+⛔⭐ **THE 12 UNIT TESTS COULD NOT SEE IT, and the reason is worth carrying.** The fake handle in `tests/test_camera_open.py` returns a frame from every `read()` immediately. A real camera does not. **The fake was faithful to the interface and wrong about the physics**, so every assertion passed against behaviour no camera has. This is [§62.1](FINDINGS.md)'s lesson (the lagging simulator caught what 616 unit tests could not) recurring in a new place: a fake that is instant is a fake that hides latency defects.
+
+✅ **Fixed as three phases instead of one**, all constants measured rather than chosen:
+
+1. `FIRST_FRAME_S = 2.5` — wait for one real frame. That is the delivery proof, and 2.5 s is four times the 0.56 s observed.
+2. `WARMUP_S = 0.4` — read and **discard**, so start-up latency is not in the rate.
+3. `MEASURE_S = 1.0` — count. About 30 frames, enough to tell 30 from 10 and not enough to tell 29 from 30, which is the right precision for the question.
+
+✅ **Confirmed on the real cameras afterwards**, and this is the MJPG fix's hardware confirmation:
+
+```
+c920: 1280x720 at 29.9 fps in MJPG   (was 10.01 fps before the MJPG request)
+d405 colour: 1280x720 at 30.0 fps in YUYV
+```
+
+⭐ **The fake handle now has a `dead_reads` mode** that returns nothing for its first N reads, and a test asserts the reported rate is not "slow" for a handle that starts late. The defect cannot come back silently.
+
+### 76.13 ⚠️⭐⭐ A `| tail -3` THREW AWAY THE ONE THING THAT MATTERED, and the fix is in the tool rather than the habit
+
+The command handed to Julien for the station's fast-forward ended `uv run checks/run_tests.py | tail -3`. One test file failed, and `run_tests.py` prints each failing file's whole output **before** its final warning, so the three surviving lines were:
+
+```
+58/59 passed
+
+⚠️  A green run proves the checks that exist still pass...
+```
+
+No file name. No test name. **The failing test's name was on his screen and the command discarded it.** ⚠️ This is the [negative-results rule](FINDINGS.md) again, in the other direction: that rule says never conclude "X does not exist" from a truncated search, and this is never hand somebody a truncated report of a failure.
+
+✅ **Two fixes, and the tool's one matters more than the habit's.** `run_tests.py` now prints the failing file and its failing test names **last**, after the long echo, on a line that says it is last on purpose. Anything printed before a variable-length echo can be truncated away by a pipe. Verified against a fixture that mimics this exact case, and `checks/falsify_run_tests.py` now has two checks locking the property (8/8).
+
+⬜ **The failure itself is UNREPRODUCED and it is `tests/test_camera_render.py`**, which holds 59 checks. It has since passed 4 full suite runs on the station, 12 sequential runs of that file alone, and 8 concurrent runs. Its terminal-detection and terminal-size tests all patch what they read, so the obvious environment dependence is not it. ⚠️ **If it appears again, the failing test name now prints last** — capture it rather than the count.
+
+### 76.14 ⬜⭐⭐ WHAT IS OPEN NOW — supersedes [§76.9](FINDINGS.md)
+
+⭐ **The station is current and the camera fix is confirmed on the hardware.** The fast-forward landed (`e97a8a05..6083af3c`), the suite runs **804/804 across 38 files** on both machines, and `open_measured` reports 29.9 fps on the C920 and 30.0 on the D405 against the real devices.
+
+**His, and short:**
+
+1. ⭐ **One camera-carrying recording on the station with the fixed code**, to confirm the whole session path rather than the function alone: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty.
+2. **Delete the 813 sidecar files** on the station: `ssh yam-pc "find ~/yam-robotics/recordings -name '._*' -delete"`. Nothing needs them.
+3. ⬜ **Whether to build a librealsense capture backend**, which is the only route to depth ([§76.10](FINDINGS.md)). No password needed, and nothing needs it yet.
+4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
+5. **Frame the top camera at the workspace** before collecting real data ([§73.2](FINDINGS.md): it films one arm close up).
+6. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
+7. Optional: the second D405 for a three-camera session there · `kp` for sub-centimetre grabs ([ROADMAP §8.2](ROADMAP.md) item 17) · whether to push to the team branch.
+
+⬜ **Not his, and queued:** the falsifiers are still outside the one-command suite ([§76.7](FINDINGS.md)), and `tests/test_camera_render.py`'s single unreproduced failure ([§76.13](FINDINGS.md)).

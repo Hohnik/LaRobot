@@ -81,6 +81,20 @@ def main() -> int:
     # silently disarmed check (§59.1), and only the reader can see it — so say it.
     print("\n⚠️  A green run proves the checks that exist still pass. Compare the TOTAL "
           "against the last committed figure: a drop means a check was disarmed.")
+    # ⛔⭐⭐ THE VERDICT GOES LAST, AND IT USED TO GO IN THE MIDDLE. On 2026-08-19 an agent
+    # handed Julien `run_tests.py | tail -3`. One file failed, so the long per-file echo
+    # above pushed the TOTAL line out of range and all he saw was that file's own
+    # "58/59 passed" summary — no file name, no test name. The failing test's name was on
+    # his screen and the command threw it away (FINDINGS §76.12). Anything printed BEFORE a
+    # variable-length echo can be truncated away by a pipe. So the names print again here,
+    # after everything, where `tail` cannot lose them.
+    if failures:
+        print("\n⛔ FAILING, and this line is last on purpose so a `| tail` cannot hide it:")
+        for path, out in failures:
+            marks = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("✗")]
+            shown = "; ".join(m.lstrip("✗ ").split("\n")[0] for m in marks[:4]) or "no ✗ line, so it crashed before counting"
+            more = f" (+{len(marks) - 4} more)" if len(marks) > 4 else ""
+            print(f"   {path.name}: {shown}{more}")
     return 1 if failures else 0
 
 

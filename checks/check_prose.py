@@ -63,8 +63,14 @@ HIS_DOCS: dict[str, int] = {
     "docs/PLAN.md": 40,
     "docs/LINUX.md": 44,
     "docs/COMMANDS.md": 117,
-    "README.md": 188,
+    "README.md": 28,
 }
+
+#: ⛔ `docs/HISTORY.md` is deliberately absent. It is an ARCHIVE: the README's first two
+#: sessions, moved out on 2026-08-19 because they were two thirds of the page that says
+#: "start here". Its prose is 12 days old and nobody reads it to find anything out, so
+#: holding it to a readability ceiling would be busywork on frozen text. ⚠️ It carries a
+#: 📖 REFERENCE banner saying exactly that, so nobody mistakes it for the live state.
 
 BANNED = [
     ("it's not", "\"it's not X, it's Y\". Say what it is."),
@@ -204,10 +210,16 @@ def main() -> int:
         cap = "no ceiling" if ceiling is None else f"ceiling {ceiling}"
         print(f"  {mark} {rel:<24} {len(found):>4} fault(s), {cap}")
         if args.verbose or (ceiling is not None and len(found) > ceiling):
-            for line in found[: 40 if args.verbose else 12]:
+            # ⛔ `-v` PRINTS EVERYTHING. It used to stop at 40 and say nothing, which hid the
+            # 41st fault of a 41-fault file — so a `diff` of two verbose runs came out
+            # balanced while the count had gone up by one. A silent cap inside a reporting
+            # tool is the exact defect this file's own findings are about (FINDINGS §76.4's
+            # family). The un-verbose view still trims, and it SAYS how many it trimmed.
+            shown = found if args.verbose else found[:12]
+            for line in shown:
                 print(f"        {line}")
-            if not args.verbose and len(found) > 12:
-                print(f"        … {len(found) - 12} more, run with -v")
+            if len(shown) < len(found):
+                print(f"        … {len(found) - len(shown)} more, run with -v")
 
     if args.ceilings:
         print("\nHIS_DOCS: dict[str, int] = {")

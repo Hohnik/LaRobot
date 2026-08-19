@@ -40,6 +40,15 @@ def main() -> int:
         ("the crash (no count line) is caught", "⛔ test_crash.py" in out),
         ("a lying exit code is caught despite its count", "⛔ test_liar.py" in out),
         ("the total says how many files fail", "3 file(s) FAILING" in out),
+        # ⛔⭐ THE LAST FOUR LINES MUST NAME THE FAILING TESTS. On 2026-08-19 Julien was handed
+        # `run_tests.py | tail -3`, one file failed, and the long per-file echo pushed
+        # everything useful out of range — he saw a bare "58/59 passed" with no file name and
+        # no test name (FINDINGS §76.12). Anything printed before a variable-length echo can
+        # be truncated away by a pipe, so the verdict prints last. This is that property.
+        ("the verdict survives a `| tail -4`",
+         "FAILING, and this line is last" in "\n".join(out.splitlines()[-4:])),
+        ("the surviving verdict names the failing FILE",
+         any("test_crash.py" in ln for ln in out.splitlines()[-4:])),
     ]
     failed = 0
     for label, ok in checks:

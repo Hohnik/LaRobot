@@ -16,12 +16,20 @@ REPO = Path(__file__).resolve().parent.parent
 import numpy as np  # noqa: E402
 
 from yam.cameras.open import (  # noqa: E402
+    FIRST_FRAME_S,
+    MEASURE_S,
     SIZE_LADDER,
     SLOW_FPS,
     TARGET_FPS,
+    WARMUP_S,
     CameraOpen,
     open_measured,
 )
+
+#: Tiny windows, so the suite does not spend 1.4 s per fake camera. The real defaults are
+#: asserted separately below, because a test that overrides every default proves nothing
+#: about the defaults.
+FAST = {"first_frame_s": 0.3, "warmup_s": 0.01, "measure_s": 0.05}
 
 
 class FakeCap:
@@ -33,10 +41,16 @@ class FakeCap:
     """
 
     def __init__(self, delivers: dict[tuple[int, int], float],
-                 frame_size: tuple[int, int] | None = None, fourcc: str = "MJPG") -> None:
+                 frame_size: tuple[int, int] | None = None, fourcc: str = "MJPG",
+                 dead_reads: int = 0) -> None:
         self.delivers = delivers
         self.frame_size = frame_size
         self._fourcc = fourcc
+        # ⭐ `dead_reads` reproduces the real defect of 2026-08-19: a camera's first frames do
+        # not arrive the instant the format is set. The D405 took 0.56 s. A handle that
+        # answers instantly cannot show that, and that is exactly why the first version of
+        # `open_measured` reported 8.6 fps for a 30 fps camera.
+        self.dead_reads = dead_reads
         self.asked = (0, 0)
         self.set_order: list[str] = []
         self.reads = 0
@@ -73,6 +87,8 @@ class FakeCap:
         self.reads += 1
         if self.asked not in self.delivers:
             return False, None
+        if self.reads <= self.dead_reads:
+            return False, None
         w, h = self.frame_size or self.asked
         return True, np.zeros((h, w, 3), dtype=np.uint8)
 
@@ -81,7 +97,7 @@ class FakeCap:
 
 def test_a_camera_that_works_at_the_first_size_does_not_step_down():
     cap = FakeCap({(1280, 720): 30.0})
-    got = open_measured(cap, window_s=0.05)
+    got = open_measured(cap, **FAST)
     assert got is not None, "a working camera must open"
     assert (got.width, got.height) == (1280, 720), got
     assert got.stepped_down is False, "no step-down happened, so it must not say one did"
@@ -92,27 +108,27 @@ def test_the_size_comes_from_the_FRAME_not_from_what_the_handle_claims():
     # ⛔ The real defect: `cap.get` answered 1280x720 while nothing arrived at all. Here the
     # handle claims 1280x720 and hands back 640x480 frames. The measured answer must be 640x480.
     cap = FakeCap({(1280, 720): 30.0}, frame_size=(640, 480))
-    got = open_measured(cap, window_s=0.05)
+    got = open_measured(cap, **FAST)
     assert (got.width, got.height) == (640, 480), (
         f"reported {got.width}x{got.height} — that is `cap.get`, not the frame")
 
 
 def test_the_format_is_read_back_when_the_driver_says():
     cap = FakeCap({(1280, 720): 30.0}, fourcc="MJPG")
-    assert open_measured(cap, window_s=0.05).fourcc == "MJPG"
+    assert open_measured(cap, **FAST).fourcc == "MJPG"
 
 
 def test_a_driver_that_will_not_name_its_format_reports_a_question_mark():
     # macOS/AVFoundation returns -1 for CAP_PROP_FOURCC. That is unknown, never a fault.
     cap = FakeCap({(1280, 720): 30.0}, fourcc="")
-    assert open_measured(cap, window_s=0.05).fourcc == "?"
+    assert open_measured(cap, **FAST).fourcc == "?"
 
 
 # --- the D405 case: accepts the size, delivers nothing at it -------------------------
 
 def test_a_camera_that_accepts_1280x720_and_delivers_nothing_STEPS_DOWN():
     cap = FakeCap({(848, 480): 30.0})
-    got = open_measured(cap, window_s=0.05)
+    got = open_measured(cap, **FAST)
     assert got is not None, "848x480 works on this handle, so the open must succeed"
     assert (got.width, got.height) == (848, 480), got
     assert got.stepped_down is True, "it stepped down, and the operator must be told"
@@ -121,20 +137,20 @@ def test_a_camera_that_accepts_1280x720_and_delivers_nothing_STEPS_DOWN():
 
 def test_the_ladder_is_tried_largest_first():
     cap = FakeCap({(1280, 720): 30.0, (640, 480): 30.0})
-    got = open_measured(cap, window_s=0.05)
+    got = open_measured(cap, **FAST)
     assert (got.width, got.height) == (1280, 720), "the largest working size must win"
 
 
 def test_a_camera_that_delivers_at_NO_size_returns_None_so_the_caller_can_refuse():
     cap = FakeCap({})
-    assert open_measured(cap, window_s=0.02) is None, (
+    assert open_measured(cap, **FAST) is None, (
         "zero frames at every size is a broken session and must not open")
     assert cap.reads > 0, "it must actually have tried to read, not just called set()"
 
 
 def test_every_size_in_the_ladder_is_tried_before_giving_up():
     cap = FakeCap({})
-    open_measured(cap, window_s=0.02)
+    open_measured(cap, **FAST)
     widths = [n for n in cap.set_order if n == "width"]
     assert len(widths) == len(SIZE_LADDER), (
         f"set width {len(widths)} time(s) for a ladder of {len(SIZE_LADDER)}")
@@ -170,10 +186,40 @@ def test_MJPG_is_requested_BEFORE_the_size():
     # C920 in YUYV, where its own firmware caps 1280x720 at 10 fps (measured on the station,
     # FINDINGS §76). The order is the property worth locking down in a test.
     cap = FakeCap({(1280, 720): 30.0})
-    open_measured(cap, window_s=0.01)
+    open_measured(cap, **FAST)
     assert cap.set_order[0] == "fourcc", (
         f"first set() was {cap.set_order[0]!r}; MJPG must come before the size")
     assert cap.set_order.index("fourcc") < cap.set_order.index("width")
+
+
+# --- the rate window, which is where the first version was wrong ---------------------
+
+def test_a_camera_whose_first_frames_come_LATE_is_still_measured_at_its_real_rate():
+    # ⛔ THE REAL DEFECT, reproduced. The first version measured the rate from the instant the
+    # format was set, so a camera that takes a moment to start reported a third of its true
+    # rate. On the station a 30 fps C920 came out as 8.6 fps, and the "too slow" warning
+    # would then have fired in every healthy session (FINDINGS §76.3).
+    cap = FakeCap({(1280, 720): 30.0}, dead_reads=25)
+    got = open_measured(cap, first_frame_s=1.0, warmup_s=0.02, measure_s=0.05)
+    assert got is not None, "25 dead reads then frames must still count as working"
+    assert got.slow is False, (
+        f"reported {got.fps:.1f} fps for a handle that delivers every read after warm-up — "
+        "the start-up latency is leaking into the rate again")
+
+
+def test_the_warm_up_frames_are_not_counted_in_the_rate():
+    cap = FakeCap({(1280, 720): 30.0})
+    got = open_measured(cap, first_frame_s=0.3, warmup_s=0.05, measure_s=0.05)
+    # window_s carries the MEASURED window, so it must reflect measure_s and never the total.
+    assert got.window_s < 0.2, f"window_s {got.window_s:.3f} looks like it includes warm-up"
+
+
+def test_the_defaults_are_the_measured_ones_and_not_placeholders():
+    # ⭐ FIRST_FRAME_S is 4x the 0.56 s the D405 actually took. If someone shrinks it below
+    # that measurement, a working camera silently steps down a size.
+    assert FIRST_FRAME_S >= 2.0, f"{FIRST_FRAME_S}s is under the measured 0.56 s plus headroom"
+    assert WARMUP_S > 0, "a zero warm-up is the defect this constant exists to prevent"
+    assert MEASURE_S >= 0.5, f"{MEASURE_S}s cannot tell 30 fps from 20"
 
 
 def main() -> int:

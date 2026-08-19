@@ -35,7 +35,7 @@ SpaceMouse twist  →  integrate to a target EE pose  →  IK  →  joint target
    (6 numbers)          (a pose that persists)      (mink)     (7 numbers)
 ```
 
-The middle two boxes are the whole problem. The outer two are done: the SpaceMouse is decoded and verified on all six axes (README §4), and the arm accepts joint commands and moves (README §5).
+The middle two boxes are the whole problem. The outer two are done: the SpaceMouse is decoded and verified on all six axes ([HISTORY §4](HISTORY.md)), and the arm accepts joint commands and moves ([HISTORY §5](HISTORY.md)).
 
 ⚠️ **Why the arm cannot simply be driven by the SpaceMouse directly.** A SpaceMouse gives *cartesian velocity* of the end effector. The arm takes *joint angles*. There is no fixed mapping between them — it depends on the arm's current configuration — which is exactly what inverse kinematics computes. `docs/Setup-Plan.md` §4.2 names this as the single largest deviation from the papers, which all teleoperate with GELLO leader arms that hand over joint angles directly and need no IK at all.
 
@@ -112,7 +112,7 @@ Sub-steps:
 
 It is also the **safest possible whole-arm test**: the arm holds its current pose and follows no trajectory, so there is nothing to overshoot. And it is the first genuinely impressive moment — the arm becomes back-drivable and you can push it around by hand.
 
-⚠️ This is the first time the arm holds real torque against gravity. It gets its own gated step, its own command, and the 400 ms firmware timeout intact (README §5).
+⚠️ This is the first time the arm holds real torque against gravity. It gets its own gated step, its own command, and the 400 ms firmware timeout intact ([HISTORY §5](HISTORY.md)).
 
 **Done when:** the arm holds position without sagging, and can be pushed by hand and stays where put.
 
