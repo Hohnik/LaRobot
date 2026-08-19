@@ -668,6 +668,33 @@ def add_i2rt_to_path() -> Path:
     return I2RT_PATH
 
 
+def bus_selector(arm: str = DEFAULT_ARM) -> tuple[dict, str | None]:
+    """How to open a bus for `arm` on THIS platform: `(kwargs, serial_to_verify)`.
+
+    ⭐⭐ WHY THIS EXISTS (ROADMAP §8.2 item 49). Two functions open a CAN bus directly rather
+    than through `chain_channel`: `open_raw_can_interface` (register reads) and
+    `open_motor_interface` (single motors). Both hardcoded `bustype="gs_usb"` with an integer
+    adapter index, which is correct on macOS and impossible on Linux, where the kernel owns
+    the adapter and it is a SocketCAN interface. **`apps/ping_motors.py` goes through the
+    second one, and it is step 2 of the bring-up checklist** — so without this the first
+    health command on the new machine would have failed. Found by sweeping for platform
+    assumptions rather than by hitting it. (The whole-arm chain is not in this list: it goes
+    through `chain_channel`, which was ported first.)
+
+    The second element is the serial to check AFTER opening, or None when there is nothing to
+    check: on macOS the index could be stale between the scan and the open, so the serial is
+    re-read from the opened device ([FINDINGS §0](../../docs/FINDINGS.md) #5). On Linux the
+    interface name was itself derived from the serial in sysfs, so there is no index to be
+    wrong about — and SocketCAN exposes no USB serial through the socket anyway.
+    """
+    from yam.platform import IS_LINUX  # noqa: PLC0415
+
+    if IS_LINUX:
+        return {"channel": resolve_arm_socketcan(arm), "bustype": "socketcan"}, None
+    index, serial = resolve_arm(arm)
+    return {"channel": index, "bustype": "gs_usb"}, serial
+
+
 def open_raw_can_interface(
     *,
     bitrate: int = YAM_BITRATE,
@@ -687,12 +714,13 @@ def open_raw_can_interface(
     # means every path gets the same robustness -- ping_motors.py was still
     # desyncing (motors 4, 6, 7 silent) purely because it took this route instead.
     patch_dm_driver_for_gs_usb()
-    index, serial = resolve_arm(arm)
+    selector, serial = bus_selector(arm)
 
     from i2rt.motor_config_tool.utils import RawCanInterface
 
-    iface = RawCanInterface(channel=index, bustype="gs_usb", bitrate=bitrate, name=name)
-    _verify_serial(iface, serial, arm)
+    iface = RawCanInterface(bitrate=bitrate, name=name, **selector)
+    if serial:
+        _verify_serial(iface, serial, arm)
     return iface
 
 
@@ -719,16 +747,16 @@ def open_motor_interface(
     # means every path gets the same robustness -- ping_motors.py was still
     # desyncing (motors 4, 6, 7 silent) purely because it took this route instead.
     patch_dm_driver_for_gs_usb()
-    index, serial = resolve_arm(arm)
+    selector, serial = bus_selector(arm)
 
     from i2rt.motor_drivers.dm_driver import ControlMode, DMSingleMotorCanInterface
 
     iface = DMSingleMotorCanInterface(
         control_mode=ControlMode.MIT,
-        channel=index,
-        bustype="gs_usb",
         bitrate=bitrate,
         name=name,
+        **selector,
     )
-    _verify_serial(iface, serial, arm)
+    if serial:
+        _verify_serial(iface, serial, arm)
     return iface

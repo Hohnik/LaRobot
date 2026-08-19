@@ -81,6 +81,32 @@ def main() -> int:
     ap.add_argument("--max-print", type=int, default=20, help="frames to print in full")
     args = ap.parse_args()
 
+    # ⛔⭐ REFUSE ON LINUX RATHER THAN FAIL OBSCURELY (ROADMAP §8.2 item 49). This tool speaks
+    # to the adapter through libusb to get gs_usb's LISTEN-ONLY mode, which is the property
+    # that makes it electrically invisible. On Linux the kernel driver owns the adapter, so
+    # libusb cannot claim it and the failure surfaces as an unrelated-looking USB error. The
+    # Linux equivalent is a listen-only SocketCAN interface plus candump, and naming it is
+    # more useful than a traceback.
+    from yam.platform import IS_LINUX  # noqa: PLC0415
+
+    if IS_LINUX:
+        print("⛔ This probe is macOS-only, on purpose.\n")
+        print("   It uses libusb to put the adapter in gs_usb LISTEN-ONLY mode, and on Linux")
+        print("   the kernel driver owns the adapter, so libusb cannot claim it.\n")
+        print("   The Linux equivalent, listen-only so the node stays electrically invisible:")
+        print("     sudo ip link set can0 down")
+        print("     sudo ip link set can0 type can bitrate 1000000 listen-only on")
+        print("     sudo ip link set can0 up")
+        print("     candump -td -x can0        # Ctrl-C to stop")
+        print("     sudo ip link set can0 down && sudo ip link set can0 type can \\")
+        print("       bitrate 1000000 listen-only off && sudo ip link set can0 up\n")
+        print("   ⚠️ Leave listen-only OFF afterwards, or no motor will ever answer: a")
+        print("      listen-only node cannot ACK, which is exactly why it is safe to watch")
+        print("      with and useless to drive with.")
+        print("   ⭐ For device state instead, `uv run checks/check_platform.py` works "
+              "everywhere.")
+        return 1
+
     patch_gs_usb_for_macos()
 
     devs = GsUsb.scan()

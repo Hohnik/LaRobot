@@ -129,5 +129,8 @@ This distinction is the point of §4 existing, and it follows this repo's own ru
 | SpaceMouse | opens exclusively, no rule needed | needs a udev rule before a non-root user may open it |
 | depth | would need a day of compiling; measured as colour-only over UVC | `apt install librealsense2-*`, then `pyrealsense2` |
 | the clocks | `perf_counter` and `monotonic` are the same clock, measured | both documented as `CLOCK_MONOTONIC`; `check_platform.py` measures it on the first run |
+| `camera_view --list` | AVFoundation modes, measured index identification | the `/dev/v4l/by-id` table, since the kernel already answers it |
+| `probe_can.py` | libusb listen-only watch of the raw bus | refuses, and prints the `ip link ... listen-only on` + `candump` recipe instead |
+| single-motor tools (`ping_motors`, `move_one_motor`, `teleop_gripper`, …) | gs_usb index, serial re-verified after opening | SocketCAN interface, resolved from the serial before opening (nothing left to verify) |
 
 *Written 2026-08-19, when the connection did not exist yet. When it does, the first `check_platform.py --raw` on the real machine turns §4's second list into the first one, and this file should say so.*
