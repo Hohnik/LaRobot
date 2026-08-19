@@ -5137,7 +5137,7 @@ Two PRs landed on `Hohnik/LaRobot` main since the 2026-08-18 exploration, the se
 
 **Decisions, minutes each:** ✅ ~~confirm the bench sides~~ and ✅ ~~ratify [docs/PLAN.md](PLAN.md)~~ — **both closed 2026-08-19, [§72.6](FINDINGS.md)** · the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9) stays open.
 
-**For the colleagues (his call on timing):** the private remote (~5 minutes together, his GitHub) is the best vehicle — it ships [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md) and the whole evidence base in one link; a chat-drafted message to the team exists in the session transcript of 2026-08-19.
+**For the colleagues:** ✅ **PUSHED 2026-08-19 at his word** (*"just update that"*): the existing `julien/yam-teleop-wip` branch on `Hohnik/LaRobot` is current with main (`7040efe..1d2dd6f`, fast-forward). Niklas reads, in order: `README.md` → `docs/PLAN.md` → `docs/ARCHITECTURE.md`. The message draft is in the session transcript of 2026-08-19.
 
 **From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (episode encoding byte for byte, camera topics included, and the gripper-unit question — [§72.4](FINDINGS.md)).
 
