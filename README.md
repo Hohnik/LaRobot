@@ -36,7 +36,7 @@
 > - **Four speed limits sit in series and the smallest binds** — `--linear-scale`, `--teleop-speed`, `--max-speed`, `--max-lag`; the plan printout explains each ([docs/FINDINGS.md](docs/FINDINGS.md) §65.0). All are safety limits; raising them is the operator's call, never an agent's.
 > - **The jaws cook motor 7 if commanded onto a stop** — every path goes through the gripper clamp and the stall latch; never bypass them ([docs/FINDINGS.md](docs/FINDINGS.md) §4).
 > - **Nothing checks for the two arms colliding.** The operator is the guard, deliberately ([docs/ROADMAP.md](docs/ROADMAP.md) §8.2 item 25).
-> - **An agent never runs anything that sends a setpoint, and can never run a camera** (macOS permission is per app). Working contract: [docs/HANDOFF.md](docs/HANDOFF.md) §4.
+> - **An agent never runs anything that sends a setpoint.** Working contract: [docs/HANDOFF.md](docs/HANDOFF.md) §4. ⚠️ **Cameras differ by platform**: macOS grants capture per application, so an agent shell can never have it; **on the Linux station an agent CAN open cameras** (the gate is the `video` group), and it does ([docs/FINDINGS.md](docs/FINDINGS.md) §75.7).
 >
 > ## Hardware bring-up checklist (the page the rebuild asks for first)
 >
@@ -46,18 +46,20 @@
 > 4. **After any power cycle, calibrate the jaws per arm**: `uv run apps/calibrate_gripper.py --yes --arm B` (then `--arm G`). ⚠️ `--arm` is not optional — without it you calibrate B whichever arm you meant.
 > 5. **The jaw frame shifts by ±2π between sessions, per arm.** It depends on where the jaws sat at power-up; `build_robot()` reconciles it automatically and `ping_motors` prints it. Never write a shift direction into a document.
 > 6. **The SpaceMice have EMPTY USB serials, and so does the C920.** Pucks are assigned by wiggle at session start (move the one you want); cameras: the two D405s have real serials, the C920 is selected by model name.
-> 7. **First camera use needs macOS permission** for the terminal app: System Settings → Privacy & Security → Camera. Agent shells can never be granted it.
+> 7. **First camera use needs macOS permission** for the terminal app: System Settings → Privacy & Security → Camera. Agent shells can never be granted it. ⚠️ **On Linux there is no per-app gate** — membership of the `video` group is the whole permission ([docs/LINUX.md](docs/LINUX.md) §3).
 > 8. ⚠️ **Put the CAN adapters on a powered USB 3 hub, not behind a dock.** The one hard crash this rig had was the whole bus sagging away mid-session: all seven motors latched `0xD`, both adapters fell into their bootloaders ([docs/FINDINGS.md](docs/FINDINGS.md) §46.0). Not fixable in software.
 >
 > ## Layout
 >
 > ```
 > apps/           things you RUN: teleop_session, camera_view, calibrate_gripper, ping_motors, …
+>                 export_episode (the C3 log) · export_dataset (the C4 training set)
 > checks/         read-only diagnostics + the falsifiers that prove the checkers can see failures
 > tests/          the whole suite — one command prints the live total: uv run checks/run_tests.py
 > src/yam/        the library (installed by uv sync): robot, can, session, teleop, motion,
 >                 inputs/, fake/ (the lagging simulator), ui/
-> config/         measured calibration — tracked on purpose (session_defaults.json is not)
+> config/         measured calibration — tracked on purpose, so it TRAVELS between machines
+>                 (session_defaults.json is not; linux/ holds the two udev rules)
 > docs/           HANDOFF (live state) · FINDINGS (evidence) · COMMANDS · ROADMAP · the German plans
 > third_party/    the vendored I2RT SDK, untouched
 > recordings/     gitignored: taught movements and tracking logs live on the rig only

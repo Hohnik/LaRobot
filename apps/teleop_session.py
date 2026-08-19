@@ -1676,7 +1676,14 @@ def main() -> int:  # noqa: PLR0915
     capture: CaptureSet | None = None
     capture_names: list[str] = []
     if args.cameras:
-        print("opening cameras (this holds the macOS capture permission of THIS terminal):")
+        # ⚠️ Platform-aware since FINDINGS §75.10: this line claimed a macOS permission on the
+        # Linux station, where the gate is group membership instead. Two different facts, and
+        # printing the wrong one teaches the reader a wrong thing about their own machine.
+        from yam.platform import IS_LINUX  # noqa: PLC0415
+
+        print("opening cameras "
+              + ("(this needs the `video` group, which this user has):" if IS_LINUX
+                 else "(this holds the macOS capture permission of THIS terminal):"))
         capture, capture_names = open_session_cameras(args.cameras)
 
     # ⚠️ ONE PUCK, and with two arms this becomes arm call per arm with `exclude=` holding

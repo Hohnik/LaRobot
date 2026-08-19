@@ -5356,6 +5356,31 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⛔⭐⭐ **AND MY OWN DOCUMENTATION HAD THE WRONG FIX IN IT.** [LINUX.md](LINUX.md) recommended `TAG+="uaccess"` and called it safer than a world-writable mode, which is true and useless here: **`uaccess` grants access through logind's ACLs to whoever holds an ACTIVE LOCAL SEAT, and this station is driven over SSH, which is not a seat.** It would have granted nothing and looked like a second, deeper fault. The rule now uses `GROUP="plugdev"`, which he is already in, matches both the `usb` and `hidraw` subsystems (the libusb backend makes the first one the live one), and ships as a file in the repo so the command he runs has no quoting in it. **The lesson generalises: a Linux permission mechanism that assumes a desktop session is the wrong mechanism for a machine used over SSH.**
 
+### 75.10 ✅✅✅⭐⭐⭐ THE WHOLE SYSTEM RUNS ON THE LINUX STATION — his session drove an arm, and the port is CONFIRMED end to end
+
+✅✅ **His first full session on the PC worked** (2026-08-19, over SSH, `--arms B,G --cameras c920,d405:2603`). In his own words: *"it seems to work. I was able to control the robot arm."* What the log proves, line by line:
+- **Both cameras opened at their measured COLOUR streams** (`/dev/video0` and `/dev/video6`), each delivering 1280x720.
+- **The puck was seized** — so [§75.9](FINDINGS.md)'s two fixes both hold: the identification change found it and the `plugdev` udev rule let it open.
+- **Arm G correctly joined WITHOUT a puck** ([§68.5](FINDINGS.md)'s path, now exercised on Linux) and arm B took the only one.
+- **Both arms built**: 14 motors, jaw limits verified against the jaws, B shifted **−2π** and G not at all, exactly as on the Mac.
+- **He drove arm B in TELEOP** (joint values and the tool position moved, reach 0.38-0.39 m of the 0.60 m sphere).
+- **Two parks ran**, including the progress line and the settle report (0.027-0.040 rad off, the [§69.2](FINDINGS.md) friction floor).
+- **`q q` parked both arms and disabled all 14 motors**, with temperatures 35-39 °C against the 55 °C warning.
+
+⭐ **So every layer of this project now runs on both platforms**: CAN, motors, registers, cameras, the puck, teleop, parking, the whole session loop, the tests, and both dataset exports. **The only thing not yet done on Linux is a camera-carrying RECORDING, which is a keypress (`w`) inside a session he now knows works.**
+
+⛔⭐ **THE DEFECT HIS LOG EXPOSED, and it is this repo's own favourite kind.** Two messages asserted **macOS** while running on Linux: *"opening cameras (this holds the macOS capture permission of THIS terminal)"* and *"macOS is about to lose this device to us"*. Neither is true there — the camera gate on Linux is group membership, and the desktop that loses the puck is not macOS. Small, harmless to the machine, and still a claim that teaches the reader something false about the computer in front of them. **Both are platform-aware now.** ⚠️ The general rule this is the fourth or fifth instance of: **a message naming a platform is a claim, and it goes stale the moment the code runs somewhere else.**
+
+### 75.11 ⭐ WHY HIS MAC WAYPOINTS APPEARED ON THE PC AND HIS RECORDINGS DID NOT — his question, answered precisely
+
+He asked why the poses and recordings he saved on the Mac showed up on the station. **Two different answers, and the difference is deliberate:**
+
+✅ **The waypoints DID travel, because `config/park_pose.json` is TRACKED in git on purpose.** So do the axis map (`config/spacemouse_map.json`) and the gripper limits (`config/gripper_limits.json`). They are measured calibration: cheap to carry, expensive to redo, and meaningless to re-derive per machine. That is why his session on the PC listed *"waypoints already saved: B: 1, 2, 3, 4, 5, 6"* and why `p 1` worked there immediately. ⚠️ **Worth knowing rather than fearing: park poses are JOINT ANGLES, not positions in the room**, so they mean the same thing on any desk — but the space around the arm does not. A pose taught with a clear bench can still swing into something new, which is the operator's guard as always.
+
+⛔ **The recordings did NOT travel: `recordings/` is gitignored** (twice over, lines 28 and 213). Recordings are data, not configuration: a five-minute two-arm take is megabytes, they are rig-local, and the [§60.2](FINDINGS.md) provenance rules exist so a sim take can never masquerade as a real one. **The PC holds exactly `recordings/5.json` plus its 118 MB of frames because an agent copied that one by hand with `tar` for the cross-platform export test** ([§75.3](FINDINGS.md)), plus two files the sim driver wrote itself (`sim/0.json`, `sim/8.json`). Nothing else came across, and nothing else will unless it is copied deliberately.
+
+⭐ **The consequence for anyone continuing this work:** treat `config/` as shared truth and `recordings/` as per-machine. A dataset built on the station stays on the station until someone exports it on purpose.
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
 ✅ **DONE 2026-08-19: the sudo block ran** (ffmpeg, v4l-utils, can-utils installed; `lavita` in the `video` group), and the colour stream is measured ([§75.7](FINDINGS.md)). **What remains needs his hands or his root, nothing more:**
@@ -5376,7 +5401,7 @@ ssh -t yam-pc 'sudo cp /tmp/90-yam-can.rules /etc/udev/rules.d/ && sudo udevadm 
 ssh -t yam-pc 'sudo cp /tmp/70-yam-spacemouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger && echo INSTALLED'
 ```
 
-3. ⬜ **Then the full session, which only he can drive** (it sends setpoints): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603 --start-mode hold`. Everything else it needs is attached. That single run would confirm teleop, recording, the camera writers and the park machinery on Linux.
+3. ✅ **DONE — the full session ran and he drove the arm** ([§75.10](FINDINGS.md)). ⬜ **All that is left of the Linux port is a camera-carrying RECORDING**, which is one keypress inside a session he now knows works: press `w`, drive or hand-guide, `w` again, save to a free slot, then `uv run checks/check_recordings.py` and `uv run apps/export_dataset.py`. ⚠️ Slot 0 on the PC is free of real recordings; slots 1-4 and 6-9 are free there too (only slot 5 exists, copied by hand).
 4. ⬜ **Optional physical:** the second D405 `255323071773` if a three-camera session is wanted on the station. ⚠️ There is exactly ONE SpaceMouse in the project right now and it is on the PC — the Mac enumerates none, so a second puck would have to come back from wherever it went ([§68.5](FINDINGS.md)).
 
 **Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.

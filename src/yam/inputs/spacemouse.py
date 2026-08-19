@@ -112,11 +112,19 @@ def looks_like_a_puck(info: dict) -> bool:
 def countdown_hands_off(seconds: int = 3) -> None:
     """Give the puck time to centre before we seize the device.
 
-    See the module docstring: opening mid-deflection strands macOS with a
-    latched pointer delta and the cursor drifts until the device is unplugged.
+    See the module docstring: opening mid-deflection strands the WINDOW SYSTEM with a
+    latched pointer delta, and the cursor drifts until the device is unplugged.
+
+    ⚠️ The message names the right operating system, because it used to say "macOS" on
+    every platform and Julien read that line on the Linux station ([FINDINGS §75.10](../../../docs/FINDINGS.md)).
+    A message that asserts something false about the machine it is running on is small, and
+    it is still the same defect class as every other stale claim in this repo.
     """
+    from yam.platform import IS_LINUX  # noqa: PLC0415
+
+    who = "the desktop" if IS_LINUX else "macOS"
     print("⚠️  TAKE YOUR HANDS OFF THE SPACEMOUSE and let it centre.")
-    print("    macOS is about to lose this device to us — that is intended — but if")
+    print(f"    {who} is about to lose this device to us — that is intended — but if")
     print("    the puck is deflected at that moment, the cursor will drift and fight")
     print("    your real mouse until the device is unplugged.")
     for remaining in range(seconds, 0, -1):
