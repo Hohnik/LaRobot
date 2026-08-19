@@ -23,7 +23,16 @@
 >
 > ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
 >
-> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** The station is current, the suite is **821/821 across 39 files** on both machines, and `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405** against the physical devices. [FINDINGS §76.14](FINDINGS.md) is the current his-list.
+> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §76.14](FINDINGS.md) is the current his-list.
+>
+> ⭐⭐ **TWO NUMBERS TO COMPARE AGAINST, and they are separate on purpose:**
+>
+> ```bash
+> uv run checks/run_tests.py        #  821/821 checks across 39 files
+> uv run checks/run_falsifiers.py   #  CATCH TOTAL: 50/50 across 5 falsifiers
+> ```
+>
+> ⚠️ **The suite total used to depend on whether you ran it from a terminal**, which is what made [FINDINGS §76.13](FINDINGS.md) look like a flake for two days. It is environment-independent now, verified with a pty and without one. **The falsifier total is new**: rule 4 always asked for a catch count and nothing had ever totalled one ([§76.7](FINDINGS.md)).
 >
 > ⚠️⭐ **THREE THINGS THE CONFIRMATION RUN ITSELF FOUND, all in [FINDINGS §76](FINDINGS.md), and the first one matters most:**
 > - ⛔ **The D405's 1280x720 failure is INTERMITTENT, not permanent.** §76.2 first said the mode delivers nothing, full stop. It has now been measured **dead twice and alive twice in four hours**. That claim is corrected in place. An intermittent mode is a better argument for reading a real frame than a dead one, because it is exactly what a `cap.get` message hides ([§76.2](FINDINGS.md)).
@@ -43,7 +52,7 @@
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
 > ⬜⭐⭐ **WHAT IS ACTUALLY OPEN, shortest-first. The full list with commands is [FINDINGS §76.9](FINDINGS.md):**
-> 1. ⭐ **One camera-carrying recording on the station with the fixed code**, to confirm the whole session path rather than the function on its own: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made on the station before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty.
+> 1. ⛔⭐ **NEEDS THE ARMS, which were unplugged on the evening of 2026-08-19.** One camera-carrying recording on the station with the fixed code, to confirm the whole session path rather than the function on its own: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made on the station before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty, and `check_recordings.py` now says both out loud ([FINDINGS §76.15](FINDINGS.md)). ⭐ **Everything else on his list either needs no hardware or is a decision** ([FINDINGS §76.14](FINDINGS.md)).
 > 2. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). His, two minutes.
 > 3. **Frame the top camera at the WORKSPACE before collecting real data** ([FINDINGS §73.2](FINDINGS.md): it currently films a close-up of one arm).
 > 4. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — it settles the C4 gate, the per-view size and the gripper unit in one go ([FINDINGS §74.1](FINDINGS.md)).

@@ -5729,14 +5729,36 @@ No file name. No test name. **The failing test's name was on his screen and the 
 
 ⚠️ **The general rule, and it is worth carrying past this repo: a test that reads the real environment is asserting your shell, not your code.** The tell is a docstring explaining what the environment happens to be.
 
+### 76.15 ✅⭐⭐ `check_recordings` CAN SEE THE ORIGINAL DEFECT NOW, confirmed against the station's own recording
+
+The checker passed the station's slot 1 in complete silence. That recording is the one that started this whole section, and it holds **both** defects: a D405 that wrote zero frames, and a C920 at 26 frames over 2.43 s. Neither was reported, for two different reasons.
+
+- **The zero-frame camera**: its meta said 0 written and its directory held 0 files, so the two **agreed**, and only disagreement was ever checked. ⛔ **Agreement is not health.**
+- **The 10.7 fps camera**: nothing computed a rate. The number was frames ÷ duration and it was in the saved file the entire time.
+
+✅ Both are faults now, and it was run against the real file rather than a fixture:
+
+```
+📷 c920:26@1280x720 10.7fps⚠️ · d405-260323072846:0⛔
+   ⛔ c920: 26 frames over 2.43s is 10.7 fps, well under the 30 the episode exporter fills its ticks with…
+   ⛔ d405-260323072846: recorded ZERO frames. The camera was named for this recording and contributed nothing…
+```
+
+⚠️ **And it does not cry wolf**: every Mac recording reads 30.0 to 30.3 fps and is silent. Seven tests cover it, using real `cv2.imencode` output so the picture size is read from a real JPEG header rather than a fake one.
+
+⛔⭐ **One more misdirection removed in the same pass, and it is the second time this exact summary block named the wrong cause** ([§76.5](FINDINGS.md) was the first). The frame-fault summary printed *"FIRST THING TO RULE OUT: macOS sidecar files"* for all three camera faults. On slot 1 there is no count mismatch at all, so that advice sent the reader hunting `._*` files which explain neither the zero frames nor the slow rate. It is scoped to the mismatch now.
+
 ### 76.14 ⬜⭐⭐ WHAT IS OPEN NOW — supersedes [§76.9](FINDINGS.md)
 
-⭐ **The station is current and the camera fix is confirmed on the hardware.** The fast-forward landed (`e97a8a05..6083af3c`), the suite runs **804/804 across 38 files** on both machines, and `open_measured` reports 29.9 fps on the C920 and 30.0 on the D405 against the real devices.
+⭐ **The station is current and the camera fix is confirmed on the hardware.** `open_measured` reports 29.9 fps on the C920 and 30.0 on the D405 against the real devices, through the session's own startup code. ⚠️ **The two totals to compare against are at the end of this section**, and they are separate on purpose.
+
+✅ **Done since**: the 813 sidecar files are deleted (verified, zero remain), and the station's clone is current.
+
+⬜⛔ **BLOCKED ON HARDWARE, and it is the only thing that is.** The arms were unplugged on the evening of 2026-08-19, so everything below that needs a motor waits for the next bench day.
 
 **His, and short:**
 
-1. ⭐ **One camera-carrying recording on the station with the fixed code**, to confirm the whole session path rather than the function alone: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty.
-2. **Delete the 813 sidecar files** on the station: `ssh yam-pc "find ~/yam-robotics/recordings -name '._*' -delete"`. Nothing needs them.
+1. ⭐⛔ **One camera-carrying recording on the station with the fixed code** (needs the arms). It confirms the whole session path rather than the function alone: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty. ⭐ **`check_recordings.py` now says both of those out loud** — it was run against the station's own slot 1 and reported `c920:26@1280x720 10.7fps⚠️` and `d405-260323072846:0⛔` with the reason for each ([§76.15](FINDINGS.md)).
 3. ⬜ **Whether to build a librealsense capture backend**, which is the only route to depth ([§76.10](FINDINGS.md)). No password needed, and nothing needs it yet.
 4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
 5. **Frame the top camera at the workspace** before collecting real data ([§73.2](FINDINGS.md): it films one arm close up).

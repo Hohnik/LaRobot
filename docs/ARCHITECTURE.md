@@ -329,9 +329,12 @@ Only Julien drives the arms, and every minute of that is a minute nobody else ca
 | write a C3 log file | `src/yam/episode.py`, `apps/export_episode.py` | `tests/test_episode.py` |
 | write a C4 training directory | `src/yam/dataset.py`, `apps/export_dataset.py` | `tests/test_dataset.py`, `checks/check_dataset.py` |
 | work out which machine this is | `src/yam/platform.py` | `tests/test_platform.py`, `checks/check_platform.py` |
+| open a camera and prove it delivers | `src/yam/cameras/open.py` | `tests/test_camera_open.py` |
+| list files without picking up the operating system's litter | `src/yam/files.py` | `tests/test_files.py` |
 | the loop itself, and the screen | `apps/teleop_session.py` | `checks/drive_sim_session.py`, which drives the whole loop simulated |
 | the fake arm that lags like the real one | `src/yam/fake/arm.py` | `tests/test_fake_arm.py`, `checks/falsify_fake_arm.py` |
-| keeping the checkers honest | `checks/check_*.py` and their `falsify_*.py` partners | `checks/run_tests.py`, one command for the whole suite |
+| keeping the checkers honest | `checks/check_*.py` and their `falsify_*.py` partners | `checks/run_falsifiers.py`, one command for one catch total |
+| keeping the documents readable | `checks/check_prose.py` | `tests/test_prose.py`, `checks/falsify_check_prose.py` |
 
 ## 11. What is deliberately missing
 
@@ -351,7 +354,9 @@ That belongs to the team's software. This repo stops at handing over the file.
 
 **Depth images are not recorded.**
 
-The wrist cameras can measure depth, but only through Intel's own library, and that library is not installed on the station. Over the ordinary webcam protocol they give colour only, and that has been measured on both machines.
+The wrist cameras can measure depth. Getting it needs Intel's own library, and this repo reads them through the ordinary webcam protocol instead, which gives colour only. That has been measured on both machines.
+
+The library itself turns out to be easy: one command, no administrator password, nothing compiled. It was tried on the station and it delivered depth pictures. Building it into the recording path is a real piece of work, and nothing needs depth yet. So the measurement is written down, and the work is waiting for a reason.
 
 ---
 
