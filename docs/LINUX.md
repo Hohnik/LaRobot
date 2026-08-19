@@ -50,6 +50,18 @@ ssh-copy-id -i ~/.ssh/yam_linux.pub USERNAME@10.147.20.x
 
 **Then tell me three things** and I take it from there: the PC's ZeroTier IP, your username on it, and where you want the repo to live (`~/yam-robotics` unless you say otherwise). I never handle your password, and I will not run anything that moves an arm without your word, exactly as on the Mac.
 
+The first thing that happens with those three facts is this block, which is why they are the only three: it goes into `~/.ssh/config` on the Mac and turns every later command into `ssh yam-pc`.
+
+```
+Host yam-pc
+    HostName 10.147.20.x          # your PC's ZeroTier IP
+    User USERNAME                 # your login on the PC
+    IdentityFile ~/.ssh/yam_linux
+    ServerAliveInterval 30        # keeps a long session from dropping silently
+```
+
+Then `ssh yam-pc uname -a` proves the path end to end without touching anything on the bench.
+
 ⚠️ **If both machines sit on the same office network anyway**, plain `ssh USERNAME@<local-ip>` works with no ZeroTier at all. ZeroTier is worth it for reaching the bench from home, and it costs nothing once set up.
 
 ## 2. What happens once the connection exists
