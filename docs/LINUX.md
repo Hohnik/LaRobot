@@ -64,13 +64,27 @@ Then `ssh yam-pc uname -a` proves the path end to end without touching anything 
 
 ⚠️ **If both machines sit on the same office network anyway**, plain `ssh USERNAME@<local-ip>` works with no ZeroTier at all. ZeroTier is worth it for reaching the bench from home, and it costs nothing once set up.
 
-## 2. What happens once the connection exists
+## 2. The connection, as it actually is — and how to work with it
 
-1. I add an SSH config entry so the machine has a short name (`ssh yam-pc`), and check the connection with a harmless command.
-2. `git clone` the repo on the PC (from `Hohnik/LaRobot`, branch `julien/yam-teleop-wip`, which is current), then `uv sync`.
-3. `uv run checks/check_platform.py --raw` — **the first real command, and the one that matters.** It prints what the machine provides and, with `--raw`, the exact text it parsed. That output either confirms the Linux device-naming code or shows precisely how the machine differs (§4).
-4. `uv run checks/run_tests.py` — the whole suite runs with no hardware. If the port is sound, the total matches the Mac's.
-5. Then hardware, in the order the README's bring-up checklist already gives: devices, motor health, dry run, and only then a session.
+✅ **All of this is live as of 2026-08-19** ([FINDINGS §75](FINDINGS.md)). An agent picking this up needs these six facts and nothing else:
+
+1. **`ssh yam-pc` works from the Mac, with no password.** The host entry is in `~/.ssh/config` (HostName `10.64.9.60`, User `lavita`, IdentityFile `~/.ssh/yam_linux`). The machine calls itself **RoVita**: Ubuntu 24.04.4, 32 cores, 60 GB RAM, 3.4 TB free, **RTX 5090 32 GB**.
+2. **The repo lives at `~/yam-robotics` on the PC**, with `uv sync` already done. The team's own repo is beside it at `~/LaRobot`.
+3. ⭐ **Code moves Mac → PC by git BUNDLE, never by a push.** Pushing to `Hohnik/LaRobot` needs Julien's word every time ([HANDOFF §4](HANDOFF.md) rule 9), and a bundle needs nobody's. The loop, three commands from the Mac:
+
+```bash
+git bundle create /tmp/yam.bundle --all && scp /tmp/yam.bundle yam-pc:/tmp/yam.bundle && ssh yam-pc 'cd ~/yam-robotics && git fetch -q /tmp/yam.bundle "main:refs/remotes/mac/main" && git reset --hard refs/remotes/mac/main'
+```
+
+   ⚠️ `git reset --hard` is safe here because the PC's clone is never edited directly. If that ever changes, fetch and merge instead. Gitignored things (`recordings/`, `third_party/i2rt`, the venv) are untouched by it.
+
+4. ⚠️ **`third_party/i2rt` is gitignored, so it does NOT travel in the bundle.** It is cloned from upstream at the tag the Mac uses: `git clone --depth 1 --branch v1.3.1 https://github.com/i2rt-robotics/i2rt.git third_party/i2rt`. Both machines are on `1276f63`.
+5. ⛔ **Use a fresh connection when group membership matters.** Julien's `~/.ssh/config` sets `ControlMaster auto` globally, so connections are shared and an old one keeps the group list it was opened with. `ssh -o ControlPath=none yam-pc …` after a `usermod` change.
+6. ⛔ **`sudo` on the PC needs Julien.** Every command that needs root goes to him wrapped in `ssh -t yam-pc '…'` so it can be pasted on the Mac, which is where he types ([FINDINGS §75.6](FINDINGS.md)).
+
+**What has been verified on the machine** ([FINDINGS §75.2](FINDINGS.md), [§75.5](FINDINGS.md), [§75.7](FINDINGS.md)): `uv sync` from a clean clone · the suite at 773/773, the same total as the Mac · the whole simulated session at 31/31 · every checker and falsifier · the two clocks the frame join depends on, 40 ns apart · the training export at 17/17 with a `states_actions.bin` **byte-identical to the Mac's** · both CAN adapters identified from their serials (`can0` = arm G, `can1` = arm B) · all three camera streams of the D405 classified by pixel format, and both cameras captured by the agent itself.
+
+**What is still untested there, and it is only this:** anything that needs a motor to answer (the CAN links are DOWN until someone with root brings them up) and anything that needs the SpaceMouse (still on the Mac).
 
 ## 3. What the PC needs
 
