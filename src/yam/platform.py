@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -23,6 +24,8 @@ __all__ = [
     "IS_MACOS", "IS_LINUX", "platform_name", "platform_note",
     "CanLink", "parse_can_links", "read_can_links",
     "V4lCamera", "parse_v4l_by_id", "read_v4l_cameras", "udev_capture_nodes",
+    "enum_v4l_formats", "classify_v4l_node", "DEPTH_FOURCCS", "INFRARED_FOURCCS",
+    "COLOUR_FOURCCS",
     "camera_permission_note",
 ]
 
@@ -169,6 +172,90 @@ def read_can_links() -> list[CanLink]:
 
 # ------------------------------------------------------------- cameras, on Linux ----
 
+#: ⛔⭐⭐ MEASURED on the station 2026-08-19 with `v4l2-ctl --list-formats`, then re-measured
+#: by this module's own ioctl and cross-checked against it ([FINDINGS §75.7](../../docs/FINDINGS.md)).
+#: A D405's three capture nodes are **depth, infrared and colour, in that order**, and telling
+#: them apart by their pixel formats is the only way that does not involve guessing:
+#:   /dev/video2  Z16                                → 16-bit DEPTH
+#:   /dev/video4  GREY · UYVY · Y8I · Y12I           → INFRARED
+#:   /dev/video6  YUYV                               → COLOUR
+#: ⚠️ Note UYVY appears on the INFRARED node, so "it offers a colour format" is NOT sufficient
+#: on its own — the greyscale and interleaved formats beside it are what identify that node.
+DEPTH_FOURCCS = frozenset({"Z16", "Z16 "})
+INFRARED_FOURCCS = frozenset({"GREY", "Y8I", "Y8I ", "Y12I", "Y16", "Y16 "})
+COLOUR_FOURCCS = frozenset({"YUYV", "MJPG", "UYVY", "RGB3", "BGR3", "NV12", "YU12", "H264"})
+
+#: VIDIOC_ENUM_FMT: _IOWR('V', 2, struct v4l2_fmtdesc). dir=3, size=64, type=0x56, nr=2.
+#: The struct is `u32 index; u32 type; u32 flags; u8 description[32]; u32 pixelformat;
+#: u32 reserved[4]` = 64 bytes, and `pixelformat` sits at offset 44.
+_VIDIOC_ENUM_FMT = (3 << 30) | (64 << 16) | (0x56 << 8) | 2
+_V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
+_FMTDESC_SIZE = 64
+_PIXELFORMAT_OFFSET = 44
+
+
+def enum_v4l_formats(device: str) -> tuple[str, ...]:
+    """Every pixel format `device` offers for capture, as four-character codes.
+
+    ⭐⭐ WHY AN IOCTL RATHER THAN SHELLING OUT TO `v4l2-ctl` (which does the same job): the
+    rebuild should not need `v4l-utils` installed to pick the right camera node, and a
+    subprocess per node per session is slower than three syscalls. **The two were compared on
+    the station and agree exactly** ([FINDINGS §75.7](../../docs/FINDINGS.md)) — a new
+    instrument is checked against the known one before it is trusted, which is this repo's
+    rule.
+
+    ⚠️ Needs read access to the node, so on Linux the user must be in the `video` group.
+    Returns `()` on any failure rather than raising: a camera whose formats cannot be read is
+    a camera the caller must decide about, and an exception here would take down a session
+    over a diagnostic.
+    """
+    if not IS_LINUX:
+        return ()
+    import fcntl  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+
+    found: list[str] = []
+    try:
+        fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return ()
+    try:
+        for index in range(32):
+            buf = bytearray(_FMTDESC_SIZE)
+            struct.pack_into("II", buf, 0, index, _V4L2_BUF_TYPE_VIDEO_CAPTURE)
+            try:
+                fcntl.ioctl(fd, _VIDIOC_ENUM_FMT, buf)
+            except OSError:
+                break          # EINVAL past the last format is how V4L2 says "no more"
+            (pixelformat,) = struct.unpack_from("I", buf, _PIXELFORMAT_OFFSET)
+            code = "".join(chr((pixelformat >> (8 * i)) & 0xFF) for i in range(4))
+            if code not in found:
+                found.append(code)
+    finally:
+        os.close(fd)
+    return tuple(found)
+
+
+def classify_v4l_node(fourccs: tuple[str, ...] | frozenset) -> str:
+    """`"colour"`, `"depth"`, `"infrared"` or `"unknown"` for one node's format list.
+
+    ⛔ Order matters and is deliberate. Depth first, because a `Z16`-only node is unambiguous.
+    Infrared second, because that node ALSO offers `UYVY`, which is a colour format — testing
+    for colour first would classify the infrared stream as colour and record greyscale as if
+    it were a photograph. Pure, so the measured format lists from the real cameras are the
+    test fixture.
+    """
+    codes = {code.strip() for code in fourccs}
+    if not codes:
+        return "unknown"
+    if codes & {c.strip() for c in DEPTH_FOURCCS}:
+        return "depth"
+    if codes & {c.strip() for c in INFRARED_FOURCCS}:
+        return "infrared"
+    if codes & {c.strip() for c in COLOUR_FOURCCS}:
+        return "colour"
+    return "unknown"
+
 @dataclass(frozen=True)
 class V4lCamera:
     """One camera as Linux names it. ⭐ `index` is directly OpenCV's index, no probing.
@@ -198,6 +285,13 @@ class V4lCamera:
     #: case `index` falls back to the first node and says so
     #: ([FINDINGS §75.6](../../docs/FINDINGS.md)).
     capture_nodes: tuple[int, ...] = ()
+    #: ⭐ The capture node that carries COLOUR, identified from its pixel formats, or None
+    #: when the formats could not be read (no `video` group) or none looked like colour.
+    #: When it is set, `index` IS this node — see `read_v4l_cameras`.
+    colour_node: int | None = None
+    #: How `index` was chosen, so a report can say WHY rather than just what:
+    #: "colour-format" · "first-capture-node" · "first-node".
+    index_reason: str = "first-node"
 
 
 #: A `/dev/v4l/by-id` entry: `usb-<vendor>_<model>_<serial>-video-index<N>`. The serial is the
@@ -243,8 +337,39 @@ def parse_v4l_by_id(listing: dict[str, str],
         cameras.append(V4lCamera(device=f"/dev/{first_node}", index=first_index,
                                  model=(model or body) if serial else body,
                                  serial=serial, by_id=first_name,
-                                 nodes=mine, capture_nodes=capture))
+                                 nodes=mine, capture_nodes=capture,
+                                 index_reason=("first-capture-node" if capture
+                                               else "first-node")))
     return sorted(cameras, key=lambda c: c.index)
+
+
+def with_colour_nodes(cameras: list[V4lCamera],
+                      formats: dict[int, tuple[str, ...]]) -> list[V4lCamera]:
+    """Re-point each camera's `index` at its COLOUR node, from measured pixel formats.
+
+    Pure: `formats` maps a node number to its format codes, so the selection logic is tested
+    against the real measured lists rather than against a live camera.
+
+    ⛔ WHY THIS IS NOT OPTIONAL POLISH. A D405's FIRST capture node is `Z16`, which is DEPTH.
+    Without this step the session would open depth and store it as if it were a photograph —
+    frames that decode, look plausible in a thumbnail, and mean something entirely different
+    from what the dataset claims ([FINDINGS §75.7](../../docs/FINDINGS.md)). When no node
+    classifies as colour the index is left exactly as it was, and `index_reason` says so, so
+    a caller can tell a measured choice from a fallback.
+    """
+    out: list[V4lCamera] = []
+    for cam in cameras:
+        colour = next((n for n in (cam.capture_nodes or cam.nodes)
+                       if classify_v4l_node(formats.get(n, ())) == "colour"), None)
+        if colour is None:
+            out.append(cam)
+            continue
+        node = f"video{colour}"
+        out.append(V4lCamera(device=f"/dev/{node}", index=colour, model=cam.model,
+                             serial=cam.serial, by_id=cam.by_id, nodes=cam.nodes,
+                             capture_nodes=cam.capture_nodes, colour_node=colour,
+                             index_reason="colour-format"))
+    return sorted(out, key=lambda c: c.index)
 
 
 def _plausible_serial(text: str) -> bool:
@@ -293,4 +418,10 @@ def read_v4l_cameras(root: Path | None = None) -> list[V4lCamera]:
         entries = {p.name: str(p.readlink()) for p in by_id_dir.iterdir() if p.is_symlink()}
     except OSError:
         return []
-    return parse_v4l_by_id(entries, udev_capture_nodes() or None)
+    cameras = parse_v4l_by_id(entries, udev_capture_nodes() or None)
+    # ⭐ Then ask each capture node what it actually delivers, and prefer the colour one.
+    # Reading formats needs the `video` group; without it every list comes back empty and
+    # the cameras keep their first-capture-node index, with `index_reason` saying so.
+    formats = {n: enum_v4l_formats(f"/dev/video{n}")
+               for cam in cameras for n in (cam.capture_nodes or cam.nodes)}
+    return with_colour_nodes(cameras, formats)

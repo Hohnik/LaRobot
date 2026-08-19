@@ -23,6 +23,8 @@ REPO = Path(__file__).resolve().parent.parent
 from yam.can import ARM_SERIALS  # noqa: E402
 from yam.platform import (  # noqa: E402
     CAN_BITRATE,
+    classify_v4l_node,
+    enum_v4l_formats,
     IS_LINUX,
     IS_MACOS,
     camera_permission_note,
@@ -199,24 +201,32 @@ def main() -> int:
             if len(cam.nodes) > 1:
                 caps = list(cam.capture_nodes) or "unknown (udev could not be asked)"
                 print(f"      nodes {list(cam.nodes)} · CAPTURE nodes {caps}")
-                if len(cam.capture_nodes) > 1:
-                    print(f"      ⚠️ {len(cam.capture_nodes)} capture streams under one "
-                          "device (a D405 publishes depth, infrared and colour).")
-                    print(f"         Index {cam.index} is the FIRST of them, and which one "
-                          "is COLOUR is still unconfirmed.")
-                    print(f"         Settle it: v4l2-ctl --device /dev/video"
-                          f"{cam.capture_nodes[-1]} --list-formats  (YUYV/MJPG = colour, "
-                          "Z16/Y16 = depth or infrared)")
-                    notes.append(
-                        f"{cam.model[:26]} has {len(cam.capture_nodes)} capture nodes "
-                        f"{list(cam.capture_nodes)} and colour is probably the LAST "
-                        f"(/dev/video{cam.capture_nodes[-1]}), because the device's USB "
-                        "interfaces run Depth, Depth, infrared, RGB in that order. Confirm "
-                        "with v4l2-ctl before recording a dataset, and pass the node "
-                        "directly (--cameras <N>) until then (FINDINGS §75.6).")
-                elif cam.capture_nodes:
-                    print("      ✓ exactly one capture node, so the metadata nodes cannot "
-                          "be opened by mistake")
+            # ⭐ Say WHY this index was chosen, not just what it is. `index_reason` carries it,
+            # and the three cases are genuinely different: a measured colour stream, a
+            # fallback because the formats could not be read, and no udev at all.
+            if cam.index_reason == "colour-format":
+                kinds = {n: classify_v4l_node(enum_v4l_formats(f"/dev/video{n}"))
+                         for n in (cam.capture_nodes or cam.nodes)}
+                shown = " · ".join(f"video{n}={kind}" for n, kind in kinds.items())
+                print(f"      ✓ index {cam.index} is the COLOUR stream, identified from its "
+                      f"pixel formats")
+                if len(kinds) > 1:
+                    print(f"        ({shown})")
+            elif len(cam.capture_nodes) > 1:
+                print(f"      ⚠️ {len(cam.capture_nodes)} capture streams under one device "
+                      "and their formats could not be read,")
+                print(f"         so index {cam.index} is just the first. On a D405 the first "
+                      "is DEPTH, not colour.")
+                print("         Fix the cause: this user must be in the `video` group "
+                      "(see the group section above).")
+                notes.append(
+                    f"{cam.model[:26]} has {len(cam.capture_nodes)} capture nodes "
+                    f"{list(cam.capture_nodes)} and their pixel formats could not be read, "
+                    "so the colour stream could not be identified. Join the `video` group; "
+                    "until then pass the node directly with --cameras <N> (FINDINGS §75.7).")
+            elif cam.capture_nodes:
+                print("      ✓ exactly one capture node, so the metadata nodes cannot "
+                      "be opened by mistake")
         if cams:
             print("\n  ⭐ On Linux these indices come from the by-id symlinks, so they ARE "
                   "OpenCV's\n     indices. No hint file and no lens-covering "

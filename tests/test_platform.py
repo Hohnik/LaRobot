@@ -18,6 +18,8 @@ REPO = Path(__file__).resolve().parent.parent
 
 from yam.platform import (  # noqa: E402
     CAN_BITRATE,
+    classify_v4l_node,
+    with_colour_nodes,
     V4lCamera,
     camera_permission_note,
     parse_can_links,
@@ -189,6 +191,53 @@ def test_read_v4l_cameras_walks_a_real_directory() -> None:  # noqa: D103
             (root / name).symlink_to(node)
         cams = read_v4l_cameras(root=root)
         assert len(cams) == 3 and isinstance(cams[0], V4lCamera)
+
+
+#: ✅ REAL format lists, measured on the station 2026-08-19 with BOTH `v4l2-ctl --list-formats`
+#: and this module's own ioctl, which agreed exactly (FINDINGS §75.7). This is the map that
+#: turns "the first capture node" into "the colour one".
+REAL_FORMATS = {
+    0: ("YUYV", "MJPG"),                            # C920, colour
+    2: ("Z16 ",),                                   # D405 depth
+    4: ("GREY", "UYVY", "Y8I ", "Y12I"),            # D405 infrared
+    6: ("YUYV",),                                   # D405 colour
+}
+
+
+def test_the_measured_format_lists_classify_correctly() -> None:
+    assert classify_v4l_node(REAL_FORMATS[0]) == "colour"
+    assert classify_v4l_node(REAL_FORMATS[2]) == "depth"
+    assert classify_v4l_node(REAL_FORMATS[6]) == "colour"
+    # ⛔ THE ORDERING TRAP: the infrared node ALSO offers UYVY, which is a colour format. If
+    # colour were tested first this node would classify as colour and a dataset would carry
+    # greyscale infrared as if it were photographs (FINDINGS §75.7).
+    assert classify_v4l_node(REAL_FORMATS[4]) == "infrared", \
+        "the infrared node offers UYVY too — greyscale formats beside it are what identify it"
+    assert classify_v4l_node(()) == "unknown", "no formats read means unknown, never a guess"
+
+
+def test_the_colour_node_is_chosen_over_the_first_capture_node() -> None:
+    """⛔ The defect this prevents: a D405's first capture node is DEPTH. Opening it and
+    storing the frames as photographs is the silent wrong answer (FINDINGS §75.7)."""
+    cams = parse_v4l_by_id(BY_ID_FIXTURE, {0, 2, 4, 6})
+    before = {c.serial or "c920": c for c in cams}
+    assert before["260323072846"].index == 2, "the first capture node is the depth stream"
+
+    after = {c.serial or "c920": c for c in with_colour_nodes(cams, REAL_FORMATS)}
+    d405 = after["260323072846"]
+    assert d405.index == 6 and d405.colour_node == 6
+    assert d405.index_reason == "colour-format", "the report must be able to say WHY"
+    assert after["c920"].index == 0 and after["c920"].colour_node == 0
+
+
+def test_unreadable_formats_leave_the_index_alone_and_say_so() -> None:
+    # No `video` group means every format list is empty. The index must NOT silently become
+    # something else, and `index_reason` must not claim a measurement that did not happen.
+    cams = parse_v4l_by_id(BY_ID_FIXTURE, {0, 2, 4, 6})
+    after = {c.serial or "c920": c for c in with_colour_nodes(cams, {})}
+    d405 = after["260323072846"]
+    assert d405.index == 2 and d405.colour_node is None
+    assert d405.index_reason == "first-capture-node"
 
 
 def test_the_platform_answers_are_specific_and_honest() -> None:

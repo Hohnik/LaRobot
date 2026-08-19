@@ -5307,15 +5307,40 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⚠️ **What is still one command from settled: which of the three capture nodes is COLOUR.** The USB interface order (Depth, Depth, infrared, RGB) makes `/dev/video6` the likely answer, and *likely* is not what this repo ships. `v4l2-ctl --device /dev/video6 --list-formats` decides it: YUYV or MJPG is colour, Z16 or Y16 is depth or infrared. Until then `--cameras 6` passes a node directly, and the session prints the capture list every time it opens a multi-stream camera.
 
+### 75.7 ✅✅⭐⭐⭐ THE COLOUR STREAM IS MEASURED, NOT GUESSED — and the first capture node was DEPTH, so this was a real trap
+
+✅ **His sudo block ran** (ffmpeg 6.1.1, v4l-utils, can-utils installed; `lavita` added to `video`, active on the next connection). `v4l2-ctl --device /dev/video6 --list-formats` answered `YUYV 4:2:2`, and then the full map was measured across every capture node:
+
+| node | formats | what it is |
+|---|---|---|
+| `/dev/video0` | `YUYV` `MJPG` | the C920, **colour** |
+| `/dev/video2` | `Z16` | the D405's **16-bit DEPTH** |
+| `/dev/video4` | `GREY` `UYVY` `Y8I` `Y12I` | the D405's **infrared** |
+| `/dev/video6` | `YUYV` | the D405's **colour** |
+
+⛔⭐⭐ **So the code's previous default was WRONG in the most dangerous way available: it opened `/dev/video2`, which is DEPTH, and would have stored it as if it were a photograph.** Frames that decode, look plausible in a thumbnail, and mean something entirely different from what the dataset claims. The dataset would have trained a policy on depth maps labelled as colour, and nothing would have raised.
+
+✅ **The fix measures instead of guessing.** `yam/platform.py` now reads each capture node's pixel formats and classifies it (`classify_v4l_node`), and the camera's `index` becomes the COLOUR node with `index_reason="colour-format"` recording that the choice was measured. ⚠️ **The classification ORDER is load-bearing and the reason is a trap of its own: the infrared node also offers `UYVY`, which is a colour format.** Testing for colour first would label infrared as colour. So depth is tested first (a `Z16`-only node is unambiguous), then infrared (its greyscale and interleaved formats identify it), then colour.
+
+⭐⭐ **The format reader is a raw `VIDIOC_ENUM_FMT` ioctl, not a `v4l2-ctl` subprocess — and it was cross-checked against `v4l2-ctl` on all four nodes before being trusted.** They agree exactly. That keeps `v4l-utils` off the rebuild's required list and costs three syscalls instead of a process per node. Checking a new instrument against the known one is this repo's rule ([§36.3](FINDINGS.md)), and it is why the ioctl can be believed.
+
+⛔ **When the formats cannot be read (no `video` group), nothing is guessed**: the index stays where it was, `index_reason` says `first-capture-node`, the report explains that the first stream on a D405 is depth, and **the session REFUSES to open a multi-stream camera** rather than recording depth by accident. A refusal costs a retry; the alternative costs a dataset.
+
+✅⭐⭐ **AN AGENT RAN THE CAMERAS, which has never been possible in this project.** Linux has no per-app camera gate, so with the `video` group the agent measured them directly: `capture_probe --cameras c920 d405:2603 --seconds 8` gave **c920 28.5 fps MJPG** and **D405 28.0 fps YUYV**, gaps ~33 ms with a worst of 36 ms, both healthy. `probe_camera_pixels --index 6` reads an ordinary photograph at every mode (three differing channels, 0.00% zeros). **Every camera measurement in this repo's history was a command handed to Julien ([§61.3](FINDINGS.md)); on the station that is over.**
+
+⚠️⭐ **THE DEPTH QUESTION, re-asked on Linux and refined rather than reversed.** [§63.0](FINDINGS.md) concluded on macOS that the D405 is colour-only for this stack and depth needs the SDK. On Linux the picture is different in mechanism and the same in consequence: **the kernel DOES expose a real depth stream** (`/dev/video2`, `Z16`, 16-bit), which AVFoundation never showed, **but OpenCV cannot open that node at all** — it fails loudly with `can't open camera by index` and `VIDIOC_G_INPUT: Inappropriate ioctl for device`, with `CAP_PROP_CONVERT_RGB` on or off. So for an OpenCV-based stack depth still needs librealsense (or a raw V4L2 mmap loop, which is real work nobody should do for this). **The practical advice is unchanged and now has a sharper reason: on Ubuntu, install librealsense if depth is wanted, and expect nothing from OpenCV on that node.**
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
-**On the PC, needs his sudo (one block, ~1 minute). ⛔ Wrapped in `ssh -t` because he pastes on the MAC and this belongs on the PC — the [§75.6](FINDINGS.md) lesson:**
+✅ **DONE 2026-08-19: the sudo block ran** (ffmpeg, v4l-utils, can-utils installed; `lavita` in the `video` group), and the colour stream is measured ([§75.7](FINDINGS.md)). **What remains needs his hands or his root, nothing more:**
+
+⬜ **Bring the CAN interfaces up — needed once per boot, needs root:**
 
 ```bash
-ssh -t yam-pc 'sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils && sudo usermod -aG video lavita && v4l2-ctl --device /dev/video6 --list-formats'
+ssh -t yam-pc 'sudo ip link set can0 up type can bitrate 1000000 && sudo ip link set can1 up type can bitrate 1000000 && ip -br link show type can'
 ```
 
-That last part answers [§75.6](FINDINGS.md)'s remaining question in the same breath: YUYV or MJPG means `/dev/video6` is the colour stream, Z16 or Y16 means it is depth or infrared and the answer is another capture node (2 or 4).
+⬜ **Physical:** the arms' mains power on at the PC, and (only if a three-camera session is wanted there) the second D405 `255323071773` plus the SpaceMouse, both still on the Mac's hub. ⭐ Once CAN is up, `uv run apps/ping_motors.py --arm B --yes` is agent-safe (it enables motors for one frame and sends no setpoint, [HANDOFF §4](HANDOFF.md) rule 1), so the first Linux motor reading can happen without him.
 
 **Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.
 

@@ -965,11 +965,23 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
                 "  A metadata node opens successfully and delivers no frames, which is why "
                 "this refuses instead of recording nothing."
             )
-        if len(cam.capture_nodes) > 1:
-            print(f"  ⚠️ {cam.model[:26]} has capture nodes {list(cam.capture_nodes)} "
-                  f"(depth, infrared, colour). Opening {cam.index}; if the frames are not "
-                  "colour,\n     pass the node directly, e.g. --cameras "
-                  f"{cam.capture_nodes[-1]} (FINDINGS §75.6).")
+        # ⭐ Say which stream is being opened and how that was decided. A D405's FIRST
+        # capture node is DEPTH (Z16), so "opened the first one" would be a silent wrong
+        # answer — the formats are read and the COLOUR node chosen (FINDINGS §75.7).
+        if cam.index_reason == "colour-format":
+            print(f"  ✓ {name}: /dev/video{cam.index} is the COLOUR stream, identified from "
+                  "its pixel formats")
+        elif len(cam.capture_nodes) > 1:
+            raise SystemExit(
+                f"⛔ {spec}: this camera has {len(cam.capture_nodes)} capture streams "
+                f"{list(cam.capture_nodes)} and their pixel formats could not be read, so "
+                "the COLOUR one cannot be identified.\n"
+                "  On a D405 the first stream is DEPTH, and recording it as if it were a "
+                "photograph is exactly the silent-wrong-answer this refuses to make.\n"
+                "  Fix: join the `video` group (`sudo usermod -aG video $USER`, then log out "
+                "and back in), or pass the node directly, e.g. --cameras "
+                f"{cam.capture_nodes[-1]}."
+            )
         cap = cv2.VideoCapture(cam.index)
         if not cap.isOpened():
             cap.release()
