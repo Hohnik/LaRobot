@@ -62,10 +62,51 @@ def find_device() -> dict | None:
 
 
 def is_multi_axis(info: dict) -> bool:
+    """Does this HID interface declare itself a multi-axis controller?
+
+    ⚠️ Only answerable where the platform fills the usage fields at all — see
+    `usage_fields_readable`. A `False` from here means "it did not say so", which on Linux
+    means "nobody asked" rather than "no".
+    """
     return (
         info.get("usage_page") == MULTI_AXIS_USAGE_PAGE
         and info.get("usage") == MULTI_AXIS_USAGE
     )
+
+
+def usage_fields_readable(info: dict) -> bool:
+    """Did the platform's hidapi backend fill `usage_page`/`usage` at all?
+
+    ⛔⭐⭐ MEASURED, and it is the whole reason the session found no puck on Linux
+    ([FINDINGS §75.9](../../../docs/FINDINGS.md)). On macOS hidapi reports
+    `usage_page=0x01 usage=0x08` for a SpaceMouse. **On the Linux station the same puck
+    enumerates with `usage_page=0` and `usage=0`** — the libusb backend does not parse the
+    report descriptor, so those fields are simply absent. Code that REQUIRED them therefore
+    rejected the only puck attached and reported "No SpaceMouse found", which is a true
+    statement about the wrong question.
+    """
+    return bool(info.get("usage_page")) or bool(info.get("usage"))
+
+
+def looks_like_a_puck(info: dict) -> bool:
+    """Is this interface a SpaceMouse motion interface, on either platform?
+
+    ⭐ The rule is the one `find_device` already documented, applied consistently:
+      * where the usage fields exist, require multi-axis — the strongest evidence available;
+      * where they do not, accept **3Dconnexion's own vendor id and nothing else.**
+
+    ⛔ WHY LOGITECH IS NEVER ACCEPTED BLIND, and this is not hypothetical: `0x046D` covers
+    the legacy 3Dconnexion units AND the C920 webcam AND the plain optical mouse sitting on
+    the station right now. A blanket vendor match would open the mouse, which enumerates
+    cleanly, opens cleanly, reports a plausible product string, and never sends a motion
+    report — indistinguishable from a decode bug, and exactly the confident-wrong-answer
+    this repo refuses to ship ([FINDINGS §0](../../../docs/FINDINGS.md)).
+    """
+    if info.get("vendor_id") not in VIDS:
+        return False
+    if usage_fields_readable(info):
+        return is_multi_axis(info)
+    return info.get("vendor_id") == SPACEMOUSE_VID
 
 
 def countdown_hands_off(seconds: int = 3) -> None:
@@ -155,11 +196,10 @@ class TwistReader:
 
 def find_all_devices() -> list[dict]:
     """Every multi-axis SpaceMouse interface currently attached."""
-    return [
-        d
-        for d in hid.enumerate()
-        if d["vendor_id"] in VIDS and is_multi_axis(d)
-    ]
+    # ⭐ `looks_like_a_puck` rather than `is_multi_axis`: on Linux the usage fields are not
+    # filled at all, and requiring them found nothing on a station with a puck attached
+    # (FINDINGS §75.9). The Logitech safety property is unchanged.
+    return [d for d in hid.enumerate() if looks_like_a_puck(d)]
 
 
 def pick_device_by_wiggle(

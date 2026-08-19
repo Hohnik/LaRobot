@@ -1,0 +1,13 @@
+# Let a normal user open the 3Dconnexion SpaceMouse. YAM station, 2026-08-19.
+# yam-robotics: docs/LINUX.md §3, FINDINGS §75.9.
+#
+# ⛔ WHY GROUP="plugdev" AND NOT TAG+="uaccess", which is the form most guides show.
+# `uaccess` grants access through logind's ACLs to the user holding an ACTIVE LOCAL SEAT.
+# This station is driven over SSH, and an SSH session is not a local seat, so uaccess grants
+# nothing here. A group does, and `lavita` is already in plugdev.
+#
+# Two subsystems on purpose: the hidapi build in use reports libusb-style paths (e.g.
+# "9-2:1.0"), so the usb rule is the one that matters today, and the hidraw rule covers a
+# future build that uses the hidraw backend instead.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="256f", MODE="0660", GROUP="plugdev"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", MODE="0660", GROUP="plugdev"

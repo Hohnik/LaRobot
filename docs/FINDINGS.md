@@ -5344,6 +5344,18 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⭐ **What the corrected report also settled: there IS a SpaceMouse on the PC** (one Compact; the second is still on the Mac). So a full session with cameras can run on the station as soon as Julien drives it — nothing physical is missing for a two-camera recording.
 
+### 75.9 ⛔✅⭐⭐⭐ THE SPACEMOUSE FAILURE HAS TWO CAUSES, BOTH LINUX-SPECIFIC — his friend was right, and one of them was in my own documentation
+
+⛔ **The symptom:** his first full session on the station opened both cameras correctly and then stopped at *"No SpaceMouse found for arm B (or none was moved)"*, with a puck plugged in and `check_rig` listing it.
+
+✅⭐⭐ **CAUSE 1, the identification. MEASURED on the station:** `hid.enumerate()` reports the puck as `vendor_id 0x256f, product_id 0xc635, product_string '', usage_page 0, usage 0, path b'9-2:1.0'`. **On macOS the same puck reports `usage_page=0x01, usage=0x08`** (Generic Desktop / Multi-axis Controller), and `find_all_devices()` REQUIRED exactly that. The hidapi build on Linux uses the libusb backend, which does not parse the report descriptor, so those fields are simply absent — and a filter demanding them rejected the only puck attached. *"No SpaceMouse found"* was a true statement about the wrong question.
+
+⭐ **The fix applies a rule the code had already written down for the single-arm path** (`find_device`'s docstring): where the usage fields exist, require multi-axis; where they do not, accept **3Dconnexion's own vendor id and nothing else**. `looks_like_a_puck` is that rule, and `find_all_devices` now uses it. ⛔ **The Logitech safety property is untouched, and it is not hypothetical**: `0x046D` covers the legacy 3Dconnexion units, the C920 **and the plain optical mouse sitting on this very station**. Accepting that vendor without evidence would open the mouse, which enumerates, opens, reports a plausible name and never sends a motion report — indistinguishable from a decode bug. ✅ Verified on the station: `find_all_devices()` now returns exactly one puck; five acceptance cases are pinned in `tests/test_puck_assignment.py` with the real captures.
+
+⛔ **CAUSE 2, the permission — and this one is still open, because it needs root.** `/dev/hidraw*` are all `crw------- root root`, and hidapi's libusb backend needs access to the USB node rather than hidraw. Opening the puck as `lavita` fails with `OSError: open failed`. So even with the identification fixed, the session cannot read it yet.
+
+⛔⭐⭐ **AND MY OWN DOCUMENTATION HAD THE WRONG FIX IN IT.** [LINUX.md](LINUX.md) recommended `TAG+="uaccess"` and called it safer than a world-writable mode, which is true and useless here: **`uaccess` grants access through logind's ACLs to whoever holds an ACTIVE LOCAL SEAT, and this station is driven over SSH, which is not a seat.** It would have granted nothing and looked like a second, deeper fault. The rule now uses `GROUP="plugdev"`, which he is already in, matches both the `usb` and `hidraw` subsystems (the libusb backend makes the first one the live one), and ships as a file in the repo so the command he runs has no quoting in it. **The lesson generalises: a Linux permission mechanism that assumes a desktop session is the wrong mechanism for a machine used over SSH.**
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
 ✅ **DONE 2026-08-19: the sudo block ran** (ffmpeg, v4l-utils, can-utils installed; `lavita` in the `video` group), and the colour stream is measured ([§75.7](FINDINGS.md)). **What remains needs his hands or his root, nothing more:**
@@ -5358,8 +5370,14 @@ ssh -t yam-pc 'sudo cp /tmp/90-yam-can.rules /etc/udev/rules.d/ && sudo udevadm 
 
    It brings every `can*` interface up at 1 Mbit/s the moment the kernel sees it, so after the next reboot or replug nobody types anything. ⚠️ If the file is no longer in `/tmp`, it is `config/linux/90-yam-can.rules` in the repo (the PC's clone has it too). ⭐ Optional, documented in the file itself: adding `restart-ms 100` makes the controller recover itself from a bus-off condition instead of staying dead — worth considering on a rig whose one hard crash was the bus sagging away ([§46.0](FINDINGS.md)), and worth knowing that it makes that fault self-clear rather than persist. **Alternative if he prefers it manual but password-less:** a `sudoers.d` line allowing exactly those two `ip link` commands, which would also let an agent recover a bus-off link without him.
 
-2. ⬜ **A full session on the station, which only he can drive** (it sends setpoints): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603 --start-mode hold`. Everything it needs is attached, including one SpaceMouse. That single run would confirm teleop, recording, the camera writers and the park machinery on Linux.
-3. ⬜ **Optional physical:** the second D405 `255323071773` and the second SpaceMouse, both still on the Mac, if a three-camera or two-puck session is wanted there.
+2. ⭐ **Install the SpaceMouse rule, which is what blocks a session now** ([§75.9](FINDINGS.md)). The file is in the repo and already on the station:
+
+```bash
+ssh -t yam-pc 'sudo cp /tmp/70-yam-spacemouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger && echo INSTALLED'
+```
+
+3. ⬜ **Then the full session, which only he can drive** (it sends setpoints): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603 --start-mode hold`. Everything else it needs is attached. That single run would confirm teleop, recording, the camera writers and the park machinery on Linux.
+4. ⬜ **Optional physical:** the second D405 `255323071773` if a three-camera session is wanted on the station. ⚠️ There is exactly ONE SpaceMouse in the project right now and it is on the PC — the Mac enumerates none, so a second puck would have to come back from wherever it went ([§68.5](FINDINGS.md)).
 
 **Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.
 

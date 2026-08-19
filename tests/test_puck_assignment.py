@@ -113,6 +113,51 @@ def test_a_single_shared_puck_follows_the_selection() -> None:
     assert gate != -1, "the shared-puck mode lost its exactly-one-real-puck gate"
 
 
+#: ✅ REAL captures. The Linux entry is exactly what `hid.enumerate()` returned on the station
+#: 2026-08-19 for the one attached puck; the Logitech mouse and the C920 are also really on
+#: that machine. ⚠️ The macOS entry is the documented macOS shape (usage_page 0x01, usage 0x08
+#: are this module's own measured constants) — the puck had already moved to the PC by the time
+#: this test was written, so it could not be re-captured on the Mac at that moment.
+LINUX_PUCK = {"vendor_id": 0x256F, "product_id": 0xC635, "product_string": "",
+              "usage_page": 0, "usage": 0, "path": b"9-2:1.0"}
+MAC_PUCK = {"vendor_id": 0x256F, "product_id": 0xC635,
+            "product_string": "SpaceMouse Compact", "usage_page": 0x01, "usage": 0x08}
+LINUX_MOUSE = {"vendor_id": 0x046D, "product_id": 0xC077,
+               "product_string": "USB Optical Mouse", "usage_page": 0, "usage": 0}
+LEGACY_PUCK = {"vendor_id": 0x046D, "product_id": 0xC626,
+               "product_string": "SpaceNavigator", "usage_page": 0x01, "usage": 0x08}
+C920 = {"vendor_id": 0x046D, "product_id": 0x08E5, "product_string": "HD Pro Webcam C920",
+        "usage_page": 0x01, "usage": 0x02}
+
+
+def test_a_puck_is_recognised_on_both_platforms() -> None:
+    """⛔ THE DEFECT THIS FIXES (FINDINGS §75.9): on macOS hidapi fills usage_page/usage, on
+    Linux it leaves them 0. Code that REQUIRED them rejected the only puck attached to the
+    station and reported "No SpaceMouse found", which is a true statement about the wrong
+    question."""
+    from yam.inputs.spacemouse import looks_like_a_puck, usage_fields_readable
+
+    assert usage_fields_readable(MAC_PUCK) and not usage_fields_readable(LINUX_PUCK)
+    assert looks_like_a_puck(MAC_PUCK), "the macOS shape must still be accepted"
+    assert looks_like_a_puck(LINUX_PUCK), "the Linux shape has no usage fields to offer"
+    assert looks_like_a_puck(LEGACY_PUCK), \
+        "a legacy Logitech-branded unit that DOES declare multi-axis is still a puck"
+
+
+def test_a_logitech_device_is_never_accepted_blind() -> None:
+    """⛔ 0x046D covers the legacy pucks AND the C920 AND the plain optical mouse sitting on
+    the station. Accepting that vendor without evidence would open the mouse: it enumerates,
+    opens, reports a plausible name, and never sends a motion report — indistinguishable
+    from a decode bug (FINDINGS §0)."""
+    from yam.inputs.spacemouse import looks_like_a_puck
+
+    assert not looks_like_a_puck(LINUX_MOUSE), \
+        "a Logitech mouse with no usage fields must be refused, not guessed at"
+    assert not looks_like_a_puck(C920), "the webcam declares usage 0x02, which is not a puck"
+    assert not looks_like_a_puck({"vendor_id": 0x1234, "usage_page": 0x01, "usage": 0x08}), \
+        "an unknown vendor is not a puck however it describes itself"
+
+
 def main() -> int:
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_") and callable(f)]
     failed = []

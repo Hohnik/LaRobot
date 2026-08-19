@@ -108,15 +108,15 @@ sudo usermod -aG video,plugdev $USER
 
 Linux has no per-application camera permission, which is a real difference from macOS: being in the `video` group is the whole gate. That also means an agent on the PC can open cameras itself, so the hand-the-command-over dance that every camera measurement on the Mac needed simply disappears.
 
-**The SpaceMouse** needs a rule before a normal user may open it. Its USB vendor is `256f` (measured on this rig: `256f:c635`, a SpaceMouse Compact):
+**The SpaceMouse** needs a rule before a normal user may open it, and the rule form matters more than it looks. The file is in the repo at `config/linux/70-yam-spacemouse.rules` and is already copied to `/tmp` on the station:
 
 ```bash
-echo 'SUBSYSTEM=="hidraw", ATTRS{idVendor}=="256f", TAG+="uaccess"
-SUBSYSTEM=="usb", ATTRS{idVendor}=="256f", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-spacemouse.rules
-sudo udevadm control --reload-rules && sudo udevadm trigger
+ssh -t yam-pc 'sudo cp /tmp/70-yam-spacemouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger && echo INSTALLED'
 ```
 
-`uaccess` gives access to whoever is logged in at the seat, which is safer than making the device world-writable.
+⛔ **It uses `GROUP="plugdev"`, not `TAG+="uaccess"`, and an earlier version of this file recommended the wrong one.** `uaccess` grants access through logind's ACLs to whoever holds an **active local seat**. This station is driven over SSH, and an SSH session is not a local seat, so `uaccess` grants nothing here. A group does, and `lavita` is already in `plugdev` ([FINDINGS §75.9](FINDINGS.md)).
+
+⚠️ Two subsystems are matched on purpose. The hidapi build in use reports libusb-style paths (`9-2:1.0`), so the `usb` rule is the one doing the work today; the `hidraw` rule covers a future build that uses the other backend. `udevadm trigger` in the command applies the new mode to the already-plugged puck, so no replug is needed.
 
 **The CAN adapters** appear as network interfaces on Linux, and each must be brought up with the bitrate before anything can talk to a motor. This needs `sudo`, so it stays your step:
 
