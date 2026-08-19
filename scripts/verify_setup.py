@@ -4,7 +4,7 @@ from robot.inputs.keyboard import Keyboard
 
 
 def main() -> int:
-    keyboard_ok = Keyboard.available()
+    keyboard_ok = Keyboard.is_available()
     print(f"{keyboard_ok=}")
 
     all_ok = all([keyboard_ok])
