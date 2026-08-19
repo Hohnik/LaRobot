@@ -152,7 +152,7 @@ def main() -> int:
     # and playing the wrong one into the wrong session is the mistake worth making visible.
     print(f"{'file':>9} {'arms':>6} {'commit':>9} {'recorded':>17} {'dur':>7} "
           f"{'padding':>9} {'share':>6} {'peak p99':>9}  {'how it was made':<22}")
-    padded: list[str] = []
+    padded: list[tuple[str, bool]] = []   # (file name, its modes include a park)
     contradictory: list[str] = []
     for path in files:
         try:
@@ -164,7 +164,9 @@ def main() -> int:
         share = 100.0 * pad / traj.duration if traj.duration else 0.0
         flag = "  ⛔" if pad > PADDING_S else ""
         if pad > PADDING_S:
-            padded.append(path.name)
+            # ⭐ FINDINGS §73.1: a recording of an AUTOMATED run (its modes include a park) usually carries a real trailing pause — the seconds between the run finishing and the operator pressing w. Same measurement, different likely cause, different advice; the split keeps the §30.1 defect loud without telling anyone to re-record a healthy run.
+            is_run = any(":park" in m for m in (traj.meta.get("modes") or []))
+            padded.append((path.name, is_run))
         # ⭐ `method` is shown because the defect in FINDINGS §35.4 was found by
         # reading a saved file rather than the screen: a movement hand-guided in
         # GUIDE was stamped `live:hold`, because the label was written at the
@@ -222,11 +224,20 @@ def main() -> int:
         print("   `method` names only the mode the recording STARTED in. Not a fault in the")
         print("   data, and it does mean the label cannot be trusted for those files.")
         print()
-    if padded:
-        print(f"⛔ {len(padded)} of {len(files)} carry more than {PADDING_S:.1f}s of "
-              f"padding: {', '.join(padded)}")
+    defect = [name for name, is_run in padded if not is_run]
+    run_tails = [name for name, is_run in padded if is_run]
+    if defect:
+        print(f"⛔ {len(defect)} of {len(files)} carry more than {PADDING_S:.1f}s of "
+              f"padding: {', '.join(defect)}")
         print("   That is the FINDINGS §30.1 defect. Re-record those; it takes seconds.")
-    else:
+    if run_tails:
+        print(f"⚠️ {len(run_tails)} run-recording(s) carry more than {PADDING_S:.1f}s of "
+              f"trailing still time: {', '.join(run_tails)}")
+        print("   These recorded an automated run (their modes include a park), and the")
+        print("   tail is usually the gap between the run finishing and w being pressed —")
+        print("   not the §30.1 defect. Wasted ticks in an episode, not broken data. The")
+        print("   technique that avoids it: press w DURING the run's last leg (FINDINGS §73.1).")
+    if not padded:
         print(f"✓ none of the {len(files)} files carry more than {PADDING_S:.1f}s of "
               f"trailing still time.")
     print("\n⚠️ Padding is measured at the END only, so a pause in the middle is invisible,")

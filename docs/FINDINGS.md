@@ -5150,3 +5150,29 @@ Two PRs landed on `Hohnik/LaRobot` main since the 2026-08-18 exploration, the se
 ⚠️ **The hedge in "I think so" is recorded rather than smoothed over, and here is what settles it for good**: the operational definition of "left" is *left as the TOP camera's image sees it*, because that image is the frame the policy trains in. An image-based verification was ATTEMPTED today and could not run — see below — so the first properly-aimed top frame confirms the sides in one glance (arm G should appear on the image's left half). If it ever shows otherwise, the fix is re-exporting with the flags swapped; the recordings themselves carry no side and are untouched.
 
 ⛔⭐ **What the attempt found instead, by reading recording 3's actual frames: the C920 is filming the BACK OF A MACBOOK** — an Apple logo and a cable, no bench, no arms. The G wrist camera shows a static desk-level scene (correct for an arm in HOLD), and the B wrist camera shows the OPERATOR at the desk (it looks back at him from the teleop pose). Consequences, all cheap because these takes were pipeline proofs: ① episodes 1-3 are proofs of the machinery, never data; ② camera AIM joins the deferred mounts decision in [PLAN.md](PLAN.md) §4 — before the first real dataset take, the C920 must actually view the bench, and the Anleitung's own C7 warning applies to the operator sitting in a wrist camera's view; ③ the frames-on-disk design paid off in an unplanned way: an agent can READ the saved images and audit what the dataset actually sees, which is how this was caught.
+
+## 73 ⭐⭐⭐ 2026-08-19, HIS FINAL TEST — THE AUTOMATED COLLECTION LOOP IS CONFIRMED ON HARDWARE, END TO END, AND THE BENCH LIST IS EMPTY
+
+### 73.0 ✅✅⭐⭐⭐ EVERY STEP RAN, plus two improvisations that proved more than the plan asked
+
+1. ✅⭐⭐ **The recorded automated run exists and became an episode**: slot 5 (8.9 s, `live:B:hold+G:hold+B:park` — the modes field carries the PARK, exactly as [§72.3](FINDINGS.md) promised), 267/268/269 frames from the three cameras, exported as `recordings/episodes/5.mcap` with all three camera topics. **That closes the loop the whole project aimed at: teach waypoints once → run them → the run records itself with cameras → one command makes a training episode.** Only the team's C4 gate remains before Gate C.
+2. ✅⭐ **His improvisation proved the second variant**: in a one-arm session he pressed `w` DURING a running park — the banner read `RECORDING B PARK`, the save prompt appeared while the park was still driving, and the interleaving all worked (slot 6, 137/136/137 frames). He then REPLAYED the recorded run (`l 6`): parked to its start, played 4.5 s, worst lag 0.072 rad, and the [§72.1](FINDINGS.md) fix showed its arrival line before PLAYING.
+3. ✅ Slot 4 rode along as a labelled three-camera teleop take (11.1 s, 334 frames on each camera, zero drops, 2.3 s marked bad). Loop rates through all of it: 85-90 Hz with three writer threads.
+
+### 73.1 ⚠️⭐ THE ONE NEW PATTERN: a run-recording carries the operator's reaction gap as trailing stillness, and the checker used to blame the wrong defect
+
+Slot 5 ended with **2.10 s of trailing still time (23.6%)** — the gap between the run finishing and his `w`. `check_recordings` flagged it as the [§30.1](FINDINGS.md) recorder defect and said "re-record", which is wrong twice for a run-recording: the data is healthy (the arm really did sit still), and re-recording would reproduce it. ✅ **The checker now splits the verdict**: >1 s of tail on a recording whose modes include a park is reported as the stop-after-run gap (wasted episode ticks, not broken data), with the technique that avoids it — **press the stopping `w` DURING the run's last leg**, which his own slot 6 demonstrated (zero padding). The §30.1 defect message stays for everything else.
+
+### 73.2 ⚠️ THE FRAMES AUDIT, second round: the C920 now films arm G, close up — B never enters the picture
+
+He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the view is now the bench window with ONE folded arm centred, and across the whole 11-second take that arm never moves while B drove at up to 0.84 rad/s — so the filmed arm is G and **arm B is out of frame for the entire take**. Consequences: the left=G/right=B confirmation by image is STILL pending (it needs both arms, or at least the workspace, in the top view), and the framing note for real collection sharpens: **the top camera must see the workspace where the task happens**, not a portrait of one arm. [PLAN.md](PLAN.md) §4's camera-aim decision carries this.
+
+### 73.3 ⬜ WHAT REMAINS — the shortest this list has ever been
+
+**At the bench, only if and when he wants:** frame the top camera so it sees the workspace (and both arms if possible) — then one glance at any saved frame confirms left=G right=B for good ([§72.6](FINDINGS.md)) · the kp lever for sub-centimetre grabs stays optional ([ROADMAP §8.2](ROADMAP.md) item 17).
+
+**Decisions:** the noise bound for varied replays ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean).
+
+**From the team:** ABC's `export_mcap.py` or the `abc_minimal` repo — the C4 gate, the one thing between today's episodes and Gate C, plus the gripper-unit question ([§72.4](FINDINGS.md)).
+
+**Standing:** the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
