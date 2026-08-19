@@ -4,9 +4,9 @@
 >
 > It assumes you know nothing. Nothing about this project, nothing about robot arms, nothing about the code. Every word that needs explaining is explained here, the first time it appears.
 >
-> **How long it takes:** about twenty minutes, start to finish. You can also stop after section 5 and still have the useful half.
+> Reading all of it takes about twenty minutes. You can also stop after section 5 and still have the useful half.
 >
-> **What it is not the place for:** the live state of the project and the evidence behind every claim. An agent working in this repo reads [HANDOFF.md](HANDOFF.md) for the state and [FINDINGS.md](FINDINGS.md) for the evidence. Those two are written dense on purpose. This one is written to be read.
+> Two things are deliberately absent: the live state of the project, and the evidence behind every claim. An agent working in this repo reads [HANDOFF.md](HANDOFF.md) for the state and [FINDINGS.md](FINDINGS.md) for the evidence. Those two are written dense on purpose. This one is written to be read.
 >
 > **Contents**
 >

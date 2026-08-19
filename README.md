@@ -60,7 +60,10 @@
 >                 inputs/, fake/ (the lagging simulator), ui/
 > config/         measured calibration — tracked on purpose, so it TRAVELS between machines
 >                 (session_defaults.json is not; linux/ holds the two udev rules)
-> docs/           HANDOFF (live state) · FINDINGS (evidence) · COMMANDS · ROADMAP · the German plans
+> src/yam/files.py  the one listing helper: a name starting with `.` is never our data
+> docs/           ARCHITECTURE + PLAN + LINUX + COMMANDS are written to be READ by a person
+>                 HANDOFF (live state) · FINDINGS (evidence) · ROADMAP are agent files, dense
+>                 on purpose. `uv run checks/check_prose.py` holds the first group readable.
 > third_party/    the vendored I2RT SDK, untouched
 > recordings/     gitignored: taught movements and tracking logs live on the rig only
 > ```

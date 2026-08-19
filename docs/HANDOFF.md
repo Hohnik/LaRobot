@@ -15,11 +15,15 @@
 >
 > ⚠️ **The session log at §7 is 51 rows long. Do not read it front to back.** Its rows are dated and each one names the FINDINGS sections it produced; use it to answer *"when did X change and why"*, not to get oriented.
 >
-> ## ⭐⭐⭐ THE STATE AT THE END OF 2026-08-19 — read THIS block, then [FINDINGS §75](FINDINGS.md). The layers below it are HISTORY, kept for their reasoning
+> ## ⭐⭐⭐ THE STATE AT THE END OF 2026-08-19 — read THIS block, then [FINDINGS §76](FINDINGS.md). The layers below it are HISTORY, kept for their reasoning
 >
 > ⭐⭐⭐ **THE GOAL ([FINDINGS §67.0](FINDINGS.md)): this repo is a finished WALKTHROUGH, and its deliverable is [docs/PLAN.md](PLAN.md)** (ratified 2026-08-19). Julien's team rebuilds the real station from scratch; what this repo owes is every feature built once, proven on the hardware, and written down. **Nothing here needs hardening as if it were production.**
 >
 > ✅✅✅ **WHERE THINGS ACTUALLY STAND: the whole system runs on BOTH machines.** Every feature is confirmed on the physical arms — teleop, hand-guiding, waypoint runs with grabs, record and replay, composite runs, mirror, labels, three-camera recording, and both dataset exports. Julien's own words after the first Linux session: *"it seems to work. I was able to control the robot arm."* ([FINDINGS §75.10](FINDINGS.md))
+>
+> ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
+>
+> ⭐ **All of it is fixed and committed on the Mac** (`950a3fa`, suite **797/797 across 37 files**, up 21 checks with no file dropped). ⬜ **The station's clone is still at `e97a8a05` and needs one fast-forward from him**, because a `git` write there needs his approval. The bundle is already sitting at `/tmp/yam.bundle` on the station. [FINDINGS §76.9](FINDINGS.md) is the current his-list.
 >
 > ⭐⭐ **THE MACHINES, and which is which:**
 >
@@ -29,19 +33,23 @@
 > | what it is | macOS, gs_usb over libusb, AVFoundation cameras | `lavita@10.64.9.60` "RoVita", Ubuntu 24.04.4, 32 cores, 60 GB, **RTX 5090 32 GB** |
 > | the repo | `~/Developer/Projects/yam-robotics` | `~/yam-robotics` (the team's own repo sits beside it at `~/LaRobot`) |
 > | hardware today | nothing attached (it all moved) | both arms, the C920, one D405 (`260323072846`), one SpaceMouse |
-> | suite | 776/776 | 776/776, same total |
+> | suite | 797/797 | 776/776 until the fast-forward, then 797/797 |
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
-> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN, shortest-first. The full list with commands is [FINDINGS §75.4](FINDINGS.md):**
-> 1. ⭐ **One camera-carrying RECORDING on the station.** That is the last unproven step of the Linux port and it is a keypress: in a session, `w` · drive or hand-guide · `w` · save to a free slot, then `check_recordings.py` and `export_dataset.py`. Only he can drive it (it sends setpoints, §4 rule 1).
+> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN, shortest-first. The full list with commands is [FINDINGS §76.9](FINDINGS.md):**
+> 1. ⭐ **Fast-forward the station's clone, then one camera session to confirm the camera fix on the real cameras.** The recording itself is DONE (slot 1 on the station, 229 samples) and it is what exposed §76. What to look for after the fast-forward: `measured 1280x720 at 29.9 fps in MJPG` for the C920, and `measured 848x480` plus a stepped-down warning for the D405. ⚠️ **Re-record anything made on the station before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty.
 > 2. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). His, two minutes.
 > 3. **Frame the top camera at the WORKSPACE before collecting real data** ([FINDINGS §73.2](FINDINGS.md): it currently films a close-up of one arm).
 > 4. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — it settles the C4 gate, the per-view size and the gripper unit in one go ([FINDINGS §74.1](FINDINGS.md)).
 > 5. Optional: the second D405 for a three-camera session there · `kp` for sub-centimetre grabs (item 17) · whether to push the current commits to the team branch (**he has not answered this**).
 >
-> ⛔⭐⭐ **THE FIVE THINGS THAT BIT HARDEST ON THE PORT, so nobody re-learns them** (all in [FINDINGS §75](FINDINGS.md)):
+> ⛔⭐⭐ **THE THINGS THAT BIT HARDEST ON THE PORT, so nobody re-learns them** (in [FINDINGS §75](FINDINGS.md) and [§76](FINDINGS.md)):
+> - ⭐ **A camera's usable modes are a property of the camera PLUS the platform.** The D405 streams 848x480 on Linux and not 1280x720; on macOS 1280x720 worked and 848x480 was broken. Exactly inverse. **Never hard-code a size for a camera you have not measured** ([§76.2](FINDINGS.md), [§63.0](FINDINGS.md)).
+> - ⭐ **Set the pixel format BEFORE the size, and set it to MJPG.** A C920 at 1280x720 in YUYV is capped at 10 fps by its own firmware; in MJPG it does 30. macOS ignores the request and chooses well; Linux does not ([§76.1](FINDINGS.md)).
+> - ⭐ **`cap.get` after `cap.set` tells you what you asked for, never what the camera does.** Read a real frame and take the size from its `shape` ([§76.0](FINDINGS.md)).
 > - **A D405 publishes SIX video nodes on Linux and the FIRST is DEPTH.** Pick the node by reading its pixel formats. `video2`=depth, `video4`=infrared, `video6`=colour. And check depth BEFORE colour, because the infrared node also offers a colour format ([§75.7](FINDINGS.md)).
+> - ⭐ **macOS sidecar files (`._*`) arrive with any hand-copied folder and every plain `glob` picks them up.** One crashed a checker, one was offered as a playable recording, and they doubled every frame count. Every listing goes through `yam/files.py::listing` now ([§76.4](FINDINGS.md)).
 > - **hidapi on Linux leaves `usage_page`/`usage` empty**, so a filter requiring them finds no SpaceMouse. Trust those fields when present; otherwise trust 3Dconnexion's own vendor id and **never** blanket Logitech, which also covers the webcam and the mouse on that desk ([§75.9](FINDINGS.md)).
 > - **libusb cannot read USB serials when a kernel driver owns the device.** Read sysfs instead, or `check_rig` reports both arms missing while the motors answer ([§75.8](FINDINGS.md)).
 > - **`TAG+="uaccess"` grants nothing over SSH** (it needs an active local seat). Use a group the user is already in ([§75.9](FINDINGS.md)).
@@ -51,7 +59,7 @@
 >
 > ⚠️⭐ **`config/` TRAVELS AND `recordings/` DOES NOT, and the difference is deliberate** ([FINDINGS §75.11](FINDINGS.md)). Waypoints, the axis map and the gripper limits are tracked in git, so his Mac-taught poses appeared on the station and `p 1` worked there at once. Recordings are gitignored: only what someone copies by hand exists on the other machine.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **776/776 across 35 files** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **797/797 across 37 files** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
@@ -496,6 +504,20 @@ These are not preferences, they were arrived at by things going wrong.
    - ⛔ **Clipped jargon.** "wired in", "half built", "checked out", "spun up".
 
    ⭐ **The test he effectively described: read it aloud.** If it sounds like a written style rather than like explaining something to a colleague, rewrite it.
+
+   ⭐⭐⭐ **REFINED A THIRD TIME, 2026-08-19, AND THIS ONE CLOSES A LOOPHOLE IN THE RULE ABOVE.** The sentence *"This applies to CHAT ONLY — repo files keep the conventions you see here"* is what `docs/ARCHITECTURE.md` fell through. It was written on 2026-08-19 as a repo file, in repo-file style, and he could not read it:
+
+   > *"you wrote it in a writing style again that does not make a lot of sense. It's not nicely structured. It's not understandable. He did not adhere to any of the things we spoke about when talking about how to write something in a nice, understandable way. It should be understandable for a sixteen year old who has never even seen the project and any of the code and any of the architecture and stuff."*
+
+   ⛔ **So the rule is not about the medium. It is about the reader.** A file HE reads is held to the chat standard. A file only agents read keeps the dense conventions, and the two are now listed explicitly in `checks/check_prose.py`'s `HIS_DOCS` manifest.
+
+   ⭐ **Two things changed beyond the audience question, and both are stronger than the old wording:**
+   - **The bar moved from "an 18-year-old who knows the project" to "a 16-year-old who has never seen the project".** For a document, assume zero prior context. Define every term at first use. Put a glossary before the jargon rather than after it.
+   - ⛔ **A POINTER MAY NOT STAND IN FOR AN EXPLANATION.** The old ARCHITECTURE.md said things like *"FINDINGS §37.0 is what happened when nobody knew this layer existed"*, and its own header announced that every claim links to its evidence *"instead of restating it"*. For an agent that is efficient. For him every one of those is a dead end, because he does not read FINDINGS. **A link may add evidence. It may never carry the meaning.**
+
+   ⚠️ **Two more faults the word list cannot see, both taken from that document:** a heading that is a slogan rather than a description (*"ArmSession: the class decides, the script narrates"*), and a document that declares three audiences in its own opening paragraph. **One document, one reader.** A file written for him and for an agent at once drifts to agent density every time, because that is the cheaper thing to write.
+
+   ✅ **THE MECHANICAL DEFENCE, because this rule has now failed three times while being present and correct:** `uv run checks/check_prose.py`. It enforces the checkable half against the documents in `HIS_DOCS`, with a per-file ceiling that may go down and never up. `checks/falsify_check_prose.py` proves it catches the faults and, as importantly, leaves decoration, acronyms, tables and own-line bold labels alone. `docs/ARCHITECTURE.md` sits at **0** and is the reference for what clean looks like. ⛔ **A clean run is still not a passing grade**: it measures phrases and cannot see a slogan heading, an undefined term, or a pointer standing in for an explanation.
 
 ⚠️ **It decays hardest immediately after heavy tool use or long reasoning**, which is exactly when the worst messages get written. Re-read the rule before composing, not before starting.
 

@@ -73,10 +73,12 @@ Then `ssh yam-pc uname -a` proves the path end to end without touching anything 
 3. ⭐ **Code moves Mac → PC by git BUNDLE, never by a push.** Pushing to `Hohnik/LaRobot` needs Julien's word every time ([HANDOFF §4](HANDOFF.md) rule 9), and a bundle needs nobody's. The loop, three commands from the Mac:
 
 ```bash
-git bundle create /tmp/yam.bundle --all && scp /tmp/yam.bundle yam-pc:/tmp/yam.bundle && ssh yam-pc 'cd ~/yam-robotics && git fetch -q /tmp/yam.bundle "main:refs/remotes/mac/main" && git reset --hard refs/remotes/mac/main'
+git bundle create /tmp/yam.bundle --all && scp /tmp/yam.bundle yam-pc:/tmp/yam.bundle && ssh yam-pc 'cd ~/yam-robotics && git fetch -q /tmp/yam.bundle "main:refs/remotes/mac/main" && git merge --ff-only refs/remotes/mac/main && git log --oneline -1'
 ```
 
-   ⚠️ `git reset --hard` is safe here because the PC's clone is never edited directly. If that ever changes, fetch and merge instead. Gitignored things (`recordings/`, `third_party/i2rt`, the venv) are untouched by it.
+   ⭐ **`git merge --ff-only`, and it used to be `git reset --hard`.** Both land the PC on the Mac's commit while the PC's clone is never edited directly, and `--ff-only` is strictly better: it REFUSES if the move is not a fast-forward, so the one case where a hard reset would silently destroy work is the one case this stops. It also passes the agent harness's destructive-command gate, which blocks `reset --hard` over SSH and correctly so ([FINDINGS §76.9](FINDINGS.md) item 1 is the session where that happened).
+
+   ⚠️ Gitignored things (`recordings/`, `third_party/i2rt`, the venv) are untouched either way. ⛔ If `--ff-only` ever refuses, do NOT reach for `--hard` reflexively: something on the PC has diverged, and finding out what comes first.
 
 4. ⚠️ **`third_party/i2rt` is gitignored, so it does NOT travel in the bundle.** It is cloned from upstream at the tag the Mac uses: `git clone --depth 1 --branch v1.3.1 https://github.com/i2rt-robotics/i2rt.git third_party/i2rt`. Both machines are on `1276f63`.
 5. ⛔ **Use a fresh connection when group membership matters.** Julien's `~/.ssh/config` sets `ControlMaster auto` globally, so connections are shared and an old one keeps the group list it was opened with. `ssh -o ControlPath=none yam-pc …` after a `usermod` change.
@@ -147,6 +149,18 @@ This distinction is the point of §4 existing, and it follows this repo's own ru
 
 **How that gets settled in one command:** with the hardware plugged in, `uv run checks/check_platform.py --raw` prints the raw text beside the parse. Either the formats match and the port is fully confirmed, or they differ and the output shows exactly where. It also prints the `sudo ip link set canX up type can bitrate 1000000` line for each adapter, which is the one CAN step that needs root after every boot.
 
+## 4a. ⛔ macOS sidecar files arrive with any hand-copied folder
+
+If you copy `recordings/` (or anything else) from the Mac by hand, expect **files named `._<original>`** to arrive with it. They are AppleDouble sidecars: 163 bytes, one extended attribute, no data anyone wants. The station's copy had **813 of them** and they caused four separate wrong answers in one session, including a checker that crashed and a frame count that came out at exactly double and then accused real data of being foreign ([FINDINGS §76.4](FINDINGS.md)).
+
+Every listing of the project's own files goes through `yam/files.py::listing` now, so the tools ignore them, and `check_recordings.py` tells you how many it ignored. Clear them out anyway:
+
+```bash
+ssh yam-pc "find ~/yam-robotics/recordings -name '._*' -delete"
+```
+
+⚠️ The producer is not established. Plain `tar` on this Mac does not emit them, tested with real extended attributes present and with `COPYFILE_DISABLE=1` and `--no-mac-metadata`. Whatever wrote them preserved only whole-second mtimes. So: check for them after any hand copy rather than trusting one recipe.
+
 ## 5. The differences from macOS, in one table
 
 | what | macOS (the walkthrough) | Linux (the station) |
@@ -156,6 +170,8 @@ This distinction is the point of §4 existing, and it follows this repo's own ru
 | camera identity | AVFoundation uniqueID equals locationID·VID·PID, plus one confirmed index hint per port layout | `/dev/v4l/by-id` names model and serial and links to `/dev/videoN`, which IS OpenCV's index |
 | two identical D405s | needed a physical confirmation once per port arrangement | separated by serial from the symlink name, nothing physical needed |
 | camera permission | granted per application; an agent can never have it | membership of the `video` group; an agent on the PC can open cameras |
+| ⭐ pixel format | AVFoundation ignores the MJPG request and picks well by itself; measured, it changes nothing | ⛔ **the request is obeyed and it matters.** A C920 at 1280x720 in YUYV is capped at **10.01 fps** by its own firmware, in MJPG it does **29.92**. YUYV is format `[0]`, so it wins by default ([FINDINGS §76.1](FINDINGS.md)) |
+| ⭐ D405 colour sizes | 1280x720 and 640x480 give clean photographs; **848x480 is broken** (16-bit data read as 8-bit triplets) | ⛔ exactly inverse: **848x480 and below stream at up to 89.88 fps, 1280x720 delivers NOTHING.** `v4l2-ctl --stream-mmap` gets nothing either, so this is below OpenCV. The mode is advertised, the link is 5 Gbit/s ([FINDINGS §76.2](FINDINGS.md)) |
 | SpaceMouse | opens exclusively, no rule needed | needs a udev rule before a non-root user may open it |
 | depth | would need a day of compiling; measured as colour-only over UVC | `apt install librealsense2-*`, then `pyrealsense2` |
 | the clocks | `perf_counter` and `monotonic` are the same clock, measured | both documented as `CLOCK_MONOTONIC`; `check_platform.py` measures it on the first run |

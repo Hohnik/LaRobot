@@ -313,6 +313,7 @@ uv run checks/run_tests.py                          # ⭐⭐ EVERY test file as 
 uv run checks/check_rig.py                          # what is on the USB bus. Never transmits
 uv run checks/check_flags.py                        # do the commands in docs/ actually work?
 uv run checks/check_links.py                        # every relative link and § reference
+uv run checks/check_prose.py                        # ⭐ are the docs HE reads still readable?
 uv run checks/check_recordings.py                   # what is in each recording slot
 uv run checks/check_restructure.py                  # the N-arm restructure is still coherent
 uv run checks/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
@@ -322,6 +323,8 @@ uv run checks/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end 
 ⭐⭐ **`run_tests.py` exists because two test files sat red for days with nobody able to see it** ([FINDINGS §67.5](FINDINGS.md)) — each file has its own `main()` and nothing ran them all. It fails a file on any of three signals (nonzero exit, no count line, passed < total) and prints a **grand total**: compare it against the last committed figure, because a total that DROPS while everything is green means a check was silently disarmed ([FINDINGS §59.1](FINDINGS.md), [§70.4](FINDINGS.md)).
 
 ⭐ **`check_collision.py` needs ONE tape-measure reading** — the metres between the two arm bases — because nothing in the repo records it and no software can derive it. Add `--yaw-b 180` if they face each other. ⭐⭐ **It may close the whole collision question in one line:** each arm is already held inside a 0.60 m sphere around its own base, so **beyond 1.20 m of base separation a collision is geometrically impossible** while that limit is enforced. ⛔ Except in GUIDE mode, where nothing can stop a hand. [ROADMAP §8.2](ROADMAP.md) item 25, [FINDINGS §59.3](FINDINGS.md).
+
+⭐⭐ `check_prose.py` checks the documents Julien reads against his own writing rules, [HANDOFF §4](HANDOFF.md) rule 8. It exists because that rule has failed three times while being present and correct, most recently when `docs/ARCHITECTURE.md` was written in repo-file style and he could not read it. It holds five documents (`ARCHITECTURE`, `PLAN`, `LINUX`, `COMMANDS`, `README`) at a per-file fault ceiling that may go down and never up, and `docs/ARCHITECTURE.md` sits at zero as the reference for clean. `tests/test_prose.py` puts the ceilings in the one-command suite; `checks/falsify_check_prose.py` proves the checker catches faults AND leaves decoration, acronyms, tables and own-line bold labels alone. ⛔ `HANDOFF`, `FINDINGS` and `ROADMAP` are deliberately exempt: they are agent files and dense on purpose. ⚠️ A clean run is not a passing grade, because it measures phrases and cannot see a slogan heading or a term used before it is defined.
 
 ⭐ **`check_flags.py` reads every `uv run` line in `docs/` and validates it against the real parser** — a flag that does not exist, a value outside `choices`, a value that will not parse as its type. `COMMANDS.md` had gone stale four times in two days before it existed, and one stale line recommended a command that drives the jaws into both stops ([FINDINGS §59.1](FINDINGS.md)).
 

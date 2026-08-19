@@ -5381,7 +5381,7 @@ He asked why the poses and recordings he saved on the Mac showed up on the stati
 
 ⭐ **The consequence for anyone continuing this work:** treat `config/` as shared truth and `recordings/` as per-machine. A dataset built on the station stays on the station until someone exports it on purpose.
 
-### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
+### 75.4 ⬜ THE HIS-LIST as it stood at the end of 2026-08-19 morning — superseded by [§76.9](FINDINGS.md)
 
 ✅ **DONE 2026-08-19: the sudo block ran** (ffmpeg, v4l-utils, can-utils installed; `lavita` in the `video` group), and the colour stream is measured ([§75.7](FINDINGS.md)). **What remains needs his hands or his root, nothing more:**
 
@@ -5411,3 +5411,167 @@ ssh -t yam-pc 'sudo cp /tmp/70-yam-spacemouse.rules /etc/udev/rules.d/ && sudo u
 **Also his, unchanged:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9) · framing the top camera at the workspace before real collection ([§73.2](FINDINGS.md)) · whether to push the current commits to the team branch (nothing has been pushed since `f47a23f`'s predecessor state; rule 9 stands).
 
 **From the team:** ABC's `export_mcap.py` or `abc_minimal` — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
+
+## §76 ⛔✅⭐⭐⭐ THE FIRST CAMERA-CARRYING RECORDING ON THE STATION — it worked, and every camera line on screen was a lie
+
+⭐ **Read this section if you touch cameras, checkers, or anything that lists files.** It comes from one log Julien pasted on 2026-08-19 after the first session on the station that pressed `w`. The session did what he asked. Six separate things it printed were wrong, none of them raised anything, and four of them shared one cause. This is [§0](FINDINGS.md) again, in a part of the stack that had been called proven.
+
+⚠️ **It supersedes one claim in [§75.10](FINDINGS.md).** That section reads *"Both cameras opened at their measured COLOUR streams, each delivering 1280x720."* The node identification was right. The word "delivering" was not: one of those two cameras delivered nothing at all.
+
+### 76.0 ⛔⭐⭐⭐ "delivering 1280x720" WAS READ BACK FROM `cap.get`, SO IT NAMED THE REQUEST, NOT THE CAMERA
+
+The session's Linux camera path did this, and the last line is the defect:
+
+```python
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+cap.set(cv2.CAP_PROP_FPS, 30)
+got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+print(f"  📷 {name} open on {cam.device} (index {cam.index}), delivering {got[0]}x{got[1]}.")
+```
+
+**No frame was ever read.** `cap.get` returns what `cap.set` accepted, so the line was guaranteed to agree with itself whatever the camera did. What the camera actually did, from the same log:
+
+```
+📷 c920: 26 frame(s).
+📷 d405-260323072846: 0 frame(s).
+⏹ RECORDED 2.4s, 229 samples
+```
+
+**The D405 delivered zero frames for the entire session, twice, and the screen said "delivering 1280x720" both times.** At shutdown the driver finally said so, in OpenCV's voice rather than this repo's: `VIDEOIO(V4L2:/dev/video6): select() timeout`.
+
+⛔ **The guard for exactly this already existed and did not cover this case.** The same function refuses a metadata node with the words *"A metadata node opens successfully and delivers no frames, which is why this refuses instead of recording nothing."* That refusal was built for a node that is not a capture node. A capture node that streams nothing walked straight past it. **A guard written against one instance of a failure mode does not cover the mode** ([HANDOFF §4](HANDOFF.md) rule 7's question, asked of the right thing: *what path reaches this hazard without passing through you?*).
+
+### 76.1 ✅⭐⭐⭐ CAUSE ONE: THE LINUX PATH NEVER ASKED FOR MJPG, SO THE C920 RECORDED AT 10 FPS INSTEAD OF 30
+
+`apps/camera_view.py::configure_camera` has always set `CAP_PROP_FOURCC` to MJPG **before** the size, and its own comment says why:
+
+> This line is kept because it is correct and load-bearing on Linux, where this rig is ultimately headed.
+
+The session's Linux camera path was then written with three bare `set()` calls and no codec request, because it does not import `camera_view`. So OpenCV took the device's first advertised format. Measured on the station:
+
+| device | size | format | measured rate |
+|---|---|---|---|
+| C920 `/dev/video0` | 1280x720 | **MJPG** | **29.92 fps** |
+| C920 `/dev/video0` | 1280x720 | **YUYV** | **10.01 fps** |
+| D405 `/dev/video6` | 848x480 | YUYV | 89.88 fps |
+
+`v4l2-ctl --list-formats -d /dev/video0` lists `[0]: 'YUYV'` and `[1]: 'MJPG'`, so the first one wins by default, and **a C920 at 1280x720 in YUYV is capped at 10 fps by its own firmware**. `v4l2-ctl --get-fmt-video` on the station after his session still read `Pixel Format: 'YUYV'`, which is the direct evidence that this is what ran. The arithmetic agrees from the other end: 26 frames in 2.43 s is 10.7 fps.
+
+⛔⭐ **The lesson is not about MJPG.** The knowledge was correct, written down, and sitting in a comment in a file the new code path does not import. **Two copies of a configuration step is how a documented fact stops applying.** There is one copy now, `yam/cameras/open.py::configure`, and `camera_view.configure_camera` delegates to it. Same defect shape as [§52.1](FINDINGS.md): the tested code must be the code that runs, and here the *documented* code must be the code that runs.
+
+⚠️ **What this cost the data.** The episode exporter fills 30 ticks a second, 33,333,333 ns apart. A 10 fps camera makes every tick repeat a picture three times. Nothing is corrupt and nothing says so either. Any recording made on the station before this commit carries a third of the images it appears to.
+
+### 76.2 ✅⛔⭐⭐⭐ CAUSE TWO: THE D405 ACCEPTS 1280x720 AND DELIVERS NOTHING AT IT, AND THIS IS BELOW OPENCV
+
+Measured on the station, each with a hard timeout so it could not hang the investigation:
+
+| size asked of `/dev/video6` | frames dequeued by `v4l2-ctl --stream-mmap` |
+|---|---|
+| 1280x720 YUYV | **none, ever** (the first attempt blocked for four minutes) |
+| 848x480 YUYV | 5 of 5, then 200 at 89.88 fps |
+| 640x480 YUYV | 5 of 5 |
+| 424x240 YUYV | 5 of 5 |
+
+⭐ **Three explanations are ruled out by measurement rather than by argument:**
+
+- **Not OpenCV.** `v4l2-ctl` gets nothing either, and it is the reference tool.
+- **Not the advertised format.** `v4l2-ctl --list-formats-ext -d /dev/video6` lists YUYV 1280x720 at 30, 15 and 5 fps. The mode is offered.
+- **Not USB bandwidth.** `lsusb -t` puts the D405 alone on bus 002 at **5000M**. YUYV 720p30 needs about 442 Mbit/s.
+
+⚠️ **And the mode that works on Linux is the mode that was BROKEN on macOS.** [§63.0](FINDINGS.md) recorded that Julien's D405 gave a clean photograph at 640x480 and at 1280x720 and diagonal coloured bands at 848x480. On Linux it is the exact inverse: 848x480 and below stream, 1280x720 does not. **A camera's usable modes are a property of the camera plus the platform, never of the camera alone.** Nothing may hard-code a size for a camera it has not measured.
+
+⭐ **librealsense is NOT installed on the station** (`pyrealsense2` missing, no `rs-enumerate-devices`), so this is the plain UVC path in both cases. Whether Intel's own library streams 1280x720 there is unmeasured and is a separate question from this one.
+
+### 76.3 ✅⭐⭐ THE FIX: A CAMERA IS OPEN WHEN A REAL FRAME HAS ARRIVED — `yam/cameras/open.py`
+
+`open_measured(cap)` walks a ladder largest first, configures the handle at each size, and **reads real frames for 0.7 s**. The first size that produces a frame wins, and every number printed comes out of that frame's own `shape`.
+
+```
+SIZE_LADDER = [(1280, 720), (848, 480), (640, 480), (424, 240)]
+```
+
+1280x720 stays first, so nothing that works today changes. 848x480 is next because it is the largest size the D405 was measured to stream on Linux. The ladder only goes down within one handle, because raising a size after lowering it confuses some V4L2 drivers and there is never a reason to.
+
+⚠️ **ZERO FRAMES REFUSES; A SLOW RATE WARNS LOUDLY.** The split is deliberate and it is not a softening of [HANDOFF §4](HANDOFF.md) rule 4. Zero frames means the session would record an empty camera, which no operator wants, so it exits with the `v4l2-ctl` command to run next. A rate under 20 fps is degraded data rather than a broken session, and whether to accept thin images is the operator's call, so it prints the rate, the consequence and the likely cause. Rule 4 is about hazards. A slow camera is not one.
+
+⭐ **The window is a wall-clock deadline, not a frame count.** A frame count would have waited forever on the camera that started all of this.
+
+**12 tests in `tests/test_camera_open.py`**, against a fake handle that reproduces both real failures: one that accepts 1280x720 and delivers nothing, and one that claims a size through `get()` while handing back frames of another. The MJPG-before-size ordering is locked down by its own test, because that ordering is the whole 10 fps defect.
+
+### 76.4 ⛔⭐⭐⭐ 813 macOS SIDECAR FILES, AND EVERY PLAIN `glob` IN THIS REPO PICKED THEM UP
+
+`recordings/` on the station held **813 files named `._<original>`**. They are AppleDouble sidecars: magic `0x00051607`, version 2, the filler string `Mac OS X`, 163 bytes each, carrying one extended attribute (`com.apple.provenance`). macOS writes them when it stores a file's extended attributes on a filesystem that cannot hold them itself.
+
+⚠️ **The producer is not established.** [§75.11](FINDINGS.md) says slot 5 was copied by hand with `tar`, and plain `tar` on this Mac (Darwin 25.5) does **not** emit them: tested with real extended attributes present, with and without `COPYFILE_DISABLE=1` and `--no-mac-metadata`, and all three archives were clean. One clue in the evidence: every sidecar's mtime is a whole second (`13:20:02.000000000`) while its original keeps nanoseconds (`13:20:02.282783986`), so whatever wrote them preserved only second resolution. **This does not change the fix, and the fix is right whatever the producer was.**
+
+⛔ **Four distinct wrong answers, one cause:**
+
+1. **`checks/check_recordings.py` crashed.** `folder.glob("*.json")` matched `._5.json`; the table above printed it politely as `⛔ unreadable: UnicodeDecodeError: 'utf-8' codec can't decode byte 0xa3 in position 45`, and then a **second pass forty lines lower re-loaded every file with no error guard** and took the whole script down with the same exception. Byte 45 of the sidecar is `0xa3`, which matches the AppleDouble header exactly. ⭐ **The defect is that one loop was careful and the other was not.** Both are guarded now, and any unreadable file re-creates the case.
+2. **The session offered `._5` as a playable recording.** `PLAY which recording? saved: ._5, 1, 5` — from `sorted(q.stem for q in TAKES_DIR.glob("*.json"))`. Note that the free-slot line on the same screen read `free: 0 1 2 3 4 6 7 8 9`, so the two listings on one screen disagreed about what exists.
+3. **Every frame count came out at exactly double, and the checker called real data foreign.** `glob("*.jpg")` matched `._000123.jpg`. Slot 5's meta claims 267, 268 and 269 pictures; the station reported 534, 536 and 538. Verified from both ends: the Mac's own directories hold 267, 268 and 269 JPEGs plus one index file each, and `267 × 2 = 534` for all three cameras. **The recording was fine. The measurement was doubled, and the message accused the data.**
+4. **`check_links`, `check_flags` and `test_unwrap` all read every `docs/*.md` match as text**, so one `._X.md` would have taken out all three the same way. That one had not happened yet.
+
+✅ **`src/yam/files.py` is the one filter**, with 9 tests including the doubling arithmetic. Every listing of this project's own files goes through `listing(folder, pattern)`. A name starting with `.` is never this repo's data.
+
+⭐ **Reported, not silently skipped.** `check_recordings` now says how many sidecars it ignored and prints `find recordings -name '._*' -delete`. An operator whose copy brought 813 pieces of litter should be told, because that copy method will keep doing it and the files break other tools too.
+
+### 76.5 ⛔⭐⭐ THE CHECKER REPORTED THE WRONG DEFECT, WITH THE WRONG COUNT, NAMING ONE FILE THREE TIMES
+
+From the log:
+
+```
+⛔ 3 file(s) are labelled `live:hold` yet moved faster than 0.5 rad/s: 5.json, 5.json, 5.json.
+```
+
+Every part of that is wrong, and its own table two lines above contradicts it: slot 5's peak p99 reads **0.43 rad/s**, below the 0.5 threshold the message claims was exceeded. Slot 5's `method` is `live:B:hold+G:hold+B:park` and its `modes` list has three entries, so `label_verdict` correctly returned no fault.
+
+⛔ **The cause: one list, `contradictory`, was appended to from two different places** — once for a label fault, and once per camera inside the frame-count loop. Slot 5 had three camera faults (the doubling above), so one file's name went in three times, and the summary printed the label-fault sentence over frame-fault data.
+
+✅ Two lists now, each with its own accurate message, each de-duplicated by file. The frame-fault message names the sidecar cause first, because it caused every instance of this so far. ⚠️ **The general shape is worth naming: a shared accumulator makes two faults indistinguishable at the point where you explain them to a person.** A checker that misreports its own finding is worse than one that says nothing, because somebody acts on it.
+
+### 76.6 ⚠️⭐⭐ "top speed 1.83 rad/s" IN A SESSION THAT CAPS EVERY JOINT AT 1.00 — the clamp did not leak
+
+The playback tracking table printed:
+
+```
+B forearm_pitch    worst lag 0.158 rad at  1.83 rad/s · top speed  1.83 rad/s with 0.158 rad of lag
+```
+
+while the same session's own banner said `max-speed 1.00 rad/s  the same cap again, below all control logic, so nothing can reach around it`. Read together, that says the cap leaked.
+
+✅ **It did not.** `TrackingLog.observe` is called with `rs.target`, the replay's own target, sampled **before** `SafeRobot` sees it (`apps/teleop_session.py`, the replay branch). So both speed columns are what the recording ASKED for, and 1.83 rad/s is the clamp refusing 1.83 rad/s. That is the clamp working. The lag columns are `target − measured`, read from the encoders, and they are real measurements.
+
+⭐ **This matters because that table is the only measurement this project has of what the hardware can follow** (`TrackingLog`'s own docstring says so). A column that reads as a measured speed and is actually a request would bias every future decision about raising a limit. Printed as `asked for up to 1.83 rad/s` now, with the docstring stating plainly that the speeds are requests and the lags are measurements.
+
+⚠️ **Related and NOT a defect, so nobody re-investigates it:** measured joint speeds in recordings do legitimately exceed `max_speed`. Slot 8 shows a p99 of 1.57 rad/s in GUIDE, where a human hand moves the arm and no command is involved at all. And even under command, `budget = max_speed · dt` grows with a stalled loop (`dt` capped at 0.05 s), and the `max_lag` clamp can advance the command by up to 0.25 rad in one cycle when the measured pose has run ahead. `max_speed` bounds the COMMAND's rate. It has never claimed to bound the arm's momentum.
+
+### 76.7 ⛔⭐ `falsify_check_dataset` HAS BEEN UNABLE TO FIND ITS OWN INPUT SINCE THE BATCH PIPELINE LANDED
+
+It globbed `recordings/datasets/episode_*` while `export_dataset` writes into a split directory, `recordings/datasets/train/episode_slot5`. So it printed *"⛔ no exported episode to break"* and exited 1.
+
+⭐ **Two honest notes on severity.** It exits non-zero, so it never passed while checking nothing. And nothing runs it automatically, because `run_tests.py` only collects `tests/test_*.py`. So it was loud and unheard rather than silently green. `checks/check_dataset.py` uses `rglob` for this same reason; this now matches it, and it is back to catching **5/5 breaks**.
+
+⚠️ **The open question this raises, which is [ROADMAP §8.2](ROADMAP.md) work rather than a fix:** the falsifiers are not in the one command that prints one total. Rule 4's whole point is that a green suite plus a stable catch count is the evidence, and today the catch counts have to be collected by hand.
+
+### 76.8 ✅⭐ WHAT THE SESSION GOT RIGHT, because a log full of defects hides the result
+
+The port is confirmed further than [§75.10](FINDINGS.md) left it. From the same log:
+
+- **Two arms, 14 motors, both jaw frames verified against the jaws** (B shifted −2π, G not at all), exactly as on the Mac.
+- **He drove arm B in TELEOP and recorded it**, then saved it to slot 1: 229 samples, 2.4 s, with the commit, the timestamp, the modes and the camera counts stamped in.
+- ⭐ **The playback gate did its job across two arms.** G reached its start pose immediately (0.00 rad of travel) and then printed `arm G is at the start pose; waiting for B`. That is [§72.1](FINDINGS.md)'s purpose-carrying park working on hardware.
+- **The tracking table was written to a file** rather than living only in the terminal, which is [§33.3](FINDINGS.md)'s rule holding.
+- ⭐ **The honest-omission line worked**: `⚠️ 8 of 14 joints too slow to rate (<0.01 rad/s)`. A quietly 6-row table would have read as complete.
+- **`Ctrl-C` parked both arms, disabled all 14 motors, confirmed them disabled, and wrote an incident file.** Temperatures peaked at 36 °C and 39 °C against a 55 °C warning.
+- **A discard actually discarded**, and a save actually saved, on the first use of that prompt on this machine.
+
+⚠️ **One number to keep an eye on rather than act on:** the loop printed `⚠️ 83Hz` during the replay with two cameras open, against 87-90 Hz measured without them ([§31.1](FINDINGS.md)). Two JPEG encoders in-process cost a few Hz. Everything below is written against measured `dt`, so nothing is biased by it.
+
+### 76.9 ⬜⭐⭐ WHAT IS NOW OPEN, and the one thing only he can do
+
+1. ⭐ **The station's clone needs one fast-forward, and then one camera session to confirm the fix on the real cameras.** The code is committed on the Mac and the bundle is already at `/tmp/yam.bundle` on the station. The `git` write there needs his approval. What to look for afterwards: `measured 1280x720 at 29.9 fps in MJPG` for the C920, and `measured 848x480 at ~30 fps` plus a stepped-down warning for the D405.
+2. **Re-record anything on the station made before this commit.** Those recordings carry a third of the images they appear to, and their D405 directory is empty.
+3. **Delete the 813 sidecars** on the station: `find ~/yam-robotics/recordings -name '._*' -delete`. Nothing needs them, and they will keep confusing anything that lists files.
+4. ⬜ **Whether to install librealsense on the station**, which needs root and is therefore his. It is the only way to know whether Intel's own library streams the D405 at 1280x720 there, and it is the only route to depth on either platform ([§63.0](FINDINGS.md), [§75.7](FINDINGS.md)). ⚠️ Note that the C4 export shrinks every view to 224x224, so 848x480 is already far more than the training format uses. **Nothing needs 1280x720 from a wrist camera.**
+5. ⬜ **The falsifiers should join the one-command suite** (see [§76.7](FINDINGS.md)).
