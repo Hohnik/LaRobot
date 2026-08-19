@@ -196,6 +196,19 @@ def main() -> int:
         for cam in cams:
             print(f"  ✓ index {cam.index:<3} {cam.model[:40]:<40} "
                   f"serial {cam.serial or '(none reported)'}")
+            if len(cam.nodes) > 1:
+                print(f"      ⚠️ this camera exposes {len(cam.nodes)} video nodes "
+                      f"{list(cam.nodes)} — colour, depth, infrared and metadata all live")
+                print(f"         under one device. Index {cam.index} is the FIRST node, "
+                      "which is a CHOICE, not a")
+                print("         measurement: nobody has confirmed yet which node carries "
+                      "COLOUR on Linux.")
+                notes.append(
+                    f"{cam.model[:28]} has {len(cam.nodes)} video nodes {list(cam.nodes)}. "
+                    "Confirm which one is colour before recording a dataset: "
+                    "`v4l2-ctl --device /dev/videoN --list-formats` (needs v4l-utils), or "
+                    "open each with apps/probe_camera_pixels.py once the video group is set "
+                    "(FINDINGS §75.5).")
         if cams:
             print("\n  ⭐ On Linux these indices come from the by-id symlinks, so they ARE "
                   "OpenCV's\n     indices. No hint file and no lens-covering "

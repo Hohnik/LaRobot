@@ -5282,6 +5282,18 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⭐ **A method note for the rebuild:** ffmpeg is not installed on the PC yet (it needs `sudo apt`), so the proof used `uv run --with static-ffmpeg` to fetch a static ffmpeg/ffprobe pair into `/tmp/ffbin` for the run. **That is a test convenience and not the recommendation** — the real install is one apt line, and the repo's dependency list was deliberately left alone. Worth knowing: **the whole dataset feature can be proven on a machine where an agent cannot install anything.**
 
+### 75.5 ✅⛔⭐⭐⭐ THE HARDWARE APPEARED MID-SESSION AND THE DEVICE PARSERS ARE NOW VERIFIED AGAINST REAL CAPTURES — with one assumption corrected and one left open
+
+⭐ **He plugged things in while the session was running**, so the two paths [§75.2](FINDINGS.md) called unverified could be tested at once. The fixtures in `tests/test_platform.py` and `tests/test_camera_identity.py` are now the station's **actual output, verbatim**, and their comments say so. That upgrade is the point: a fixture written from documentation tests its author's belief, and a fixture cut from the real machine tests reality.
+
+✅✅ **CAN: exactly right, first time.** `can0` carries serial `20593383594E5018` = **arm G**, `can1` carries `2081337C594E5018` = **arm B**, both read through `/sys/class/net/canX/device/../serial`, the two-hop path the parser was written for. Both interfaces are **DOWN with no bitrate**, which is their state after every boot, and the report named each one with the `sudo ip link set canX up type can bitrate 1000000` line that fixes it. ⭐ Worth keeping: the adapter serials are the SAME ones the Mac uses, so `ARM_SERIALS` needs no per-machine variant and an arm keeps its name across platforms.
+
+⛔⭐⭐ **CAMERAS: the join works and one assumption was WRONG. A D405 publishes SIX video nodes on Linux, not one.** The real by-id names are `usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405_260323072846-video-index0` through `index5` — the vendor and product strings BOTH appear (so the model text is doubled) and colour, depth, infrared and metadata streams all live under one USB device. The C920 publishes two. **The first version of the parser kept only `-video-index0` entries, so it silently discarded the existence of the other five.** The serial and model extraction was right, and the index it reports is right for the C920.
+
+⚠️⚠️ **THE OPEN QUESTION THIS EXPOSES, and it must be answered before any dataset is collected on Linux: which of a D405's six nodes carries COLOUR?** On macOS AVFoundation offered one stream per camera and the question could not arise. On Linux `-video-index0` is the device's first node, and for a RealSense that is commonly the DEPTH stream rather than colour. The parser now carries **every** node (`V4lCamera.nodes`) and `check_platform.py` prints the list with a warning that the chosen index is a CHOICE and not a measurement. ⛔ Answering it needs either `v4l-utils` (`v4l2-ctl --device /dev/videoN --list-formats`) or the `video` group so a node can be opened — **both need his sudo**, which is why it is in [§75.4](FINDINGS.md) rather than done. ⭐ The C920 is unaffected: its first node is its colour stream, and it is the top camera anyway.
+
+⚠️ **One D405 only.** At capture time the station had the C920 and the `260323072846` D405 (the arm-G one); `255323071773` was still on the Mac's hub. Nothing is wrong, and a three-camera session on the PC needs it moved across.
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
 **On the PC, needs his sudo (one block, ~1 minute):**
@@ -5291,7 +5303,9 @@ sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils
 sudo usermod -aG video $USER        # then log out and back in, or the group does not apply
 ```
 
-**Physical, his hands:** plug the two CAN adapters, the three cameras and the SpaceMouse into the PC. Then `uv run checks/check_platform.py --raw` on the PC either confirms the Linux device formats or shows exactly how they differ — and it prints the `sudo ip link set canX up type can bitrate 1000000` command for each adapter, which is the one CAN step that needs root every boot.
+**Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.
+
+⛔ **And one question the sudo block above unblocks, which must be answered before collecting a dataset on Linux: which of a D405's six video nodes is COLOUR?** With `v4l-utils` installed: `v4l2-ctl --device /dev/video2 --list-formats` (and `/dev/video3` … `/dev/video7`). The one that offers YUYV/MJPG at 1280x720 is the colour stream; a 16-bit Y16 format is depth. Send that output and the resolver takes the right node instead of the first one ([§75.5](FINDINGS.md)).
 
 **Also his, unchanged:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9) · framing the top camera at the workspace before real collection ([§73.2](FINDINGS.md)) · whether to push the current commits to the team branch (nothing has been pushed since `f47a23f`'s predecessor state; rule 9 stands).
 

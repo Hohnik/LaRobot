@@ -179,10 +179,17 @@ class V4lCamera:
     """
 
     device: str               # "/dev/video0"
-    index: int                # 0 — what OpenCV's VideoCapture(index) opens
+    index: int                # what OpenCV's VideoCapture(index) opens — the FIRST node
     model: str                # "Intel_R__RealSense_TM__Depth_Camera_405"
     serial: str               # "255323071773", or "" when the camera reports none
     by_id: str                # the full by-id link name, kept for the report and for auditing
+    #: ⛔⭐ EVERY video node this one physical camera exposes, ascending. MEASURED on the
+    #: station 2026-08-19: the C920 shows 2 and **a D405 shows SIX** (colour, depth, infrared
+    #: and metadata streams all live under one USB device). `index` is the first of them,
+    #: which is a CHOICE and not a measurement — on this rig's D405s nobody has yet confirmed
+    #: which node carries COLOUR on Linux. Carrying the whole list is what makes that
+    #: question askable instead of invisible ([FINDINGS §75.5](../../docs/FINDINGS.md)).
+    nodes: tuple[int, ...] = ()
 
 
 #: A `/dev/v4l/by-id` entry: `usb-<vendor>_<model>_<serial>-video-index<N>`. The serial is the
@@ -196,26 +203,34 @@ def parse_v4l_by_id(listing: dict[str, str]) -> list[V4lCamera]:
 
     ⛔ Only `-video-index0` entries are returned. A UVC camera exposes several video nodes and only the first is the capture node; the others are metadata streams that open successfully and deliver nothing — a silent-wrong-answer trap of exactly this repo's favourite kind.
     """
-    cameras: list[V4lCamera] = []
+    # ⭐ Group by DEVICE first (the body of the by-id name), because one physical camera
+    # publishes several nodes and the old version silently kept only the first — which
+    # threw away the fact that a D405 has six of them.
+    per_device: dict[str, list[tuple[int, str, str]]] = {}
     for name in sorted(listing):
         match = _BY_ID.match(name)
-        if not match or match.group("node") != "0":
+        if not match:
             continue
-        target = listing[name]
-        node = Path(target).name                     # "video0" from "../../video0"
+        node = Path(listing[name]).name              # "video0" from "../../video0"
         digits = "".join(ch for ch in node if ch.isdigit())
         if not node.startswith("video") or not digits:
             continue
-        body = match.group("body")
+        per_device.setdefault(match.group("body"), []).append((int(digits), node, name))
+
+    cameras: list[V4lCamera] = []
+    for body, found in per_device.items():
+        found.sort()
+        first_index, first_node, first_name = found[0]
         # The serial is the trailing field when it looks like one: cameras that report no
         # serial simply end with the model, and inventing a serial from a model word would
         # be the wrong-identity failure this module exists to prevent.
         model, _, tail = body.rpartition("_")
         serial = tail if model and _plausible_serial(tail) else ""
-        cameras.append(V4lCamera(device=f"/dev/{node}", index=int(digits),
+        cameras.append(V4lCamera(device=f"/dev/{first_node}", index=first_index,
                                  model=(model or body) if serial else body,
-                                 serial=serial, by_id=name))
-    return cameras
+                                 serial=serial, by_id=first_name,
+                                 nodes=tuple(i for i, _, _ in found)))
+    return sorted(cameras, key=lambda c: c.index)
 
 
 def _plausible_serial(text: str) -> bool:

@@ -3,9 +3,9 @@
 
     uv run tests/test_platform.py
 
-⛔⭐ READ THIS BEFORE TRUSTING A GREEN RUN. Every fixture below is **hand-written from the documented `ip`, sysfs and `/dev/v4l/by-id` formats. None of it was captured from Julien's Linux PC**, because no Linux machine has been reached yet. So these tests prove the parsers do what their author intended; they do NOT prove the real machine prints this. `checks/check_platform.py` prints the RAW text beside its parse for exactly that reason: the first run on the real PC either confirms these formats or shows precisely how they differ ([FINDINGS §74.0](../docs/FINDINGS.md)).
+✅⭐ **THESE FIXTURES ARE REAL CAPTURES, taken from the station `lavita@10.64.9.60` on 2026-08-19** ([FINDINGS §75.5](../docs/FINDINGS.md)). They were hand-written from documented formats for a few hours, and this file said so; the moment the machine was reachable with hardware attached they were replaced by its actual output, verbatim. **That upgrade is the point** — a fixture written from documentation tests its author's belief, and a fixture cut from the real machine tests reality.
 
-⭐ The macOS-side fixtures ARE real captures and live in `tests/test_camera_identity.py`. Keeping the two apart is deliberate: a reader must never have to guess which fixtures are measurements.
+⭐ What the capture corrected: a D405 publishes **SIX** video nodes on Linux (colour, depth, infrared and metadata under one USB device), not one, and the vendor and product strings BOTH appear in the by-id name so the model text is doubled. The first version of the parser kept only `-video-index0` entries and would have silently discarded the fact that the other five exist.
 """
 
 from __future__ import annotations
@@ -27,40 +27,65 @@ from yam.platform import (  # noqa: E402
     sysfs_can_serial,
 )
 
-#: ⚠️ HAND-WRITTEN, not captured. Two candleLight adapters as `ip -details link show type can`
-#: is documented to print them: one brought up at 1 Mbit/s, one still down.
+#: ✅ REAL CAPTURE from the station, 2026-08-19: both candleLight adapters attached and both
+#: still DOWN, which is their state after every boot until someone runs the `ip link set`
+#: command. ⭐ Kept exactly as `ip -details link show type can` printed it, tabs included.
 IP_FIXTURE = """\
-3: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc pfifo_fast state UP mode DEFAULT group default qlen 10
-    link/can  promiscuity 0 minmtu 0 maxmtu 0
-    can state ERROR-ACTIVE (berr-counter tx 0 rx 0) restart-ms 0
-          bitrate 1000000 sample-point 0.750
-          tq 12 prop-seg 29 phase-seg1 30 phase-seg2 20 sjw 1
-4: can1: <NOARP,ECHO> mtu 16 qdisc pfifo_fast state DOWN mode DEFAULT group default qlen 10
-    link/can  promiscuity 0 minmtu 0 maxmtu 0
-    can <BERR-REPORTING> state STOPPED restart-ms 0
+7: can0: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10
+    link/can  promiscuity 0  allmulti 0 minmtu 16 maxmtu 16 
+    can state STOPPED restart-ms 0 
+	  gs_usb: tseg1 1..256 tseg2 1..128 sjw 1..128 brp 1..512 brp_inc 1
+	  clock 160000000 numtxqueues 1 numrxqueues 1 parentbus usb parentdev 1-4:1.0 
+8: can1: <NOARP,ECHO> mtu 16 qdisc noop state DOWN mode DEFAULT group default qlen 10
+    link/can  promiscuity 0  allmulti 0 minmtu 16 maxmtu 16 
+    can state STOPPED restart-ms 0 
+	  gs_usb: tseg1 1..256 tseg2 1..128 sjw 1..128 brp 1..512 brp_inc 1
+	  clock 160000000 numtxqueues 1 numrxqueues 1 parentbus usb parentdev 3-3:1.0 
 """
 
-#: ⚠️ HAND-WRITTEN. This rig's three cameras as `/dev/v4l/by-id` is documented to name them:
-#: two D405s with their REAL serials (from FINDINGS §70.6, which is a real capture) and the
-#: C920, whose USB serial is genuinely empty — so its entry carries no serial field at all.
+#: ✅ REAL CAPTURE, same machine and moment: an UP interface has a `bitrate` line, which the
+#: captured pair above does not, so this one line is kept separately to exercise that branch.
+#: ⚠️ Synthesised from the documented `ip` output for an UP link — labelled, because no
+#: interface on the station has been brought up yet.
+IP_UP_FIXTURE = """\
+7: can0: <NOARP,UP,LOWER_UP,ECHO> mtu 16 qdisc pfifo_fast state UP mode DEFAULT group default qlen 10
+    link/can  promiscuity 0  allmulti 0 minmtu 16 maxmtu 16 
+    can state ERROR-ACTIVE restart-ms 0 
+          bitrate 1000000 sample-point 0.750
+"""
+
+#: ✅ REAL CAPTURE from the station, 2026-08-19, verbatim: the C920 (2 nodes, NO serial in the
+#: name because the device reports none) and ONE D405 (**6 nodes**, its serial at the end, and
+#: the vendor and product strings both present so the model text appears twice). The second
+#: D405 was still on the Mac's hub at capture time. ⭐ A second D405 line is added below to
+#: exercise the two-identical-cameras case, built by substituting the other real serial.
+_D405 = "usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405"
 BY_ID_FIXTURE = {
-    "usb-Intel_R__RealSense_TM__Depth_Camera_405_255323071773-video-index0": "../../video2",
-    "usb-Intel_R__RealSense_TM__Depth_Camera_405_255323071773-video-index1": "../../video3",
-    "usb-Intel_R__RealSense_TM__Depth_Camera_405_260323072846-video-index0": "../../video4",
     "usb-046d_HD_Pro_Webcam_C920-video-index0": "../../video0",
     "usb-046d_HD_Pro_Webcam_C920-video-index1": "../../video1",
+    **{f"{_D405}_260323072846-video-index{i}": f"../../video{2 + i}" for i in range(6)},
+    # ⚠️ Constructed, not captured: the same real name with this rig's OTHER real serial, so
+    # the "two identical D405s" case is covered. Its node numbers continue the sequence.
+    **{f"{_D405}_255323071773-video-index{i}": f"../../video{8 + i}" for i in range(6)},
 }
 
 
-def test_can_links_carry_state_and_bitrate_apart() -> None:
-    links = parse_can_links(IP_FIXTURE, {"can0": "2081337C594E5018"})
+def test_the_real_capture_reads_as_two_down_interfaces_with_their_serials() -> None:
+    # The serials are the station's real ones: can0 is arm G, can1 is arm B (FINDINGS §75.5).
+    links = parse_can_links(IP_FIXTURE, {"can0": "20593383594E5018",
+                                         "can1": "2081337C594E5018"})
     assert [l.interface for l in links] == ["can0", "can1"]
-    up, down = links
-    assert up.state == "UP" and up.bitrate == CAN_BITRATE
-    assert up.serial == "2081337C594E5018", "the serial is what an arm is resolved by"
-    assert down.state == "DOWN" and down.bitrate is None, \
-        "an interface that exists but is DOWN cannot carry a frame, and must read that way"
-    assert down.serial == "", "an unknown serial stays empty — never guessed from position"
+    assert all(l.state == "DOWN" for l in links), \
+        "both adapters are DOWN after every boot until `ip link set` runs — presence is not " \
+        "readiness, and a DOWN interface cannot carry a frame"
+    assert all(l.bitrate is None for l in links), "a DOWN link has no bitrate configured"
+    assert links[0].serial == "20593383594E5018" and links[1].serial == "2081337C594E5018"
+
+
+def test_an_up_interface_reports_its_bitrate() -> None:
+    links = parse_can_links(IP_UP_FIXTURE, {"can0": "20593383594E5018"})
+    assert len(links) == 1
+    assert links[0].state == "UP" and links[0].bitrate == CAN_BITRATE
 
 
 def test_a_missing_serial_is_empty_rather_than_wrong() -> None:
@@ -97,8 +122,8 @@ def test_by_id_gives_serial_model_and_the_opencv_index_directly() -> None:
     cams = {c.serial or c.model: c for c in parse_v4l_by_id(BY_ID_FIXTURE)}
     assert set(cams) == {"255323071773", "260323072846", "046d_HD_Pro_Webcam_C920"}, \
         f"expected two serialled D405s and the serial-less C920, got {sorted(cams)}"
-    assert cams["255323071773"].index == 2 and cams["255323071773"].device == "/dev/video2"
-    assert cams["260323072846"].index == 4
+    assert cams["260323072846"].index == 2 and cams["260323072846"].device == "/dev/video2"
+    assert cams["255323071773"].index == 8
     assert "RealSense" in cams["255323071773"].model
     # ⭐ This is the whole Linux advantage: two IDENTICAL cameras separated by serial, with
     # their OpenCV index read from a symlink — no hint file, no mode probe, no lens covering.
@@ -111,13 +136,22 @@ def test_the_c920s_absent_serial_stays_absent() -> None:
     assert c920.index == 0
 
 
-def test_only_the_capture_node_is_returned() -> None:
-    cams = parse_v4l_by_id(BY_ID_FIXTURE)
-    assert len(cams) == 3, f"5 by-id entries, 3 cameras — index1 nodes are metadata: {cams}"
-    assert all(c.by_id.endswith("index0") for c in cams)
+def test_one_camera_per_device_with_every_node_it_publishes() -> None:
+    """⛔ The capture corrected this: a D405 publishes SIX nodes, not one. Keeping the whole
+    list is what makes "which node is colour?" an askable question rather than a silent
+    assumption (FINDINGS §75.5)."""
+    cams = {c.serial or "c920": c for c in parse_v4l_by_id(BY_ID_FIXTURE)}
+    assert len(cams) == 3, f"14 by-id entries, 3 physical cameras: {sorted(cams)}"
+    assert cams["c920"].nodes == (0, 1), "the C920 publishes two nodes"
+    assert cams["260323072846"].nodes == (2, 3, 4, 5, 6, 7), \
+        "a D405 publishes SIX — colour, depth, infrared and metadata under one device"
+    assert all(c.index == c.nodes[0] for c in cams.values()), \
+        "index is the FIRST node, and it is a choice: nobody has confirmed which node " \
+        "carries colour on Linux"
+    assert all(c.by_id.endswith("index0") for c in cams.values())
 
 
-def test_read_v4l_cameras_walks_a_real_directory() -> None:
+def test_read_v4l_cameras_walks_a_real_directory() -> None:  # noqa: D103
     # Proves the live reader against the same shape, using a real filesystem rather than a
     # mock — a reader that only works against a dict would not have been exercised at all.
     with tempfile.TemporaryDirectory() as d:

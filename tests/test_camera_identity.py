@@ -22,12 +22,15 @@ from yam.cameras.identity import (  # noqa: E402
 )
 from yam.platform import parse_v4l_by_id  # noqa: E402
 
-#: ⚠️ HAND-WRITTEN from the documented `/dev/v4l/by-id` format, NOT captured — no Linux
-#: machine has been reached yet (FINDINGS §74.0). The serials inside it ARE real (§70.6).
+#: ✅ The REAL `/dev/v4l/by-id` naming, captured from the station 2026-08-19 (FINDINGS §75.5):
+#: the vendor and product strings both appear, so the model text is doubled, and a D405
+#: publishes six nodes. The C920's entry carries no serial because the device reports none.
+_D405 = "usb-Intel_R__RealSense_TM__Depth_Camera_405_Intel_R__RealSense_TM__Depth_Camera_405"
 LINUX_BY_ID = {
-    "usb-Intel_R__RealSense_TM__Depth_Camera_405_255323071773-video-index0": "../../video2",
-    "usb-Intel_R__RealSense_TM__Depth_Camera_405_260323072846-video-index0": "../../video4",
     "usb-046d_HD_Pro_Webcam_C920-video-index0": "../../video0",
+    "usb-046d_HD_Pro_Webcam_C920-video-index1": "../../video1",
+    **{f"{_D405}_260323072846-video-index{i}": f"../../video{2 + i}" for i in range(6)},
+    **{f"{_D405}_255323071773-video-index{i}": f"../../video{8 + i}" for i in range(6)},
 }
 
 #: Trimmed from the live `ioreg -p IOUSB -w0 -l` of 2026-08-19: both D405s (distinct
@@ -107,6 +110,8 @@ def test_the_linux_resolver_takes_the_same_three_spellings() -> None:
     assert linux_camera_for_spec("d405:2603", cams).serial == "260323072846"
     assert linux_camera_for_spec("d405:2553", cams).serial == "255323071773"
     assert linux_camera_for_spec("2", cams).index == 2, "a raw index still works"
+    assert linux_camera_for_spec("d405:2603", cams).index == 2, \
+        "the index is the device's FIRST node, from the real six-node capture"
     # ⭐ The Linux win in one line: two IDENTICAL cameras separated with no hint file and
     # no lens-covering, because the by-id name carries the serial AND the index.
     assert (linux_camera_for_spec("d405:2603", cams).index
