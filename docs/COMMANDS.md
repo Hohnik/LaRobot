@@ -260,6 +260,14 @@ uv run apps/teleop_session.py --sim --yes --arms B,G --start-mode hold
 
 ⛔ **What `--sim` cannot tell you:** anything about feel, gravity compensation, thermal behaviour, or the axis map. It catches sequencing, state-machine, cursor and following-error bugs, which is where this week's defects lived. Full limits: [FINDINGS §59.0](FINDINGS.md), what it found: [FINDINGS §60.2](FINDINGS.md).
 
+## ⭐ The dataset side — recordings become episodes
+
+```bash
+uv run apps/export_episode.py --slot 7 --left B --right G   # one MCAP episode, the team's C3 contract
+```
+
+⭐⭐ **This writes the [Setup-Anleitung.md](Setup-Anleitung.md) C3 shape exactly**: the eight state/action topics with their 6+1 dimensions per side, every stream on the 33,333,333 ns tick, joint-space actions ([FINDINGS §70.13](FINDINGS.md)). Labels, provenance, the arm mapping and the action policy ride in `/episode-meta`. ⛔ **`--left`/`--right` are REQUIRED** — the sides are bench positions nothing in a recording can derive, and a defaulted wrong side mirrors every episode silently. ⛔ Single-arm recordings are refused (an ABC episode needs both sides), simulated recordings export with their `simulated` stamp and a warning, and **camera topics are absent until frames are wired into the recorder** — the export says so on every run. ⚠️ **The Anleitung's own C4 gate stands: verify a mini-sample against ABC's loader before collecting for real** — this output is the contract as written, not yet verified ABC input.
+
 ## ⭐ The checkers — no hardware, and they answer real questions
 
 ```bash
