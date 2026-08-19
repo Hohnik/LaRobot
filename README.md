@@ -2,11 +2,19 @@
 
 > ## What this repo is
 >
-> **A finished, hardware-proven walkthrough of a bimanual YAM arm setup, built so a team can rebuild it from scratch** (Julien's ruling, [docs/FINDINGS.md](docs/FINDINGS.md) §67.0). Every feature here was built once, tested headless, and confirmed on the real arms; the findings, dead ends and measured numbers are all written down. The end deliverable is a consolidation plan ([docs/ROADMAP.md](docs/ROADMAP.md) §8.5) the rebuild works from.
+> **A finished, hardware-proven walkthrough of a bimanual YAM arm setup, built so a team can rebuild it from scratch** (Julien's ruling, [docs/FINDINGS.md](docs/FINDINGS.md) §67.0). Every feature here was built once, tested without hardware first, and then confirmed on the real arms. The findings, the dead ends and the measured numbers are all written down. The deliverable is the rebuild plan, [docs/PLAN.md](docs/PLAN.md), and the rebuild works from it.
 >
-> What it does today, all confirmed on hardware: two arms driven from one 90 Hz loop by SpaceMouse (cartesian IK teleop), hand-guiding under gravity compensation, blended waypoint runs **including grabs** (the run pauses where only the jaws move and reports whether something was gripped), record-and-replay of hand-taught movements with puck scrubbing — **with camera frames recorded beside every take and exported into C3-shaped MCAP episodes with images** — composite runs (waypoints + taught takes in one sequence), mirror mode, per-session saved settings, a lagging simulator for the whole loop, and safe-stop/incident machinery.
+> What it does today, all confirmed on hardware:
 >
-> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md) (the rebuild plan — the deliverable this repo exists to produce)** → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system is shaped and why, one level down from the plan) → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state — its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2).
+> - Two arms driven from one 90 Hz loop by SpaceMouse: the puck steers the gripper in cartesian space through inverse kinematics.
+> - Hand-guiding: the arm goes weightless under gravity compensation and you move it by hand.
+> - Waypoint runs that can grab. The run pauses where only the jaws move and reports whether something was gripped.
+> - Recording and replaying hand-taught movements, with the puck as a scrub wheel for the playback clock.
+> - Camera frames recorded beside every recording, and an exporter that turns a recording into an MCAP episode with images, in the exact topic shape of the team's setup guide (its section C3).
+> - Composite runs: waypoints and recorded movements in one sequence.
+> - Mirror mode (one arm follows the other), saved per-session settings, a simulator that lags like the real hardware and runs the whole loop with nothing attached, and safe-stop plus incident recording.
+>
+> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md)** (the rebuild plan, the deliverable this repo exists to produce) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system is shaped and why, one level down from the plan) → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state; its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2).
 >
 > ## Day one: prove the rig works, in three commands
 >
