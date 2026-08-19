@@ -34,8 +34,12 @@ from yam.episode import (
 from yam.recording import Layout, Trajectory
 
 __all__ = ["EPISODE_FPS", "TIMEBASE", "PTS_STEP", "GOP", "VIEW_SIZE", "ROW_WIDTH",
-           "STATES_FILE", "VIDEO_FILE", "META_FILE", "FFMPEG_VIDEO_ARGS",
-           "ffmpeg_command", "stack_views", "DatasetReport", "export_dataset"]
+           "STATES_FILE", "VIDEO_FILE", "META_FILE", "FFMPEG_VIDEO_ARGS", "STD_FLOOR",
+           "ffmpeg_command", "stack_views", "norm_stats", "DatasetReport", "export_dataset"]
+
+#: The floor for a zero-variance column in the normalisation statistics. Small enough not to
+#: distort a real column, large enough that dividing by it cannot produce an infinity.
+STD_FLOOR = 1e-6
 
 #: The contract's frame rate. Identical to C3's 33,333,333 ns tick by construction.
 EPISODE_FPS = 30
@@ -297,3 +301,40 @@ def export_dataset(traj: Trajectory, left: str, right: str, cameras: dict[str, s
                          duration_s=duration, view_size=(view_width, view_height),
                          frame_size=frame_size, roles=roles,
                          mapping={"left": left, "right": right}, warnings=tuple(warnings))
+
+
+def norm_stats(rows: Any, columns: Sequence[str] = ROW_COLUMNS,
+               floor: float = STD_FLOOR) -> dict:
+    """Per-column mean and standard deviation for the trainer's `norm_stats.json` (guide C5).
+
+    Pure, so the arithmetic is testable without a dataset on disk, and the caller decides
+    which rows go in — which is how the train-only rule is enforced one level up: statistics
+    that included the validation episodes would leak the held-out set into every training
+    batch and quietly flatter every validation number afterwards.
+
+    ⚠️ A column that never moved has standard deviation zero, and dividing by it produces
+    infinities downstream. Those columns are floored to `floor` and **named in the result**,
+    because a silently floored column turns a motionless joint into amplified noise for the
+    model. Naming them is what makes "the left arm held still in every take" visible instead
+    of mysterious.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    table = np.asarray(rows, dtype=np.float64)
+    if table.ndim != 2 or table.shape[1] != len(columns):
+        raise ValueError(f"expected (n, {len(columns)}) rows, got {table.shape}")
+    if table.shape[0] == 0:
+        raise ValueError("statistics over no rows would be a file of zeros that every "
+                         "training run would trust")
+    mean = table.mean(axis=0)
+    std = table.std(axis=0)
+    floored = [columns[i] for i in range(len(columns)) if std[i] < floor]
+    std = np.maximum(std, floor)
+    return {
+        "columns": list(columns),
+        "mean": [float(v) for v in mean],
+        "std": [float(v) for v in std],
+        "count": int(table.shape[0]),
+        "std_floor": floor,
+        "floored_columns": floored,
+    }

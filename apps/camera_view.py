@@ -658,6 +658,21 @@ def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
     Julien's iPhone over Continuity — and a test suite with side effects on hardware
     is one people stop running.
     """
+    # ⭐ On Linux the whole question is answered by /dev/v4l/by-id, so route there and never
+    # touch the AVFoundation machinery below (which would find nothing and then probe every
+    # index for no reason). One dispatch, and every caller of this function — the viewer,
+    # capture_probe — works on both platforms (ROADMAP §8.2 item 49).
+    from yam.platform import IS_LINUX, read_v4l_cameras  # noqa: PLC0415
+
+    if IS_LINUX and cams is None and identified is None:
+        from yam.cameras.identity import linux_camera_for_spec  # noqa: PLC0415
+
+        try:
+            found = linux_camera_for_spec(spec, read_v4l_cameras())
+        except ValueError as e:
+            raise CameraLookupError(str(e)) from e
+        return found.index, MacCamera(found.model, "", found.by_id), None
+
     cams = mac_cameras() if cams is None else cams
     if not cams:
         raise CameraLookupError(
@@ -711,6 +726,31 @@ def resolve_camera(spec: str, cams: list[MacCamera] | None = None,
 def list_cameras() -> None:
     """Everything known about every camera: what macOS lists, which index each one is
     **measured** to be, and what each index actually shows. Run after any replug."""
+    from yam.platform import IS_LINUX, read_v4l_cameras  # noqa: PLC0415
+
+    if IS_LINUX:
+        # ⭐ On Linux this report is short because the kernel already answers it: the by-id
+        # name carries model and serial, and its symlink target IS OpenCV's index. There is
+        # nothing to measure, so measuring would only be theatre (ROADMAP §8.2 item 49).
+        cams_linux = read_v4l_cameras()
+        if not cams_linux:
+            print("⛔ nothing in /dev/v4l/by-id — no camera is attached, or this user is not")
+            print("   in the `video` group. `uv run checks/check_platform.py --raw` prints")
+            print("   the raw listing and says which it is.")
+            return
+        print(f"Linux lists {len(cams_linux)} camera(s) from /dev/v4l/by-id.")
+        print("⭐ These indices ARE OpenCV's — the by-id symlink points at /dev/videoN, so")
+        print("   nothing here is inferred from a list order.\n")
+        print(f"  {'idx':>3s}  {'device':<13s} {'serial':<16s} model")
+        for cam in cams_linux:
+            print(f"  {cam.index:>3d}  {cam.device:<13s} "
+                  f"{cam.serial or '(none reported)':<16s} {cam.model}")
+        print("\n  Select by name or serial — both work, and the name is what a recording"
+              " stores:")
+        print("      uv run apps/camera_view.py --camera c920 --term")
+        print("      uv run apps/camera_view.py --camera d405:2603 --term")
+        return
+
     cams = mac_cameras()
     if cams:
         print(f"macOS lists {len(cams)} camera(s). ⚠️ THIS ORDER IS NOT OpenCV's ORDER —")

@@ -278,10 +278,18 @@ uv run apps/export_episode.py --slot 7 --left G --right B --top c920 --left-wris
 ## ⭐⭐ The training format papers use — one directory per episode
 
 ```bash
+# one recording → one training episode
 uv run apps/export_dataset.py --slot 5 --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773
-uv run checks/check_dataset.py                     # ⭐ re-read every episode and check the contract
+# ⭐ or the whole shelf at once, into a split directory
+uv run apps/export_dataset.py --all --split train --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773
+uv run checks/check_dataset.py --root recordings/datasets   # ⭐ re-read every episode, check the contract
+uv run apps/build_dataset_stats.py --root recordings/datasets --task-name "put the block in the bin"
 uv run checks/falsify_check_dataset.py             # prove that checker can still see a break
 ```
+
+⭐⭐ **`--all` converts every recording that carries camera frames**, in slot order, into `recordings/datasets/<split>/`. It names what it skips and why (no frames, one arm only, a role naming a camera that recording does not have) and carries on, so one bad slot never costs the batch. **`--split train|val` is the guide's own C5 requirement**: the validation episodes must be SEPARATE recordings from the start, never frames carved out of training episodes later.
+
+⭐ **`build_dataset_stats.py` writes the `norm_stats.json` the trainer looks for** (guide C5): per-column mean and standard deviation over the **train split only**, because statistics that included the validation episodes would leak the held-out set into every training batch. It verifies its own output by normalising the training data with what it just wrote and checking the result really is zero-mean and unit-variance, and it NAMES any column that never moved (a motionless joint floored to 1e-6 becomes amplified noise otherwise). On this rig's three episodes it correctly reported that the left arm's second joint and its jaw never moved, because arm G held still throughout.
 
 ⭐⭐ **Two exports exist and they are different things.** `apps/export_episode.py` writes the C3 **log** (one MCAP file, every stream on the 33,333,333 ns tick). `apps/export_dataset.py` writes the C4 **training set**: `episode_<id>/` holding `states_actions.bin` (`(num_steps, 28)` float64, 14 state then 14 action, columns named in the metadata), `combined_camera-images-rgb.mp4` (the views stacked vertically, 224×224 each by default), and `episode_metadata.json`. One shared row builder feeds both, so the log and the training set can never describe a demonstration differently ([FINDINGS §74.1](FINDINGS.md)).
 

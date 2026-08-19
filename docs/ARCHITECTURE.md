@@ -26,9 +26,13 @@
              ▼                              recordings/frames/<slot>/
       14 motors, 2 arms
                                                      │
-      recordings/<slot>.json  ──────────────►  yam/episode.py
-      (one flat 14-joint timeline)             → <slot>.mcap (C3 contract)
+      recordings/<slot>.json  ──────────────►  yam/episode.py  → <slot>.mcap   (C3 log)
+      (one flat 14-joint timeline)     │
+                                       └────►  yam/dataset.py → episode_<id>/  (C4 training set)
+                                                 states_actions.bin · stacked mp4 · metadata
 ```
+
+⭐ **Every device name in that picture is resolved through one module, `yam/platform.py`** — the only place in the repo that branches on the operating system. On macOS the CAN adapter is a gs_usb index verified by serial and the cameras need the uniqueID chain; on Linux the adapter is a SocketCAN interface named from its serial in sysfs and the cameras come from `/dev/v4l/by-id`. Nothing else in the diagram knows which machine it is on.
 
 ## 2. The five layers, and the one rule each is built around
 
@@ -40,7 +44,7 @@
 
 **The loop: state advances only in arrival and completion branches.** A park hands over to a playback in the branch where the park arrives. A composite leg advances where the previous leg completes. Never in a key branch, never on a timer ([FINDINGS §57.1](FINDINGS.md)). Two additions to that rule paid for themselves. Every park carries its purpose, so an arrival can only be credited to the thing it was actually for — [FINDINGS §72.1](FINDINGS.md) is the day a waypoint leg's arrival got credited to a playback armed in the same event. And the playback gate measures every arm against the recording's start pose before anything plays, because the bookkeeping has been wrong once and measuring is cheaper than trusting.
 
-**The data lane: one flat timeline, provenance stamped twice, frames beside the file.** A recording is one 14-wide joint timeline in `--arms` order, which is ABC's own shape ([ROADMAP §9.2](ROADMAP.md)). Labels ride inside the file ([FINDINGS §70.10](FINDINGS.md)). A simulated recording is stamped as simulated in two independent fields ([FINDINGS §60.2](FINDINGS.md)). Camera frames live on disk beside the file, with dropped frames counted rather than silently missing ([FINDINGS §71.2](FINDINGS.md)). The episode exporter writes the C3 contract, and every mapping the file cannot derive on its own — which arm stands left, which camera looks from where — is required input, refused when absent ([FINDINGS §70.13](FINDINGS.md)).
+**The data lane: one flat timeline, provenance stamped twice, frames beside the file.** A recording is one 14-wide joint timeline in `--arms` order, which is ABC's own shape ([ROADMAP §9.2](ROADMAP.md)). Labels ride inside the file ([FINDINGS §70.10](FINDINGS.md)). A simulated recording is stamped as simulated in two independent fields ([FINDINGS §60.2](FINDINGS.md)). Camera frames live on disk beside the file, with dropped frames counted rather than silently missing ([FINDINGS §71.2](FINDINGS.md)). The episode exporter writes the C3 contract, and every mapping the file cannot derive on its own — which arm stands left, which camera looks from where — is required input, refused when absent ([FINDINGS §70.13](FINDINGS.md)). **Two exports leave from the same rows**: `yam/episode.py` writes the C3 log and `yam/dataset.py` writes the C4 training directory, both fed by one `state_action_rows()` so they can never describe a demonstration differently. The C4 video's encoding is strict on purpose, because the trainer computes where frame k is rather than decoding to find it, and `checks/check_dataset.py` re-reads the finished file to prove each property landed ([FINDINGS §74.1](FINDINGS.md)).
 
 ## 3. The base ideas — the five that generated everything above
 
@@ -56,7 +60,8 @@
 2. `w` starts a recording. Every cycle appends 14 measured joint values, and each camera's fresh frames go to its own writer thread (JPEG plus an index file, drops counted). The operator drives (`t`), hand-guides (`g`), or lets a waypoint run execute (`p 1 2 3` Enter). The recording rides through all of it, and `k` marks a bad stretch into the file.
 3. `w` stops the recording on the same line the sampler stops ([FINDINGS §30.1](FINDINGS.md)). A digit saves `recordings/<slot>.json` plus `frames/<slot>/`, with the commit, the timestamp, the modes and the camera counts stamped in.
 4. `checks/check_recordings.py` re-counts everything from disk — padding, labels, frames, provenance — and flags whatever disagrees.
-5. `export_episode --slot 3 --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773` writes the C3 MCAP file: eight vector topics plus three camera topics, every stream on the 33,333,333 ns tick, actions as next-tick states, and every mapping auditable in the episode's own `/episode-meta`. The C4 gate (ABC's loader) is the one verification this bench cannot run.
+5. `export_episode --slot 3 --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773` writes the C3 MCAP file: eight vector topics plus three camera topics, every stream on the 33,333,333 ns tick, actions as next-tick states, and every mapping auditable in the episode's own `/episode-meta`.
+6. `export_dataset` with the same flags writes the C4 training directory instead, and `checks/check_dataset.py` re-reads it: the table's shape and finiteness, the action policy in the bytes, and every property of the video the loader depends on. The C4 gate (ABC's own loader) is the one verification this bench cannot run.
 
 ## 5. Where everything lives
 
@@ -69,7 +74,9 @@
 | teleop math | `yam/teleop.py` (IK, frames, workspace) | `test_teleop_ik` |
 | recording + playback | `yam/recording.py` (`Trajectory`, labels, replay, scrub) | `test_recording` · `test_scrub` · `test_save_slot` |
 | cameras | `yam/cameras/` (frame · grabber · capture · identity · specs · writer) | `test_capture` · `test_camera_identity` · `test_frame_writer` |
-| episodes | `yam/episode.py` · `apps/export_episode.py` | `test_episode` |
+| episodes (C3 log) | `yam/episode.py` · `apps/export_episode.py` | `test_episode` |
+| training sets (C4) | `yam/dataset.py` · `apps/export_dataset.py` | `test_dataset` · `checks/check_dataset.py` + `falsify_check_dataset.py` |
+| what machine is this | `yam/platform.py` (CAN links, v4l cameras, clocks, permissions) | `test_platform` · `checks/check_platform.py` |
 | the loop itself | `apps/teleop_session.py` (script only — decisions live above) | `checks/drive_sim_session.py` (the whole loop, simulated) |
 | the simulator | `yam/fake/arm.py` (lags like the measured law) | `test_fake_arm` · `checks/falsify_fake_arm.py` |
 | truth maintenance | `checks/check_*.py` and their `falsify_*.py` | `checks/run_tests.py` — one command, one total |

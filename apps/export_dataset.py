@@ -29,7 +29,14 @@ from export_episode import find_slot  # noqa: E402 — one slot-finder, both exp
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[1].strip())
-    ap.add_argument("--slot", required=True, help="recording slot 0-9 to export")
+    ap.add_argument("--slot", default="", help="recording slot 0-9 to export")
+    ap.add_argument("--all", action="store_true",
+                    help="⭐ export EVERY recording that carries camera frames, in slot order. "
+                         "Recordings without frames are skipped by name, never silently")
+    ap.add_argument("--split", choices=("train", "val"), default="train",
+                    help="which split directory to write into (default %(default)s). ⛔ The "
+                         "guide requires the val split to be SEPARATE EPISODES from the "
+                         "start, never frames taken out of training episodes")
     ap.add_argument("--left", required=True, choices=sorted(ARM_SERIALS),
                     help="which arm stands on the bench's LEFT — required, never guessed")
     ap.add_argument("--right", required=True, choices=sorted(ARM_SERIALS),
@@ -52,32 +59,75 @@ def main() -> int:
     args = ap.parse_args()
     if args.left == args.right:
         raise SystemExit("⛔ left and right name the same arm — one of them is wrong.")
+    if bool(args.slot) == bool(args.all):
+        raise SystemExit("⛔ give either --slot N or --all, not both and not neither.")
     cameras = {role: value for role, value in
                (("top", args.top), ("left-wrist", args.left_wrist),
                 ("right-wrist", args.right_wrist)) if value}
 
-    path = find_slot(args.slot)
-    traj = Trajectory.load(path)
-    out_root = Path(args.out) if args.out else REPO / "recordings" / "datasets"
-    try:
-        report = export_dataset(traj, left=args.left, right=args.right, cameras=cameras,
-                                recording_path=path, out_root=out_root,
-                                view_width=args.view_width, view_height=args.view_height,
-                                episode_id=args.episode_id or None,
-                                source=str(path.relative_to(REPO)))
-    except ValueError as e:
-        raise SystemExit(f"⛔ {e}") from e
+    base = Path(args.out) if args.out else REPO / "recordings" / "datasets"
+    out_root = base / args.split
 
-    print(f"\n⭐ TRAINING EPISODE written: {report.path.relative_to(REPO)}")
-    print(f"   {report.steps} steps at 30 Hz covering {report.duration_s:.1f}s · "
-          f"left={report.mapping['left']} right={report.mapping['right']}")
-    print(f"   📹 {len(report.roles)} view(s) stacked in order {list(report.roles)} · "
-          f"each {report.view_size[0]}x{report.view_size[1]} · "
-          f"frame {report.frame_size[0]}x{report.frame_size[1]}")
-    for w in report.warnings:
-        print(f"   ⚠️ {w}")
+    # ⭐ One list of slots, whether it came from --slot or --all, so the two paths cannot
+    # drift. --all takes only recordings that CARRY FRAMES, and names the ones it skips:
+    # a batch export that silently ignored half the shelf would be the worst kind of quiet.
+    if args.all:
+        slots, skipped = [], []
+        for digit in "0123456789":
+            for folder in (REPO / "recordings", REPO / "recordings" / "sim"):
+                candidate = folder / f"{digit}.json"
+                if candidate.is_file():
+                    meta = Trajectory.load(candidate).meta
+                    (slots if (meta.get("cameras") or {}).get("per_camera")
+                     else skipped).append(digit)
+                    break
+        if skipped:
+            print(f"⚠️ skipping {len(skipped)} recording(s) with no camera frames: "
+                  f"{', '.join(skipped)} — a C4 episode is a video plus a table.")
+        if not slots:
+            raise SystemExit("⛔ no recording carries camera frames, so there is nothing to "
+                             "export. Record with --cameras first.")
+        print(f"⭐ exporting {len(slots)} recording(s) into "
+              f"{out_root.relative_to(REPO)}/: {', '.join(slots)}\n")
+    else:
+        slots = [args.slot]
+
+    written = []
+    for slot in slots:
+        path = find_slot(slot)
+        traj = Trajectory.load(path)
+        episode_id = (args.episode_id or None) if len(slots) == 1 else f"slot{slot}"
+        try:
+            report = export_dataset(traj, left=args.left, right=args.right, cameras=cameras,
+                                    recording_path=path, out_root=out_root,
+                                    view_width=args.view_width, view_height=args.view_height,
+                                    episode_id=episode_id,
+                                    source=str(path.relative_to(REPO)))
+        except ValueError as e:
+            if args.all:
+                print(f"  ⛔ slot {slot}: {e}\n")
+                continue
+            raise SystemExit(f"⛔ {e}") from e
+        written.append(report)
+        print(f"⭐ slot {slot} → {report.path.relative_to(REPO)}")
+        print(f"   {report.steps} steps at 30 Hz covering {report.duration_s:.1f}s · "
+              f"left={report.mapping['left']} right={report.mapping['right']}")
+        print(f"   📹 {len(report.roles)} view(s) stacked in order {list(report.roles)} · "
+              f"each {report.view_size[0]}x{report.view_size[1]} · "
+              f"frame {report.frame_size[0]}x{report.frame_size[1]}")
+        for w in report.warnings:
+            print(f"   ⚠️ {w}")
+        print()
+
+    if not written:
+        raise SystemExit("⛔ nothing was exported.")
+    total = sum(r.steps for r in written)
+    print(f"⭐ {len(written)} episode(s), {total} steps, in "
+          f"{out_root.relative_to(REPO)}/ (split: {args.split})")
     print("\n⭐ VERIFY IT NOW — the properties the loader depends on are invisible to the eye:")
-    print(f"   uv run checks/check_dataset.py --dir {report.path.relative_to(REPO)}")
+    print(f"   uv run checks/check_dataset.py --root {base.relative_to(REPO)}")
+    print("⭐ Then the normalisation statistics the trainer expects (guide C5):")
+    print(f"   uv run apps/build_dataset_stats.py --root {base.relative_to(REPO)}")
     print("   ⛔ And the Anleitung's C4 gate still applies: only ABC's own loader can confirm "
           "the\n      published spec is complete.")
     return 0

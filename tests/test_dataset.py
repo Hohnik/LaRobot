@@ -35,8 +35,10 @@ from yam.dataset import (  # noqa: E402
     STATES_FILE,
     TIMEBASE,
     VIDEO_FILE,
+    STD_FLOOR,
     export_dataset,
     ffmpeg_command,
+    norm_stats,
     stack_views,
 )
 from yam.episode import ROW_COLUMNS  # noqa: E402
@@ -211,6 +213,47 @@ def test_a_missing_view_warns_rather_than_pretending() -> None:
     assert any("3 views" in w for w in report.warnings), \
         "a 1-view stack where the contract wants 3 must say so — a loader expecting three " \
         "would read stacked rows that are not there"
+
+
+def test_the_normalisation_statistics_normalise_their_own_data() -> None:
+    """⭐ The consequence, not the intention: normalising the input with the produced stats
+    must give zero mean and unit variance. A subtly wrong stats file trains a model badly
+    and raises nothing (guide C5)."""
+    rng = np.random.default_rng(7)
+    rows = rng.normal(3.0, 2.0, size=(500, ROW_WIDTH))
+    rows[:, 4] = 1.234                      # a column that never moved
+    stats = norm_stats(rows)
+    mean, std = np.asarray(stats["mean"]), np.asarray(stats["std"])
+    live = [i for i in range(ROW_WIDTH) if i != 4]
+    normalised = (rows - mean) / std
+    assert abs(normalised[:, live].mean()) < 1e-12
+    assert abs(normalised[:, live].std(axis=0) - 1.0).max() < 1e-9
+    assert stats["count"] == 500 and stats["columns"] == list(ROW_COLUMNS)
+
+
+def test_a_motionless_column_is_floored_and_NAMED() -> None:
+    rows = np.zeros((20, ROW_WIDTH))
+    rows[:, 0] = np.arange(20)              # only one column carries any signal
+    stats = norm_stats(rows)
+    assert stats["std"][1] == STD_FLOOR, "a zero-variance column must be floored, not zero"
+    assert stats["std"][0] > STD_FLOOR
+    assert len(stats["floored_columns"]) == ROW_WIDTH - 1
+    assert ROW_COLUMNS[1] in stats["floored_columns"], \
+        "a floored column must be NAMED — silently amplifying noise on a dead column is the " \
+        "kind of plausible-looking dataset this repo exists to catch"
+    # Dividing by the floor must never produce an infinity, which is the whole point of it.
+    assert np.isfinite((rows - np.asarray(stats["mean"])) / np.asarray(stats["std"])).all()
+
+
+def test_statistics_over_nothing_or_the_wrong_width_refuse() -> None:
+    for rows, why in ((np.zeros((0, ROW_WIDTH)), "no rows"),
+                      (np.zeros((5, 3)), "the wrong column count")):
+        try:
+            norm_stats(rows)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"statistics over {why} must refuse")
 
 
 def main() -> int:

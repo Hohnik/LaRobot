@@ -140,13 +140,19 @@ def check_episode(path: Path) -> tuple[list[str], list[str]]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--dir", default="", help="one episode directory (default: scan them all)")
+    ap.add_argument("--root", default="", help="a dataset root to scan recursively "
+                                              "(default: recordings/datasets/)")
     ap.add_argument("--quiet", action="store_true", help="only print failures and the total")
     args = ap.parse_args()
 
     if args.dir:
         episodes = [Path(args.dir)]
     else:
-        episodes = sorted(p for p in DEFAULT_ROOT.glob("episode_*") if p.is_dir())
+        # ⭐ Recursive, because a dataset root holds train/ and val/ subdirectories (the guide's
+        # C5 split), and a checker that only looked at the top level would silently report
+        # "nothing to check" on a perfectly full dataset.
+        root = Path(args.root) if args.root else DEFAULT_ROOT
+        episodes = sorted(p for p in root.rglob("episode_*") if p.is_dir())
     if not episodes:
         print(f"no episode directories under {DEFAULT_ROOT.relative_to(REPO)}.")
         print("  Export one:  uv run apps/export_dataset.py --slot 5 --left G --right B \\")
@@ -165,7 +171,11 @@ def main() -> int:
         total_ok += len(ok)
         total_bad += len(bad)
         mark = "✓" if not bad else "⛔"
-        print(f"\n{mark} {path.name}  ({len(ok)} checks passed, {len(bad)} failed)")
+        try:
+            shown = path.relative_to(REPO)
+        except ValueError:
+            shown = path
+        print(f"\n{mark} {shown}  ({len(ok)} checks passed, {len(bad)} failed)")
         if not args.quiet:
             for line in ok:
                 print(f"    ✓ {line}")
