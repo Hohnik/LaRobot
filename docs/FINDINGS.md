@@ -4979,3 +4979,22 @@ His verdict: *"everything really feels exactly as before. It seems really good."
 ### 70.16 ⚠️ THE RIG AS RE-READ ON 2026-08-19, and what the sweep found
 
 Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as he said; nothing currently built needs the second — it returns only when simultaneous two-hand teleop demos are wanted) · both D405s and the C920, same serials and ports as [§70.6](FINDINGS.md). ⛔ **No motor replies on either arm** (`online motors: []`, both) — the adapters run from USB, the motors from the wall, so the first suspect by this repo's own table is that **the arms' mains power is not on yet**. Nothing was retried past one ping per arm; mains is a physical action and is his. ⚠️ The register diff (`check_arms_match`) is queued behind mains for the same reason.
+
+### 70.17 ⬜⭐⭐ THE CONSOLIDATED LIST OF EVERYTHING THAT IS HIS — supersedes [§70.11](FINDINGS.md)'s list, current as of the 2026-08-19 reconnection sweep
+
+> Everything agent-runnable from the reconnected rig has been run ([§70.15](FINDINGS.md), [§70.16](FINDINGS.md)). What follows is his, in the order that unblocks the most. The second SpaceMouse is NOT needed — nothing built requires it; it returns only when simultaneous two-hand teleop demos are wanted.
+
+**At the bench, ~15 minutes total:**
+
+1. ⛔ **Turn on the arms' MAINS power** — both adapters answer, no motor does ([§70.16](FINDINGS.md)); motors run from the wall.
+2. **Then the health pair:** `uv run apps/ping_motors.py --arm B --yes` · same for G · `uv run checks/check_arms_match.py --yes` (the register diff against the 2026-08-14 baseline).
+3. **Cameras, two commands:** `uv run apps/camera_view.py --list` (the identification measurement; note which INDEX each camera got), then `uv run apps/capture_probe.py --indices <the three indices> --seconds 10 --save` — the multi-camera bandwidth measurement ([§70.9](FINDINGS.md)). ⚠️ `--cameras d405` will refuse as ambiguous with two D405s attached; indices are the way today.
+4. **The grab re-run** on the Lego piece (the [§70.3](FINDINGS.md) sequence): the pause line now prints *"arm settled X rad off"* — at the friction floor (~0.02-0.04 rad) the pose was taught short, so re-save the two at-object waypoints a few millimetres further and it grips.
+5. **One labelled recording:** `w` · move · `k` · move · `k` · `w` · save — then `uv run checks/check_recordings.py` shows the bad stretch ([§70.10](FINDINGS.md)).
+6. **One composite grab:** save poses around the object, record the grab as a take, then `p <pose> w<take> <pose>` Enter Enter ([§70.12](FINDINGS.md)).
+
+**Decisions, minutes each:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · which arm stands on the bench's LEFT (the episode exporter requires it) · ⭐ **read [docs/PLAN.md](PLAN.md)** — his ratification turns the draft into the team's deliverable.
+
+**From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (to match the episode encoding byte for byte), else the C4 mini-sample gate adjudicates.
+
+**Standing, unchanged:** a private remote for this repo (needs his GitHub, ~5 minutes together) · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2, open since 2026-08-06).
