@@ -28,7 +28,7 @@
 > ⭐⭐ **TWO NUMBERS TO COMPARE AGAINST, and they are separate on purpose:**
 >
 > ```bash
-> uv run checks/run_tests.py        #  821/821 checks across 39 files
+> uv run checks/run_tests.py        #  824/824 checks across 39 files
 > uv run checks/run_falsifiers.py   #  CATCH TOTAL: 50/50 across 5 falsifiers
 > ```
 >
@@ -47,7 +47,7 @@
 > | what it is | macOS, gs_usb over libusb, AVFoundation cameras | `lavita@10.64.9.60` "RoVita", Ubuntu 24.04.4, 32 cores, 60 GB, **RTX 5090 32 GB** |
 > | the repo | `~/Developer/Projects/yam-robotics` | `~/yam-robotics` (the team's own repo sits beside it at `~/LaRobot`) |
 > | hardware today | nothing attached (it all moved) | both arms, the C920, one D405 (`260323072846`), one SpaceMouse |
-> | suite | 821/821 · falsifiers 50/50 | same totals |
+> | suite | 824/824 · falsifiers 50/50 | same totals |
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
@@ -66,6 +66,8 @@
 > - ⭐ **macOS sidecar files (`._*`) arrive with any hand-copied folder and every plain `glob` picks them up.** One crashed a checker, one was offered as a playable recording, and they doubled every frame count. Every listing goes through `yam/files.py::listing` now ([§76.4](FINDINGS.md)).
 > - ⛔⭐ **A D405 has TWO serial numbers and this repo uses the second one.** `serial_number` reads `260522273162`, `asic_serial_number` reads `260323072846`, and the USB descriptor, `/dev/v4l/by-id` and every recorded camera name use the ASIC one. A librealsense backend keyed on the wrong field renames every camera in the dataset and reads on screen as "camera not attached" ([§76.11](FINDINGS.md)).
 > - ⚠️ **A fake that answers instantly hides every latency defect.** The camera fix's unit tests all passed against a handle that returns a frame from the first read; a real camera takes 0.56 s, and that gap was the whole of [§76.12](FINDINGS.md). Same family as [§62.1](FINDINGS.md).
+> - ⛔⛔ **THE ROOM HALVES THE FRAME RATE.** A C920 with `exposure_dynamic_framerate` on gives **29.92 fps in daylight and 14.98 in a dim room**, same size, same format, while the driver reports 30 throughout. Its kernel default is 0 and the station's camera reads 1. **So a demonstration recorded in the evening carries half the images of the same one at noon**, with nothing in the file to say why. The session reads the control and says so now ([§76.16](FINDINGS.md)).
+> - ⭐ **`cap.get` after `cap.set` is not a defect on its own.** It answers "would you accept this?", which is the right question when telling two camera models apart. It becomes a defect the moment the answer is reported as what the camera is DOING. Six sites, four fixed and two correct ([§76.17](FINDINGS.md)).
 > - **hidapi on Linux leaves `usage_page`/`usage` empty**, so a filter requiring them finds no SpaceMouse. Trust those fields when present; otherwise trust 3Dconnexion's own vendor id and **never** blanket Logitech, which also covers the webcam and the mouse on that desk ([§75.9](FINDINGS.md)).
 > - **libusb cannot read USB serials when a kernel driver owns the device.** Read sysfs instead, or `check_rig` reports both arms missing while the motors answer ([§75.8](FINDINGS.md)).
 > - **`TAG+="uaccess"` grants nothing over SSH** (it needs an active local seat). Use a group the user is already in ([§75.9](FINDINGS.md)).
@@ -75,7 +77,7 @@
 >
 > ⚠️⭐ **`config/` TRAVELS AND `recordings/` DOES NOT, and the difference is deliberate** ([FINDINGS §75.11](FINDINGS.md)). Waypoints, the axis map and the gripper limits are tracked in git, so his Mac-taught poses appeared on the station and `p 1` worked there at once. Recordings are gitignored: only what someone copies by hand exists on the other machine.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **821/821 across 39 files**, plus `run_falsifiers.py` at **50/50 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **824/824 across 39 files**, plus `run_falsifiers.py` at **50/50 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
