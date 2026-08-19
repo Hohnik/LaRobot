@@ -78,6 +78,7 @@ import cv2
 # confirmed HERE, now shared with the capture layer. The API this file calls is
 # unchanged — see yam/cameras/grabber.py for the move note.
 from yam.cameras.grabber import FrameGrabber, fourcc_name  # noqa: E402
+from yam.cameras.open import FIRST_FRAME_S, await_first_frame  # noqa: E402 — one copy of "wait for a frame"
 from yam.cameras.open import configure as yam_configure  # noqa: E402 — ONE copy of the capture settings, FINDINGS §76
 import numpy as np
 
@@ -842,18 +843,26 @@ def probe_modes(index: int, secs: float = 2.5) -> None:
             cap.set(cv2.CAP_PROP_FPS, 30)
             got = int(cap.get(cv2.CAP_PROP_FOURCC))
             got_s = "".join(chr((got >> (8 * i)) & 0xFF) for i in range(4)).strip() or "?"
-            aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             for _ in range(5):
                 cap.read()
+            # ⛔⭐ THE "actual" COLUMN USED TO COME FROM `cap.get`, WHICH ANSWERS THE REQUEST.
+            # In this table of all places: its whole purpose is telling the operator which
+            # sizes a camera really delivers, and the line below is the one they read to pick
+            # `--width`/`--height`. A camera that accepts a size and streams nothing at it
+            # showed up here as working (FINDINGS §76.0, §76.2). The shape of a real frame is
+            # the only honest answer, and this loop was already reading frames.
             t0 = time.perf_counter()
             n = 0
+            shape = None
             while time.perf_counter() - t0 < secs:
-                if cap.read()[0]:
+                ok_read, got_frame = cap.read()
+                if ok_read and got_frame is not None:
                     n += 1
+                    shape = got_frame.shape[:2]
             dur = time.perf_counter() - t0
             cap.release()
-            print("%-24s %-12s %-7s %.1f" % (f"{w}x{h} {cc or 'as-is'}", f"{aw}x{ah}", got_s, n / dur))
+            actual = f"{shape[1]}x{shape[0]}" if shape else "NO FRAMES"
+            print("%-24s %-12s %-7s %.1f" % (f"{w}x{h} {cc or 'as-is'}", actual, got_s, n / dur))
     print("\n  Pick the largest size that still gives ~30 fps and pass it as")
     print("  --width/--height. If MJPG changes nothing, macOS is ignoring the codec")
     print("  request and resolution is your only lever — which is why the default is 640x480.")
@@ -1750,9 +1759,21 @@ def main() -> int:
         print(f"⛔ could not open camera index {args.index}. Try:  --list")
         return 1
 
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"camera {args.index}: {w}x{h}, requested {args.fps} fps, MJPG"
+    # ⛔⭐ ONE REAL FRAME BEFORE THE SIZE IS PRINTED. This line used to read the size back
+    # from the handle, which returns what was ASKED for. The fps already said "requested"
+    # and the size did not, so the same line carried a request and a claim side by side
+    # (FINDINGS §76.0). `await_first_frame` is the same helper the session's camera open uses, so
+    # there is one copy of "wait for a frame, with a deadline".
+    first = await_first_frame(cap, FIRST_FRAME_S)
+    if first is None:
+        print(f"⛔ camera {args.index} opened and delivered NO FRAMES within "
+              f"{FIRST_FRAME_S:.1f}s. It accepted the settings and produced nothing.\n"
+              "  Try a smaller --width/--height: a camera can accept a size it cannot "
+              "stream (FINDINGS §76.2).")
+        cap.release()
+        return 1
+    h, w = first.shape[:2]
+    print(f"camera {args.index}: measured {w}x{h}, requested {args.fps} fps, MJPG"
           f"  ({'reused the probe handle' if ready is not None else 'opened'} in "
           f"{time.perf_counter() - t_open:.1f}s)")
 

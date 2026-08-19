@@ -254,6 +254,25 @@ COLOUR_FOURCCS = frozenset({"YUYV", "MJPG", "UYVY", "RGB3", "BGR3", "NV12", "YU1
 _VIDIOC_ENUM_FMT = (3 << 30) | (64 << 16) | (0x56 << 8) | 2
 _V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
 _FMTDESC_SIZE = 64
+
+#: `VIDIOC_G_CTRL`, reading one control into a `struct v4l2_control { __u32 id; __s32 value; }`.
+_VIDIOC_G_CTRL = (3 << 30) | (8 << 16) | (0x56 << 8) | 27
+
+#: `V4L2_CID_EXPOSURE_AUTO_PRIORITY`, which `v4l2-ctl` calls `exposure_dynamic_framerate`.
+#:
+#: ⛔⭐⭐ WHEN THIS IS 1, A CAMERA MAY HALVE ITS OWN FRAME RATE TO LENGTHEN ITS EXPOSURE, AND
+#: NOTHING ELSE SAYS SO. Measured on the station's C920 on 2026-08-19, at 1280x720 MJPG,
+#: seconds apart ([FINDINGS §76.16](../../docs/FINDINGS.md)):
+#:
+#:     exposure_dynamic_framerate = 1  ->  14.98 fps
+#:     exposure_dynamic_framerate = 0  ->  29.92 fps
+#:
+#: ⚠️ Its kernel default is 0 and the station's camera reads 1. The driver keeps reporting
+#: 30 fps in `VIDIOC_G_PARM` the whole time, so this is one more request that is not a
+#: delivery. ⛔ And it depends on the ROOM: the same camera measured 29.9 fps in daylight and
+#: 15.0 the same evening. **A rig therefore produces 30 fps by day and 15 by night, silently**,
+#: and the episode exporter fills 30 ticks a second either way.
+_V4L2_CID_EXPOSURE_AUTO_PRIORITY = 0x009A0903
 _PIXELFORMAT_OFFSET = 44
 
 
@@ -297,6 +316,41 @@ def enum_v4l_formats(device: str) -> tuple[str, ...]:
     finally:
         os.close(fd)
     return tuple(found)
+
+
+def dynamic_framerate_allowed(device: str) -> bool | None:
+    """Is this camera allowed to halve its own frame rate for exposure? `None` if unknown.
+
+    ⭐ REPORTED, NEVER CHANGED, and that is a deliberate line. Turning it off buys a steady
+    30 fps and pays for it with darker pictures in a dim room. Frame rate against image
+    brightness is a data-quality trade for the operator, in the same family as which arm
+    stands on the left: the software can measure it and must not decide it.
+
+    ⭐ An ioctl rather than a `v4l2-ctl` subprocess, for the reason `enum_v4l_formats` gives:
+    the rebuild should not need `v4l-utils` installed to answer a question about a camera.
+
+    Returns `None` on any failure, including a camera that has no such control. Not every
+    camera does, and a missing control is an unknown rather than a fault.
+    """
+    if not IS_LINUX:
+        return None
+    import fcntl  # noqa: PLC0415
+    import struct  # noqa: PLC0415
+
+    try:
+        fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        buf = bytearray(struct.pack("Ii", _V4L2_CID_EXPOSURE_AUTO_PRIORITY, 0))
+        try:
+            fcntl.ioctl(fd, _VIDIOC_G_CTRL, buf)
+        except OSError:
+            return None
+        _, value = struct.unpack("Ii", bytes(buf))
+        return bool(value)
+    finally:
+        os.close(fd)
 
 
 def classify_v4l_node(fourccs: tuple[str, ...] | frozenset) -> str:

@@ -284,6 +284,48 @@ def test_the_platform_answers_are_specific_and_honest() -> None:
     assert ("video" in note) if platform_name() == "Linux" else True
 
 
+# ── the exposure control that can halve a frame rate, added 2026-08-19 (FINDINGS §76.16) ──
+
+
+def test_the_ioctl_and_control_numbers_are_the_documented_ones() -> None:
+    """⛔ A mistyped ioctl number is the realistic failure here, and it fails SILENTLY: the
+    call raises OSError, the function returns None, and None means "unknown" rather than
+    "wrong". So the numbers are pinned against the values the kernel headers define.
+
+    `VIDIOC_G_CTRL` is `_IOWR('V', 27, struct v4l2_control)` and the struct is 8 bytes, so
+    `(3 << 30) | (8 << 16) | (0x56 << 8) | 27` = `0xC008561B`. ⚠️ **27 decimal is 0x1B**, and
+    writing the expected value as `0xC0085627` was this test's own first mistake, caught on
+    its first run. The value here is confirmed twice: by that arithmetic, and by the function
+    agreeing exactly with `v4l2-ctl` on the station's real cameras.
+
+    `V4L2_CID_EXPOSURE_AUTO_PRIORITY` is `0x009A0903`, which `v4l2-ctl` prints as
+    `exposure_dynamic_framerate`.
+    """
+    from yam.platform import _V4L2_CID_EXPOSURE_AUTO_PRIORITY, _VIDIOC_G_CTRL  # noqa: PLC0415
+
+    assert _VIDIOC_G_CTRL == 0xC008561B, hex(_VIDIOC_G_CTRL)
+    assert _V4L2_CID_EXPOSURE_AUTO_PRIORITY == 0x009A0903, hex(_V4L2_CID_EXPOSURE_AUTO_PRIORITY)
+
+
+def test_a_device_that_does_not_exist_is_UNKNOWN_and_never_raises() -> None:
+    """⚠️ None means unknown. A camera without this control and a camera that cannot be opened
+    are both unknown, and neither is a fault that should take down a session."""
+    from yam.platform import dynamic_framerate_allowed  # noqa: PLC0415
+
+    assert dynamic_framerate_allowed("/dev/video-does-not-exist") is None
+
+
+def test_it_answers_None_off_Linux_rather_than_guessing() -> None:
+    """⭐ Verified against `v4l2-ctl` on the station's real cameras instead of a unit test,
+    which is the same route `enum_v4l_formats` took: the C920 answered True where `v4l2-ctl`
+    said 1, and the D405 answered None because it has no such control
+    ([FINDINGS §76.16](../docs/FINDINGS.md))."""
+    from yam.platform import IS_LINUX, dynamic_framerate_allowed  # noqa: PLC0415
+
+    if not IS_LINUX:
+        assert dynamic_framerate_allowed("/dev/video0") is None
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

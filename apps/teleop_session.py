@@ -952,7 +952,7 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
     import cv2  # noqa: PLC0415
 
     from yam.cameras.identity import linux_camera_for_spec  # noqa: PLC0415
-    from yam.platform import read_v4l_cameras  # noqa: PLC0415
+    from yam.platform import dynamic_framerate_allowed, read_v4l_cameras  # noqa: PLC0415
 
     listed = read_v4l_cameras()
     grabbers: dict[str, FrameGrabber] = {}
@@ -1029,11 +1029,28 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
         if opened.stepped_down:
             print(f"     ⚠️ stepped down from {opened.asked[0]}x{opened.asked[1]}: this "
                   "camera accepted that size and delivered no frames at it.")
+        # ⛔⭐⭐ THE ROOM CAN HALVE THE FRAME RATE, AND ONLY THIS LINE SAYS SO. A C920 with
+        # `exposure_dynamic_framerate` on drops from 29.92 fps to 14.98 in a dim room, at the
+        # same size and format, while the driver keeps reporting 30 (FINDINGS §76.16). So the
+        # same rig yields 30 fps by day and 15 by night with nothing on screen to show it.
+        # ⭐ Reported, never changed: turning it off buys a steady rate and pays in darker
+        # pictures, and that trade is the operator's, like which arm stands on the left.
+        dyn = dynamic_framerate_allowed(cam.device)
+        if dyn:
+            print("     ⚠️ this camera may HALVE its own frame rate to lengthen exposure in a "
+                  "dim room, and the driver still reports 30.")
+            print("        Steady rate instead of brighter pictures:  v4l2-ctl -d "
+                  f"{cam.device} --set-ctrl=exposure_dynamic_framerate=0")
         if opened.slow:
             print(f"     ⛔ {opened.fps:.1f} fps is well under {TARGET_FPS:.0f}. The episode "
                   "exporter fills 30 ticks a second, so a camera this slow makes every")
-            print("        tick repeat frames. Usually the format: check that MJPG is "
-                  f"offered with  v4l2-ctl --list-formats-ext -d {cam.device}")
+            print("        tick repeat frames.")
+            if dyn:
+                print("        ⭐ MOST LIKELY THE LINE ABOVE, because the control is on and "
+                      "this rate is about half of 30.")
+            else:
+                print("        Usually the format: check that MJPG is offered with  "
+                      f"v4l2-ctl --list-formats-ext -d {cam.device}")
     return CaptureSet(grabbers), list(grabbers)
 
 

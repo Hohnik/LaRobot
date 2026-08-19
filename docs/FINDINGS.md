@@ -5748,6 +5748,68 @@ The checker passed the station's slot 1 in complete silence. That recording is t
 
 ⛔⭐ **One more misdirection removed in the same pass, and it is the second time this exact summary block named the wrong cause** ([§76.5](FINDINGS.md) was the first). The frame-fault summary printed *"FIRST THING TO RULE OUT: macOS sidecar files"* for all three camera faults. On slot 1 there is no count mismatch at all, so that advice sent the reader hunting `._*` files which explain neither the zero frames nor the slow rate. It is scoped to the mismatch now.
 
+### 76.16 ⛔⭐⭐⭐ THE ROOM HALVES THE FRAME RATE. The same C920 gave 29.9 fps this afternoon and 15.0 the same evening
+
+⭐ **Found by sweeping the repo for the pattern that caused everything above**, hours after the C920 had been confirmed at 29.9 fps. The viewer's own `--measure` reported **14.5 fps** for the same camera at the same size in the same format. Two measurements of one camera, both correct, four hours apart.
+
+⛔ **THE CAUSE, measured on the station seconds apart:**
+
+```
+exposure_dynamic_framerate = 1   ->  14.98 fps      (as found)
+exposure_dynamic_framerate = 0   ->  29.92 fps
+```
+
+`exposure_dynamic_framerate` is V4L2's `V4L2_CID_EXPOSURE_AUTO_PRIORITY`. When it is on, the camera may **halve its own frame rate** to give the sensor a longer exposure. Its kernel default is 0 and the station's C920 reads **1**.
+
+⚠️ **So it depends on the light in the room, and nothing on screen said so.** In daylight the camera has no reason to slow down and reports 30. In a dim room it halves itself. `VIDIOC_G_PARM` keeps answering **30 fps** throughout, so this is one more request that is not a delivery. **The rig therefore produces 30 fps by day and 15 by night**, and the episode exporter fills 30 ticks a second either way.
+
+⛔⛔ **THE CONSEQUENCE FOR THE DATASET, and it is worse than a slow camera.** A camera stuck at 10 fps is at least *consistently* wrong and shows up the moment anyone looks. This varies with the time of day. **Two demonstrations of the same task, recorded morning and evening, differ by a factor of two in how many images they carry**, and nothing in the file records why. That is a training set with a hidden variable in it.
+
+✅ **`yam/platform.py::dynamic_framerate_allowed` reads the control** with a `VIDIOC_G_CTRL` ioctl rather than a `v4l2-ctl` subprocess, for the reason [`enum_v4l_formats`](FINDINGS.md) gives: the rebuild should not need `v4l-utils` installed to answer a question about a camera. ⭐ **Checked against the known instrument before it was trusted**, the same rule as [§75.7](FINDINGS.md): the C920 answered `True` where `v4l2-ctl` printed `1`, and the D405 answered `None` because it has no such control.
+
+✅ **The session now says it at camera open, and it was run in the dim room to see:**
+
+```
+📷 c920 open on /dev/video0 (index 0), measured 1280x720 at 15.0 fps in MJPG.
+   ⚠️ this camera may HALVE its own frame rate to lengthen exposure in a dim room, and the driver still reports 30.
+      Steady rate instead of brighter pictures:  v4l2-ctl -d /dev/video0 --set-ctrl=exposure_dynamic_framerate=0
+   ⛔ 15.0 fps is well under 30. The episode exporter fills 30 ticks a second, so a camera this slow makes every
+      tick repeat frames.
+      ⭐ MOST LIKELY THE LINE ABOVE, because the control is on and this rate is about half of 30.
+```
+
+⭐ **The D405 gets no warning**, because it has no such control. The advice appears where it applies.
+
+⚠️⭐ **REPORTED, NEVER CHANGED, and the line is deliberate.** Turning the control off buys a steady 30 fps and pays for it with darker pictures in a dim room. **Frame rate against image brightness is a data-quality trade**, in the same family as which arm stands on the left ([§70.13](FINDINGS.md)): the software can measure it and must not decide it. ⛔ Rule 4's refuse-don't-warn is about hazards, and a dark picture is not one.
+
+⭐⭐ **THE GENERAL FORM, and it is the sharpest version of today's whole theme.** [§76.0](FINDINGS.md) was a value read back from our own request. This one is worse: **the number was honestly measured, and it was still not a property of the camera.** It was a property of the camera plus the room. ⚠️ **A measurement is only as stable as the conditions it was taken in, and a measurement written down without its conditions becomes a claim.** That applies to every number in this file.
+
+### 76.17 ✅⭐⭐ THE SWEEP THAT FOUND IT: every place this repo read back its own request
+
+⭐ After [§76.0](FINDINGS.md), the obvious question was how many other places did the same thing. `cap.get(CAP_PROP_*)` after `cap.set` is the mechanical signature, and there were **six** sites. Each was judged on what it was asking, because two of them are correct.
+
+| where | what it did | verdict |
+|---|---|---|
+| the session's Linux camera open | printed the request as "delivering" | ⛔ fixed in [§76.0](FINDINGS.md) |
+| `probe_indices` | reported the request while holding a real frame | ⛔ fixed: reads `frame.shape` |
+| `probe_modes`, the `--probe` sweep | its **"actual" column** was the request | ⛔ fixed: reads `frame.shape`, or prints `NO FRAMES` |
+| the viewer's status line | printed the request as the camera's size | ⛔ fixed: waits for one real frame first |
+| `identify_indices` | asks "does this device ACCEPT mode X" to tell two models apart | ✅ correct, and its wording already says "answered" |
+| the macOS model check in the session | same question, comparing against a mode only one model offers | ✅ correct |
+
+⭐ **The two correct ones matter as much as the four fixed ones.** `cap.get` after `cap.set` is not a defect on its own. It answers *"would you accept this?"*, which is a real and useful question when you are telling two cameras apart. It becomes a defect the moment the answer is reported as *what the camera is doing*.
+
+⛔ **And the `--probe` sweep was the worst of the four**, because that table exists precisely to tell an operator which sizes a camera really delivers, and its output is what they read to choose `--width`. Run on the station's D405 afterwards, it shows what it was hiding:
+
+```
+requested                actual       codec   measured fps
+1920x1080 MJPG           1280x720     YUYV    30.0
+960x540 MJPG             848x480      YUYV    30.0
+640x480 MJPG             640x480      YUYV    30.0
+```
+
+Three of those requests were not honoured, and the old table said they were.
+
 ### 76.14 ⬜⭐⭐ WHAT IS OPEN NOW — supersedes [§76.9](FINDINGS.md)
 
 ⭐ **The station is current and the camera fix is confirmed on the hardware.** `open_measured` reports 29.9 fps on the C920 and 30.0 on the D405 against the real devices, through the session's own startup code. ⚠️ **The two totals to compare against are at the end of this section**, and they are separate on purpose.

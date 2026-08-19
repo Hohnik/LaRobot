@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 __all__ = ["SIZE_LADDER", "TARGET_FPS", "SLOW_FPS", "FIRST_FRAME_S", "WARMUP_S",
-           "MEASURE_S", "CameraOpen", "configure", "open_measured"]
+           "MEASURE_S", "CameraOpen", "await_first_frame", "configure", "open_measured"]
 
 #: Sizes tried in order, largest first, until one actually delivers a frame.
 #:
@@ -119,7 +119,7 @@ def _fourcc(cap) -> str:  # noqa: ANN001
     return name if name.isprintable() and name else "?"
 
 
-def _await_first(cap, deadline_s: float):  # noqa: ANN001, ANN201
+def await_first_frame(cap, deadline_s: float):  # noqa: ANN001, ANN201
     """Read until ONE real frame arrives, or `deadline_s` passes. The frame, or None.
 
     ⭐ This is the delivery proof, and it is separate from the rate measurement on purpose. Whether a camera works at all and how fast it runs are two different questions, and answering them in one window got the second one wrong.
@@ -167,7 +167,7 @@ def open_measured(cap, sizes: list[tuple[int, int]] | None = None,  # noqa: ANN0
     ladder = list(sizes if sizes is not None else SIZE_LADDER)
     for i, (w, h) in enumerate(ladder):
         configure(cap, w, h, fps)
-        first = _await_first(cap, first_frame_s)
+        first = await_first_frame(cap, first_frame_s)
         if first is None:
             continue
         frame, count, dt = _measure_rate(cap, warmup_s, measure_s)
