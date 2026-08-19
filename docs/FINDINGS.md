@@ -5241,3 +5241,58 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 **From the team:** ABC's `export_mcap.py` or the `abc_minimal` repo — it settles the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
 
 **Standing:** the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
+
+## 75 ⭐⭐⭐ 2026-08-19, EVENING — THE LINUX PC IS REACHED, THE PORT IS LARGELY CONFIRMED ON IT, AND THE TRAINING TABLE IS BIT-IDENTICAL ACROSS BOTH MACHINES
+
+### 75.0 ✅⭐⭐ THE CONNECTION EXISTS — the facts a contextless agent needs, and how the last mile actually went
+
+✅ **The machine.** `lavita@10.64.9.60`, hostname **RoVita**, Ubuntu 24.04.4 LTS, kernel 7.0.0-29, x86_64. **32 cores, 60 GB RAM, 3.4 TB free — and an RTX 5090 with 32 GB** (driver 595.84). ⭐ That last fact matters beyond convenience: [Setup-Anleitung.md](Setup-Anleitung.md)'s branch 1 assumes exactly one RTX 5090 for local training, so the machine the plan was written against is the machine that exists. Reached over ZeroTier network `76fc96e498125bb2` ("LaNetwork"); Julien's Mac is `10.64.9.52`. The team's own repo is already cloned there at `~/LaRobot` (clean, on `main` at `065a08e`).
+
+⭐ **How the key got installed, and why the order mattered.** His `ssh-copy-id` failed with *"No route to host"*, then his plain `ssh` worked a minute later — so the ZeroTier peer path takes a few seconds to negotiate after joining, and a failure in that window says "no route" rather than anything about authentication. His successful session left a live control socket behind (his `~/.ssh/config` sets `ControlMaster auto` globally), and the public key was appended to `~/.ssh/authorized_keys` **through that socket**, so no password was ever handled by an agent. ⛔ **The distinction was then verified rather than assumed**: a connection with `ControlPath=none` and key-only auth succeeded on its own, which is the difference between "the key works" and "I am riding his session". Both matter; only the first is durable.
+
+✅ **His question, answered: the password is now unnecessary, not saved.** Key-based login is what "permasave" should mean here — `~/.ssh/yam_linux` on the Mac, its public half in `authorized_keys` on the PC. Nothing stores a password anywhere, and an agent still cannot type one.
+
+⚠️ **The transfer used a git bundle, not a push.** `git bundle create --all` → `scp` → `git clone`, then `git fetch <bundle>` for updates. **Deliberate: pushing to `Hohnik/LaRobot` needs his word every time** ([HANDOFF §4](HANDOFF.md) rule 9), and the PC needed the current code immediately. The PC's clone has all 253 commits and a `larobot` remote configured but never pushed to. `third_party/i2rt` is gitignored, so it was cloned separately from upstream at the same tag the Mac has (**v1.3.1, `1276f63`** — identical, checked).
+
+### 75.1 ⛔⭐⭐ THE SECOND MACHINE IMMEDIATELY FOUND A DEFECT THE FIRST ONE COULD NOT: the sim driver depended on a gitignored recording
+
+⛔ **What happened.** `checks/drive_sim_session.py` scored **29/31 on Linux and 31/31 on the Mac, on identical code.** The two failures complained that the tracking table did not name arm G's rows — a message pointing nowhere near the cause. The cause: the driver played **slot 7, one of Julien's real hand-guided takes**, and `recordings/` is gitignored, so a fresh clone has no slot 7. The session correctly said nothing was saved there, the playback never ran, and the table checks failed for want of any movement.
+
+⭐⭐ **The lesson, and it is a new one for this repo: a checker that depends on data it does not create goes blind on a new machine.** That is the [§70.8](FINDINGS.md) family (a green checker that validates nothing) with a twist worth naming — **the Mac's green run was partly borrowed from rig-local data no other machine has.** Nothing was wrong with the code under test; the instrument was calibrated against a file that only exists on one desk.
+
+✅ **Fixed:** the driver writes its own two-arm recording before starting (a slow sine, 0.3 rad over 3 s, so 0.2-0.6 rad/s per joint — above the table's 0.01 rad/s floor and inside every clamp), with BOTH arms moving because the checks assert the table names B's rows and G's ([§60.1](FINDINGS.md) is the defect they exist to catch). ⭐ It writes **slot 0**, not slot 7, and the reason is worth keeping: a sim recording SHADOWS a real one of the same number (`slot_for_reading`), so writing slot 7 would have quietly replaced the real take on the Mac and removed the very thing that made the check interesting there. Slot 0 is the one slot his rig leaves free. The file carries `simulated: true` and lives in `recordings/sim/`, the same two independent marks a saved sim take gets ([§60.2](FINDINGS.md)). **31/31 on both machines now.**
+
+### 75.2 ✅✅⭐⭐⭐ WHAT THE PORT PROVED ON THE REAL MACHINE, and the two things still unproven
+
+✅ **Everything that does not need the hardware now runs on Ubuntu, identically:**
+- **Suite: 767/767 across 35 files**, the same total as the Mac.
+- **`drive_sim_session`: 31/31** — the whole 3000-line loop, both simulated arms, TELEOP, recording 14 joints, the save prompt, playback with its tracking table, a three-leg composite run, and `q q` parking and disabling all 14 motors.
+- **Every checker and falsifier**: `check_links` 1459/1459 · `check_flags` green · `check_restructure` coherent · `falsify_fake_arm` 19/19 · `falsify_check_flags` green · `falsify_run_tests` 6/6.
+- **`uv sync` from a clean clone**, Python 3.12.3, numpy 2.5.2, cv2 5.0.0, mujoco — no path hacks, no build steps, first try.
+
+✅⭐⭐ **THE CLOCK ASSUMPTION IS NOW MEASURED ON LINUX, and it was the deepest one.** A recording stamps joints with `perf_counter` and frames with `monotonic_ns`, and `yam/episode.py` joins them by SUBTRACTION — valid only if they share an epoch. On Linux both are `clock_gettime(CLOCK_MONOTONIC)` and the measured offset is **40 nanoseconds**. So the camera-to-joint join is exact on the station too, and that is no longer an inference from documentation.
+
+⛔ **Still unproven, and honestly so: the CAN and camera device parsers.** No arms and no cameras are plugged into the PC yet, so `ip -details link show type can` prints nothing and `/dev/v4l/by-id` **does not exist at all** (udev creates it when the first camera appears). Both were handled gracefully rather than crashing, and `check_platform.py --raw` reported exactly that. **The formats in `yam/platform.py` therefore remain designed-and-unverified**, and one command settles them the moment hardware is attached: `uv run checks/check_platform.py --raw`.
+
+### 75.3 ✅⭐⭐⭐ THE TRAINING TABLE IS BIT-IDENTICAL ON BOTH MACHINES — the strongest cross-platform result available without hardware
+
+✅ **The test:** his real slot-5 recording and its 118 MB of frames were copied to the PC, exported there with `apps/export_dataset.py`, and verified with `checks/check_dataset.py`.
+- **17/17 contract checks passed on Linux**, the same 17 as on the Mac: PTS exactly 512·k on every frame, keyframes exactly on k%30, no B-frames, timebase 1/15360, faststart, frame count equal to row count, and the action policy holding in the actual bytes.
+- ⭐⭐ **`states_actions.bin` hashes to `396ca7cb75dd8ee7f5553a66…` on BOTH machines.** The numeric training table is bit-for-bit reproducible across macOS and Linux, which means the joint/action half of the dataset carries no platform dependence at all. The video cannot be byte-identical (different ffmpeg builds) and does not need to be: every property the loader computes from is asserted on both.
+
+⭐ **A method note for the rebuild:** ffmpeg is not installed on the PC yet (it needs `sudo apt`), so the proof used `uv run --with static-ffmpeg` to fetch a static ffmpeg/ffprobe pair into `/tmp/ffbin` for the run. **That is a test convenience and not the recommendation** — the real install is one apt line, and the repo's dependency list was deliberately left alone. Worth knowing: **the whole dataset feature can be proven on a machine where an agent cannot install anything.**
+
+### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
+
+**On the PC, needs his sudo (one block, ~1 minute):**
+
+```bash
+sudo apt update && sudo apt install -y ffmpeg v4l-utils can-utils
+sudo usermod -aG video $USER        # then log out and back in, or the group does not apply
+```
+
+**Physical, his hands:** plug the two CAN adapters, the three cameras and the SpaceMouse into the PC. Then `uv run checks/check_platform.py --raw` on the PC either confirms the Linux device formats or shows exactly how they differ — and it prints the `sudo ip link set canX up type can bitrate 1000000` command for each adapter, which is the one CAN step that needs root every boot.
+
+**Also his, unchanged:** the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9) · framing the top camera at the workspace before real collection ([§73.2](FINDINGS.md)) · whether to push the current commits to the team branch (nothing has been pushed since `f47a23f`'s predecessor state; rule 9 stands).
+
+**From the team:** ABC's `export_mcap.py` or `abc_minimal` — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).

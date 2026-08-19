@@ -123,11 +123,11 @@ uv add pyrealsense2
 
 This distinction is the point of §4 existing, and it follows this repo's own rule: never present an assumption as a measurement.
 
-**Proven, because it ran:** the whole suite (764 checks) and the training-episode export both run on macOS today, and neither touches an operating-system-specific path. The export produced a real episode from a real recording and passed all 17 contract checks, including frame timestamps and keyframe placement ([FINDINGS §74.1](FINDINGS.md)).
+**Proven ON THIS MACHINE, 2026-08-19** (`lavita@10.64.9.60`, Ubuntu 24.04.4 — [FINDINGS §75.2](FINDINGS.md)): `uv sync` from a clean clone, the whole suite at **767/767** (the same total as the Mac), the full simulated session at **31/31**, every checker and falsifier green, the training-episode export at **17/17** on a real recording, and the `states_actions.bin` table **bit-identical to the Mac's**. Also measured rather than assumed: `perf_counter` and `monotonic` are both `CLOCK_MONOTONIC` here and differ by **40 ns**, so the camera-to-joint join is exact on this machine too.
 
-**Designed and unverified:** every Linux device-naming path in `src/yam/platform.py`. It was written from the documented formats of `ip -details link show`, sysfs and `/dev/v4l/by-id`, and no Linux machine had been reached when it was written. Its tests prove the parsers do what their author intended, and the fixtures say so in their own comments.
+**Still designed and unverified: the CAN and camera device paths only.** No arms or cameras are plugged into the PC yet, so `ip -details link show type can` prints nothing and `/dev/v4l/by-id` does not exist at all (udev creates it when the first camera appears). Both were handled gracefully rather than crashing. The formats in `src/yam/platform.py` come from documentation, and the fixtures in `tests/test_platform.py` say so in their own comments.
 
-**How that gets settled in one command:** `uv run checks/check_platform.py --raw` prints the raw text beside the parse. Either the formats match and the port is confirmed, or they differ and the output shows exactly where. Send me that output and it is a small fix, not an investigation.
+**How that gets settled in one command:** with the hardware plugged in, `uv run checks/check_platform.py --raw` prints the raw text beside the parse. Either the formats match and the port is fully confirmed, or they differ and the output shows exactly where. It also prints the `sudo ip link set canX up type can bitrate 1000000` line for each adapter, which is the one CAN step that needs root after every boot.
 
 ## 5. The differences from macOS, in one table
 
