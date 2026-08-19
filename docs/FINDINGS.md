@@ -5562,7 +5562,17 @@ It globbed `recordings/datasets/episode_*` while `export_dataset` writes into a 
 
 ⭐ **Two honest notes on severity.** It exits non-zero, so it never passed while checking nothing. And nothing runs it automatically, because `run_tests.py` only collects `tests/test_*.py`. So it was loud and unheard rather than silently green. `checks/check_dataset.py` uses `rglob` for this same reason; this now matches it, and it is back to catching **5/5 breaks**.
 
-⚠️ **The open question this raises, which is [ROADMAP §8.2](ROADMAP.md) work rather than a fix:** the falsifiers are not in the one command that prints one total. Rule 4's whole point is that a green suite plus a stable catch count is the evidence, and today the catch counts have to be collected by hand.
+✅⭐⭐ **AND THE HOLE IT REVEALED IS CLOSED: there is one command for the catch counts now.** Rule 4's whole point is that a green suite **plus a stable catch count** is the evidence, and the catch counts had to be gathered by hand from five different summary formats. That friction is why nobody did it, and it is why this falsifier sat unheard.
+
+Every falsifier now ends with one machine-readable line, `CATCHES: n/m`, on **both** its passing and its failing path. `uv run checks/run_falsifiers.py` runs all five and prints one figure:
+
+```
+✓ CATCH TOTAL: 50/50 across 5 falsifiers
+```
+
+⚠️ **A separate command rather than part of the suite, and the reason is not tidiness.** A falsifier deliberately breaks things: `falsify_fake_arm.py` monkey-patches a class, and two others write known-bad fixture files. Running that inside a **parallel** test runner invites one test file to observe another's sabotage, which manufactures exactly the intermittent suite [§76.13](FINDINGS.md) just finished removing. They run sequentially here, and all five together take under two seconds.
+
+⭐ **The runner is itself falsified**, in `tests/test_run_falsifiers.py`, against fixtures fed through its own `--dir`. Eight checks, and the three that matter are the ones where silence must not read as success: a falsifier that reports fewer catches than it expects, one that crashes before counting, and one that exits 0 while never saying a number at all.
 
 ### 76.8 ✅⭐ WHAT THE SESSION GOT RIGHT, because a log full of defects hides the result
 
@@ -5665,6 +5675,17 @@ d405 colour: 1280x720 at 30.0 fps in YUYV
 
 ⭐ **The fake handle now has a `dead_reads` mode** that returns nothing for its first N reads, and a test asserts the reported rate is not "slow" for a handle that starts late. The defect cannot come back silently.
 
+⛔⭐⭐ **AND `apps/camera_view.py` ALREADY KNEW. THAT IS THE SECOND TIME TODAY.** Its probe loop reads frames in a settle window and explicitly skips the early ones:
+
+```python
+if float(candidate.std()) >= 1.0:
+    break        # real content, not a warm-up frame
+```
+
+**The comment says "warm-up frame".** That file had met these cameras, learned that the first frames are junk, and written it down. [§76.1](FINDINGS.md) is the same story with the MJPG line, whose comment even said it was "load-bearing on Linux, where this rig is ultimately headed". **Two separate defects in one day, both already answered in one file the new code path did not read.**
+
+⭐ **So the rule is narrower and more actionable than "share code":** before writing a new capture path, READ `apps/camera_view.py`. It is the only file in this repo that has spent hours in front of these particular cameras, and its comments are field notes rather than documentation. ⚠️ That probe was itself reporting `cap.get` for its size while holding a real frame; harmless there because it also records whether a frame arrived, and now fixed to read the frame's shape.
+
 ### 76.13 ⚠️⭐⭐ A `| tail -3` THREW AWAY THE ONE THING THAT MATTERED, and the fix is in the tool rather than the habit
 
 The command handed to Julien for the station's fast-forward ended `uv run checks/run_tests.py | tail -3`. One test file failed, and `run_tests.py` prints each failing file's whole output **before** its final warning, so the three surviving lines were:
@@ -5679,7 +5700,34 @@ No file name. No test name. **The failing test's name was on his screen and the 
 
 ✅ **Two fixes, and the tool's one matters more than the habit's.** `run_tests.py` now prints the failing file and its failing test names **last**, after the long echo, on a line that says it is last on purpose. Anything printed before a variable-length echo can be truncated away by a pipe. Verified against a fixture that mimics this exact case, and `checks/falsify_run_tests.py` now has two checks locking the property (8/8).
 
-⬜ **The failure itself is UNREPRODUCED and it is `tests/test_camera_render.py`**, which holds 59 checks. It has since passed 4 full suite runs on the station, 12 sequential runs of that file alone, and 8 concurrent runs. Its terminal-detection and terminal-size tests all patch what they read, so the obvious environment dependence is not it. ⚠️ **If it appears again, the failing test name now prints last** — capture it rather than the count.
+✅⭐⭐⭐ **AND THE FIX FOUND THE CAUSE ON ITS FIRST REAL FAILURE, WHICH WAS NOT A FLAKE AT ALL.** His next run printed:
+
+```
+⛔ FAILING, and this line is last on purpose so a `| tail` cannot hide it:
+   test_camera_render.py: test_the_cell_size_is_reported_as_measured_or_assumed_never_silently
+      AssertionError: no tty here, so nothing can have been measured
+```
+
+⛔ **`tests/test_camera_render.py` asserted an accident of its own environment.** The test called `cell_size()` with no patching at all and asserted `measured is False`, its docstring reasoning *"under the test harness there is no terminal at all"*. **That is true of an agent shell and false of Julien's.** He runs the suite from an interactive terminal over SSH, Ghostty fills in `TIOCGWINSZ`'s pixel fields, so `cell_size()` genuinely measured and returned `measured=True`.
+
+⭐ **So it was deterministic in both directions and looked flaky only because two people ran it two ways.** It passed 4 full suites, 12 sequential runs and 8 concurrent runs for an agent, and failed every time for him. **No amount of re-running from the wrong shell could ever have found it.**
+
+⛔⛔ **THE COST WAS NEVER ONE RED LINE. THE SUITE TOTAL BECAME ENVIRONMENT-DEPENDENT.** This repo's whole staleness defence is *compare the TOTAL against the last committed figure* ([§70.4](FINDINGS.md)), and a total that legitimately differs by **where you typed the command** destroys that rule quietly. ⚠️ It is also the [§76.12](FINDINGS.md) lesson from the other side: there, a fake that was too clean hid a defect; here, an environment that was too clean **became** the assertion.
+
+✅ **Fixed as four deterministic checks instead of one accidental one**, with a `FakeIoctl` that supplies the 8 bytes `TIOCGWINSZ` would return:
+
+| what is forced | what must be true |
+|---|---|
+| every stream raises (a piped run) | `measured is False`, and the assumed cell is 2:1 |
+| a terminal reporting 640x384 px over 80x24 cells | `measured is True`, cell 8x16 px |
+| a terminal reporting a non-2:1 cell | the real aspect is carried through, never flattened to the assumption |
+| a terminal reporting ZERO pixels (Apple Terminal) | `measured is False`, because zeros are an answer and not a measurement |
+
+⭐ **The property worth asserting was never which branch runs.** It is that the answer always says which branch ran, because a fallback you cannot see is indistinguishable from a bug.
+
+✅ **Confirmed environment-independent by measurement**: the whole suite totals the same with a pty and without one, and `tests/test_camera_render.py` is the only test file that touches the terminal at all. Every one of its reads now goes through `FakeTerminal` or `FakeIoctl`.
+
+⚠️ **The general rule, and it is worth carrying past this repo: a test that reads the real environment is asserting your shell, not your code.** The tell is a docstring explaining what the environment happens to be.
 
 ### 76.14 ⬜⭐⭐ WHAT IS OPEN NOW — supersedes [§76.9](FINDINGS.md)
 
@@ -5695,4 +5743,13 @@ No file name. No test name. **The failing test's name was on his screen and the 
 6. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
 7. Optional: the second D405 for a three-camera session there · `kp` for sub-centimetre grabs ([ROADMAP §8.2](ROADMAP.md) item 17) · whether to push to the team branch.
 
-⬜ **Not his, and queued:** the falsifiers are still outside the one-command suite ([§76.7](FINDINGS.md)), and `tests/test_camera_render.py`'s single unreproduced failure ([§76.13](FINDINGS.md)).
+✅ **Both of the queued items closed the same evening.** The falsifiers have one command and one catch total ([§76.7](FINDINGS.md)), and `tests/test_camera_render.py`'s failure turned out to be a test asserting its own terminal rather than a flake ([§76.13](FINDINGS.md)).
+
+⭐ **Two numbers to compare against next time, and they are separate on purpose:**
+
+```
+uv run checks/run_tests.py        →  821/821 checks across 39 files
+uv run checks/run_falsifiers.py   →  CATCH TOTAL: 50/50 across 5 falsifiers
+```
+
+⚠️ **The suite total is now environment-independent**, verified with a pty and without one. Before this evening it silently differed by whether you ran it from a terminal, which is what made [§76.13](FINDINGS.md) look like a flake.

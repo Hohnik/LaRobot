@@ -103,6 +103,10 @@ def main() -> int:
     else:
         print("✓ every deliberate break was caught and every correct command was left "
               "alone.")
+    # ⭐ `CATCHES: n/m` is the one line `checks/run_falsifiers.py` reads. Every falsifier
+    # ends with it so the catch counts can be TOTALLED, which is what rule 4 actually asks
+    # for: a green run plus a stable catch count is evidence, and a green run alone is not.
+    print(f"CATCHES: {len(CASES) - wrong}/{len(CASES)}")
     return 1 if wrong else 0
 
 

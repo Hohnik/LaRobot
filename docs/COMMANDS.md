@@ -310,6 +310,7 @@ uv run checks/check_platform.py --raw      # ⭐ also dump the raw text it parse
 
 ```bash
 uv run checks/run_tests.py                          # ⭐⭐ EVERY test file as ONE suite, with a total
+uv run checks/run_falsifiers.py                     # ⭐⭐ EVERY falsifier, with ONE catch total
 uv run checks/check_rig.py                          # what is on the USB bus. Never transmits
 uv run checks/check_flags.py                        # do the commands in docs/ actually work?
 uv run checks/check_links.py                        # every relative link and § reference
@@ -319,6 +320,16 @@ uv run checks/check_restructure.py                  # the N-arm restructure is s
 uv run checks/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
 uv run checks/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
 ```
+
+⭐⭐ `run_falsifiers.py` is the other half of the same discipline, and it was missing until 2026-08-19. [HANDOFF §4](HANDOFF.md) rule 4 says the evidence a checker works is a green run plus a stable catch count. Those counts had to be gathered by hand from five different summary formats. That is why nobody did it. Every falsifier ends with one machine-readable `CATCHES: n/m` line now, on its failing path as well as its passing one, and this command sums them.
+
+⚠️ There are two commands and two totals, on purpose. A falsifier deliberately breaks things: one monkey-patches a class and two write known-bad fixtures. Running that inside the parallel suite would invite one test file to observe another's sabotage. All five together take under two seconds.
+
+⭐ The runner is falsified in `tests/test_run_falsifiers.py` ([FINDINGS §76.7](FINDINGS.md)). Three of its cases are the ones where silence must not read as success:
+
+- a falsifier reporting fewer catches than it expects
+- one crashing before it counts anything
+- one exiting 0 while never printing a number at all
 
 ⭐⭐ **`run_tests.py` exists because two test files sat red for days with nobody able to see it** ([FINDINGS §67.5](FINDINGS.md)) — each file has its own `main()` and nothing ran them all. It fails a file on any of three signals (nonzero exit, no count line, passed < total) and prints a **grand total**: compare it against the last committed figure, because a total that DROPS while everything is green means a check was silently disarmed ([FINDINGS §59.1](FINDINGS.md), [§70.4](FINDINGS.md)).
 

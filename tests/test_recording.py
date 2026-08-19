@@ -636,6 +636,107 @@ def test_guide_at_hand_guiding_speed_is_exactly_what_is_expected() -> None:
     assert label_verdict("live:guide", None, 2.9)[1] is None
 
 
+# ── camera frames per recording, added 2026-08-19 (FINDINGS §76) ─────────────
+
+
+def a_frames_dir(counts: dict[str, int], size: tuple[int, int] = (1280, 720)) -> Path:
+    """A `frames/<slot>/<camera>/` tree holding real JPEGs, so the checker reads real headers.
+
+    ⭐ Real `cv2.imencode` output rather than fake bytes: the size is read out of the JPEG's
+    own header, and asserting on a fake header would measure the wrong instrument.
+    """
+    import cv2  # noqa: PLC0415
+    import numpy as np  # noqa: PLC0415
+
+    root = Path(tempfile.mkdtemp())
+    slot = root / "frames" / "9"
+    for name, n in counts.items():
+        d = slot / name
+        d.mkdir(parents=True, exist_ok=True)
+        img = np.zeros((size[1], size[0], 3), dtype=np.uint8)
+        ok, buf = cv2.imencode(".jpg", img)
+        assert ok
+        for i in range(n):
+            (d / f"{i:06d}.jpg").write_bytes(buf.tobytes())
+        (d / "index.json").write_text("{}")
+    return root
+
+
+def test_a_camera_that_recorded_ZERO_frames_is_a_fault_even_though_the_count_agrees() -> None:
+    """⛔⭐ THE CASE THAT STARTED FINDINGS §76, and this checker used to pass it in silence.
+
+    A D405 was named on the command line, opened, printed "delivering 1280x720", and wrote
+    nothing for the whole session. Its meta said 0 written and its directory held 0 files, so
+    the two agreed and nothing was reported. **Agreement is not health.**
+    """
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 30})
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 30},
+                                              "d405-2603": {"written": 0}}}
+    line, faults = frames_verdict(meta, root, duration_s=1.0)
+    assert any("ZERO frames" in f for f in faults), faults
+    assert "d405-2603:0⛔" in line, line
+
+
+def test_a_camera_running_far_under_30_fps_is_flagged_from_the_SAVED_FILE_alone() -> None:
+    """⛔⭐⭐ The 10 fps defect was in the saved recording the whole time and no tool looked.
+
+    26 frames across 2.43 s is 10.7 fps, and the episode exporter fills 30 ticks a second, so
+    every tick repeats pictures. The number is just frames divided by duration (FINDINGS §76.1).
+    """
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 26})
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 26}}}
+    line, faults = frames_verdict(meta, root, duration_s=2.43)
+    assert any("10.7 fps" in f for f in faults), faults
+    assert "10.7fps⚠️" in line, line
+
+
+def test_a_camera_at_30_fps_is_NOT_flagged_because_that_is_the_healthy_case() -> None:
+    """⚠️ Every Mac recording sits at 30.0 to 30.3 fps. Flagging those would be cry-wolf."""
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 90})
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 90}}}
+    line, faults = frames_verdict(meta, root, duration_s=3.0)
+    assert faults == [], faults
+    assert "30.0fps" in line and "⚠️" not in line, line
+
+
+def test_the_recorded_SIZE_is_read_from_the_pictures_own_header() -> None:
+    """⭐ A session can legitimately record two cameras at two different sizes since the
+    step-down ladder exists, so the size stops being derivable and has to be measured."""
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 30}, size=(848, 480))
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 30}}}
+    line, _ = frames_verdict(meta, root, duration_s=1.0)
+    assert "@848x480" in line, line
+
+
+def test_a_count_that_disagrees_with_the_directory_is_still_the_loudest_fault() -> None:
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 30})
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 60}}}
+    _, faults = frames_verdict(meta, root, duration_s=1.0)
+    assert any("not the recording's own" in f for f in faults), faults
+
+
+def test_no_duration_means_no_rate_claim_rather_than_a_wrong_one() -> None:
+    """⚠️ A rate needs a duration. Without one the count is still shown and no rate is
+    invented, because inventing one is how a plausible wrong number gets on screen."""
+    from check_recordings import frames_verdict  # noqa: PLC0415
+
+    root = a_frames_dir({"c920": 30})
+    meta = {"dir": "frames/9", "per_camera": {"c920": {"written": 30}}}
+    line, faults = frames_verdict(meta, root, duration_s=0.0)
+    assert "fps" not in line, line
+    assert faults == []
+
+
 def test_a_mismatch_is_reported_even_when_the_speed_looks_fine() -> None:
     """The two faults are independent, and only one of them looks at speed."""
     from check_recordings import label_verdict  # noqa: PLC0415

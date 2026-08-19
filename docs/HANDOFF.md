@@ -23,7 +23,7 @@
 >
 > ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
 >
-> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** The station is current, the suite is **804/804 across 38 files** on both machines, and `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405** against the physical devices. [FINDINGS §76.14](FINDINGS.md) is the current his-list.
+> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** The station is current, the suite is **821/821 across 39 files** on both machines, and `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405** against the physical devices. [FINDINGS §76.14](FINDINGS.md) is the current his-list.
 >
 > ⚠️⭐ **THREE THINGS THE CONFIRMATION RUN ITSELF FOUND, all in [FINDINGS §76](FINDINGS.md), and the first one matters most:**
 > - ⛔ **The D405's 1280x720 failure is INTERMITTENT, not permanent.** §76.2 first said the mode delivers nothing, full stop. It has now been measured **dead twice and alive twice in four hours**. That claim is corrected in place. An intermittent mode is a better argument for reading a real frame than a dead one, because it is exactly what a `cap.get` message hides ([§76.2](FINDINGS.md)).
@@ -38,7 +38,7 @@
 > | what it is | macOS, gs_usb over libusb, AVFoundation cameras | `lavita@10.64.9.60` "RoVita", Ubuntu 24.04.4, 32 cores, 60 GB, **RTX 5090 32 GB** |
 > | the repo | `~/Developer/Projects/yam-robotics` | `~/yam-robotics` (the team's own repo sits beside it at `~/LaRobot`) |
 > | hardware today | nothing attached (it all moved) | both arms, the C920, one D405 (`260323072846`), one SpaceMouse |
-> | suite | 804/804 | 804/804, same total |
+> | suite | 821/821 · falsifiers 50/50 | same totals |
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
@@ -66,7 +66,7 @@
 >
 > ⚠️⭐ **`config/` TRAVELS AND `recordings/` DOES NOT, and the difference is deliberate** ([FINDINGS §75.11](FINDINGS.md)). Waypoints, the axis map and the gripper limits are tracked in git, so his Mac-taught poses appeared on the station and `p 1` worked there at once. Recordings are gitignored: only what someone copies by hand exists on the other machine.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **804/804 across 38 files** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **821/821 across 39 files**, plus `run_falsifiers.py` at **50/50 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >

@@ -55,6 +55,7 @@
 > apps/           things you RUN: teleop_session, camera_view, calibrate_gripper, ping_motors, …
 >                 export_episode (the C3 log) · export_dataset (the C4 training set)
 > checks/         read-only diagnostics + the falsifiers that prove the checkers can see failures
+>                 two commands, two totals: run_tests.py and run_falsifiers.py
 > tests/          the whole suite — one command prints the live total: uv run checks/run_tests.py
 > src/yam/        the library (installed by uv sync): robot, can, session, teleop, motion,
 >                 inputs/, fake/ (the lagging simulator), ui/

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -868,12 +869,85 @@ def test_kitty_gets_a_tighter_budget_than_iterm_because_png() -> None:
     assert C.IMAGE_WIDTH_CAP["kitty"] < C.IMAGE_WIDTH_CAP["iterm"]
 
 
-def test_the_cell_size_is_reported_as_measured_or_assumed_never_silently() -> None:
-    """A fallback you cannot see is indistinguishable from a bug. Under the test
-    harness there is no terminal at all, so this must report the assumed cell."""
-    cell = C.cell_size()
-    assert cell.measured is False, "no tty here, so nothing can have been measured"
+class FakeIoctl:
+    """Replace `fcntl.ioctl` so BOTH branches of `cell_size()` can be tested on purpose.
+
+    `packed` is the 8 bytes `TIOCGWINSZ` would return (`rows, cols, xpixel, ypixel`), or
+    None to make every stream raise, which is what a piped or captured run does.
+    """
+
+    def __init__(self, packed: bytes | None) -> None:
+        self.packed = packed
+
+    def __enter__(self):  # noqa: ANN204
+        self._real = C.fcntl.ioctl
+        C.fcntl.ioctl = self._fake
+        return self
+
+    def _fake(self, fd, request, buf):  # noqa: ANN001, ANN202, ARG002
+        if self.packed is None:
+            raise OSError("no terminal")
+        return self.packed
+
+    def __exit__(self, *exc: object) -> None:
+        C.fcntl.ioctl = self._real
+
+
+def winsize(rows: int, cols: int, xpixel: int, ypixel: int) -> bytes:
+    """The 8 bytes `TIOCGWINSZ` hands back, in the order `cell_size()` unpacks them."""
+    return struct.pack("HHHH", rows, cols, xpixel, ypixel)
+
+
+def test_a_run_with_no_terminal_reports_the_ASSUMED_cell_and_says_so() -> None:
+    """⛔⭐⭐ THIS TEST USED TO ASSERT AN ACCIDENT OF ITS ENVIRONMENT, AND IT FAILED ON HIS
+    MACHINE FOR TWO DAYS WHILE PASSING ON EVERY AGENT SHELL.
+
+    It read `cell_size()` with no patching at all and asserted `measured is False`, with the
+    docstring *"under the test harness there is no terminal at all"*. **That is true of an
+    agent shell and false of Julien's.** He runs the suite from an interactive terminal over
+    SSH; Ghostty fills in the pixel fields, so `cell_size()` measured, `measured` came back
+    True, and the assertion blew up.
+
+    ⚠️ The cost was not one red line. **The suite total became environment-dependent**, and
+    this repo's whole staleness defence is "compare the TOTAL against the last committed
+    figure" ([FINDINGS §70.4](../docs/FINDINGS.md)). A total that legitimately differs by
+    where you typed the command destroys that. It also read as flaky, because it passed 24
+    times in a row for an agent and failed for him ([FINDINGS §76.13](../docs/FINDINGS.md)).
+
+    ⭐ **The property worth asserting was never which branch runs.** It is that the answer
+    always SAYS which branch ran, because a fallback you cannot see is indistinguishable
+    from a bug. So both branches are now forced, and neither depends on the terminal.
+    """
+    with FakeIoctl(None):
+        cell = C.cell_size()
+    assert cell.measured is False, "no terminal can be measured, so it must say assumed"
     assert abs(cell.aspect - 2.0) < 0.01, "the assumed cell should be the classic 2:1"
+
+
+def test_a_terminal_that_reports_its_pixels_is_MEASURED_and_says_so() -> None:
+    # 80 columns over 640 px is an 8 px cell; 24 rows over 384 px is 16 px. Aspect 2.0.
+    with FakeIoctl(winsize(24, 80, 640, 384)):
+        cell = C.cell_size()
+    assert cell.measured is True, "the terminal answered, so this is a measurement"
+    assert (cell.width, cell.height) == (8.0, 16.0), cell
+
+
+def test_a_NON_2to1_measured_cell_is_carried_through_rather_than_rounded_to_the_assumption() -> None:
+    # ⭐ The whole reason this is measured: Retina cells often are not 2:1, and assuming
+    # they are stretches a 16:9 picture. 80 cols over 720 px is 9 px; 24 rows over 384 is 16.
+    with FakeIoctl(winsize(24, 80, 720, 384)):
+        cell = C.cell_size()
+    assert cell.measured is True
+    assert abs(cell.aspect - 16 / 9) < 0.01, f"aspect {cell.aspect:.3f} was flattened"
+
+
+def test_a_terminal_that_reports_ZEROS_counts_as_unmeasured() -> None:
+    """Apple Terminal answers `TIOCGWINSZ` and fills the pixel fields with zeros. That is
+    an answer and not a measurement, and dividing by it would raise."""
+    with FakeIoctl(winsize(24, 80, 0, 0)):
+        cell = C.cell_size()
+    assert cell.measured is False, "zeros are not a measurement"
+    assert abs(cell.aspect - 2.0) < 0.01
 
 
 def test_a_non_2to1_cell_changes_the_grid_so_the_picture_stays_square() -> None:

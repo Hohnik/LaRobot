@@ -304,6 +304,11 @@ class ProbeResult:
     device reported 1 fps on one run and 30 on the next, so OpenCV is deriving it
     from frame timing rather than reading the format. `width`/`height` were stable
     across every run and are.
+
+    ⭐ Since 2026-08-19 `width`/`height` come from the returned frame's own shape whenever a
+    frame arrived, and from `cap.get` only when none did. A handle answers the size it was
+    ASKED for, which is a different question from the size it hands over, and confusing the
+    two is [FINDINGS §76.0](../docs/FINDINGS.md).
     """
 
     index: int
@@ -384,11 +389,19 @@ def probe_indices(read_frames: bool = True, limit: int | None = None,
                     if float(candidate.std()) >= 1.0:
                         break        # real content, not a warm-up frame
             waited = time.perf_counter() - t0
+        # ⛔ THE SIZE COMES FROM THE FRAME when there is one. This block already held a real
+        # frame and still reported `cap.get`, which answers what was REQUESTED rather than
+        # what arrived. On 2026-08-19 that exact substitution printed "delivering 1280x720"
+        # for a camera that delivered nothing all session (FINDINGS §76.0). Here it was
+        # harmless because `ok` records whether a frame came, and it was still a claim
+        # dressed as a measurement. `cap.get` remains the fallback for the no-frame case,
+        # where there is nothing better and `ok` is False anyway.
+        shape = frame.shape[:2] if ok and frame is not None else None
         results.append(ProbeResult(
             index=idx,
             ok=bool(ok),
-            width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
+            width=int(shape[1]) if shape else int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+            height=int(shape[0]) if shape else int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
             fps=float(cap.get(cv2.CAP_PROP_FPS)),
             mean=float(np.mean(frame)) if ok and frame is not None else float("nan"),
             mono=frame_is_mono(frame) if ok else None,

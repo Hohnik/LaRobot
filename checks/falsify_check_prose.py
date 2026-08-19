@@ -100,9 +100,14 @@ def main() -> int:
         if cried_wolf:
             print(f"⛔ {len(cried_wolf)} of {len(CLEAN)} healthy examples were reported. "
                   "That is the cry-wolf failure; fix it before anyone learns to skip the output.")
+        # ⭐ The count prints on the FAILING path too, because that is when it matters most:
+        # `run_falsifiers.py` totals it, and a total that drops is the signal.
+        got = (len(BREAKS) - len(missed)) + (len(CLEAN) - len(cried_wolf))
+        print(f"CATCHES: {got}/{len(BREAKS) + len(CLEAN)}")
         return 1
     print(f"✓ {len(BREAKS)}/{len(BREAKS)} breaks caught, {len(CLEAN)}/{len(CLEAN)} healthy "
           "examples left alone. Its green runs mean something.")
+    print(f"CATCHES: {len(BREAKS) + len(CLEAN)}/{len(BREAKS) + len(CLEAN)}")
     return 0
 
 

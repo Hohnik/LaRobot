@@ -57,6 +57,7 @@ def main() -> int:
     if failed:
         print("\n──── runner output ────\n" + out)
     print(f"\n{len(checks) - failed}/{len(checks)} passed")
+    print(f"CATCHES: {len(checks) - failed}/{len(checks)}")
     return 1 if failed else 0
 
 

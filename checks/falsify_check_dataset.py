@@ -104,8 +104,10 @@ def main() -> int:
     if caught != len(breaks):
         print("⛔ check_dataset.py has gone partly blind. A checker that cannot see a break "
               "is worse\n   than no checker, because it is believed.")
+        print(f"CATCHES: {caught}/{len(breaks)}")
         return 1
     print("✓ the checker sees every break. Its green runs mean something.")
+    print(f"CATCHES: {caught}/{len(breaks)}")
     return 0
 
 

@@ -105,10 +105,25 @@ def jpeg_size(path: Path) -> tuple[int, int] | None:
     return None
 
 
-def frames_verdict(meta_cameras: dict, recording_dir: Path) -> tuple[str, list[str]]:
+#: A camera's frames per second, implied by its count and the recording's length, below which
+#: the recording is thin. Two thirds of the 30 the episode exporter fills its ticks with.
+#:
+#: ⛔⭐⭐ WHY THIS CHECK EXISTS AT ALL. On 2026-08-19 a recording on the Linux station saved
+#: **26 frames across 2.43 s**, which is 10.7 fps against a nominal 30, because the camera was
+#: running in an uncompressed format capped at 10 fps by its own firmware ([FINDINGS §76.1](../docs/FINDINGS.md)).
+#: The recording's meta and its directory agreed perfectly, so **this checker passed it**, and
+#: the whole defect was found by reading a session log rather than by any tool. ⭐ The number
+#: was in the saved file the entire time: frames ÷ duration. Now it is on screen.
+THIN_FPS = 20.0
+
+
+def frames_verdict(meta_cameras: dict, recording_dir: Path,
+                   duration_s: float = 0.0) -> tuple[str, list[str]]:
     """Measure a recording's camera frames against what its meta claims (item 48 ③).
 
     Returns ``(one display line, fault lines)``. The counting is the point: the meta's numbers were written at save time and the JPEGs sit on disk, so agreement is evidence the frames belong to this file and disagreement means the directory was moved, half-copied or edited — the same measure-don't-assert rule as the padding column above.
+
+    ⭐ `duration_s` turns the count into a RATE, which is the question the count alone cannot answer. Agreement between meta and disk says the frames belong to the file. It says nothing about whether there are enough of them.
     """
     faults: list[str] = []
     parts: list[str] = []
@@ -132,6 +147,25 @@ def frames_verdict(meta_cameras: dict, recording_dir: Path) -> tuple[str, list[s
             faults.append(f"{name}: meta says {want} frame(s) were written and "
                           f"{cam_dir.relative_to(recording_dir)} holds {on_disk} — "
                           "these frames are not the recording's own.")
+        # ⛔ ZERO FRAMES IS A FAULT even when the meta agrees, and this is the case that
+        # started FINDINGS §76: a camera was named on the command line, opened, reported
+        # "delivering 1280x720", and wrote nothing. Meta said 0, disk held 0, they agreed,
+        # and this checker said nothing at all. Agreement is not health.
+        if want == 0 and on_disk == 0:
+            piece += "⛔"
+            faults.append(f"{name}: recorded ZERO frames. The camera was named for this "
+                          "recording and contributed nothing, so any episode exported from "
+                          "it has an empty view. See FINDINGS §76.0.")
+        elif duration_s > 0:
+            rate = on_disk / duration_s
+            piece += f" {rate:.1f}fps"
+            if rate < THIN_FPS:
+                piece += "⚠️"
+                faults.append(f"{name}: {on_disk} frames over {duration_s:.2f}s is "
+                              f"{rate:.1f} fps, well under the 30 the episode exporter fills "
+                              "its ticks with, so every tick repeats pictures. The known "
+                              "cause is a camera left in an uncompressed format (FINDINGS "
+                              "§76.1). Not corrupt data; thin data.")
         if counts.get("dropped", 0):
             piece += f" ({counts['dropped']} dropped)"
         if counts.get("write_errors", 0):
@@ -244,7 +278,7 @@ def main() -> int:
               f"{traj.joint_speed(99):8.2f}{flag}  {method:<22}")
         # ⭐ item 48: a recording that carries camera frames says so on its own second line, counted from disk rather than trusted from meta.
         if traj.meta.get("cameras"):
-            line, cam_faults = frames_verdict(traj.meta["cameras"], folder)
+            line, cam_faults = frames_verdict(traj.meta["cameras"], folder, traj.duration)
             print(line)
             for fault in cam_faults:
                 if path.name not in frame_faults:
@@ -271,9 +305,10 @@ def main() -> int:
         print("   by hand came out stamped as HOLD. The data is fine; the label is not.")
         print()
     if frame_faults:
-        print(f"⛔ {len(frame_faults)} file(s) claim a picture count their frames directory does "
-              f"not match: {', '.join(frame_faults)}.")
-        print("   The per-camera fault lines above the table say which camera and by how much.")
+        print(f"⛔ {len(frame_faults)} file(s) have a camera problem: {', '.join(frame_faults)}.")
+        print("   Three different things land here, and the per-camera lines above say which:")
+        print("   a count that disagrees with the directory · a camera that recorded ZERO")
+        print("   frames · a camera whose frames-per-second is far under 30.")
         print("   ⭐ FIRST THING TO RULE OUT, because it caused every instance of this so far:")
         print("   macOS sidecar files. If the folder was hand-copied from the Mac, every picture")
         print("   arrived with a `._`-prefixed twin and the count came out at exactly double.")

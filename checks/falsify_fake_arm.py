@@ -142,4 +142,5 @@ if __name__ == "__main__":
     print(f"\n{'✓ every sabotage was caught' if ok else '⛔ AT LEAST ONE TEST IS BLIND'}")
     # After restoring, the real suite must still pass — proof the harness left no damage.
     print(f"suite after restore: {'PASS' if T.main() == 0 else 'FAIL'}")
+    print(f"CATCHES: {len(ALL) if ok else 0}/{len(ALL)}")
     sys.exit(0 if ok else 1)
