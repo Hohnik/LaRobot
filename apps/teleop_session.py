@@ -390,6 +390,9 @@ TAKES_DIR = REPO / "recordings"
 # against a 0.15 limit. So treat this as "the fastest we allow ourselves to ask for", and
 # see ROADMAP §6.6 for the measurement that would replace it.
 MAX_PLANNED_JOINT_SPEED = MAX_JOINT_STEP * CONTROL_HZ
+
+# ⛔⭐ How far (rad, worst ARM joint, jaws excluded) a replay arm may sit from the recording's start pose at the moment playback would begin. A park arrives within ~0.05 rad and settles within ~0.05 more, so 0.25 — the default max-lag, the point past which the first command is a real yank — separates "settled short" from "never parked here at all". FINDINGS §72.1: a playback once began 1.28 rad off because the READY BOOKKEEPING lied; this check measures the arm instead of trusting the bookkeeping, so that whole failure class refuses instead of dragging.
+REPLAY_START_TOLERANCE = 0.25
 # ⚠️ How long one recording may run before it stops itself. ~16 minutes at 100 Hz, which
 # is well past the ~4.5 minutes of context a long-horizon policy wants (ROADMAP §9.3).
 # It exists because nothing else would ever stop a recording, and an unbounded list in a
@@ -1430,6 +1433,8 @@ def main() -> int:  # noqa: PLR0915
     replay_prev_target: list[float] | None = None
     tracking: TrackingLog | None = None   # per-joint answer to "how fast can it go?"
     replay_pending: Trajectory | None = None   # parked to its start, waiting to run
+    # ⛔⭐ WHY EVERY PARK CARRIES ITS PURPOSE (FINDINGS §72.1): an arrival used to be creditable to a playback ARMED IN THE SAME EVENT. A pose-leg's arrival advanced the composite queue, the queue armed the take leg, and the very same arrival then fell through into the ready-check and counted as "this arm is at the recording's start" — so the playback began while the arm still had 1.28 rad of park to go, measured on the bench 2026-08-19. The credit below now requires the ARRIVED path to have been the replay's own park-to-start, nothing else's.
+    park_purpose: dict[str, str] = {}          # arm name → why its CURRENT park runs
     # ⭐⭐ WHICH ARMS A PLAYBACK DRIVES, in the RECORDING's order, and how its samples map
     # onto them. Both come from the file's own metadata rather than from the session, so a
     # recording made with `--arms B,G` cannot be replayed onto `--arms G,B` with each arm
@@ -2022,6 +2027,8 @@ def main() -> int:  # noqa: PLR0915
             # `e` key keeps `easing` current mid-park.
             one.blend = BLEND_MODES[blend_idx][1]
             one.easing = EASINGS[ease_idx]
+            park_purpose[one.name] = ("replay" if for_replay
+                                      else "composite" if for_composite else "operator")
             for warn in one.begin_path([ParkLeg(n, list(pose)) for n, pose in legs], t,
                                        smooth=not args.no_smooth,
                                        mixed_leg_advice=not for_replay):
@@ -3529,7 +3536,11 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  PARK to which?  0 = base, 1-9 = a waypoint, "
                               f"Enter = base.")
                         print(f"     Type several digits for a SEQUENCE, then Enter."
-                              f"   waypoints: {have or 'none'}\n")
+                              f"   waypoints: {have or 'none'}")
+                        # ⭐ FINDINGS §72.2: he pressed w HERE hoping to record the run, and got the composite take-marker instead (w+digit = play a recording as a leg, by design). Recording a run has always worked the other way round — start it FIRST — and nothing said so at the one place he reached for it.
+                        print("     w then a digit plays a RECORDING as a leg. To RECORD "
+                              "a run: press w BEFORE p —\n     recording runs through "
+                              "parks and playbacks, w again stops it.\n")
                     elif k in "oc" and any(one.mode == "teleop" for one in aimed):
                         # ⭐ Every selected arm's jaws. `o` and `c` are commands, and BOTH
                         # selected means the operator asked for both grippers.
@@ -4165,6 +4176,15 @@ def main() -> int:  # noqa: PLR0915
                             # arrival (which waits for the second) had its pending playback
                             # cancelled as "abandoned". FINDINGS §57.1.
                             one.park_path, one.park_marks = None, []
+                            # ⛔⭐⭐ THE PURPOSE IS TAKEN BEFORE THE QUEUE MAY ADVANCE (FINDINGS §72.1).
+                            # The composite advance two lines down can ARM A TAKE LEG inside this very
+                            # event; without this capture, the pose-leg arrival being handled right now
+                            # fell through into the ready-check below and was credited as "this arm is
+                            # at the recording's start" — the recording then played while the arm still
+                            # had 1.28 rad of park to go, measured on the bench 2026-08-19. The credit
+                            # is only valid for the park THIS arrival completed, and that park's purpose
+                            # was stamped when it began.
+                            arrived_purpose = park_purpose.pop(one.name, "operator")
                             # ⭐ Composite (ROADMAP §6.6.1a): a pose-leg's park arrived.
                             # The leg is done when EVERY awaited arm has arrived; only
                             # then does the queue advance — in the ARRIVAL branch, never
@@ -4176,8 +4196,10 @@ def main() -> int:  # noqa: PLR0915
                             # ⭐ The handover from "drive to the start pose" to "play the
                             # recording" lives HERE, in the arrival branch, so a park that
                             # was blocked or interrupted can never roll into a playback:
-                            # only a park that actually arrived does.
-                            if replay_pending is not None and one in replay_arms:
+                            # only a park that actually arrived does — and only a park that
+                            # was FOR the playback (`arrived_purpose`), never a pose leg's.
+                            if (replay_pending is not None and one in replay_arms
+                                    and arrived_purpose == "replay"):
                                 # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each one
                                 # parks a different distance and finishes at a different
                                 # moment; starting on the first arrival would have the
@@ -4185,9 +4207,41 @@ def main() -> int:  # noqa: PLR0915
                                 replay_ready.add(one.name)
                                 waiting = [a.name for a in replay_arms
                                            if a.name not in replay_ready]
+                                off_start = []
+                                if not waiting:
+                                    # ⛔⭐ MEASURE BEFORE PLAYING — the second, independent defence
+                                    # (FINDINGS §72.1): the bookkeeping above was wrong once, so the
+                                    # gate no longer trusts it alone. Every replay arm's ARM joints
+                                    # (jaws excluded — a jaw holding an object sits off on purpose)
+                                    # must actually BE at the recording's start, measured NOW. A
+                                    # refusal here costs a retry; a pass-through costs a playback
+                                    # dragging the arm from the wrong pose under the max-lag ratchet.
+                                    want_all = list(replay_pending.start_pose() or ())
+                                    for a in replay_arms:
+                                        sl = replay_layout.slice_for(a.name)
+                                        want = np.asarray(want_all[sl], dtype=float)
+                                        have = np.asarray(a.robot.get_joint_pos(),
+                                                          dtype=float)
+                                        n_cmp = min(N_ARM, len(want), len(have))
+                                        err = float(np.max(np.abs(have[:n_cmp]
+                                                                  - want[:n_cmp])))
+                                        if err > REPLAY_START_TOLERANCE:
+                                            off_start.append((a.name, err))
                                 if waiting:
                                     print(f"     arm {one.name} is at the start pose; "
                                           f"waiting for {', '.join(waiting)}.")
+                                elif off_start:
+                                    where = ", ".join(f"{n} is {e:.2f} rad off"
+                                                      for n, e in off_start)
+                                    print(f"\n  ⛔ NOT playing: {where} — a playback must "
+                                          "begin at the recording's own start pose "
+                                          "(FINDINGS §57.1), and something moved the arm "
+                                          "after its park arrived. Nothing plays; press "
+                                          "l (or retype the run) to park and retry.\n")
+                                    replay_pending = None
+                                    replay_ready = set()
+                                    abandon_composite("a playback almost began away "
+                                                      "from its start pose")
                                 else:
                                     replay = replay_pending
                                     replay_pending = None

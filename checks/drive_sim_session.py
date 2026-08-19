@@ -175,11 +175,29 @@ def main() -> int:
         ("both arms parked", r"arm G PARKED"),
         ("motors reported disabled", r"motors confirmed disabled: \[1, 2, 3, 4, 5, 6, 7\]"),
     ]
+    # ⛔⭐ FINDINGS §72.1: the composite's take leg once started PLAYING while an arm still
+    # had 1.28 rad of park left — a pose-leg arrival was credited to the take leg armed in
+    # the same event, and the old checks could not see it (the run still "completed").
+    # These two measure the CONSEQUENCE, which is the §0 rule: every replay arm must
+    # actually ARRIVE (two "PARK reached" between the take-park announcements and PLAYING),
+    # and the start-pose guard must never fire in a healthy run.
+    checks.append(("every arm ARRIVED before the take played", None))
+    checks.append(("no playback was refused off its start pose", None))
     bad = 0
     for label, pattern in checks:
-        hit = re.search(pattern, clean, re.M | re.S)
         if label == "no anonymous rows":
             hit = not re.search(r"^ +joint +worst lag", clean, re.M)
+        elif label == "every arm ARRIVED before the take played":
+            marks = list(re.finditer(r"start pose in recording 8", clean))
+            hit = False
+            if marks:
+                tail = clean[marks[-1].end():]
+                play = tail.find("PLAYING")
+                hit = play >= 0 and tail[:play].count("PARK reached") >= 2
+        elif label == "no playback was refused off its start pose":
+            hit = "NOT playing" not in clean
+        else:
+            hit = re.search(pattern, clean, re.M | re.S)
         ok = bool(hit)
         bad += not ok
         print(f"  {'✓' if ok else '⛔'} {label}")

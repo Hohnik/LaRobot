@@ -5072,7 +5072,7 @@ Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as 
 
 ✅ **Fix**: the save prompt prints one line per occupied slot (duration · arms · method · date) plus which slots are free, once, up front (`yam/recording.py::slot_overview`, both freeze sites, tested). The per-digit replace confirmation stays — it is the [§33.2](FINDINGS.md) overwrite guard, and the overview removes the hunting, never the guard.
 
-### 71.7 ⬜⭐⭐ THE HIS-LIST, current — supersedes [§71.3](FINDINGS.md); his morning closed its items 1, 2 and 4
+### 71.7 ⬜⭐⭐ THE HIS-LIST — ⚠️ SUPERSEDED by [§72.5](FINDINGS.md) after his midday run closed the three-camera take and ran the composite on hardware
 
 **At the bench:**
 
@@ -5085,3 +5085,60 @@ Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as 
 **From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo, else the C4 mini-sample gate adjudicates.
 
 **Standing, unchanged:** a private remote for this repo · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
+
+## 72 ⭐⭐⭐ 2026-08-19, MIDDAY RUN — THE THREE-CAMERA EPISODE EXISTS, THE COMPOSITE RAN ON HARDWARE AND EXPOSED A REAL HANDOVER BUG, AND HIS GRIP QUESTION IS ANSWERED WITH THE BUG IN HAND
+
+### 72.0 ✅✅⭐⭐ WHAT HIS RUN PROVED — the walkthrough's collection loop is complete on hardware
+
+1. ✅⭐⭐ **The three-camera take ran first try**: slot 3, 7.3 s, 646 samples, **219 + 218 + 219 frames at ~30 fps each, zero drops** — and 646/7.3 = **88.5 Hz, so THREE writer threads cost the loop nothing measurable** (one camera ran 89-90 Hz, no camera ran 83 Hz the same morning). Design point ⑤ of item 48 is now fully answered on hardware.
+2. ✅⭐⭐ **The full three-role export ran**: `recordings/episodes/3.mcap`, 218 ticks, `/top-camera` + `/left-wrist-camera` + `/right-wrist-camera` — **the first complete C3-shaped episode this project has produced.** Only the C4 gate (ABC's loader) remains between this and Gate C.
+3. ✅⭐ **The composite ran on the real arms** — four take legs and pose legs in one 7-leg queue, tracking tables per playback, and the abandon machinery fired correctly when a leg was abandoned (2 queued legs dropped, counted). ⛔ It also exposed a real defect — [§72.1](FINDINGS.md).
+4. ✅ The serial-prefix specs and the model check worked on the bench exactly as written (`model-checked at 424x240` on both D405s), the slot overview showed the whole shelf and the save took two keypresses (eleven yesterday), and the gripper stall latch fired twice in teleop and released correctly.
+5. ⛔⭐ **The placeholder pattern bit AGAIN**: he typed `--slot <3>` with literal angle brackets because [§71.7](FINDINGS.md)'s command carried `--slot <n>`. Two instances in two days ([§71.1](FINDINGS.md) was the first) make it a rule: **a command handed to Julien contains only typeable text — a real example value, never a bracketed placeholder.** [§72.5](FINDINGS.md) is written that way.
+
+### 72.1 ⛔⭐⭐⭐ THE COMPOSITE HANDOVER BUG — a playback began with arm B 1.28 rad AWAY from the recording's start, and the sim had been showing it invisibly all along
+
+⛔ **What his log shows, line by line**: after the pose leg (waypoints 1→2→3→1), the take leg for recording 2 announced B's park (1.29 rad of travel) — and in the SAME instant printed *"arm B is at the start pose; waiting for G"*. G's 0.00 rad park arrived a cycle later, the playback started, and B was dragged 1.28 rad to catch up (worst lag 1.294 rad, clock held 1.2 s), while B's still-running park was cancelled as abandoned and the composite dropped its remaining legs.
+
+⭐⭐ **The mechanism, confirmed in the code**: an arrival event advanced the composite queue, the queue armed the take leg *inside that same event*, and the arrival then fell through into the ready-check and was credited as "this arm reached the recording's start" — when what had actually arrived was the POSE leg's park at waypoint 1. Only pose-leg→take-leg transitions hit it, which is why the first three take legs (playback→take, no arrival in flight) ran clean.
+
+⛔⭐⭐ **The sim had reproduced it from day one and the checks were blind**: `recordings/sim/last_drive.log` shows the same instant false credit (B announced at the start pose with 1.44 rad of travel, ONE arrival before PLAYING) — and the 29 checks still passed, because they asserted the take-park was *announced*, never that every arm *arrived* before playing. The [§0](FINDINGS.md) pattern in a checker: green while validating the wrong thing. ⚠️ The abandon cascade is timing-dependent, which is why two morning sim runs passed and the midday one failed "composite completed" — the same underlying defect, flickering.
+
+✅⭐⭐ **Fixed with two independent defences, falsified before trusted:**
+1. **Every park carries its PURPOSE** (`replay` · `composite` · `operator`), stamped when it begins and taken at its arrival — the ready-credit now requires the arrived park to have been the playback's own park-to-start, so no other leg's arrival can ever be mistaken for it.
+2. **The gate MEASURES before playing**: when the bookkeeping says every arm is ready, each replay arm's ARM joints (jaws excluded — a jaw holding an object sits off on purpose) are checked against the recording's start pose, and anything beyond 0.25 rad (`REPLAY_START_TOLERANCE` — parks arrive within ~0.05, settle within ~0.05 more) refuses the playback loudly instead of dragging the arm.
+3. The sim driver gained the checks that would have caught this a week ago: every replay arm must ARRIVE (two "PARK reached" between the take-park announcements and PLAYING) and the start-pose guard must never fire in a healthy run. **Falsified: 29/31 on the pre-fix code, 31/31 after.**
+
+⚠️ **Safety accounting, honestly**: the arm was never in free flight — `max_lag` clamped every command to 0.25 rad ahead of the measured pose, so the "jump" was a bounded ratchet-drag, exactly what that layer exists for. What the bug DID poison is data and grips: a playback that starts off-pose grips off-pose.
+
+### 72.2 ✅⭐ HIS GRIP QUESTION, answered with the audit he asked for — what changed, what did not, and what the two-of-three grips mean
+
+His observation: the playback grips used to be very consistent, and this run gripped twice with only one really good. **The audit:**
+
+1. ⛔ **Yes — something built since then made one playback worse: [§72.1](FINDINGS.md).** The composite is new since his consistent era, and a playback that starts 1.28 rad off-pose grips wherever it happens to pass. Found, fixed, double-guarded. This is the one concrete regression the history supports.
+2. ✅ **The playback machinery itself is unchanged** since the consistent era (`replay_step` untouched; the park merge was his own "feels exactly as before" pass, [§69.0](FINDINGS.md)). The only jaw-path change is the settle-gate, and it was read end to end today: it keeps commanding the SAME split pose while it waits ([session.py's step_path]), so it can delay a grab by ~half a second but cannot move where the jaws close.
+3. ⭐ **His own hypothesis stands as the rest of the answer: the recording's quality.** The consistent grips replayed a HAND-GUIDED take; today's grips replayed teleop-driven takes recorded while working the cameras. Same playback fidelity, different taught path.
+4. ⚠️ **The floor under everything stays [§69.2](FINDINGS.md)**: every arrival settles 0.02-0.04 rad short (up to ~1.5 cm at the elbow), direction not repeatable, so millimetre grabs sit AT the noise floor — that is why "not millimetre perfect" is the honest expectation and kp (item 17) is the one real lever. ⭐ A small observation from his own logs, worth one line: settle offsets track approach speed (0.020-0.022 rad at 0.40 rad/s park speed; 0.033-0.039 at 1.50) — teaching AND grabbing at the same, lower speed is free consistency.
+
+### 72.3 ✅⭐ RECORDING A PARK RUN — it has always worked, the one key he tried was taken by the composite syntax, and now the prompt says so
+
+His ask: record the waypoint run itself, so the park feature produces demonstrations. **The flow exists**: press `w` BEFORE `p` — the sampler records through every mode including PARK (mode switches mid-take are hardware-proven, slot 9 carries `teleop+guide`), cameras and labels ride along, and the take's `modes` field says the arm was in PARK. What he pressed instead was `w` INSIDE the park prompt, which by design means "the next digit names a take leg" (the composite syntax) — so the park prompt now states both meanings, and [COMMANDS.md](COMMANDS.md)'s dataset section documents the collection loop: teach waypoints once, then `w` · `p 1 2 3` Enter · `w` · save, with the scene reset between runs. ⭐ **This IS the automated collection lane**: one taught sequence, many recorded episodes with variation coming from the scene.
+
+### 72.4 ⭐⭐ THE TEAM IS BUILDING NOW — their main re-read 2026-08-19, and one live contract risk found
+
+Two PRs landed on `Hohnik/LaRobot` main since the 2026-08-18 exploration, the second the same morning as this session: a **working MuJoCo simulation** of the ABC `put_bottles` scene (30 Hz ticks, top/left/right cameras — ABC's own `camera_keys`) and a `docs/ARCHITECTURE.mmd` declaring their plan: an `Input` interface (Keyboard · Spacemouse · **Policy**) and a `Robot` interface (Real · Sim) — the same seams [PLAN.md](PLAN.md) names. Their `inputs/mcap_recording.py` is an **empty file**, so this walkthrough's episode exporter is the only running C3 implementation anywhere. ⛔ **The one live risk: their `Observation` carries the gripper in METRES and our episodes carry it NORMALISED 0..1, and C3 names the ee dim without a unit** — flagged in [PLAN.md](PLAN.md) §4; ABC's `export_mcap.py` adjudicates at C4. Full re-read: [ROADMAP §10.6](ROADMAP.md). ⭐ Also written this session, at his ask for levelled documents: **[ARCHITECTURE.md](ARCHITECTURE.md)** — the layer between the plan and the code (the five shapes, the five base ideas, the module map), now in the README's read order. His ruling on the doc system, recorded: the PLAN's pointer style is right, FINDINGS' linking is right, and more detail belongs in MORE documents at DIFFERENT levels, not in longer ones.
+
+### 72.5 ⬜⭐⭐ THE HIS-LIST, current — supersedes [§71.7](FINDINGS.md); every command below is typeable verbatim
+
+**At the bench, when he wants:**
+
+1. ⭐ **One automated collected episode — the full loop in one run** (also re-proves the [§72.1](FINDINGS.md) fix on hardware): start `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603,d405:2553 --start-mode hold`, teach or keep waypoints, then `w` · `p 1 2 3` Enter · `w` · save to slot 4 · `uv run apps/export_episode.py --slot 4 --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773`. A composite variant (`p 1 w3 1` Enter Enter) also re-runs the fixed handover with real distances.
+2. **Grip consistency, if he wants it better**: teach and run at one LOW speed (the settle offsets in his own logs are half as large at 0.4 rad/s as at 1.5), re-teach the grab from a hand-guided take rather than teleop, and the remaining ~1 cm is the [§69.2](FINDINGS.md) friction floor — kp (item 17) is the one lever past it, his call.
+
+**Decisions, minutes each:** ⭐ **confirm the bench sides in one word** — both his exports used `left=G right=B`, every episode inherits it · the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9) · **ratify [docs/PLAN.md](PLAN.md)** (he has read it: *"the plan in general looks good"* — one word makes it the deliverable).
+
+**For the colleagues (his call on timing):** the private remote (~5 minutes together, his GitHub) is the best vehicle — it ships [PLAN.md](PLAN.md), [ARCHITECTURE.md](ARCHITECTURE.md) and the whole evidence base in one link; a chat-drafted message to the team exists in the session transcript of 2026-08-19.
+
+**From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (episode encoding byte for byte, camera topics included, and the gripper-unit question — [§72.4](FINDINGS.md)).
+
+**Standing:** the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).
