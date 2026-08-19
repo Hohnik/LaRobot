@@ -17,7 +17,7 @@
 > uv run apps/teleop_session.py --arm B        # NO --yes: prints the full plan, moves nothing
 > ```
 >
-> No hardware at all? `uv run apps/teleop_session.py --sim --yes --arms B,G` runs the whole loop on the simulator, and `uv run checks/run_tests.py` runs all 705 checks.
+> No hardware at all? `uv run apps/teleop_session.py --sim --yes --arms B,G` runs the whole loop on the simulator, and `uv run checks/run_tests.py` runs the whole suite and prints its total.
 >
 > ## Safety, in one place
 >
@@ -45,7 +45,7 @@
 > ```
 > apps/           things you RUN: teleop_session, camera_view, calibrate_gripper, ping_motors, …
 > checks/         read-only diagnostics + the falsifiers that prove the checkers can see failures
-> tests/          705 checks across 29 files — one command: uv run checks/run_tests.py
+> tests/          the whole suite — one command prints the live total: uv run checks/run_tests.py
 > src/yam/        the library (installed by uv sync): robot, can, session, teleop, motion,
 >                 inputs/, fake/ (the lagging simulator), ui/
 > config/         measured calibration — tracked on purpose (session_defaults.json is not)
