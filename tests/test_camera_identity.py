@@ -13,7 +13,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-from yam.cameras.identity import parse_ioreg, unique_id_for_serial, usb_unique_id  # noqa: E402
+from yam.cameras.identity import (  # noqa: E402
+    devices_matching_serial,
+    parse_ioreg,
+    unique_id_for_serial,
+    usb_unique_id,
+)
 
 #: Trimmed from the live `ioreg -p IOUSB -w0 -l` of 2026-08-19: both D405s (distinct
 #: serials, distinct ports) and the C920 (⛔ NO serial line — that is the real device's
@@ -70,6 +75,18 @@ def test_the_parser_reads_all_three_and_keeps_ports_apart() -> None:
     assert len(devs) == 3
     locs = {d["location_id"] for d in devs}
     assert locs == {19005440, 18939904, 18092032}, "three cameras, three distinct ports"
+
+
+def test_a_serial_prefix_selects_exactly_one_device_or_none() -> None:
+    devs = parse_ioreg(FIXTURE)
+    # The dictation-friendly prefixes this rig actually needs (FINDINGS §71.5).
+    assert [d["serial"] for d in devices_matching_serial("2553", devs)] == ["255323071773"]
+    assert [d["serial"] for d in devices_matching_serial("2603", devs)] == ["260323072846"]
+    assert len(devices_matching_serial("2", devs)) == 2, \
+        "an ambiguous prefix returns BOTH so the caller can refuse and name them"
+    assert devices_matching_serial("9", devs) == []
+    assert devices_matching_serial("", devs) == [], \
+        "an empty prefix must never select everything — the C920 has an empty serial"
 
 
 def main() -> int:

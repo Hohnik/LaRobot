@@ -127,6 +127,7 @@ from yam.motion import EASINGS, easing_factor  # noqa: E402
 from yam.recording import (  # noqa: E402
     Layout,
     describe_slot,
+    slot_overview,
     TrackingLog,
     Trajectory,
     replay_step,
@@ -930,45 +931,59 @@ def status_row(one: ArmSession, lead: str, reach: float, floor: float,
 def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
     """Open every `--cameras` spec, or refuse loudly before anything is energised.
 
-    ⭐ ROADMAP §8.2 item 48 ①: each spec resolves through the machinery that already exists — a raw index opens directly, a model name resolves by MEASUREMENT (`camera_view`'s confirmed mode probe), and `model:serial` resolves through the FINDINGS §70.15 identity chain (serial → ioreg locationID → uniqueID) plus the hint file, which is the only way to name ONE of two identical D405s.
+    ⭐ ROADMAP §8.2 item 48 ①: each spec resolves through the machinery that already exists — a raw index opens directly, a model name resolves by MEASUREMENT (`camera_view`'s confirmed mode probe), and `model:serial` resolves through the FINDINGS §70.15 identity chain (serial → ioreg locationID → uniqueID) plus the hint file, which is the only way to name ONE of two identical D405s. A serial may be any unique PREFIX (`d405:2553`), because Julien dictates commands; the recorded camera NAME always carries the FULL serial, so the dataset's names do not depend on how much of it was typed.
+
+    ⛔ A hint-resolved index is MODEL-CHECKED before it is trusted (FINDINGS §71.5): the opened device must answer a mode only the claimed model offers. Two stale hint rows were found pointing both D405s at the C920's index — without this check the session would have recorded the webcam under a wrist camera's name and nothing would have said so. The one case no software question can catch stays physical: two same-model cameras with their cables swapped.
 
     ⛔ Runs in the operator's own terminal because macOS grants camera capture per app (FINDINGS §61.3) — an agent shell can never hold this permission, which is why every failure message below tells the operator what to run rather than retrying.
     """
     from camera_view import (  # noqa: PLC0415 — OpenCV + AVFoundation load only when cameras are asked for
         CameraLookupError,
         hinted_index,
+        mac_cameras,
+        model_discriminating_mode,
         open_camera,
         resolve_camera,
     )
-    from yam.cameras.identity import unique_id_for_serial  # noqa: PLC0415
+    from yam.cameras.identity import (  # noqa: PLC0415
+        devices_matching_serial,
+        read_ioreg,
+        usb_unique_id,
+    )
 
     grabbers: dict[str, FrameGrabber] = {}
     for spec in flatten_tokens([specs_text]):
-        name = camera_dir_name(spec)
-        if name in grabbers:
-            raise SystemExit(f"⛔ --cameras names {spec!r} twice.")
+        expect_uid = None
         if spec.isdigit():
-            idx = int(spec)
+            name, idx = camera_dir_name(spec), int(spec)
         elif ":" in spec:
-            _, serial = spec.split(":", 1)
-            uid = unique_id_for_serial(serial.strip())
-            if uid is None:
+            model, serial = spec.split(":", 1)
+            matches = devices_matching_serial(serial, read_ioreg())
+            if not matches:
                 raise SystemExit(
-                    f"⛔ {spec}: no USB device carries serial {serial.strip()!r} right now "
-                    "— `uv run checks/check_rig.py` shows what is attached."
+                    f"⛔ {spec}: no attached USB device's serial starts with "
+                    f"{serial.strip()!r} — `uv run checks/check_rig.py` shows what is there."
                 )
-            idx = hinted_index(uid)
+            if len(matches) > 1:
+                listing = ", ".join(d["serial"] for d in matches)
+                raise SystemExit(f"⛔ {spec}: {serial.strip()!r} matches more than one "
+                                 f"device ({listing}) — type more of the serial.")
+            dev = matches[0]
+            expect_uid = usb_unique_id(dev["location_id"], dev["vid"], dev["pid"])
+            name = camera_dir_name(f"{model}:{dev['serial']}")
+            idx = hinted_index(expect_uid)
             if idx is None:
                 raise SystemExit(
-                    f"⛔ {spec}: the serial resolves (uniqueID {uid}) but no confirmed "
-                    "OpenCV index is on file for it. Two identical D405s cannot be told "
-                    "apart by any measurement (FINDINGS §67.12), so the mapping needs one "
-                    "physical confirmation per port arrangement: run `uv run "
+                    f"⛔ {spec}: the serial resolves (uniqueID {expect_uid}) but no "
+                    "confirmed OpenCV index is on file for it. Two identical D405s cannot "
+                    "be told apart by any measurement (FINDINGS §67.12), so the mapping "
+                    "needs one physical confirmation per port arrangement: run `uv run "
                     "apps/capture_probe.py --indices 1 2 --seconds 3 --save`, look at the "
-                    "two saved pictures, and record which index shows which view — "
-                    "config/camera_index_hint.json then pins it (FINDINGS §70.15)."
+                    "two saved pictures, and say which index shows which view — "
+                    "config/camera_index_hint.json then pins it (FINDINGS §71.5)."
                 )
         else:
+            name = camera_dir_name(spec)
             try:
                 idx, _, found_cap = resolve_camera(spec)
             except CameraLookupError as e:
@@ -976,12 +991,50 @@ def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
             # The resolver may hand the device back already open, unconfigured. Release it and reopen below with the recording mode, so every camera goes through ONE configuration path.
             if found_cap is not None:
                 found_cap.release()
+        if name in grabbers:
+            raise SystemExit(f"⛔ --cameras names {name!r} twice.")
         cap = open_camera(idx, 1280, 720, 30)
         if cap is None:
             raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open. "
                              "`uv run apps/camera_view.py --list` shows what is there.")
+        checked = ""
+        if expect_uid is not None:
+            cams_listed = mac_cameras()
+            target = next((c for c in cams_listed if c.unique_id == expect_uid), None)
+            if target is None:
+                cap.release()
+                raise SystemExit(f"⛔ {spec}: ioreg sees the device but AVFoundation lists "
+                                 f"no camera with uniqueID {expect_uid} — replug it, then "
+                                 "`uv run apps/camera_view.py --list`.")
+            probe = model_discriminating_mode(target, cams_listed)
+            if probe is None:
+                print(f"  ⚠️ {name}: every mode is shared with another model, so the "
+                      "hinted index cannot be model-checked.")
+            else:
+                import cv2  # noqa: PLC0415
+
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, probe[0])
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, probe[1])
+                got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                       int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                cap.release()
+                if got != probe:
+                    raise SystemExit(
+                        f"⛔ {spec}: index {idx} did not answer {probe[0]}x{probe[1]}, a "
+                        f"mode only a {target.short} offers — the hint in "
+                        "config/camera_index_hint.json is STALE and would have recorded "
+                        "the wrong camera under this name (FINDINGS §71.5). Re-establish "
+                        "it: `uv run apps/capture_probe.py --indices 1 2 --seconds 3 "
+                        "--save`, look at the pictures, say which is which."
+                    )
+                # Reopened rather than reconfigured: the probe changed the mode, and one configuration path (open_camera) beats trusting set() to restore fps as well as size.
+                cap = open_camera(idx, 1280, 720, 30)
+                if cap is None:
+                    raise SystemExit(f"⛔ {spec}: index {idx} passed the model check and "
+                                     "then refused to reopen — replug it and retry.")
+                checked = f", model-checked at {probe[0]}x{probe[1]}"
         grabbers[name] = FrameGrabber(cap)
-        print(f"  📷 {name} open on index {idx} (asked for 1280x720@30).")
+        print(f"  📷 {name} open on index {idx} (asked for 1280x720@30{checked}).")
     return CaptureSet(grabbers), list(grabbers)
 
 
@@ -3423,7 +3476,10 @@ def main() -> int:  # noqa: PLR0915
                                       f"typical joint speed "
                                       f"{take_to_save.joint_speed(99):.2f} rad/s "
                                       f"(peak {take_to_save.max_joint_speed():.2f}).")
-                                print("     SAVE to which slot? 0-9, any other key discards.\n")
+                                # ⭐ The whole shelf, once, before the first digit (FINDINGS §71.6): on 2026-08-19 every slot was occupied and the one-warning-per-digit flow cost eleven keypresses. The replace confirmation below still guards each overwrite.
+                                for line in slot_overview(takes_dir):
+                                    print(line)
+                                print("\n     SAVE to which slot? 0-9, any other key discards.\n")
                     elif k == "l":
                         # ⛔ PLAY A RECORDING, AND IT ASKS TWICE ON PURPOSE. `l` sits next
                         # to `ö` and `ä` on a German keyboard, which now adjust the ease
@@ -3757,7 +3813,9 @@ def main() -> int:  # noqa: PLR0915
                             pending = "take_save"
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
                                   f"limit ({take_to_save.duration:.0f}s).")
-                            print("     SAVE to which slot? 0-9, any other key discards.\n")
+                            for line in slot_overview(takes_dir):
+                                print(line)
+                            print("\n     SAVE to which slot? 0-9, any other key discards.\n")
 
                 # ---- 4. act on the mode -----------------------------------
                 # ---- 3.5 the puck, read EVERY cycle in EVERY mode -------------

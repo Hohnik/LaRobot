@@ -71,3 +71,16 @@ def unique_id_for_serial(serial: str, devices: list[dict] | None = None) -> str 
         if dev["serial"] == serial and dev["vid"] is not None and dev["pid"] is not None:
             return usb_unique_id(dev["location_id"], dev["vid"], dev["pid"])
     return None
+
+
+def devices_matching_serial(prefix: str, devices: list[dict]) -> list[dict]:
+    """Every USB device whose serial STARTS WITH `prefix` (and has VID/PID).
+
+    ⭐ Prefixes exist because Julien dictates his commands: `d405:2553` is speakable and `d405:255323071773` is not. The caller refuses on zero matches and on more than one — a prefix that is ambiguous today (it never is on this rig: `2553` vs `2603`) must be typed longer, never guessed at.
+    """
+    prefix = prefix.strip()
+    if not prefix:
+        return []
+    return [d for d in devices
+            if d["serial"] and d["serial"].startswith(prefix)
+            and d["vid"] is not None and d["pid"] is not None]

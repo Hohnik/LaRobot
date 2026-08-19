@@ -5021,7 +5021,7 @@ Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as 
 
 ⬜⛔ **What only the bench can say (design ⑤, unchanged)**: the encode+write cost of 3 cameras at ~30 fps against the 90 Hz loop (the writer reports drops honestly, the loop-rate warning already exists), whether the D405s deliver beside the C920 on one USB tree ([§34.5](FINDINGS.md)), and the first real camera-carrying take. **Then the pipeline is complete to C4's doorstep**: record with frames → label → export with roles → the team's loader adjudicates the encoding.
 
-### 71.3 ⬜⭐⭐ THE HIS-LIST, current — supersedes [§70.17](FINDINGS.md) after his pass closed its items 1-3
+### 71.3 ⬜⭐⭐ THE HIS-LIST — ⚠️ SUPERSEDED by [§71.7](FINDINGS.md) after his second bench pass ran items 1, 2 and 4 the same morning
 
 **At the bench, ~15 minutes total:**
 
@@ -5036,3 +5036,52 @@ Both CAN adapters on the bus running firmware, no DFU · **one SpaceMouse** (as 
 **From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo (to match the episode encoding byte for byte — now including the camera-topic encoding), else the C4 mini-sample gate adjudicates.
 
 **Standing, unchanged:** a private remote for this repo (needs his GitHub, ~5 minutes together) · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2, open since 2026-08-06).
+
+### 71.4 ✅✅⭐⭐⭐ HIS SECOND PASS, SAME MORNING: THE BANDWIDTH QUESTION ANSWERED, ITEM 48 CONFIRMED ON HARDWARE TWICE, AND THE FIRST EPISODE WITH IMAGES EXISTS
+
+✅⭐⭐ **The bandwidth question ([§70.9](FINDINGS.md), item 6) is ANSWERED: all three cameras deliver 30.0 fps at 1280x720 simultaneously.** His `capture_probe --indices 0 1 2 --seconds 10 --save`: every camera 30.0 fps captured, mean gap 33.3-33.5 ms (the 30 fps period), worst gap 66 ms (one skipped frame, once), fresh ~40% of the 90 Hz samples (a 30 fps source can refresh at most ~1/3 of them). **The USB tree carries the full three-camera set with no bandwidth exhaustion at this resolution.** Report + one PNG per camera: `recordings/cameras/2026-08-19_103849_*`.
+
+✅✅⭐⭐ **Camera frames INTO recordings ran on the arms twice, first try each** ([§71.2](FINDINGS.md) built it earlier the same day):
+1. Slot 1: 5.1 s / 455 samples in TELEOP, **153 frames** (= 30 fps for 5.1 s), zero drops, saved as `1.json + frames/1/`.
+2. Slot 2: 8.7 s / 777 samples **with `k` labels riding the same take** (4.9 s marked bad — his-list item on labels is closed too), **262 frames**, zero drops.
+3. `check_recordings` showed both 📷 lines counted from disk, and `export_episode --slot 1 --left G --right B --top c920` wrote **the first episode WITH images**: 154 ticks, `/top-camera`, plus the honest warning that two wrist topics are missing. ⚠️ **The `left=G right=B` mapping is HIS ENTRY from that command and not yet confirmed as the standing bench layout** — it decides mirroring for every episode, so it needs his one-word confirmation before collection in anger.
+
+⭐ **The loop-rate half of design point ⑤ is answered for one camera: the cost is invisible.** The camera sessions held 89-90 Hz; a no-camera session the same morning ran 83 Hz. The three-camera cost inside a session is the one number still open, and the capture side of it is now known-good.
+
+⚠️ **The grab runs: the pause fired all three times, settle offsets 0.020-0.022 rad (exactly the [§69.2](FINDINGS.md) friction floor), and the jaws closed onto themselves — nothing gripped, three times.** Whether an object was present is his to say: if these were mechanics tests, everything behaved; if real attempts, the [§70.5](FINDINGS.md) advice stands (re-save the two at-object waypoints a few millimetres further into the piece).
+
+⚠️ **A visible non-lever, so nobody pulls it again: he raised the park speed 0.98 → 1.50 rad/s and the run went 7.6 s → 6.5 s.** The `SafeRobot` cap of 1.0 rad/s binds below everything ([§65.0](FINDINGS.md)); raising the park speed past it buys nothing. The lever that would actually speed parks up is `max_speed` in the `n` settings screen, and it is a safety limit, his to raise.
+
+### 71.5 ✅⛔⭐⭐⭐ WHICH D405 IS WHICH INDEX — PINNED FROM HIS ANSWER, AND THE HINT FILE WAS ALREADY POISONED IN EXACTLY THE WAY THE NEW GUARD NOW CATCHES
+
+✅ **His viewpoint answer (2026-08-19): index 1 is the arm-G view, index 2 is the arm-B view.** Joined with the serial↔arm attribution (the G-mounted D405 is `260323072846` — his own bench word of 2026-08-14, [§34.5](FINDINGS.md); `255323071773` is the original arm-B camera) and the measured serial→uniqueID chain ([§70.15](FINDINGS.md)), re-verified against live ioreg before writing: `0x121000080860b5b → 1` and `0x122000080860b5b → 2` now sit in `config/camera_index_hint.json`. The full chain dry-runs from the agent shell: `d405:2603 → 260323072846 → 0x121… → index 1`.
+
+⛔⭐⭐ **THE FIND: the hint file already carried BOTH D405 uniqueIDs → index 0 — and index 0 is the C920.** Stale rows from some earlier identification pass, harmless until yesterday, lethal after: the new `--cameras d405:<serial>` path trusts the hint (twins allow no verification of WHICH), so a session would have opened the WEBCAM under a wrist camera's name, recorded it, exported it, and nothing would have raised. The classic [§0](FINDINGS.md) shape, one config file away.
+
+✅ **Two defences, both landed:**
+1. The entries are corrected from his physical confirmation (above).
+2. **The session now MODEL-CHECKS every hint-resolved index before trusting it** (`model_discriminating_mode` in `camera_view.py`): the opened device must answer a mode only the claimed camera's MODEL offers — `424x240` for the D405 on this rig, a mode the C920 does not have and the pixel probe already proved the real D405 answers over OpenCV ([§63.0](FINDINGS.md)'s run captured it). A stale hint now refuses with the re-establishment instruction instead of recording the wrong camera. Tested with the fixture twins (`tests/test_camera_render.py`).
+
+⚠️ **The one case no software question can catch, named so nobody thinks it is covered: the two D405s' USB cables swapped between their same two ports.** uniqueIDs follow PORTS, so a swap silently exchanges the G-view and B-view names. It is physical, it needs a deliberate act at the hub, and the first glance at any recording's frames shows it.
+
+⭐ **Serial prefixes work now, because he dictates**: `d405:2553` and `d405:2603` resolve (any unique prefix; ambiguity refuses and names the candidates). The recorded camera NAME always carries the FULL serial (`d405-260323072846`), so dataset names do not depend on how much of the serial was typed.
+
+### 71.6 ✅⭐ THE SLOT PROMPT SHOWS THE WHOLE SHELF NOW — his save cost ELEVEN keypresses because every slot was occupied and the prompt revealed them one digit at a time
+
+⛔ **What the log shows**: after his first take, he pressed 6·5·4·7·8·9·1·2·3·4·1·1 — nine one-slot warnings read one at a time before he found a slot he was willing to replace. Every fact those warnings revealed was known to `describe_slot` before the first digit.
+
+✅ **Fix**: the save prompt prints one line per occupied slot (duration · arms · method · date) plus which slots are free, once, up front (`yam/recording.py::slot_overview`, both freeze sites, tested). The per-digit replace confirmation stays — it is the [§33.2](FINDINGS.md) overwrite guard, and the overview removes the hunting, never the guard.
+
+### 71.7 ⬜⭐⭐ THE HIS-LIST, current — supersedes [§71.3](FINDINGS.md); his morning closed its items 1, 2 and 4
+
+**At the bench:**
+
+1. ⭐ **The three-camera take** (the wrist hints are pinned now): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603,d405:2553 --start-mode hold` · `w` · move · `w` · save. `checks/check_recordings.py` should show three 📷 counts; the export then takes all three roles: `uv run apps/export_episode.py --slot <n> --left G --right B --top c920 --left-wrist d405-260323072846 --right-wrist d405-255323071773` ⚠️ with the wrist flags matching whichever arm really stands on which side — see the decision below. This run is also the three-camera loop-rate number ([§71.4](FINDINGS.md)).
+2. **One composite grab:** save poses around the object, record the grab as a take, then `p <pose> w<take> <pose>` Enter Enter ([§70.12](FINDINGS.md)).
+3. **The grab with the object**, if the [§71.4](FINDINGS.md) runs were mechanics tests: re-save the two at-object waypoints a few millimetres further in; the settle print bounds the software's share.
+
+**Decisions, minutes each:** ⭐ **confirm the bench sides** — his export used `left=G right=B` and every episode inherits it · the noise bound ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · **read [docs/PLAN.md](PLAN.md)** — ratification turns the draft into the team's deliverable.
+
+**From the team, whenever:** ABC's `export_mcap.py` or the `abc_minimal` repo, else the C4 mini-sample gate adjudicates.
+
+**Standing, unchanged:** a private remote for this repo · the two old API keys from `AutonomousMAS/.env` (Mind Understanding `state/NOW.md` §4 item 2).

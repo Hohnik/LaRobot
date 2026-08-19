@@ -772,6 +772,36 @@ def test_an_occupied_slot_is_DESCRIBED_before_it_can_be_overwritten() -> None:
         assert broken and "unreadable" in broken
 
 
+def test_slot_overview_shows_the_whole_shelf_once() -> None:
+    """⭐ FINDINGS §71.6: with every slot occupied, the one-warning-per-digit prompt cost eleven keypresses at the bench. The overview prints everything `describe_slot` knows, once, before the first digit."""
+    import tempfile
+
+    from yam.recording import slot_overview
+
+    with tempfile.TemporaryDirectory() as d:
+        folder = Path(d)
+        lines = slot_overview(folder)
+        assert len(lines) == 1 and "free: 0 1 2 3 4 5 6 7 8 9" in lines[0], \
+            "an empty shelf is one line saying every slot is free"
+
+        traj = Trajectory(meta={"arms": ["B"], "joints_per_arm": 7, "method": "live:B:guide",
+                                "recorded_at": "2026-08-19T10:00:00+02:00"})
+        for i in range(4):
+            traj.append(i * 0.5, [float(i)] * 7)
+        traj.save(folder / "2.json")
+        traj.save(folder / "7.json")
+        lines = slot_overview(folder)
+        assert lines[0].startswith("     2: ") and "live:B:guide" in lines[0]
+        assert lines[1].startswith("     7: ")
+        assert lines[-1] == "     free: 0 1 3 4 5 6 8 9"
+
+        for k in "01345689":
+            traj.save(folder / f"{k}.json")
+        lines = slot_overview(folder)
+        assert len(lines) == 11 and "every slot is occupied" in lines[-1], \
+            "the full shelf must say plainly that any save replaces something"
+
+
 def test_labels_a_recording_starts_good_and_marks_toggle() -> None:
     t = Trajectory()
     t.append(0.0, (0.0,)); t.append(1.0, (0.1,)); t.append(5.0, (0.2,))

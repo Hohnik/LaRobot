@@ -422,6 +422,23 @@ def discriminating_mode(cam: MacCamera, others: list[MacCamera]) -> tuple[int, i
     return min(unique, key=lambda wh: wh[0] * wh[1]) if unique else None
 
 
+def model_discriminating_mode(cam: MacCamera, cams: list[MacCamera]) -> tuple[int, int] | None:
+    """A resolution only this camera's MODEL can deliver — same-model twins may share it.
+
+    ⛔⭐ WHY THIS EXISTS BESIDE `discriminating_mode` (FINDINGS §71.5): a hint-resolved D405 cannot be verified as the RIGHT D405 (identical twins), but it CAN be verified as *a* D405 — and that check is not optional. Two stale hint rows were found pointing BOTH D405 uniqueIDs at index 0, which is the C920's index today; a session trusting them would have recorded the webcam under a wrist camera's name with full confidence. Asking the opened index for a mode only the claimed model offers (`848x480` for the D405 on this rig) catches exactly that, and a cable swap between two same-model cameras remains the one case no software question can see.
+
+    `cams` is the full list including `cam` itself; cameras sharing `cam`'s USB vid:pid (or, for non-USB devices, its name) count as the same model and do not disqualify a mode.
+    """
+    same_model = {c.unique_id for c in cams
+                  if (c.usb or c.name) == (cam.usb or cam.name)}
+    foreign: set = set()
+    for other in cams:
+        if other.unique_id not in same_model:
+            foreign |= set(other.modes)
+    unique = set(cam.modes) - foreign
+    return min(unique, key=lambda wh: wh[0] * wh[1]) if unique else None
+
+
 def identify_indices(cams: list[MacCamera], limit: int | None = None,
                      ) -> tuple[list[tuple[int, MacCamera | None]], list[str]]:
     """Work out which OpenCV index is which camera **by measurement**.

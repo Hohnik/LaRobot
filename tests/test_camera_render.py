@@ -507,6 +507,26 @@ def test_two_identical_cameras_cannot_be_told_apart_and_it_says_so() -> None:
     assert C.discriminating_mode(FAKE_NAMES[1], [twin]) is None
 
 
+def test_a_hinted_twin_can_still_be_checked_for_its_model() -> None:
+    """⭐ FINDINGS §71.5: stale hints pointed both D405s at the C920's index. Full identification of a twin stays impossible, and the MODEL is still checkable — a mode both D405s offer and no other model does."""
+    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+                       "UVC Camera VendorID_32902 ProductID_2907", "0x122000080860b5b",
+                       D405_MODES)
+    cams = [*FAKE_NAMES, twin]
+    d405 = FAKE_NAMES[1]
+    mode = C.model_discriminating_mode(d405, cams)
+    assert mode is not None and mode in D405_MODES
+    for foreign in (C920_MODES, MACBOOK_MODES, IPHONE_MODES):
+        assert mode not in foreign, f"{mode} is offered by another model, so it proves nothing"
+    assert C.model_discriminating_mode(twin, cams) == mode, \
+        "both twins get the same model question — that is the point"
+    # A model whose every mode another model also offers has no checkable question, and the honest answer is None rather than a mode that would wave the wrong camera through.
+    clone_modes = frozenset({(640, 480), (1280, 720)})
+    a = C.MacCamera("A cam", "UVC Camera VendorID_1 ProductID_1", "a", clone_modes)
+    b = C.MacCamera("B cam", "UVC Camera VendorID_2 ProductID_2", "b", clone_modes)
+    assert C.model_discriminating_mode(a, [a, b]) is None
+
+
 def test_indices_are_identified_by_measurement_not_by_list_order() -> None:
     """⛔⭐ THE REGRESSION TEST FOR THE BUG THAT SHIPPED, 2026-08-11.
 

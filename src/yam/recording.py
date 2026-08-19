@@ -562,6 +562,24 @@ def describe_slot(path: Path) -> str | None:
             f"recorded {when}")
 
 
+def slot_overview(takes_dir: Path, slots: str = "0123456789") -> list[str]:
+    """One line per occupied slot plus which are free — the whole shelf, once, up front.
+
+    ⭐ WHY ([FINDINGS §71.6](../docs/FINDINGS.md)): on 2026-08-19 every slot held a recording, and the save prompt revealed that one digit at a time — Julien pressed ELEVEN keys and read nine one-slot warnings before finding one he was willing to replace. `describe_slot` already knew everything each warning said; this shows all of it before the first digit, and the per-digit replace confirmation stays as the guard it always was.
+    """
+    lines: list[str] = []
+    free: list[str] = []
+    for k in slots:
+        desc = describe_slot(takes_dir / f"{k}.json")
+        if desc is None:
+            free.append(k)
+        else:
+            lines.append(f"     {k}: {desc}")
+    lines.append("     free: " + (" ".join(free) if free
+                                  else "none — every slot is occupied, so any save replaces"))
+    return lines
+
+
 def replay_step(traj: Trajectory, cursor: float, measured: Sequence[float], dt: float,
                 speed: float = 1.0, max_lag: float = 0.15,
                 compare: Sequence[int] | None = None) -> ReplayStep:
