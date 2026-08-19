@@ -31,7 +31,9 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-FILES = [REPO / "README.md", *sorted((REPO / "docs").glob("*.md"))]
+
+from yam.files import listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
+FILES = [REPO / "README.md", *listing(REPO / "docs", "*.md")]
 
 LINK = re.compile(r"\[([^\]]*)\]\(([^)\s]+)\)")
 HEADING = re.compile(r"^#{1,6}\s+(.*?)\s*$", re.M)

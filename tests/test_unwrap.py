@@ -21,6 +21,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 from unwrap_markdown import content, unwrap  # noqa: E402
 
+from yam.files import listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
+
 
 def test_a_wrapped_paragraph_becomes_one_line() -> None:
     assert unwrap("one two\nthree four") == "one two three four"
@@ -113,7 +115,7 @@ def test_only_whitespace_ever_changes() -> None:
 def test_the_repo_docs_all_survive_the_content_check() -> None:
     """⭐ Runs the real safety check against the real files, so a regression in the
     unwrapper is caught by the test suite rather than by reading a mangled document."""
-    targets = sorted((REPO / "docs").glob("*.md")) + [REPO / "README.md"]
+    targets = listing(REPO / "docs", "*.md") + [REPO / "README.md"]
     for path in targets:
         if not path.is_file():
             continue

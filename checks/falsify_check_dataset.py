@@ -22,6 +22,7 @@ sys.path.insert(0, str(REPO / "checks"))
 
 from check_dataset import check_episode  # noqa: E402
 from yam.dataset import META_FILE, STATES_FILE, VIDEO_FILE  # noqa: E402
+from yam.files import is_os_litter  # noqa: E402 — the OS-litter filter, FINDINGS §76
 
 
 def reencode_badly(src: Path, dst: Path, extra: list[str]) -> None:
@@ -31,7 +32,15 @@ def reencode_badly(src: Path, dst: Path, extra: list[str]) -> None:
 
 
 def main() -> int:
-    good = sorted((REPO / "recordings" / "datasets").glob("episode_*"))
+    # ⛔ RECURSIVE, and it was not. `export_dataset` writes into a SPLIT directory
+    # (`datasets/train/episode_slot5`) since the batch pipeline landed, and this line still
+    # globbed one level up. So the falsifier has been unable to find its own input ever
+    # since: it exits 1 with "no exported episode to break", which is loud, and nothing
+    # runs it automatically, so nobody heard it. `checks/check_dataset.py` uses `rglob` for
+    # the same reason; this now matches it. Found 2026-08-19 (FINDINGS §76).
+    root = REPO / "recordings" / "datasets"
+    good = [p for p in sorted(root.rglob("episode_*"))
+            if p.is_dir() and not is_os_litter(p)]
     good = [p for p in good if (p / VIDEO_FILE).is_file()]
     if not good:
         print("⛔ no exported episode to break. Export one first:")

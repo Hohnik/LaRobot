@@ -25,6 +25,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 from yam.cameras.specs import camera_dir_name  # noqa: E402
+from yam.files import listing, sidecars  # noqa: E402
 from yam.recording import Layout, Trajectory  # noqa: E402
 
 #: Above this, a tail is the §30.1 defect: it produced 1.8 to 4.4 s. Below it, a tail is
@@ -81,6 +82,29 @@ def label_verdict(method: str, modes: list[str] | None, peak_speed: float) -> tu
     return text, None
 
 
+def jpeg_size(path: Path) -> tuple[int, int] | None:
+    """`(width, height)` from a JPEG's own header, or None if it cannot be read.
+
+    ⭐ Reads the header only, so it costs nothing even on a directory of 500 pictures, and it needs no image library. A JPEG is a chain of markers: `0xFF <code> <2-byte length> <payload>`, and the frame's dimensions live in whichever "start of frame" marker the encoder used (`0xC0`-`0xCF`, skipping `0xC4`, `0xC8` and `0xCC`, which mean other things).
+    """
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    i = 2                                     # past the 0xFFD8 start-of-image marker
+    while i + 9 < len(data):
+        if data[i] != 0xFF:
+            i += 1
+            continue
+        code = data[i + 1]
+        if 0xC0 <= code <= 0xCF and code not in (0xC4, 0xC8, 0xCC):
+            height = int.from_bytes(data[i + 5:i + 7], "big")
+            width = int.from_bytes(data[i + 7:i + 9], "big")
+            return (width, height) if width and height else None
+        i += 2 + int.from_bytes(data[i + 2:i + 4], "big")
+    return None
+
+
 def frames_verdict(meta_cameras: dict, recording_dir: Path) -> tuple[str, list[str]]:
     """Measure a recording's camera frames against what its meta claims (item 48 ③).
 
@@ -91,9 +115,18 @@ def frames_verdict(meta_cameras: dict, recording_dir: Path) -> tuple[str, list[s
     base = recording_dir / str(meta_cameras.get("dir", ""))
     for name, counts in meta_cameras.get("per_camera", {}).items():
         cam_dir = base / camera_dir_name(name)
-        on_disk = len(list(cam_dir.glob("*.jpg"))) if cam_dir.is_dir() else 0
+        jpgs = listing(cam_dir, "*.jpg")
+        on_disk = len(jpgs)
         want = int(counts.get("written", 0))
+        # ⭐ The recorded SIZE, read from the first picture rather than from any claim.
+        # It became a question worth answering on 2026-08-19: the D405 colour stream
+        # delivers nothing at 1280x720 on Linux and works at 848x480, so a session can
+        # now legitimately record two cameras at two different sizes (FINDINGS §76).
+        # Nothing is wrong with that, and nobody should have to guess which happened.
         piece = f"{name}:{on_disk}"
+        size = jpeg_size(jpgs[0]) if jpgs else None
+        if size:
+            piece += f"@{size[0]}x{size[1]}"
         if on_disk != want:
             piece += "⛔"
             faults.append(f"{name}: meta says {want} frame(s) were written and "
@@ -142,10 +175,20 @@ def main() -> int:
     args = ap.parse_args()
 
     folder = REPO / args.dir if not Path(args.dir).is_absolute() else Path(args.dir)
-    files = sorted(folder.glob("*.json"))
+    files = listing(folder, "*.json")
+    litter = sidecars(folder)
     if not files:
         print(f"no recordings in {folder}")
         return 0
+    if litter:
+        # ⭐ Reported rather than silently skipped: an operator whose copy brought 813
+        # sidecar files should know, because those files also break other tools and they
+        # made this checker report a false fault about real data (FINDINGS §76).
+        print(f"⚠️ {len(litter)} macOS sidecar file(s) (`._*`) in {folder}, ignored here.")
+        print("   They appear when a Mac copies files to a filesystem that cannot hold its")
+        print("   extended attributes, for example a USB stick. They are not data.")
+        print("   Remove them with:  find recordings -name '._*' -delete")
+        print()
 
     # ⭐ `arms` is a column since 2026-08-14, when a recording became able to hold more
     # than one arm. A two-arm file and a one-arm file look identical in every other column,
@@ -153,7 +196,15 @@ def main() -> int:
     print(f"{'file':>9} {'arms':>6} {'commit':>9} {'recorded':>17} {'dur':>7} "
           f"{'padding':>9} {'share':>6} {'peak p99':>9}  {'how it was made':<22}")
     padded: list[tuple[str, bool]] = []   # (file name, its modes include a park)
-    contradictory: list[str] = []
+    # ⛔ TWO LISTS, and they used to be one. On 2026-08-19 the Linux station printed
+    # "⛔ 3 file(s) are labelled `live:hold` yet moved faster than 0.5 rad/s: 5.json,
+    # 5.json, 5.json" for a file whose own row in the table above showed 0.43 rad/s and
+    # whose label was fine. The three entries were FRAME-COUNT faults appended to the
+    # label-fault list, so the summary named the wrong defect, the wrong count and the
+    # same file three times (FINDINGS §76). A checker that misreports its own finding is
+    # worse than one that says nothing, because somebody acts on it.
+    label_faults: list[str] = []
+    frame_faults: list[str] = []
     for path in files:
         try:
             traj = Trajectory.load(path)
@@ -182,7 +233,7 @@ def main() -> int:
         if traj.bad_seconds() > 0:
             method += f" · ✎{traj.bad_seconds():.1f}s bad"
         if fault:
-            contradictory.append(path.name)
+            label_faults.append(path.name)
         # ⚠️ Read through `Layout.from_meta`, which also understands files written before
         # the layout existed: they carry a single `arm` field and nothing else.
         layout = Layout.from_meta(traj.meta, traj.n_joints)
@@ -193,10 +244,11 @@ def main() -> int:
               f"{traj.joint_speed(99):8.2f}{flag}  {method:<22}")
         # ⭐ item 48: a recording that carries camera frames says so on its own second line, counted from disk rather than trusted from meta.
         if traj.meta.get("cameras"):
-            line, frame_faults = frames_verdict(traj.meta["cameras"], folder)
+            line, cam_faults = frames_verdict(traj.meta["cameras"], folder)
             print(line)
-            for fault in frame_faults:
-                contradictory.append(path.name)
+            for fault in cam_faults:
+                if path.name not in frame_faults:
+                    frame_faults.append(path.name)
                 print(f"      ⛔ {fault}")
 
     orphans = orphaned_frames(folder, files)
@@ -207,17 +259,39 @@ def main() -> int:
             print(f"   {line}")
 
     print()
-    if contradictory:
-        print(f"⛔ {len(contradictory)} file(s) are labelled `live:hold` yet moved faster than "
-              f"{HOLD_SPEED_S} rad/s: {', '.join(contradictory)}.")
-        print("   HOLD commands the arm to stay put, so that label and that speed disagree.")
+    if label_faults:
+        print(f"⛔ {len(label_faults)} file(s) carry a provenance label that disagrees with what "
+              f"the recording did: {', '.join(label_faults)}.")
+        print("   Either `method` names one mode while `modes` lists several, or `method` says")
+        print("   HOLD only and the arm moved faster than "
+              f"{HOLD_SPEED_S} rad/s. HOLD commands the arm to")
+        print("   stay put, so that label and that speed cannot both be true.")
         print("   The known cause is the FINDINGS §35.4 defect: `method` was written when the")
         print("   recording started and the mode was changed afterwards, so a movement guided")
         print("   by hand came out stamped as HOLD. The data is fine; the label is not.")
         print()
+    if frame_faults:
+        print(f"⛔ {len(frame_faults)} file(s) claim a picture count their frames directory does "
+              f"not match: {', '.join(frame_faults)}.")
+        print("   The per-camera fault lines above the table say which camera and by how much.")
+        print("   ⭐ FIRST THING TO RULE OUT, because it caused every instance of this so far:")
+        print("   macOS sidecar files. If the folder was hand-copied from the Mac, every picture")
+        print("   arrived with a `._`-prefixed twin and the count came out at exactly double.")
+        print("   This checker now skips them, so a doubled count here means something else.")
+        print()
 
-    pre_fix = [p.name for p in files
-               if not (Trajectory.load(p).meta.get("modes"))]
+    # ⛔ This pass RE-LOADS every file and had no error guard, while the table above did.
+    # So `._5.json` printed politely as "⛔ unreadable" in the table and then crashed the
+    # whole script forty lines later with UnicodeDecodeError (FINDINGS §76). The sidecar
+    # is filtered out at the source now; the guard stays, because "one loop is careful
+    # and the other is not" is the actual defect and any unreadable file re-creates it.
+    pre_fix = []
+    for path in files:
+        try:
+            if not Trajectory.load(path).meta.get("modes"):
+                pre_fix.append(path.name)
+        except Exception:  # noqa: BLE001 — already reported as unreadable in the table
+            continue
     if pre_fix:
         print(f"⚠️ {len(pre_fix)} file(s) carry no `modes` field: {', '.join(pre_fix)}.")
         print("   Those were recorded before the FINDINGS §35.4 provenance fix, so their")

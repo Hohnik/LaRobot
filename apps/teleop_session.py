@@ -148,6 +148,8 @@ from yam.teleop import (  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
 from yam.cameras.specs import camera_dir_name, flatten_tokens, sim_camera_error  # noqa: E402
+from yam.files import listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
+from yam.cameras.open import SIZE_LADDER, TARGET_FPS, open_measured  # noqa: E402
 from yam.cameras.writer import (  # noqa: E402
     FrameSink,
     attach_frames_to_slot,
@@ -798,6 +800,8 @@ def tracking_table(rows: list, names: list[str], hold_rad: float,
 
     `rows` is `TrackingLog.rows()`: `(index, worst lag, speed then, top speed, lag then)`.
 
+    ⚠️⭐ THE SPEEDS ARE REQUESTS, THE LAGS ARE MEASUREMENTS, and the old wording hid that. Both speed columns come from the replay's own target sequence, sampled before `SafeRobot` applies `max_speed`. So a row may legitimately name a speed higher than the session's own cap: that is the recording asking and the clamp refusing. The lag columns are `target − measured`, read from the encoders, and they are real.
+
     ⚠️⭐ A JOINT THAT BARELY MOVED IS NAMED, NOT SILENTLY DROPPED. Leaving it out of the
     table is right, because a joint that never moved says nothing about tracking. But a
     table that quietly omits rows reads as complete: his 2026-08-17 log printed **12 rows
@@ -811,8 +815,15 @@ def tracking_table(rows: list, names: list[str], hold_rad: float,
         if top < quiet:
             unmoved.append(label)
             continue
+        # ⛔ "asked for", NOT "top speed". Both speeds in this row are the speed the
+        # RECORDING requested, measured on the replay's own target before `SafeRobot`
+        # sees it. On 2026-08-19 a row read "top speed 1.83 rad/s" in a session whose own
+        # banner said max-speed caps every joint at 1.00 rad/s, which reads as the cap
+        # having leaked. It had not: the recording asked for 1.83 and the clamp refused,
+        # which is the clamp working (FINDINGS §76). The LAG figures are real measurements
+        # against the encoders; only the speeds are requests.
         out.append(f"       {label:<18} worst lag {worst:.3f} rad at "
-                   f"{at_speed:5.2f} rad/s · top speed {top:5.2f} rad/s "
+                   f"{at_speed:5.2f} rad/s · asked for up to {top:5.2f} rad/s "
                    f"with {lag_top:.3f} rad of lag")
     if unmoved:
         # ⛔⭐⭐ THE LINE MUST STAY SHORT, AND ONLY RUNNING IT SHOWED WHY. The first version
@@ -990,13 +1001,39 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
                 "  On Linux this is almost always group membership: the user must be in "
                 "`video`.\n  Check with `id`, and see docs/LINUX.md."
             )
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        cap.set(cv2.CAP_PROP_FPS, 30)
-        got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        # ⛔⭐⭐ THE WORD "delivering" USED TO BE A CLAIM. This block used to set the size,
+        # read the size back with `cap.get`, and print it as what the camera was delivering.
+        # On 2026-08-19 that printed "delivering 1280x720" for a D405 that delivered ZERO
+        # frames for the whole session, and for a C920 running at 10 fps instead of 30
+        # because no MJPG was requested. Both are in FINDINGS §76. `open_measured` reads
+        # real frames, counts them, steps the size down when nothing arrives, and every
+        # number below comes out of a frame that actually existed.
+        opened = open_measured(cap)
+        if opened is None:
+            cap.release()
+            for g in grabbers.values():
+                g.stop()
+            raise SystemExit(
+                f"⛔ {spec}: {cam.device} (index {cam.index}) opened and delivered NO FRAMES "
+                f"at any of {SIZE_LADDER}.\n"
+                "  It accepted the settings and produced nothing, which is why this refuses "
+                "instead of recording an empty camera.\n"
+                f"  Check the device on its own:  v4l2-ctl -d {cam.device} "
+                "--stream-mmap --stream-count=5 --stream-to=/dev/null\n"
+                "  If that also hangs, the camera or its cable is the problem, not this "
+                "session. See docs/LINUX.md."
+            )
         grabbers[name] = FrameGrabber(cap)
-        print(f"  📷 {name} open on {cam.device} (index {cam.index}), delivering "
-              f"{got[0]}x{got[1]}.")
+        print(f"  📷 {name} open on {cam.device} (index {cam.index}), "
+              f"measured {opened.line()}.")
+        if opened.stepped_down:
+            print(f"     ⚠️ stepped down from {opened.asked[0]}x{opened.asked[1]}: this "
+                  "camera accepted that size and delivered no frames at it.")
+        if opened.slow:
+            print(f"     ⛔ {opened.fps:.1f} fps is well under {TARGET_FPS:.0f}. The episode "
+                  "exporter fills 30 ticks a second, so a camera this slow makes every")
+            print("        tick repeat frames. Usually the format: check that MJPG is "
+                  f"offered with  v4l2-ctl --list-formats-ext -d {cam.device}")
     return CaptureSet(grabbers), list(grabbers)
 
 
@@ -3590,9 +3627,12 @@ def main() -> int:  # noqa: PLR0915
                         # marked, because "saved: 1, 2, 7" that silently mixes real
                         # demonstrations with simulated ones is the confusion the folder
                         # split exists to prevent.
-                        real = sorted(q.stem for q in TAKES_DIR.glob("*.json"))
-                        mine = (sorted(q.stem for q in takes_dir.glob("*.json"))
-                                if takes_dir != TAKES_DIR and takes_dir.is_dir() else [])
+                        # ⛔ `listing` and not `glob`: a macOS `._5.json` sidecar in a hand-copied
+                        # recordings folder was offered here as a playable slot "._5" on the Linux
+                        # station (FINDINGS §76). It is not a recording and it cannot be loaded.
+                        real = [q.stem for q in listing(TAKES_DIR, "*.json")]
+                        mine = ([q.stem for q in listing(takes_dir, "*.json")]
+                                if takes_dir != TAKES_DIR else [])
                         have = ", ".join([*[f"{n}(sim)" for n in mine],
                                           *[n for n in real if n not in mine]])
                         print("\n  PLAY which recording?  0-9, any other key cancels.")

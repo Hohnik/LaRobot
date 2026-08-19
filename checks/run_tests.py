@@ -22,6 +22,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+from yam.files import listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
 COUNT_LINE = re.compile(r"(\d+)\s*/\s*(\d+) passed\s*$")
 
 
@@ -48,7 +50,7 @@ def main() -> int:
                     help="parallel test processes (default 4)")
     args = ap.parse_args()
 
-    files = sorted(Path(args.dir).glob("test_*.py"))
+    files = listing(Path(args.dir), "test_*.py")
     if not files:
         # ⛔ Zero files is a broken invocation, never a green suite — the
         # negative-results rule: an empty search must not read as "all passed".

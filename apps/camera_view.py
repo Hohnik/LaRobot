@@ -78,6 +78,7 @@ import cv2
 # confirmed HERE, now shared with the capture layer. The API this file calls is
 # unchanged — see yam/cameras/grabber.py for the move note.
 from yam.cameras.grabber import FrameGrabber, fourcc_name  # noqa: E402
+from yam.cameras.open import configure as yam_configure  # noqa: E402 — ONE copy of the capture settings, FINDINGS §76
 import numpy as np
 
 MAX_PROBE_INDEX = 6
@@ -853,25 +854,14 @@ def configure_camera(cap, width: int, height: int, fps: int):  # noqa: ANN001, A
     seconds, not milliseconds — and doing it once to ask "who are you?" and again to
     actually watch was most of the startup delay Julien measured.
     """
-    # ⭐ MJPG first, THEN the resolution. Setting size before the codec leaves the
-    # C920 in uncompressed YUY2, where 1080p does not fit in the USB bandwidth and
-    # drops to a few fps — which reads as "lag" but is a bandwidth problem.
-    # ⚠️ MEASURED 2026-08-11: on this Mac the codec request makes NO difference —
-    # --probe reported ~30 fps with and without it at every resolution, and reading
-    # CAP_PROP_FOURCC back returns -1 (prints as "ÿÿÿÿ"), i.e. the property is not
-    # readable. So AVFoundation is choosing the format itself, and choosing well:
-    # 1920x1080 at 30 fps cannot fit down USB 2.0 uncompressed, so it must already
-    # be compressing. This line is kept because it is correct and load-bearing on
-    # Linux, where this rig is ultimately headed.
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-    cap.set(cv2.CAP_PROP_FPS, fps)
-    try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)   # ignored by some backends; harmless
-    except Exception:  # noqa: BLE001, S110
-        pass
-    return cap
+    # ⛔⭐ THE SETTINGS THEMSELVES MOVED TO `yam/cameras/open.py`, and the reason is a
+    # defect this exact comment predicted. It used to say the MJPG line was "load-bearing
+    # on Linux, where this rig is ultimately headed" — and then the session's Linux camera
+    # path was written with three bare set() calls and no codec request, because it does
+    # not import this file. The C920 ran a whole recording at 10 fps instead of 30 as a
+    # result (FINDINGS §76). Knowledge in a comment in a file you do not import is not
+    # shared. One copy, both platforms.
+    return yam_configure(cap, width, height, fps)
 
 
 def open_camera(index: int, width: int, height: int, fps: int):  # noqa: ANN201

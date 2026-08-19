@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+
+from yam.files import is_os_litter, listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
 DOCS = REPO / "docs"
 
 #: A documented invocation. Stops at a markdown table pipe, a backtick, or a comment,
@@ -153,7 +155,7 @@ def src_constants() -> dict[str, object]:
     global _SRC_CONSTS  # noqa: PLW0603
     if _SRC_CONSTS is None:
         merged: dict[str, object] = {}
-        for f in sorted((REPO / "src").rglob("*.py")):
+        for f in sorted(p for p in (REPO / "src").rglob("*.py") if not is_os_litter(p)):
             try:
                 merged.update(literal_constants(ast.parse(f.read_text())))
             except (OSError, SyntaxError):
@@ -246,7 +248,7 @@ def check_value(flag: Flag, value: str) -> str | None:
 def documented_commands() -> list[tuple[Path, int, str, str]]:
     """`(doc, line, script, argument string)` for every documented invocation."""
     found = []
-    for doc in sorted(DOCS.glob("*.md")):
+    for doc in listing(DOCS, "*.md"):
         for i, line in enumerate(doc.read_text().splitlines(), start=1):
             for m in COMMAND.finditer(line):
                 found.append((doc, i, m.group(1), command_args(m.group(2))))
@@ -322,7 +324,7 @@ def main() -> int:  # noqa: C901
     # reported ten flags on teleop_session.py that COMMANDS.md explains at length in
     # prose and tables. That is the cry-wolf failure again: technically true, useless,
     # and it buries the flags that really are invisible.
-    prose = "\n".join(d.read_text() for d in sorted(DOCS.glob("*.md")))
+    prose = "\n".join(d.read_text() for d in listing(DOCS, "*.md"))
     for script in sorted(parsers):
         parser = parsers[script]
         seen = mentioned.get(script, set())
