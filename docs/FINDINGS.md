@@ -5350,13 +5350,14 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ✅ **DONE 2026-08-19: CAN is up and all 14 motors answer on Linux** ([§75.8](FINDINGS.md)). ⬜ **What is left needs him, and it is short:**
 
-1. ⭐ **The CAN links come up DOWN after every boot, and enabling needs root.** Make it automatic once and nobody types anything again:
+1. ⭐ **The CAN links come up DOWN after every boot, and enabling them needs root — so every session starts with a password prompt.** The rule that ends that is in the repo at `config/linux/90-yam-can.rules` and has already been copied to `/tmp` on the station, so his command is short and needs no quoting:
 
 ```bash
-ssh -t yam-pc 'printf %s "ACTION==\"add\", SUBSYSTEM==\"net\", KERNEL==\"can*\", RUN+=\"/usr/sbin/ip link set %k type can bitrate 1000000\", RUN+=\"/usr/sbin/ip link set %k up\"\n" | sudo tee /etc/udev/rules.d/90-yam-can.rules && sudo udevadm control --reload-rules && echo INSTALLED'
+ssh -t yam-pc 'sudo cp /tmp/90-yam-can.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && echo INSTALLED'
 ```
 
-   ⚠️ It takes effect on the next replug or reboot. **Alternative, if he would rather keep it manual but password-less:** a sudoers line allowing exactly those two commands and nothing else (`sudo visudo -f /etc/sudoers.d/yam-can`), which also lets an agent recover a bus-off link without him. ⭐ Optional extra in either form: add `restart-ms 100` so the controller recovers itself from a bus-off instead of staying dead — worth it on a rig whose one hard crash was the bus sagging away ([§46.0](FINDINGS.md)), and worth knowing that it makes a fault self-clear rather than persist.
+   It brings every `can*` interface up at 1 Mbit/s the moment the kernel sees it, so after the next reboot or replug nobody types anything. ⚠️ If the file is no longer in `/tmp`, it is `config/linux/90-yam-can.rules` in the repo (the PC's clone has it too). ⭐ Optional, documented in the file itself: adding `restart-ms 100` makes the controller recover itself from a bus-off condition instead of staying dead — worth considering on a rig whose one hard crash was the bus sagging away ([§46.0](FINDINGS.md)), and worth knowing that it makes that fault self-clear rather than persist. **Alternative if he prefers it manual but password-less:** a `sudoers.d` line allowing exactly those two `ip link` commands, which would also let an agent recover a bus-off link without him.
+
 2. ⬜ **A full session on the station, which only he can drive** (it sends setpoints): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603 --start-mode hold`. Everything it needs is attached, including one SpaceMouse. That single run would confirm teleop, recording, the camera writers and the park machinery on Linux.
 3. ⬜ **Optional physical:** the second D405 `255323071773` and the second SpaceMouse, both still on the Mac, if a three-camera or two-puck session is wanted there.
 

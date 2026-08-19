@@ -1,0 +1,10 @@
+# Bring every candleLight CAN interface up at 1 Mbit/s the moment the kernel sees it.
+# Written 2026-08-19 for the YAM station (yam-robotics docs/LINUX.md, FINDINGS §75.8).
+#
+# Why: can0/can1 appear DOWN after every boot, and enabling them needs root, so every
+# session started with a password prompt. This does it automatically instead.
+#
+# 1000000 is the bitrate every YAM motor expects (yam/can.py::YAM_BITRATE).
+# Add `restart-ms 100` to the first RUN line if you want the controller to recover itself
+# from a bus-off condition rather than staying dead until someone intervenes.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="can*", RUN+="/usr/sbin/ip link set %k type can bitrate 1000000", RUN+="/usr/sbin/ip link set %k up"
