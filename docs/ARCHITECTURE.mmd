@@ -1,0 +1,34 @@
+classDiagram
+    %% Input
+    class Input{
+        <<interface>>
+        available()* bool
+    }
+    class Keyboard{
+    }
+
+    class Spacemouse{
+    }
+
+    class Policy{
+    }
+
+    Input <|-- Keyboard
+    Input <|-- Spacemouse
+    Input <|-- Policy
+
+    %% Robot
+    class Robot{
+        <<interface>>
+        act(action) None
+    }
+    class RealRobot{}
+    class SimRobot{}
+    Robot <|-- RealRobot
+    Robot <|-- SimRobot
+
+    %% Recorder
+
+    %% Camera
+
+    %% Kinematics??

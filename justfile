@@ -3,9 +3,9 @@
 @_default:
   -just --list --unsorted
 
-test:
-  .venv/bin/python -m pytest -q
-
 # Generate mujoco typehints
 stubs:
-    uv run pybind11-stubgen mujoco -o typings
+  uv run pybind11-stubgen mujoco -o typings
+
+sim:
+  uv run scripts/start_sim.py
