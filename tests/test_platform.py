@@ -19,6 +19,7 @@ REPO = Path(__file__).resolve().parent.parent
 from yam.platform import (  # noqa: E402
     CAN_BITRATE,
     classify_v4l_node,
+    parse_sysfs_usb,
     with_colour_nodes,
     V4lCamera,
     camera_permission_note,
@@ -238,6 +239,42 @@ def test_unreadable_formats_leave_the_index_alone_and_say_so() -> None:
     d405 = after["260323072846"]
     assert d405.index == 2 and d405.colour_node is None
     assert d405.index_reason == "first-capture-node"
+
+
+#: ✅ REAL values read from the station's sysfs, 2026-08-19: both CAN adapters (whose serials
+#: libusb could NOT read there, because the kernel driver owns them), the D405, and the C920
+#: with its genuinely empty serial. Interface directories are included on purpose — the parser
+#: must skip them or every device would appear several times.
+SYSFS_USB = {
+    "1-6": {"idVendor": "1d50", "idProduct": "606f", "serial": "20593383594E5018",
+            "product": "canable gs_usb", "busnum": "1", "devnum": "6"},
+    "1-6:1.0": {"bInterfaceNumber": "00"},
+    "3-5": {"idVendor": "1d50", "idProduct": "606f", "serial": "2081337C594E5018",
+            "product": "canable gs_usb", "busnum": "3", "devnum": "5"},
+    "2-2": {"idVendor": "8086", "idProduct": "0b5b", "serial": "260323072846",
+            "product": "Intel(R) RealSense(TM) Depth Camera 405", "busnum": "2",
+            "devnum": "2"},
+    "4-1": {"idVendor": "046d", "idProduct": "08e5", "serial": "",
+            "product": "HD Pro Webcam C920", "busnum": "4", "devnum": "1"},
+    "not-a-device": {"product": "a hub port with no idVendor"},
+}
+
+
+def test_sysfs_gives_the_serials_libusb_cannot_read_on_linux() -> None:
+    """⛔ THE DEFECT THIS FIXES (FINDINGS §75.8): libusb must OPEN a device to read a string
+    descriptor, and the kernel's gs_usb driver owns the CAN adapters on Linux — so every
+    serial came back "?" and `check_rig` announced BOTH adapters missing while the motors
+    were answering through them. sysfs publishes the descriptors as files."""
+    devices = {d["serial"]: d for d in parse_sysfs_usb(SYSFS_USB)}
+    assert "20593383594E5018" in devices and "2081337C594E5018" in devices, \
+        "both adapter serials must be readable, since that is what an arm is resolved by"
+    g = devices["20593383594E5018"]
+    assert (g["vid"], g["pid"]) == (0x1D50, 0x606F), "vid/pid parse from hex"
+    assert (g["bus"], g["addr"]) == (1, 6)
+    assert devices["260323072846"]["product"].startswith("Intel")
+    assert "" in devices, "the C920 reports an empty serial and that must survive as empty"
+    assert len(parse_sysfs_usb(SYSFS_USB)) == 4, \
+        "4 devices from 6 entries: the interface dir and the attribute-less one are skipped"
 
 
 def test_the_platform_answers_are_specific_and_honest() -> None:

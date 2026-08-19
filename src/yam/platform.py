@@ -25,7 +25,7 @@ __all__ = [
     "CanLink", "parse_can_links", "read_can_links",
     "V4lCamera", "parse_v4l_by_id", "read_v4l_cameras", "udev_capture_nodes",
     "enum_v4l_formats", "classify_v4l_node", "DEPTH_FOURCCS", "INFRARED_FOURCCS",
-    "COLOUR_FOURCCS",
+    "COLOUR_FOURCCS", "parse_sysfs_usb", "read_usb_devices",
     "camera_permission_note",
 ]
 
@@ -168,6 +168,69 @@ def read_can_links() -> list[CanLink]:
              (_IP_HEADER.match(line) for line in out.stdout.splitlines()) if m]
     serials = {name: sysfs_can_serial(name) for name in names}
     return parse_can_links(out.stdout, serials)
+
+
+def parse_sysfs_usb(entries: dict[str, dict[str, str]]) -> list[dict]:
+    """Turn a `{sysfs dir name: {attribute: text}}` mapping into USB device dicts.
+
+    ⛔⭐ WHY THIS EXISTS AND WHAT IT FIXES ([FINDINGS §75.8](../../docs/FINDINGS.md)).
+    `checks/check_rig.py` reads USB serials through libusb, which must OPEN the device to
+    fetch a string descriptor. On macOS nothing else holds the CAN adapters, so that works.
+    **On Linux the kernel's gs_usb driver owns them, libusb cannot read their strings, and
+    every serial came back `?` — so the rig report announced that BOTH adapters were missing
+    while the motors were answering through them.** A confident, plausible, wrong answer on
+    the primary bring-up tool, which is [§0](../../docs/FINDINGS.md)'s pattern exactly.
+
+    sysfs has no such problem: the kernel already knows the descriptors and publishes them as
+    files, so reading them needs no claim, no root and no libusb. Pure, so the parse is tested
+    against a captured layout.
+
+    ⚠️ Only DEVICE directories are returned (they carry `idVendor`); interface directories
+    like `1-4:1.0` are skipped, or every device would appear several times.
+    """
+    devices: list[dict] = []
+    for name in sorted(entries):
+        attrs = entries[name]
+        if "idVendor" not in attrs or "idProduct" not in attrs:
+            continue
+        try:
+            vid, pid = int(attrs["idVendor"], 16), int(attrs["idProduct"], 16)
+        except ValueError:
+            continue
+        devices.append({
+            "vid": vid, "pid": pid,
+            "bus": int(attrs.get("busnum", "0") or 0),
+            "addr": int(attrs.get("devnum", "0") or 0),
+            "serial": attrs.get("serial", "").strip(),
+            "product": attrs.get("product", "").strip(),
+            "sysfs": name,
+        })
+    return devices
+
+
+def read_usb_devices() -> list[dict]:
+    """Every USB device on THIS machine, with its serial, read from sysfs. Linux only.
+
+    Returns `[]` on any other platform, so a caller can fall back to libusb there.
+    """
+    if not IS_LINUX:
+        return []
+    root = Path("/sys/bus/usb/devices")
+    entries: dict[str, dict[str, str]] = {}
+    try:
+        children = sorted(root.iterdir())
+    except OSError:
+        return []
+    for child in children:
+        attrs: dict[str, str] = {}
+        for key in ("idVendor", "idProduct", "serial", "product", "busnum", "devnum"):
+            try:
+                attrs[key] = (child / key).read_text().strip()
+            except OSError:
+                continue
+        if attrs:
+            entries[child.name] = attrs
+    return parse_sysfs_usb(entries)
 
 
 # ------------------------------------------------------------- cameras, on Linux ----

@@ -67,14 +67,22 @@ def main() -> int:
         print("   pyusb is a dependency of this project — try `uv sync`.")
         return 1
 
-    devices = []
-    for dev in usb.core.find(find_all=True) or []:
-        devices.append({
-            "vid": dev.idVendor, "pid": dev.idProduct,
-            "bus": dev.bus, "addr": dev.address,
-            "serial": field(dev, "serial_number"),
-            "product": field(dev, "product"),
-        })
+    # ⛔⭐ ON LINUX, READ SYSFS RATHER THAN libusb ([FINDINGS §75.8](../docs/FINDINGS.md)).
+    # libusb must OPEN a device to fetch a string descriptor, and the kernel's gs_usb driver
+    # owns the CAN adapters there — so every serial came back "?" and this report announced
+    # that BOTH adapters were missing while the motors were answering through them. sysfs
+    # publishes the descriptors as files, so it needs no claim and no root.
+    from yam.platform import IS_LINUX, read_usb_devices  # noqa: PLC0415
+
+    devices = read_usb_devices() if IS_LINUX else []
+    if not devices:
+        for dev in usb.core.find(find_all=True) or []:
+            devices.append({
+                "vid": dev.idVendor, "pid": dev.idProduct,
+                "bus": dev.bus, "addr": dev.address,
+                "serial": field(dev, "serial_number"),
+                "product": field(dev, "product"),
+            })
     if not devices:
         # ⚠️ An earlier version called this "a fault", which is wrong and was written
         # without ever seeing the case. `usb.core` lists external devices; on a laptop

@@ -5330,17 +5330,35 @@ He re-aimed the C920 before the test. Reading slot 4's frames start-to-end: the 
 
 ⚠️⭐ **THE DEPTH QUESTION, re-asked on Linux and refined rather than reversed.** [§63.0](FINDINGS.md) concluded on macOS that the D405 is colour-only for this stack and depth needs the SDK. On Linux the picture is different in mechanism and the same in consequence: **the kernel DOES expose a real depth stream** (`/dev/video2`, `Z16`, 16-bit), which AVFoundation never showed, **but OpenCV cannot open that node at all** — it fails loudly with `can't open camera by index` and `VIDIOC_G_INPUT: Inappropriate ioctl for device`, with `CAP_PROP_CONVERT_RGB` on or off. So for an OpenCV-based stack depth still needs librealsense (or a raw V4L2 mmap loop, which is real work nobody should do for this). **The practical advice is unchanged and now has a sharper reason: on Ubuntu, install librealsense if depth is wanted, and expect nothing from OpenCV on that node.**
 
+### 75.8 ✅✅⭐⭐⭐ ALL 14 MOTORS ANSWER ON LINUX, THE REGISTERS ARE BIT-IDENTICAL TO THE MAC — and `check_rig` was announcing both adapters missing while they worked
+
+✅ **He brought the CAN links up** (`sudo ip link set canX up type can bitrate 1000000`). ⚠️ His one-liner printed `can1  DOWN  <NO-CARRIER…>` and that was **a race in the command, not a fault**: `ip -br` ran before the second interface finished coming up. Re-read a moment later, both are UP, both ERROR-ACTIVE (the healthy CAN state), both at 1 Mbit/s with identical bit timing. ⭐ Verified rather than assumed, because "NO-CARRIER on a CAN link" would otherwise read as a wiring fault and cost a bench visit.
+
+✅✅⭐⭐ **THE FIRST MOTOR CONTACT ON LINUX, and it is clean.** `ping_motors --arm G --yes` then `--arm B --yes` over SocketCAN: **all 14 motors answered**, temperatures **31-35 °C** against a 55 °C warning, every motor at rest (worst velocity 1 and 5 quantisation steps from zero), **no latched fault on either arm with error clearing OFF** — so that is a real reading and not an erased one ([§39.1](FINDINGS.md)'s fix doing its job on a new platform). Arm B's jaw needed the usual **−2π** shift and arm G's needed none, exactly as on the Mac.
+
+✅✅⭐⭐⭐ **AND THE REGISTERS ARE BIT-IDENTICAL ACROSS PLATFORMS.** `check_arms_match --yes` on Linux: every readable register on all 14 motors matches B against G apart from the per-unit `inertia` and `flux`, **and every value matches the 2026-08-14 baseline taken on the MAC over gs_usb, to every digit.** So the SocketCAN register path and the gs_usb register path produce the same numbers, five days apart, on different operating systems. That is the strongest evidence available that the port did not change what the arm reports.
+
+⛔⭐⭐ **THE DEFECT THIS TURN FOUND, and it is [§0](FINDINGS.md)'s pattern on the primary bring-up tool.** `checks/check_rig.py` read USB serials through **libusb**, which must OPEN a device to fetch a string descriptor. On macOS nothing else holds the CANables, so it worked. **On Linux the kernel's gs_usb driver owns them, libusb cannot read their strings, every serial came back `?`, and the report concluded: *"not ready — adapter B is not attached; adapter G is not attached"* — while the motors were answering through those very adapters.** A confident, plausible, wrong verdict on the tool the README's bring-up checklist reaches for first.
+
+✅ **Fixed by reading sysfs instead** (`yam/platform.py::read_usb_devices`): the kernel already knows every descriptor and publishes it as a file, so no claim, no root and no libusb are involved. On Linux `check_rig` now reports **B and G by serial, both running firmware**, plus the SpaceMouse, the D405 and the C920. macOS still uses libusb and is untouched. ⭐ **The fourth platform gap found by a sweep or a run rather than by a crash** — see [§74.0](FINDINGS.md) for the first three.
+
+⭐ **What the corrected report also settled: there IS a SpaceMouse on the PC** (one Compact; the second is still on the Mac). So a full session with cameras can run on the station as soon as Julien drives it — nothing physical is missing for a two-camera recording.
+
 ### 75.4 ⬜ THE HIS-LIST, current — supersedes [§74.3](FINDINGS.md)
 
 ✅ **DONE 2026-08-19: the sudo block ran** (ffmpeg, v4l-utils, can-utils installed; `lavita` in the `video` group), and the colour stream is measured ([§75.7](FINDINGS.md)). **What remains needs his hands or his root, nothing more:**
 
-⬜ **Bring the CAN interfaces up — needed once per boot, needs root:**
+✅ **DONE 2026-08-19: CAN is up and all 14 motors answer on Linux** ([§75.8](FINDINGS.md)). ⬜ **What is left needs him, and it is short:**
+
+1. ⭐ **The CAN links come up DOWN after every boot, and enabling needs root.** Make it automatic once and nobody types anything again:
 
 ```bash
-ssh -t yam-pc 'sudo ip link set can0 up type can bitrate 1000000 && sudo ip link set can1 up type can bitrate 1000000 && ip -br link show type can'
+ssh -t yam-pc 'printf %s "ACTION==\"add\", SUBSYSTEM==\"net\", KERNEL==\"can*\", RUN+=\"/usr/sbin/ip link set %k type can bitrate 1000000\", RUN+=\"/usr/sbin/ip link set %k up\"\n" | sudo tee /etc/udev/rules.d/90-yam-can.rules && sudo udevadm control --reload-rules && echo INSTALLED'
 ```
 
-⬜ **Physical:** the arms' mains power on at the PC, and (only if a three-camera session is wanted there) the second D405 `255323071773` plus the SpaceMouse, both still on the Mac's hub. ⭐ Once CAN is up, `uv run apps/ping_motors.py --arm B --yes` is agent-safe (it enables motors for one frame and sends no setpoint, [HANDOFF §4](HANDOFF.md) rule 1), so the first Linux motor reading can happen without him.
+   ⚠️ It takes effect on the next replug or reboot. **Alternative, if he would rather keep it manual but password-less:** a sudoers line allowing exactly those two commands and nothing else (`sudo visudo -f /etc/sudoers.d/yam-can`), which also lets an agent recover a bus-off link without him. ⭐ Optional extra in either form: add `restart-ms 100` so the controller recovers itself from a bus-off instead of staying dead — worth it on a rig whose one hard crash was the bus sagging away ([§46.0](FINDINGS.md)), and worth knowing that it makes a fault self-clear rather than persist.
+2. ⬜ **A full session on the station, which only he can drive** (it sends setpoints): `uv run apps/teleop_session.py --yes --arms B,G --cameras c920,d405:2603 --start-mode hold`. Everything it needs is attached, including one SpaceMouse. That single run would confirm teleop, recording, the camera writers and the park machinery on Linux.
+3. ⬜ **Optional physical:** the second D405 `255323071773` and the second SpaceMouse, both still on the Mac, if a three-camera or two-puck session is wanted there.
 
 **Physical, his hands:** ✅ the CAN adapters, the C920 and one D405 are ON the PC already and verified ([§75.5](FINDINGS.md)). ⬜ Remaining: the second D405 (`255323071773`, still on the Mac's hub) and the SpaceMouse. Then, every boot: `sudo ip link set can0 up type can bitrate 1000000` and the same for `can1` — the one CAN step that needs root.
 
