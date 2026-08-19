@@ -1,0 +1,78 @@
+# The Rebuild Plan — what to build, what we proved, what will bite you
+
+> **Who this is for:** the team rebuilding the bimanual YAM station from scratch, per Julien's ruling ([FINDINGS §67.0](FINDINGS.md)): this repo is the finished walkthrough, you build the real one. **How to use it:** read this file once, top to bottom (~20 minutes). It follows [Setup-Anleitung.md](Setup-Anleitung.md)'s own phases A→E, and for each phase says what the walkthrough proved, where reality disagreed with the plan, and which trap will bite you first. Work packages you can assign are in §3. Everything asserts a pointer, not a copy — the evidence lives in [FINDINGS.md](FINDINGS.md) and stays there.
+>
+> **Status of this document:** drafted 2026-08-19, while three inputs are still open (the task, the model confirmation, one complete camera-integrated collection run — [ROADMAP §8.5](ROADMAP.md) named them in advance). Those live in §4 as open decisions, not as blockers: every feature this plan describes exists and ran, most of it confirmed on the physical arms.
+
+## 0. The one-paragraph summary
+
+The walkthrough proved the whole loop on macOS with two YAM arms: SpaceMouse cartesian teleop at 90 Hz, hand-guiding under gravity compensation, blended waypoint runs that can grab (the run pauses where only the jaws move and reports whether something was gripped), record-and-replay of hand-taught movements, composite runs (waypoints + taught legs in one sequence), mirror mode, good/bad labelling while driving, a lagging simulator that runs the entire session headless, and an exporter that turns a recording into an MCAP episode in [Setup-Anleitung.md](Setup-Anleitung.md) C3's exact topic shape. **What does not exist anywhere yet: camera frames inside recordings, and a C4-verified episode.** The single most important thing we learned is not a feature: **this stack fails by lying, never by crashing** ([FINDINGS §0](FINDINGS.md)) — §5 tells you how we defended against that, because you will need the same defences.
+
+## 1. What "done" means for the rebuild
+
+1. Both arms driven from one process, demonstrations collected as MCAP episodes that ABC's loader accepts unchanged (Gate C), and a policy deployed through one adapter interface (Phase E).
+2. Every safety property this repo established still holds: dry-run by default, park-then-disable on every exit, thermal guards that refuse rather than warn-and-continue, one rate/lag clamp below all control logic.
+3. The verification discipline of §5 is in place from day one. It is cheaper to adopt than to rediscover: nine confident-wrong-silent defects in the FIRST hardware day alone ([FINDINGS §0](FINDINGS.md)).
+
+## 2. The phase map — the Anleitung's plan against what actually happened
+
+### Phase A (OS, drivers, ABC repo)
+
+The walkthrough deviated completely and deliberately: everything ran on **macOS**, which the SDK does not support. The workaround is one argument deep, not architectural (`bustype="gs_usb"` over libusb — [README §2.1](../README.md)). **For the rebuild on Ubuntu, Phase A applies as written** and none of the macOS workarounds travel. What DOES travel from here: [README](../README.md)'s bring-up checklist (LED table, fault-reading order, DFU-vs-mains recovery, per-session ±2π jaw shift), which is OS-independent hardware truth.
+
+### Phase B (hardware & physical setup) — mostly proven, three corrections to the plan
+
+- **CAN + arms (B2): proven far beyond the plan.** Two arms, two buses, one 90 Hz process, ~3× headroom. ⛔ **Select adapters by serial, never by index** — enumeration order changed twice in one session and index selection would have moved the wrong arm ([FINDINGS §0](FINDINGS.md) #5). ⚠️ **Put the CAN adapters on a powered USB 3 hub, never behind a dock**: the one hard crash was the whole bus sagging away mid-session — seven motors latched `0xD`, both adapters fell into their bootloaders ([FINDINGS §46.0](FINDINGS.md)). Budget for that hub.
+- **Cameras (B3): two corrections.** ① The D405 over plain UVC is a colour camera, full stop — every mode, measured from the pixels ([FINDINGS §63.0](FINDINGS.md)); depth needs the SDK, so on Ubuntu use librealsense from the start. ② **The C920 reports an EMPTY USB serial** ([FINDINGS §70.6](FINDINGS.md)), so a config that keys every camera by serial is wrong by model: D405s by serial, the C920 by model name. Identical D405s cannot be told apart by anything they capture; the candidate no-hands identification chain (serial→locationID→uniqueID→index) is one glance away from settled ([ROADMAP §8.2](ROADMAP.md) item 5).
+- **SpaceMice (B4): one correction.** They report empty serials too; identity comes from a wiggle gesture at session start ([README](../README.md)). One puck can drive a whole multi-arm session (the selection aims it — [FINDINGS §68.8](FINDINGS.md)).
+- ⛔ **There is no e-stop on this hardware.** Wall power is the only hard cut. That fact shaped every motion feature here (slow, bounded, interruptible, dry-run by default) and must shape yours.
+
+### Phase C (teleop + recording) — the heart of the walkthrough, and where the traps live
+
+- **IK chain (C1):** proven with mink/MuJoCo at 90 Hz (two solves cost 0.1 ms against a 10 ms budget). The plan's own advice stands: use ABC's `yam.xml` as the model. ⚠️ A pure rotation once dragged the tool point 44 cm; the fix and the reasoning are teaching material ([FINDINGS §18](FINDINGS.md)).
+- **Robot loop (C2):** *the class decides, the script narrates* is the shape that worked and the shape the research wants ([ROADMAP §9.5](ROADMAP.md)) — one `ArmSession` per arm, the loop samples and narrates. Adopt LaRobot's policy-as-an-input idea on top: everything that produces commands (puck, keyboard, policy) behind one interface ([ROADMAP §10.6](ROADMAP.md)).
+- **The speed model, measured once so nobody re-measures it wrong:** the arm follows with a fixed delay (`lag ≈ 0.04-0.10 rad + 0.033 s × speed`, identical on all six joints — [ROADMAP §7.5.1](ROADMAP.md)); four speed limits sit in series and the smallest binds ([FINDINGS §65.0](FINDINGS.md)); velocity feedforward is real and capped at 1, because above 1 the setpoint contradicts the position command by construction ([FINDINGS §68.6](FINDINGS.md)); and **the ~1-2 cm repeatability floor is static friction**, teleop only feels exact because your eyes close the loop ([FINDINGS §69.2](FINDINGS.md)). If a use-case needs sub-centimetre following, the one real lever is kp, with its caveats ([ROADMAP §8.2](ROADMAP.md) item 17).
+- **Recorder (C3): built and confirmed**, every-arm-in-one-timeline (ABC's 14-wide shape), with provenance stamped twice (a simulated take can never masquerade as real — [FINDINGS §60.2](FINDINGS.md)), labels marked while driving ([§70.10](FINDINGS.md)), grabs via the jaw pause ([§70.5](FINDINGS.md)), and composite runs ([§70.12](FINDINGS.md)). **Collection method, his ruling after driving both:** most demonstrations by hand-guiding and replay, the SpaceMouse kept for corrections — executing a task with the puck is hard, resetting the scene is trivial ([ROADMAP §6.6](ROADMAP.md)).
+- **Export (C3/C4): the episode exporter writes the contract as written** — exact topics, dims, the 33,333,333 ns tick, joint-space actions, sides never defaulted ([FINDINGS §70.13](FINDINGS.md)). ⛔ **Two things stand between that and Gate C: camera frames are not in recordings yet** (the capture layer exists and is tested — [FINDINGS §70.9](FINDINGS.md) — the recorder does not sample it yet), **and C4 itself**: verify a mini-sample against ABC's loader before collecting anything you intend to keep. The Anleitung's warning is right: encoding mistakes are only repairable by recollecting.
+
+### Phase D (training) and Phase E (deployment)
+
+Nothing here touched them, on purpose ([ROADMAP: deliberately-not-doing](ROADMAP.md)). Two things from here matter for E: the policy-adapter interface should be the same input interface the teleop uses (one seam, LaRobot already sketches it), and the deploy loop inherits the safety envelope of §1.2 unchanged — a policy is just another command source, and it gets the same clamps a human gets.
+
+## 3. The work packages
+
+Each package names its deliverable, what to lift from here versus rebuild, and the trap that will bite first. "Lift" means the logic and its tests translate nearly verbatim; the code is plain Python on numpy with no macOS dependence unless said.
+
+| WP | Deliverable | Lift from here | The trap |
+|---|---|---|---|
+| 1 | **CAN/robot layer**: build_robot, SafeRobot (rate + lag clamps below ALL logic), teardown order | `yam/robot.py`, `yam/can.py` concepts; on Ubuntu the SDK's SocketCAN path replaces the gs_usb workaround | the vendor's own `close()` gets teardown order wrong; a raised arm sags if you trust it ([README §5](../README.md)) |
+| 2 | **Safety envelope**: thermal guard, gripper clamp + stall latch, workspace sphere, floor, incident recorder | `ThermalGuard`, `hold_jaw`, `check_grasp`, the incident writer — all pure, all tested | the jaws cook motor 7 if any path bypasses the clamp; ask of every guard *"what path reaches the hazard without passing through you?"* ([HANDOFF §4](HANDOFF.md) rule 7) |
+| 3 | **Inputs**: SpaceMouse reader, axis maps per arm and frame, keyboard, policy adapter behind ONE interface | `yam/inputs/*` + LaRobot's `inputs/` skeleton | empty USB serials; the wiggle assignment; a dead puck must read as centred and park, never drop ([FINDINGS §68.2](FINDINGS.md)) |
+| 4 | **Session/modes**: ArmSession per arm, park machinery (blended paths, jaw pause, settle-gate), the mode keys | `yam/session.py` + its 48+ tests; the §52.1 lesson: the class's tested code must BE the code that runs | a park started by anything else must cancel a pending playback; handovers happen in arrival branches only ([FINDINGS §57.1](FINDINGS.md)) |
+| 5 | **Recording/composite/labels** | `yam/recording.py`, `yam/motion.py`, the composite queue design ([ROADMAP §6.6.1a](ROADMAP.md)) | stop must freeze the take instantly (the padding bug, [FINDINGS §30](FINDINGS.md)); labels are data, never control |
+| 6 | **Cameras**: capture threads, LaRobot's `Frame`, identification, bandwidth measurement | `yam/cameras/*` + `apps/capture_probe.py`; on Ubuntu add librealsense depth | bandwidth exhaustion is dropped frames with no error ([FINDINGS §34.5](FINDINGS.md)); enumeration order is not index order ([FINDINGS §22](FINDINGS.md)) |
+| 7 | **Episode export + C4 gate**: recordings → MCAP, then the loader verification | `yam/episode.py` + its read-back tests; replace the schema with ABC's `export_mcap.py` encoding once verified | sides are physical and never derivable; a wrong default mirrors the whole dataset silently ([FINDINGS §70.13](FINDINGS.md)) |
+| 8 | **Simulator + checkers**: an arm that LAGS like the measured law, one test runner, falsifiers for every checker | `yam/fake/arm.py`, `checks/run_tests.py`, the falsify pattern | the sim caught a crash 616 unit tests missed ([FINDINGS §62.1](FINDINGS.md)); §5 below is this row's reasoning |
+| 9 | **Deploy loop (E)**: the policy adapter, 30 Hz inference, dry-run first | the input interface from WP3; everything else is new | a policy is a command source; if it does not pass through WP1's clamps and WP2's guards, nothing else here matters |
+
+## 4. Decisions
+
+**Made, with evidence — do not re-litigate without new evidence:** joint-space actions (ABC's own choice, and what we command anyway); demonstrations mainly by guide-and-replay with per-waypoint variation tolerance ([ROADMAP §6.6](ROADMAP.md)); collision avoidance stays manual at this bench spacing (his ruling; bounding spheres cry wolf at 0.70 m — [FINDINGS §60.3](FINDINGS.md)); feedforward capped at 1 ([FINDINGS §68.6](FINDINGS.md)); the ±2π jaw shift is per-session state, never a config value ([FINDINGS §40](FINDINGS.md)); no ZMQ for one station (the Anleitung's own advice, confirmed by one process driving both arms).
+
+**Open, each with its owner:** the task (Julien/team — deliberately open, everything built task-agnostic) · the model (probably diffusion/DiT; papers with the team) · the noise bound for varied replays (Julien, ~2 minutes — [ROADMAP §8.2](ROADMAP.md) item 9 carries the lean) · kp raising for sub-centimetre grabs (Julien, bench decision, item 17) · left/right bench sides (team, one flag today) · camera mounts and calibration (deferred by ruling until the layout is final — [ROADMAP §8.4](ROADMAP.md)).
+
+## 5. The method chapter — how this stack fails, and the defences that worked
+
+**Every defect that mattered produced a confident, plausible, wrong answer and raised nothing** ([FINDINGS §0](FINDINGS.md)). Transmit echoes decoded as motor replies. A gravity model 39% short holding 4.3 kg while the screen read calm. A checker that went green while validating nothing, caught only because its falsifier counts catches ([FINDINGS §70.8](FINDINGS.md)). The defences are cheap, and they compound:
+
+1. **Check values for plausibility, never for the absence of an exception**, and prefer a test that could falsify the claim over one that agrees with it.
+2. **A written number is a cache with no invalidation.** Replace claims with the command that recomputes them (`check_rig`, `check_recordings`, `check_arms_match`, …). This plan itself follows the rule: it points, it does not copy.
+3. **Every checker gets a falsifier that feeds it known-broken input and counts the catches.** A green run plus a stable catch-count is evidence; a green run alone is not. Three real disarmings were caught this way, one of them live mid-refactor.
+4. **One suite, one command, one total** (`checks/run_tests.py`): two test files sat red for days because nothing ran everything ([FINDINGS §67.5](FINDINGS.md)). The total is the catch-counter for the suite itself.
+5. **Simulate the whole loop, not the units** — the lagging fake arm plus a scripted session caught what 616 unit tests could not.
+6. **A verifier bounds errors of commission, never omission** ([FINDINGS §50.2](FINDINGS.md)): reading the code against its own claims found the defects no checker could. Budget reading time; it is where the expensive bugs died.
+7. **Write findings down where the next person looks, when they happen.** This repo's FINDINGS file is why the rebuild plan can point instead of guess. Keep one.
+
+## 6. What NOT to rebuild — measured dead ends
+
+Velocity feedforward above gain 1 (contradiction by construction — [FINDINGS §68.6](FINDINGS.md)) · integral catch-up for mirror following (integrates noise, wanders — [FINDINGS §67.1](FINDINGS.md)) · depth over UVC on macOS (colour only, measured — [FINDINGS §63.0](FINDINGS.md)) · draining camera queues with `grab()` on a blocking backend (6 fps — [FINDINGS §21](FINDINGS.md)) · dwell-time configuration for grabs (the jaws-only leg IS the pause — [ROADMAP §6.6.2](ROADMAP.md)) · index-based device selection of any kind · trusting `system_profiler` for USB on macOS ([FINDINGS §23](FINDINGS.md)).

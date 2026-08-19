@@ -6,7 +6,7 @@
 >
 > What it does today, all confirmed on hardware: two arms driven from one 90 Hz loop by SpaceMouse (cartesian IK teleop), hand-guiding under gravity compensation, blended waypoint runs **including grabs** (the run pauses where only the jaws move and reports whether something was gripped), record-and-replay of hand-taught movements with puck scrubbing, mirror mode, per-session saved settings, a lagging simulator for the whole loop, and safe-stop/incident machinery.
 >
-> **Read in this order:** this page → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state — its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2).
+> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md) (the rebuild plan — the deliverable this repo exists to produce)** → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state — its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2).
 >
 > ## Day one: prove the rig works, in three commands
 >
