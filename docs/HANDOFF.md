@@ -23,7 +23,7 @@
 >
 > ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
 >
-> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §77.6](FINDINGS.md) is the current his-list, and [§77](FINDINGS.md) is the documentation pass of 2026-08-20.
+> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §78.2](FINDINGS.md) is the current his-list, [§77](FINDINGS.md) is the documentation pass of 2026-08-20, and [§78](FINDINGS.md) is the evening of that day: the team branch is current at his word, and their own camera framework moved the same afternoon.
 >
 > ⭐⭐ **TWO NUMBERS TO COMPARE AGAINST, and they are separate on purpose:**
 >
@@ -51,7 +51,7 @@
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
-> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN. ⛔ [FINDINGS §77.6](FINDINGS.md) IS THE AUTHORITY — it carries the commands and the reasoning, and this is the short form.** ⚠️ Two lists of what is owed will drift apart, and this one already had: it pointed at the superseded §76.9 and was missing two items. If they disagree, §76.14 wins.
+> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN. ⛔ [FINDINGS §78.2](FINDINGS.md) IS THE AUTHORITY — it contains the commands and the reasoning, and this is the short form.** ⚠️ Two lists of what is owed will drift apart, and this one already had: it pointed at the superseded §76.9 and was missing two items. If they disagree, §78.2 wins.
 >
 > **Needs the arms** (unplugged on the evening of 2026-08-19, so this waits for a bench day):
 > 1. ⭐ **One camera-carrying recording on the station with the fixed code.** It confirms the whole session path rather than the pieces: `w` · drive · `w` · save · `check_recordings.py`. Expect `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`.**
@@ -61,7 +61,7 @@
 > 3. ⭐ **The frame-rate-against-brightness trade** ([§76.16](FINDINGS.md)), before real data is collected. Whatever he picks, pick it once: the hazard is the inconsistency.
 > 4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
 > 5. **Whether to build a librealsense capture backend**, the only route to depth ([§76.10](FINDINGS.md)). No password needed; nothing needs it yet.
-> 6. Whether to push the current commits to the team branch (**he has not answered this**).
+> 6. ✅ **~~Whether to push the current commits to the team branch~~ ANSWERED AND DONE** on the evening of 2026-08-20: *"Push recent changes to teleop wip if you know what I mean"*, fast-forward `834c876..cb5c446`, 29 commits ([FINDINGS §78.0](FINDINGS.md)). ⛔ The next push needs his word again.
 >
 > **Needs the team:**
 > 7. **ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
@@ -89,7 +89,7 @@
 >
 > ⚠️⭐ **`config/` TRAVELS AND `recordings/` DOES NOT, and the difference is deliberate** ([FINDINGS §75.11](FINDINGS.md)). Waypoints, the axis map and the gripper limits are tracked in git, so his Mac-taught poses appeared on the station and `p 1` worked there at once. Recordings are gitignored: only what someone copies by hand exists on the other machine.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **831/831 across 40 files**, plus `run_falsifiers.py` at **71/71 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word — and it has now come twice, on 2026-08-19 (*"just update that"*) and on the evening of 2026-08-20 (*"Push recent changes to teleop wip"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `834c876..cb5c446`, 29 commits), which is the branch the team reads. ⛔ **Check `git rev-list --left-right --count larobot/julien/yam-teleop-wip...main` before every push**: a non-zero left number means they committed there and a fast-forward would no longer be possible ([FINDINGS §78.0](FINDINGS.md)). The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **831/831 across 40 files**, plus `run_falsifiers.py` at **71/71 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
 >
 > ## ⭐⭐⭐ THE OUTSTANDING WORK OF 2026-08-20, as a plan a cold agent can execute
 >
@@ -250,7 +250,7 @@
 > | G1 | `docs/BRIDGE.md` written: the branch table, the module-to-module map, what each side has, and what has to happen for the two to meet | ✅ 2026-08-20 |
 > | G2 | Linked from `README.md`, `docs/PLAN.md` and `docs/ARCHITECTURE.md`, and added to `HIS_DOCS` | ✅ 2026-08-20, at a ceiling of 0 |
 > | G3 | The wrong "agreed on both sides" sentence in `docs/PLAN.md` corrected | ✅ 2026-08-20, and it now names what is on each side |
-> | G4 | ⬜ **HIS DECISION: push to `julien/yam-teleop-wip`?** It is 8 behind and 3 days stale, so his friends currently read a `docs/PLAN.md` with none of §76 in it, including every camera finding, while they write a camera framework. ⛔ Pushing needs his word every time (§4 rule 9) | he answers |
+> | G4 | ✅ **HIS DECISION CAME: push to `julien/yam-teleop-wip`.** *"Push recent changes to teleop wip if you know what I mean"*, evening of 2026-08-20. Fast-forward `834c876..cb5c446`, 29 commits, 0 behind, suite and falsifiers green first | ✅ 2026-08-20 ([FINDINGS §78.0](FINDINGS.md)) |
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
@@ -698,7 +698,7 @@ These are not preferences, they were arrived at by things going wrong.
 
    ⭐⭐⭐ **REFINED A THIRD TIME, 2026-08-19, AND THIS ONE CLOSES A LOOPHOLE IN THE RULE ABOVE.** The sentence *"This applies to CHAT ONLY — repo files keep the conventions you see here"* is what `docs/ARCHITECTURE.md` fell through. It was written on 2026-08-19 as a repo file, in repo-file style, and he could not read it:
 
-   > *"you wrote it in a writing style again that does not make a lot of sense. It's not nicely structured. It's not understandable. He did not adhere to any of the things we spoke about when talking about how to write something in a nice, understandable way. It should be understandable for a sixteen year old who has never even seen the project and any of the code and any of the architecture and stuff."*
+> *"you wrote it in a writing style again that does not make a lot of sense. It's not nicely structured. It's not understandable. He did not adhere to any of the things we spoke about when talking about how to write something in a nice, understandable way. It should be understandable for a sixteen year old who has never even seen the project and any of the code and any of the architecture and stuff."*
 
    ⛔ **So the rule is not about the medium. It is about the reader.** A file HE reads is held to the chat standard. A file only agents read keeps the dense conventions, and the two are now listed explicitly in `checks/check_prose.py`'s `HIS_DOCS` manifest.
 
@@ -710,7 +710,7 @@ These are not preferences, they were arrived at by things going wrong.
 
    ⭐⭐⭐ **REFINED A FOURTH TIME, 2026-08-20, AND THIS ONE IS ABOUT WORD CHOICE RATHER THAN STRUCTURE.** He read [PLAN.md](PLAN.md), found the sentence *"none of the macOS workarounds travel"*, and said:
 
-   > *"which is unnecessary language flowering and unhelpfully worded. Explanatory language should be efficient and effective, always as long as it needs to be, never overly complicated or flowery, describing precisely what is relevant, without being pretentious, instead preferably simple and direct."*
+> *"which is unnecessary language flowering and unhelpfully worded. Explanatory language should be efficient and effective, always as long as it needs to be, never overly complicated or flowery, describing precisely what is relevant, without being pretentious, instead preferably simple and direct."*
 
    ⛔ **A METAPHOR MUST NOT STAND IN FOR A PLAIN FACT.** The metaphor adds a decoding step and nothing else, and it is almost always the same length as the plain word:
 

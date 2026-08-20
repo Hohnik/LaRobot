@@ -8,7 +8,7 @@
 >
 > There are two repositories. This one is a finished walkthrough of a working bimanual YAM station. `Hohnik/LaRobot` is the station you are actually building. Until now nothing said which part of one corresponds to which part of the other, so both sides could believe the other had already done something. That happened at least once, and section 5 is the case.
 >
-> ⚠️ Everything below was read from the repositories on 2026-08-20.
+> ⚠️ Everything below was read from the repositories on 2026-08-20, the branch positions and section 4 item 5 in the evening of that day, after your camera commit landed.
 >
 > Branch positions move. Re-read them with the commands in section 1 rather than trusting this page.
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | what it is | a finished walkthrough: every feature built once, proven on the arms, written up | the station you are building |
 | where | `~/Developer/Projects/yam-robotics` on Julien's Mac, `~/yam-robotics` on the station | `Hohnik/LaRobot`, cloned at `~/LaRobot` on the station |
-| Python | about 20 modules under `src/yam/`. `uv run checks/run_tests.py` prints the live check count | 122 lines on `main`, plus work on two branches |
+| Python | about 20 modules under `src/yam/`. `uv run checks/run_tests.py` prints the live check count | 143 lines under `src/robot/` on `main`, plus work on two branches |
 | what it is for | answering questions, so your build starts from answers | the real thing |
 
 To check any of this yourself, on the station:
@@ -34,7 +34,7 @@ cd ~/yam-robotics && git log --oneline -1 && uv run checks/run_tests.py | tail -
 
 The work packages in that plan are not "fit this into a half-built system". They are "build this, and here is the answer to every question it raises".
 
-Measured on `main` at `065a08e`:
+Measured on `main` at `17ebfbe`. Only the README changed since `065a08e`, so every line count below is unchanged:
 
 | file | lines | what that means |
 |---|---|---|
@@ -51,9 +51,9 @@ Measured on `main` at `065a08e`:
 
 | branch | position | what is on it |
 |---|---|---|
-| `feature/camera-framework` | **4 ahead of main, 0 behind. Your active branch** | `src/robot/cameras/` with `camera.py`, `frame.py`, `config.py`, `SimCamera.py`, plus `record.py` and `scripts/start_sim.py` |
-| `feature/spacemouse` | 1 ahead, 4 behind | one `SpaceMouseReader` class |
-| `julien/yam-teleop-wip` | 246 ahead, 8 behind | this walkthrough, pushed on 2026-08-19 morning. ⚠️ See section 6: it is three days old |
+| `feature/camera-framework` | **4 ahead of `main`, 1 behind. Your active branch** | `src/robot/cameras/` with `camera.py`, `frame.py`, `config.py`, `SimCamera.py`, plus `record.py` and `scripts/start_sim.py`. Tip `3576ce1`, and section 4 item 5 was read from it |
+| `feature/spacemouse` | 1 ahead, 5 behind | one `SpaceMouseReader` class, tip `519b02c` |
+| `julien/yam-teleop-wip` | 275 ahead, 9 behind | ✅ this walkthrough, current with it at `cb5c446` since the evening of 2026-08-20. See section 6 |
 
 ## 3. Which part of this repo answers which part of yours
 
@@ -75,7 +75,7 @@ The left column is your directory. The middle is where the answer already exists
 
 ## 4. Your camera framework, and four measurements that land on it this week
 
-You are writing `src/robot/cameras/` now. On 2026-08-19 this repo found four camera problems on the same hardware you are building against. All four are in [FINDINGS.md](FINDINGS.md) section 76 with the measurements. Here they are against your code.
+You are writing `src/robot/cameras/` now. On 2026-08-19 this repo found four camera problems on the same hardware you are building against. All four are in [FINDINGS.md](FINDINGS.md) section 76 with the measurements. Here they are against your code. Item 5 was added later the same week, after your commit `3576ce1`.
 
 **Your `Camera` interface, as it stands:**
 
@@ -120,6 +120,23 @@ A C920 at 1280x720 in uncompressed YUYV is limited to 10 pictures a second by th
 - A camera can accept a size and then deliver nothing at it. `cap.get` after `cap.set` returns what you asked for, never what arrives ([FINDINGS §76.0](FINDINGS.md), [§76.2](FINDINGS.md)).
 - A C920 with V4L2's `exposure_dynamic_framerate` on gives 29.92 pictures a second in daylight and 14.98 in a dim room, while the driver reports 30 throughout ([FINDINGS §76.16](FINDINGS.md)). Two demonstrations of one task recorded morning and evening then contain twice as many pictures as each other, with nothing in the file to say why.
 
+**5. Your newest commit, read on the evening of 2026-08-20.**
+
+`feature/camera-framework` moved to `3576ce1` a few hours after the rest of this page was written. It adds `SimCamera` and a `Recorder` class. Four things about it, each one checkable in a few seconds.
+
+- ⛔ `src/robot/cameras/SimCamera.py` does not compile. Line 15 reads `self._id = int | None = None`. Python treats that as one value assigned to two targets, and the second target is the expression `int | None`, so importing the file raises `SyntaxError: cannot assign to operator`. An annotation takes a colon: `self._id: int | None = None`.
+- `SimCamera.available()` is spelled without the `is_`, so it does not implement the abstract `Camera.is_available()`. Instantiating the class raises `TypeError` even once line 15 is fixed.
+- `connect()` calls `self.world.camera_id(self.name)` and nothing ever assigns `self.world`. The constructor sets `self.sim`.
+- `tests/test_cameras/test_camera.py` is one comment line, so nothing imports `SimCamera` yet. That is why the three faults above are still in it.
+
+⭐ To check the first one yourself, on any machine with Python:
+
+```bash
+python3 -m py_compile src/robot/cameras/SimCamera.py && echo "compiles"
+```
+
+⚠️ Points 1 and 2 of this section still apply word for word at `3576ce1`. Your `Frame` still has no timestamp field, and `read()` is still a pull.
+
 ## 5. The seam both sides thought the other had
 
 ⛔ [PLAN.md](PLAN.md) used to say of the command-source interface: "your `docs/ARCHITECTURE.mmd` already declares exactly this ... so this seam is agreed on both sides." That was wrong on both sides.
@@ -146,13 +163,17 @@ whether the read method is `read() -> list[float]` as here, or something else. O
 
 ## 6. What has to move, and when
 
-⚠️ `julien/yam-teleop-wip` is three days old.
+✅ `julien/yam-teleop-wip` is current with this repo again.
 
-Its tip is `834c876` from 2026-08-19 morning. Everything found since then is absent from it, including all four camera measurements in section 4, while section 4 is about the branch you are working on right now.
+Julien gave the word on the evening of 2026-08-20 and the branch was fast-forwarded from `834c876` to `cb5c446`, 29 commits. It contains every camera measurement in section 4, the interfaces in section 5, and [PERFORMANCE.md](PERFORMANCE.md). No commit on the branch was rewritten, so an existing clone needs `git pull` and nothing else.
 
 ⬜ Pushing this repo to that branch needs Julien's word every time
 
-([HANDOFF §4](HANDOFF.md) rule 9). It is his call, never an agent's. Until it happens, read `docs/` from Julien's Mac or from `~/yam-robotics` on the station rather than from that branch.
+([HANDOFF §4](HANDOFF.md) rule 9). It is his call, never an agent's, so the branch goes stale again between pushes. One command says how stale it is:
+
+```bash
+git fetch && git log --oneline -1 larobot/julien/yam-teleop-wip
+```
 
 How code reaches the station, for reference: a git bundle, never a push. The three commands are in [LINUX.md](LINUX.md) section 2.
 
@@ -189,4 +210,4 @@ Both halves of the format are written here and both check their own output: the 
 - [FINDINGS.md](FINDINGS.md) section 76 for the camera measurements behind section 4
 - [PERFORMANCE.md](PERFORMANCE.md) for what is worth making faster
 
-*Written 2026-08-20 from both repositories as they stood that day. Branch positions move, so re-run the commands in section 1 rather than trusting the tables.*
+*Written 2026-08-20 from both repositories as they stood that day, and updated the same evening after commit `3576ce1` and the push in section 6. Branch positions move, so re-run the commands in section 1 rather than trusting the tables.*

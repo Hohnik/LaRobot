@@ -5961,3 +5961,68 @@ He asked: *"does the 100Hz robot loop really have to be the same loop used for t
 - ⬜ **`docs/COMMANDS.md` at 117 and `docs/LINUX.md` at 44 have never had a reading pass.** ⚠️ Do not read those counts as "117 metaphors": they are mechanical hits, mostly bold labels run into a sentence. The metaphors in both are gone.
 - ⬜ **The worst single loop pass is unmeasured** ([§77.4](FINDINGS.md)). It is the number that would decide whether separating the camera process is worth anything.
 - ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).
+
+## §78 ⭐⭐ 2026-08-20, EVENING — THE TEAM BRANCH IS CURRENT AT HIS WORD, AND THE FETCH THAT PUSHED IT FOUND THEIR CAMERA FRAMEWORK HAD MOVED THE SAME DAY
+
+### 78.0 ✅⭐⭐ THE PUSH: `834c876..cb5c446`, A CLEAN FAST-FORWARD OF 29 COMMITS
+
+His words, mid-turn: *"Push recent changes to teleop wip if you know what I mean."* That is [§4 rule 9](HANDOFF.md)'s word on the first item of [§77.6](FINDINGS.md), and it closes it.
+
+⭐ **What was verified BEFORE the push, in this order, because rule 11 says a commit never rests on assumed correctness and a push even less:**
+
+| check | result |
+|---|---|
+| `uv run checks/run_tests.py` | 831/831 across 40 files |
+| `uv run checks/run_falsifiers.py` | CATCH TOTAL 71/71 across 5 |
+| `uv run checks/check_links.py` | 1689/1689 |
+| `uv run checks/check_prose.py` | 7 documents at or under their ceiling |
+| `git status --short` | empty |
+| `git rev-list --left-right --count larobot/julien/yam-teleop-wip...main` | `0 29`, so a fast-forward with nothing of theirs discarded |
+
+⛔ **The `0` on the left was the one that mattered.** A non-zero left count would mean someone had committed to that branch on their side, and pushing would then need a merge rather than a fast-forward. Check it before every push to a branch someone else can write to.
+
+⚠️ **The suite total is 831/831 and unchanged since [§77.6](FINDINGS.md), and links moved 1653 → 1689** because commit `cb5c446` added the unwrapper documentation. A rise in the link count is expected after a documentation commit; a **fall** while green is the same signal as a falsifier total dropping.
+
+### 78.1 ⛔⭐⭐⭐ THEIR CAMERA FRAMEWORK MOVED WHILE [BRIDGE.md](BRIDGE.md) WAS BEING WRITTEN, AND THE NEW FILE DOES NOT COMPILE
+
+The `git fetch` that the push needed also moved three of their refs. Read from the fetched objects, no network beyond the fetch:
+
+| ref | was | now | what changed |
+|---|---|---|---|
+| `larobot/main` | `065a08e` | `17ebfbe` | one README commit. `src/robot/` is still 143 lines of Python, 106 of them `environment/simulation.py` |
+| `larobot/feature/camera-framework` | `f188eda` | `3576ce1` | ⭐ **`SimCamera` and a `Recorder` class**, so their active branch is 4 ahead of their main and 1 behind |
+| `larobot/feature/spacemouse` | `500fd28` | `519b02c` | the `SpaceMouseReader` grew a main loop |
+
+⛔⭐⭐ **BOTH WARNINGS IN [§77.3](FINDINGS.md) STILL APPLY WORD FOR WORD AT `3576ce1`.** Their `Frame` still has no timestamp field while its docstring still says *"combined with a timestamp"*, and `read()` is still a blocking pull. So the two things worth telling them are unchanged, and the window to say them is still open.
+
+⭐ **Three faults in the new `SimCamera.py`, each checkable in seconds and none of them a matter of taste:**
+
+- ⛔ **It does not compile.** Line 15 is `self._id = int | None = None`. Python parses that as one value assigned to two targets, and the second target is the expression `int | None`, so the import raises `SyntaxError: cannot assign to operator`. Verified with `python3 -m py_compile` against the file as fetched. The intended line takes a colon: `self._id: int | None = None`.
+- **`SimCamera.available()` is spelled without the `is_`**, so their own abstract `Camera.is_available()` is unimplemented and instantiating the class raises `TypeError` even after line 15 is fixed.
+- **`connect()` calls `self.world.camera_id(self.name)` and nothing assigns `self.world`.** The constructor sets `self.sim`.
+
+⚠️⭐ **And the reason all three are still in it: `tests/test_cameras/test_camera.py` is a single comment line.** Nothing imports the module, so nothing has ever tried. This is [§0](FINDINGS.md)'s pattern from the other side of the fence: a green repository with an unimported file is not evidence about that file.
+
+⭐⭐ **THE METHOD FINDING, and it is why [BRIDGE.md](BRIDGE.md) section 1 prints commands rather than facts.** A claim about somebody else's repository has a shelf life measured in hours while they are actively writing in it. `docs/BRIDGE.md` was written on 2026-08-20 against `065a08e` and `f188eda`; by the evening of the same day both were superseded. **The page survived that because it says where its numbers came from and how to recompute them.** A version that had simply asserted "main is 122 lines" would have been wrong by the evening with nothing in it to reveal that.
+
+✅ **[BRIDGE.md](BRIDGE.md) is updated**: the branch table, the `17ebfbe` anchor, section 4 item 5 with the three faults and the `py_compile` command, and section 6 rewritten now that the branch is current. Still 0 prose faults, links 1690/1690.
+
+### 78.2 ⬜⭐ WHAT IS OPEN AFTER THIS SESSION — supersedes [§77.6](FINDINGS.md)
+
+⭐ **Two numbers to compare against:** `uv run checks/run_tests.py` → **831/831 across 40 files**. `uv run checks/run_falsifiers.py` → **CATCH TOTAL 71/71 across 5**. Links **1690/1690**. All eight of his documents at or under their ceiling.
+
+**His:**
+
+1. ✅ **~~Push to `julien/yam-teleop-wip`~~ DONE this session** at his word, `834c876..cb5c446` ([§78.0](FINDINGS.md)). The next push needs his word again.
+2. ⛔ **One camera-carrying recording on the station** with the fixed code. Needs the arms, unplugged since 2026-08-19.
+3. ⭐ **The frame-rate against brightness decision** ([§76.16](FINDINGS.md)), before real data is collected.
+4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9).
+5. **Frame the top camera at the workspace** ([§73.2](FINDINGS.md)).
+6. **From the team: the C4 loader check** ([BRIDGE.md](BRIDGE.md) section 7). ⭐ **New reason to ask now:** they are writing camera code this week, so the two warnings in [§78.1](FINDINGS.md) and this question travel in one message.
+7. ⬜ Whether to build a librealsense capture backend for depth ([§76.10](FINDINGS.md)).
+
+**Not his, hardware-free:**
+
+- ⬜ **`docs/COMMANDS.md` at 117 and `docs/LINUX.md` at 44 have never had a reading pass.** ⚠️ Do not read those counts as "117 metaphors": they are mechanical hits, mostly bold labels run into a sentence. The metaphors in both are gone.
+- ⬜ **The worst single loop pass is unmeasured** ([§77.4](FINDINGS.md)). `TrackingLog` records `loop_hz` per run and never the worst pass. It is the number that would decide whether separating the camera process is worth anything, and the instrument is a small addition to a file that already exists.
+- ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).
