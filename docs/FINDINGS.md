@@ -5828,6 +5828,11 @@ Three of those requests were not honoured, and the old table said they were.
 6. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
 7. Optional: the second D405 for a three-camera session there · `kp` for sub-centimetre grabs ([ROADMAP §8.2](ROADMAP.md) item 17) · whether to push to the team branch.
 
+⬜⭐ **NOT HIS, HARDWARE-FREE, and named here so a session with no bench time knows what it can take.** Both are [ROADMAP §8.2](ROADMAP.md) rows that predate this section:
+
+- **Item 35, mesh-to-mesh collision distance.** It is the prerequisite for any collision warning at all: the bounding-sphere estimate reads **2.5 cm at rest** at his ~0.70 m spacing, because `link3`'s declared sphere is 0.197 m around a much thinner link, so a warning built on it fires while the arms sit still ([§60.3](FINDINGS.md)). MuJoCo measures mesh-to-mesh directly. ⚠️ **His standing ruling is that collision avoidance stays manual at this spacing.** So the measurement is buildable and the ruling is his to revisit; building one does not presume the other.
+- **Item 37, the per-joint speed ceiling for all six joints.** A mirror run measured joint 6 at **2.64 rad/s** while allowed 10, which is what turned that diagnosis from software to hardware ([§62.0](FINDINGS.md)). ⭐ **MIRROR already produces the data for every joint and nothing collects it.** The collection is hardware-free; the numbers fill in on the next mirror run he does anyway.
+
 ✅ **Both of the queued items closed the same evening.** The falsifiers have one command and one catch total ([§76.7](FINDINGS.md)), and `tests/test_camera_render.py`'s failure turned out to be a test asserting its own terminal rather than a flake ([§76.13](FINDINGS.md)).
 
 ⭐ **Two numbers to compare against next time, and they are separate on purpose:**

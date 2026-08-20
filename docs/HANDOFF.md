@@ -51,12 +51,24 @@
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
-> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN, shortest-first. The full list with commands is [FINDINGS §76.9](FINDINGS.md):**
-> 1. ⛔⭐ **NEEDS THE ARMS, which were unplugged on the evening of 2026-08-19.** One camera-carrying recording on the station with the fixed code, to confirm the whole session path rather than the function on its own: `w` · drive · `w` · save · `check_recordings.py`. The startup lines should read `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made on the station before `950a3fa`**: those files carry a third of the images they appear to, and their D405 directory is empty, and `check_recordings.py` now says both out loud ([FINDINGS §76.15](FINDINGS.md)). ⭐ **Everything else on his list either needs no hardware or is a decision** ([FINDINGS §76.14](FINDINGS.md)).
-> 2. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). His, two minutes.
-> 3. **Frame the top camera at the WORKSPACE before collecting real data** ([FINDINGS §73.2](FINDINGS.md): it currently films a close-up of one arm).
-> 4. **From the team: ABC's `export_mcap.py` or `abc_minimal`** — it settles the C4 gate, the per-view size and the gripper unit in one go ([FINDINGS §74.1](FINDINGS.md)).
-> 5. Optional: the second D405 for a three-camera session there · `kp` for sub-centimetre grabs (item 17) · whether to push the current commits to the team branch (**he has not answered this**).
+> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN. ⛔ [FINDINGS §76.14](FINDINGS.md) IS THE AUTHORITY — it carries the commands and the reasoning, and this is the short form.** ⚠️ Two lists of what is owed will drift apart, and this one already had: it pointed at the superseded §76.9 and was missing two items. If they disagree, §76.14 wins.
+>
+> **Needs the arms** (unplugged on the evening of 2026-08-19, so this waits for a bench day):
+> 1. ⭐ **One camera-carrying recording on the station with the fixed code.** It confirms the whole session path rather than the pieces: `w` · drive · `w` · save · `check_recordings.py`. Expect `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`.**
+> 2. **Frame the top camera at the WORKSPACE** ([§73.2](FINDINGS.md): it films a close-up of one arm).
+>
+> **Needs a decision from him, and none of them block anything:**
+> 3. ⭐ **The frame-rate-against-brightness trade** ([§76.16](FINDINGS.md)), before real data is collected. Whatever he picks, pick it once: the hazard is the inconsistency.
+> 4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
+> 5. **Whether to build a librealsense capture backend**, the only route to depth ([§76.10](FINDINGS.md)). No password needed; nothing needs it yet.
+> 6. Whether to push the current commits to the team branch (**he has not answered this**).
+>
+> **Needs the team:**
+> 7. **ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
+>
+> ⬜ **NOT his, and hardware-free, so a session with no bench time can take either** ([ROADMAP §8.2](ROADMAP.md)):
+> - **item 35, mesh-to-mesh collision distance.** It is the prerequisite for any collision warning: the bounding-sphere estimate reads 2.5 cm at rest at his spacing, so a warning built on it fires while the arms sit still. ⚠️ **His standing ruling is that collision avoidance stays manual** ([§60.3](FINDINGS.md)), so build the measurement, and changing the ruling is his.
+> - **item 37, the per-joint speed ceiling for all six joints.** MIRROR already produces the data and nothing collects it. The collection is hardware-free; the numbers arrive on the next mirror run.
 >
 > ⛔⭐⭐ **THE THINGS THAT BIT HARDEST ON THE PORT, so nobody re-learns them** (in [FINDINGS §75](FINDINGS.md) and [§76](FINDINGS.md)):
 > - ⭐ **A camera's usable modes are a property of the camera PLUS the platform.** The D405 streams 848x480 on Linux and not 1280x720; on macOS 1280x720 worked and 848x480 was broken. Exactly inverse. **Never hard-code a size for a camera you have not measured** ([§76.2](FINDINGS.md), [§63.0](FINDINGS.md)).
