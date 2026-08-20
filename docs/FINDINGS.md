@@ -6023,6 +6023,28 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 
 **Not his, hardware-free:**
 
-- ⬜ **`docs/COMMANDS.md` at 117 and `docs/LINUX.md` at 44 have never had a reading pass.** ⚠️ Do not read those counts as "117 metaphors": they are mechanical hits, mostly bold labels run into a sentence. The metaphors in both are gone.
+- ✅ **~~`docs/LINUX.md` at 44~~ DONE this session, 44 → 0** ([§78.3](FINDINGS.md)). ⬜ **`docs/COMMANDS.md` at 117 still has not had one**, and it needs a restructure rather than a phrase pass: [§78.3](FINDINGS.md) says why and what the shape should be.
 - ⬜ **The worst single loop pass is unmeasured** ([§77.4](FINDINGS.md)). `TrackingLog` records `loop_hz` per run and never the worst pass. It is the number that would decide whether separating the camera process is worth anything, and the instrument is a small addition to a file that already exists.
 - ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).
+
+### 78.3 ✅⭐⭐ THE READING PASS ON [LINUX.md](LINUX.md): 44 → 0, AND IT FOUND TWO STALE NUMBERS AND A LINE THAT CONTRADICTED THE FILE IT WAS IN
+
+⭐ **The phrase count went 44 → 0 and the ceiling is lowered to 0 in `checks/check_prose.py`.** The transformation was almost all one shape: a bold label run into the sentence after it (`**On the Mac:** install the ZeroTier package…`). Three ways out, and which one to use is a judgement rather than a rule:
+
+| the label is | do this | example |
+|---|---|---|
+| a place or a time | fold it into the sentence, unbolded | `On the Mac, install the ZeroTier package from …` |
+| a step title | make it its own sentence and drop the bold | `Group membership. Log out and back in afterwards …` |
+| the topic of a paragraph | keep it as a bold line, then a BLANK line, then the text | the pattern [PERFORMANCE.md](PERFORMANCE.md) already uses |
+
+⛔⭐⭐ **THE TRAP IN THE THIRD ROW, and it would have undone the work silently.** A bold line followed directly by its text on the next line renders as one paragraph, so `apps/unwrap_markdown.py` correctly merges the two lines into one, which puts the bold back inside a sentence. **The blank line is what makes it two paragraphs and survives the unwrapper.** Both tools are right; the interaction is what bites. Always run `unwrap_markdown.py` and then `check_prose.py` again, in that order.
+
+⭐⭐ **The reading pass found three things the phrase checker cannot see, and this is the argument for reading rather than running the tool:**
+
+- ⛔ **Two different suite totals for the same event.** Section 2 said 773/773 and section 4 said 767/767, both for 2026-08-19 on the station. Both were true: 767 in the morning, 773 that evening after the camera-node work. As written, one page gave two answers to one question. It now says so, and points at `run_tests.py` for today's ([§33.3](FINDINGS.md), a written number is a cache with no invalidation).
+- ⛔ **The closing line contradicted section 2 of its own file**: *"Written 2026-08-19, when the connection did not exist yet"*, on a page whose section 2 begins *"All of this is live"*. A file that describes its own age has to be re-dated when it is updated.
+- ⚠️ **Section 4's "no arms or cameras are plugged into the PC yet" was present tense about a fact that had changed** the same evening ([§75.5](FINDINGS.md), [§75.7](FINDINGS.md)). Same defect as [§77.0](FINDINGS.md), in a file nobody suspected.
+
+✅ **Guards run after the rewrite, because a prose pass can silently break a command:** `check_flags.py` green (every documented flag still exists and every shown value is still one the parser accepts), links 1715/1715, suite 831/831, falsifiers 71/71. ⭐ **And a token diff of the file before and after**: every one of the inline code spans and every URL survives the rewrite, checked rather than eyeballed.
+
+⬜⭐⭐ **WHY [COMMANDS.md](COMMANDS.md) WAS NOT DONE IN THE SAME PASS, and this is a recommendation rather than a shortage of time.** Its 117 hits are almost all inside the key table, where the bold marks the mode name (`| `g` | **GUIDE** — zero gravity …`). Unbolding those would make the table worse, not better. ⛔ **The real readability problem in that file is not the bold: it is that single table cells hold up to 250 words.** The `l` row alone contains the playback prompt, the puck scrub, the speed dial, the stick-slip warning and four cross-references. **The fix is a restructure**: the table keeps one line per key, and every cell that grew a paragraph becomes a short section under it. That is a bigger, riskier edit on the file Julien reads at the bench, so it deserves its own session and its own reading, with `check_flags.py` as the guard that nothing typeable was lost.

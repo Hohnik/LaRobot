@@ -62,7 +62,7 @@ REPO = Path(__file__).resolve().parent.parent
 HIS_DOCS: dict[str, int] = {
     "docs/ARCHITECTURE.md": 0,
     "docs/PLAN.md": 38,
-    "docs/LINUX.md": 44,
+    "docs/LINUX.md": 0,
     "docs/COMMANDS.md": 117,
     "docs/PERFORMANCE.md": 0,
     "docs/BRIDGE.md": 0,
