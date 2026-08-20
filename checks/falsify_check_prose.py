@@ -37,6 +37,25 @@ BREAKS = [
     ("bold in the middle of a sentence",
      "The command may never run **more than 0.25 rad** ahead of the arm.",
      "bold inside a sentence"),
+    # ⭐ The metaphor class, added 2026-08-20. One entry per distinct word, because a list
+    # that tests three of thirty leaves twenty-seven able to go quiet unnoticed.
+    ("a metaphor for \"apply\"", "None of the macOS workarounds travel.", "travel"),
+    ("a metaphor for \"contains\"", "The file carries the commit and the timestamp.",
+     "carries"),
+    ("a metaphor for \"is\"", "The clamp sits below all control logic.", "sits"),
+    ("a metaphor for the mistake you will make",
+     "The trap that bites first is the enumeration order.", "bites"),
+    ("a metaphor for \"is defined in\"", "Every decision lives in one class.", "lives in"),
+    ("a metaphor for \"is stored in\"", "The labels ride inside the file.", "ride"),
+    ("a metaphor for \"caught a real defect\"",
+     "The falsifier earned its place on its first run.", "earned its place"),
+    ("a metaphor for \"reports non-faults\"",
+     "A checker that cries wolf gets ignored.", "cries wolf"),
+    ("a metaphor for \"stopped detecting\"",
+     "The suite went blind for three days.", "went blind"),
+    ("a metaphor for \"bypasses\"",
+     "No feature can reach around the clamp.", "reach around"),
+    ("a metaphor for what somebody must do", "This is what the file owes him.", "owes"),
     ("a sentence too long to parse in one pass",
      "The commanded angle may not move faster than one radian per second and the "
      "command may never run more than a quarter radian ahead of where the arm actually "
@@ -48,7 +67,7 @@ BREAKS = [
 CLEAN = [
     ("decoration characters, which are navigation in a repo file",
      "⭐⛔⚠️ The arm parks first. Then the playback runs."),
-    ("an acronym in capitals", "The CAN bus carries all seven motors. MJPG gives 30 fps."),
+    ("an acronym in capitals", "All seven motors share one CAN cable. MJPG gives 30 fps."),
     ("deliberate shouting in a repo file", "⛔ NEVER bypass the gripper clamp."),
     ("a bold label on its own line", "**Limit one: how fast the command may change.**"),
     ("a bold label with a trailing colon outside the bold",
@@ -63,9 +82,25 @@ CLEAN = [
     ("a flag name containing a double hyphen", "Pass `--yes` to send anything at all."),
     ("his own words quoted back",
      "He said: \"any type of safety would have to go lower than that.\""),
+    # ⭐ The plain replacements for every metaphor above. If any of these is reported, the
+    # check is telling people to avoid the very words it recommends.
+    ("the plain word for apply", "None of the macOS workarounds apply to your build."),
+    ("the plain word for contains", "The file contains the commit and the timestamp."),
+    ("the plain word for is", "Every command passes through the clamp last."),
+    ("the plain phrase for the likely mistake",
+     "The mistake you are most likely to make first is trusting the enumeration order."),
+    ("the plain phrase for is defined in", "Every decision is made in one class."),
+    ("the plain phrase for is stored in", "The labels are stored in the file."),
+    ("the plain phrase for caught a defect",
+     "The falsifier caught a real defect on its first run."),
+    ("the plain phrase for reports non-faults",
+     "A checker that reports faults which are not faults gets ignored."),
+    ("the plain phrase for stopped detecting",
+     "The suite stopped detecting anything for three days, and still passed."),
+    ("the plain word for bypasses", "No feature can bypass the clamp."),
     ("a paragraph after a bullet list, which must not glue onto the last bullet",
      "- the shape of the table\n- whether every number is finite\n\n"
-     "The encoding is strict on purpose. The loader calculates where frame k sits."),
+     "The encoding is strict on purpose. The loader calculates where frame k is."),
 ]
 
 

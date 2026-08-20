@@ -5810,7 +5810,7 @@ requested                actual       codec   measured fps
 
 Three of those requests were not honoured, and the old table said they were.
 
-### 76.14 ⬜⭐⭐ WHAT IS OPEN NOW — supersedes [§76.9](FINDINGS.md)
+### 76.14 ⬜ WHAT WAS OPEN ON 2026-08-19 — superseded by [§77.6](FINDINGS.md)
 
 ⭐ **The station is current and the camera fix is confirmed on the hardware.** `open_measured` reports 29.9 fps on the C920 and 30.0 on the D405 against the real devices, through the session's own startup code. ⚠️ **The two totals to compare against are at the end of this section**, and they are separate on purpose.
 
@@ -5843,3 +5843,121 @@ uv run checks/run_falsifiers.py   →  CATCH TOTAL: 50/50 across 5 falsifiers
 ```
 
 ⚠️ **The suite total is now environment-independent**, verified with a pty and without one. Before this evening it silently differed by whether you ran it from a terminal, which is what made [§76.13](FINDINGS.md) look like a flake.
+
+## §77 ⭐⭐⭐ THE DOCUMENTATION PASS OF 2026-08-20 — and the two claims it found that were written in the present tense and were not true
+
+⭐ **The whole plan, with what each of his requests meant and what "done" was, is [HANDOFF.md](HANDOFF.md)'s plan block near the top.** This section is the findings: what the work uncovered, which is a different thing from what the work was.
+
+### 77.0 ⛔⭐⭐⭐ THERE WAS NOT ONE DECLARED INTERFACE IN `src/yam/`, and [ROADMAP §10.6](ROADMAP.md) said in the present tense that there was
+
+```
+$ grep -rn 'Protocol|abstractmethod|ABC)' src/yam/
+src/yam/inputs/spacemouse_live.py:11:Protocol note. A 3Dconnexion device reports as:
+```
+
+One comment about the USB protocol. **No interface, anywhere, in about twenty modules.** And [ROADMAP §10.6](ROADMAP.md) reads *"everything that produces commands sits behind one interface"*, which a reader takes as a description of the code.
+
+⛔ **This is exactly the defect [§76](FINDINGS.md) spent a day on, found in a design claim instead of in prose.** A sentence written as an intention, read afterwards as a fact. The Mind Understanding workspace already recorded the general form (*"a design note written in the present tense reads afterwards as a description of the code"*), and this is its third instance in this project.
+
+⚠️ **The cost was not hypothetical.** [PLAN.md](PLAN.md) told the team the command-source seam was *"agreed on both sides"*. See [§77.2](FINDINGS.md): it was agreed on neither.
+
+✅ **`src/yam/seams.py` now declares three**, and the rule it follows is narrow on purpose: **a Protocol goes in only when a concrete class already satisfies it.**
+
+| interface | the class that satisfies it today | what it is the seam for |
+|---|---|---|
+| `CommandSource` | `inputs/spacemouse.py::TwistReader` | a trained policy driving the arms (Phase E) |
+| `FrameSource` | `cameras/capture.py::CaptureSet` | depth through librealsense, and a separate camera process |
+| `FrameConsumer` | `cameras/writer.py::FrameSink` | anything else that stores pictures |
+
+⭐ **`tests/test_seams.py` asserts they still describe real code**, seven checks, so an interface cannot rot back into the fiction that made it necessary. ⛔ **And no behaviour was written.** Julien's instruction was explicit: *"We don't need to build anything further."* Declaring the shape of a hole is not filling it.
+
+### 77.1 ⛔⭐⭐ THE FOURTH REFINEMENT OF THE WRITING RULE: a metaphor must not stand in for a plain fact
+
+He read [PLAN.md](PLAN.md), found *"none of the macOS workarounds travel"*, and said:
+
+> *"which is unnecessary language flowering and unhelpfully worded. Explanatory language should be efficient and effective, always as long as it needs to be, never overly complicated or flowery, describing precisely what is relevant, without being pretentious, instead preferably simple and direct."*
+
+⭐ **The rule and the substitution table are [HANDOFF §4](HANDOFF.md) rule 8**, fourth refinement, and mechanically in `checks/check_prose.py`'s `FLOWERY` list: 29 words, each carrying its plain replacement, because a message that only says "wrong" makes every reader invent a different fix.
+
+⚠️ **Length is not the target, and this is the part easiest to get wrong.** His words are *"always as long as it needs to be"*. Replacing `travel` with `apply` costs nothing. Compressing an explanation to look terse is the old failure ([§4 rule 8](HANDOFF.md): short and impenetrable is worse than long and clear).
+
+⭐ **28 metaphors were replaced across the five documents he and his friends read.** `docs/ARCHITECTURE.md` went to 0, [PLAN.md](PLAN.md) from 40 to 38, `README.md` from 28 to 27.
+
+⛔⭐ **AND ITS FALSIFIER IMMEDIATELY CAUGHT TWO METAPHORS IN ITS OWN "HEALTHY" EXAMPLES.** `checks/falsify_check_prose.py` holds a list of prose that must come back clean. Two entries were *"The CAN bus **carries** all seven motors"* and *"the loader calculates where frame k **sits**"*. Both are the exact metaphor the new rule forbids, written by the same hand, in the file whose job is to prove the rule works. **A rule's own test fixture is not exempt from the rule**, and nothing but running it would have shown that.
+
+### 77.2 ⛔⭐⭐ THE TEAM'S REPO: `main` IS 122 LINES, AND THE SEAM BOTH SIDES CREDITED TO THE OTHER
+
+⭐ **Read from `~/LaRobot` on the station on 2026-08-20.** The whole comparison is [BRIDGE.md](BRIDGE.md); the two findings are here.
+
+**One: `main` is a skeleton, and knowing that changes how [PLAN.md](PLAN.md) reads.** 122 lines of Python in total. `inputs/spacemouse.py`, `inputs/mouse.py`, `inputs/policy.py` and `inputs/mcap_recording.py` are **empty files**. `inputs/input.py` is 7 lines. `environment/simulation.py`'s 106 lines are the only substantial code. So the work packages are not "port this into a half-built system", they are "build this, and here is the answer".
+
+**Two: the command-source seam was agreed on neither side.** [PLAN.md](PLAN.md) said *"your `docs/ARCHITECTURE.mmd` already declares exactly this ... so this seam is agreed on both sides"*.
+
+| side | what it actually had |
+|---|---|
+| theirs | `Input` ABC with one method, `is_available()`. Nothing about how a command is read |
+| ours | a working `TwistReader.read()` returning six numbers. No declared interface at all |
+
+⛔ **So the plan told each side the other had finished it.** Corrected in [PLAN.md](PLAN.md) Phase C, which now names what is on each side.
+
+⭐⭐ **And their directory layout already made the decision that matters.** `inputs/policy.py` and `inputs/mcap_recording.py` sitting beside `inputs/spacemouse.py` says a trained policy and a replayed recording are both command sources. That is the right call, it is what makes Phase E small, and it is what `seams.py::CommandSource` describes. **Their half is discovery, ours is reading, and neither side had both.**
+
+### 77.3 ⚠️⭐⭐ TWO THINGS TO TELL THEM ABOUT THEIR CAMERA FRAMEWORK, WHICH THEY ARE WRITING NOW
+
+`feature/camera-framework` is **4 commits ahead of their main and 0 behind**, so it is their active branch. Their `Camera` ABC is `is_available()`, `connect()`, `read() -> Frame`, `close()`.
+
+- ⛔ **`read()` is a blocking pull.** Called once per pass of a control loop, the loop then runs at the camera's frame rate. [§21](FINDINGS.md) is this repo's measurement from getting that wrong: **6 pictures a second**. Their device interface is fine; something has to be between it and the loop, and here that is one reader thread per camera keeping only the newest picture.
+- ⛔ **Their `Frame` has no timestamp**, though its docstring says *"combined with a timestamp"*. The episode export joins pictures to control ticks by nearest timestamp ([§71.2](FINDINGS.md)), so a picture without one cannot be joined to a robot state.
+
+⭐ **Said plainly because it is true: their repo declared the interfaces and left the bodies empty, and this one wrote the bodies and declared no interfaces.** Neither approach is wrong and the two halves are what has to meet.
+
+⚠️⭐ **AND THE TIME-SENSITIVE PART.** `julien/yam-teleop-wip` is **8 commits behind their main** and its tip `834c876` predates all of [§76](FINDINGS.md). **So while they write a camera framework, the [PLAN.md](PLAN.md) on the branch they read has none of the four camera measurements in it.** ⬜ Pushing needs his word every time ([§4](HANDOFF.md) rule 9), so it is [§77.6](FINDINGS.md)'s open item.
+
+### 77.4 ✅⭐⭐ HIS PERFORMANCE QUESTION, AND THE PREMISE IN IT WAS WRONG
+
+He asked: *"does the 100Hz robot loop really have to be the same loop used for the camera reading and compression, if we only manage less than 90 Hz?"*
+
+⛔ **The loop is not slow because of the cameras.** [§31.1](FINDINGS.md) measured about **87 Hz before any camera code existed**, and 83-84 Hz was seen on the Mac with the cameras' share never isolated. Reading and compressing are already on their own threads; the loop passes a reference.
+
+⭐ **The measurements are in [PERFORMANCE.md](PERFORMANCE.md)** and this section deliberately does not copy them ([§33.3](FINDINGS.md): a written number is a cache with no invalidation). The three that changed the answer:
+
+- compressing one 1280x720 picture costs **1.4 ms**, so three cameras at 30/s need about **0.13 s of compression per second**. Not a load.
+- the arm's own following delay is **0.033 s**, a 30 Hz limit, so 83 Hz already has about three times the headroom anything measured needs.
+- quality 90 against quality 75, compared **at the 224x224 size the training format uses**, differ by **RMSE 1.39 of 255**. Half a percent, for a file 1.75 times larger.
+
+⭐ **So the honest answer to "how could this be done differently to drastically improve performance" is that there is no performance problem**, and the two levers that would move numbers are the compression quality and the capture size. Both change the recorded data, so both are his.
+
+⚠️ **What is genuinely unmeasured, and it is the one thing worth measuring next:** the **worst single loop pass**. The average says the loop is fine. Jitter is what separating processes would fix, and nobody has ever looked at it.
+
+### 77.5 ⛔⭐ THE `*` AGAINST `**` MISTAKE, MADE TWICE IN ONE DAY, IN TWO DIFFERENT FILES
+
+**First**, in `scripts/check_style.py`: stripping list markers with `lstrip("-*+0123456789. ")` also removed the `**` of a fully bold line, so 24 clean lines were reported as faults.
+
+**Second**, hours later, in the script transforming bold labels in the new documents: `line.lstrip().startswith("*")` is true of `**Label**`, so the transformation skipped every paragraph it was written for.
+
+⭐ **The rule, and it is worth carrying:** a bullet marker is `-`, `*` or `+` **followed by a space**. Bold is `**` with no space. Any test that does not require the space will treat bold as a list marker. ⚠️ Knowing this in the morning did not prevent it in the afternoon, which is the argument for the check rather than the memory.
+
+⭐ **Two more real false positives in `check_prose.py` were found the same way**, both by running it on documents it had never seen:
+
+- **`-v` capped its output at 40 lines silently**, so a diff of two verbose runs came out balanced while the count had risen by one. A silent cap inside a reporting tool.
+- **A table row inside a block quote was judged as prose**, because the quote marker was stripped *after* the line's type was decided. This repo puts its most important tables inside block quotes, and one came out as a 173-word "sentence".
+
+### 77.6 ⬜⭐ WHAT IS OPEN AFTER THIS SESSION — supersedes [§76.14](FINDINGS.md)
+
+⭐ **Two numbers to compare against:** `uv run checks/run_tests.py` → **831/831 across 40 files**. `uv run checks/run_falsifiers.py` → **CATCH TOTAL 71/71 across 5**. Links 1653/1653. All seven of his documents at or under their readability ceiling.
+
+**His, and the first is new:**
+
+1. ⬜⭐⭐ **Push to `julien/yam-teleop-wip`?** It is 8 behind their main and three days stale, so his friends read a [PLAN.md](PLAN.md) with none of [§76](FINDINGS.md) in it while writing a camera framework that four of those findings are about ([§77.3](FINDINGS.md)). ⛔ Needs his word every time.
+2. ⛔ **One camera-carrying recording on the station** with the fixed code. Needs the arms, which were unplugged on 2026-08-19.
+3. ⭐ **The frame-rate against brightness decision** ([§76.16](FINDINGS.md)), before real data is collected.
+4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9).
+5. **Frame the top camera at the workspace** ([§73.2](FINDINGS.md)).
+6. **From the team: the C4 loader check.** ⛔ The one thing no interface can exist for, and the shortest path to a trained policy runs through it ([BRIDGE.md](BRIDGE.md) section 7).
+7. ⬜ Whether to build a librealsense capture backend for depth ([§76.10](FINDINGS.md)).
+
+**Not his, hardware-free, and now including two documentation items:**
+
+- ⬜ **`docs/COMMANDS.md` at 117 and `docs/LINUX.md` at 44 have never had a reading pass.** ⚠️ Do not read those counts as "117 metaphors": they are mechanical hits, mostly bold labels run into a sentence. The metaphors in both are gone.
+- ⬜ **The worst single loop pass is unmeasured** ([§77.4](FINDINGS.md)). It is the number that would decide whether separating the camera process is worth anything.
+- ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).

@@ -2,7 +2,7 @@
 
 > **Who this is for:** the team rebuilding the bimanual YAM station from scratch. Julien's ruling ([FINDINGS §67.0](FINDINGS.md)): this repo is the finished walkthrough, you build the real one. "The walkthrough" means exactly that — every feature was built once here, proven on the real arms, and written up, so that your build starts from answers instead of from the same surprises.
 >
-> **How to use it:** read this file once, top to bottom. It takes about twenty minutes. It follows the phases A to E from your own setup guide, [Setup-Anleitung.md](Setup-Anleitung.md), and for each phase it says three things: what the walkthrough proved, where reality disagreed with the guide, and which trap will bite you first. Work packages you can assign are in §3. Every claim links to its evidence in [FINDINGS.md](FINDINGS.md) instead of copying it, so this file stays short and the evidence stays in one place. One level below this plan sits [ARCHITECTURE.md](ARCHITECTURE.md): how the walkthrough's code is shaped, the five rules behind the shapes, and where every module and its tests live.
+> **How to use it:** read this file once, top to bottom. It takes about twenty minutes. It follows the phases A to E from your own setup guide, [Setup-Anleitung.md](Setup-Anleitung.md). For each phase it says three things: what the walkthrough proved, where reality disagreed with the guide, and the mistake you are most likely to make first. Work packages you can assign are in §3. Every claim links to its evidence in [FINDINGS.md](FINDINGS.md) instead of copying it, so this file stays short and the evidence stays in one place. One level below this plan is [ARCHITECTURE.md](ARCHITECTURE.md): how the walkthrough's code is shaped, the five rules behind the shapes, and where every module and its tests live.
 >
 > **Status:** ratified by Julien on 2026-08-19. This is the team's deliverable. The inputs that are still open (the task, the model choice, the C4 check) are listed in §4 as decisions, not blockers. Everything this plan describes exists and ran on the physical arms, including episodes with camera images ([FINDINGS §72.0](FINDINGS.md)) and the automated collection loop ([FINDINGS §73.0](FINDINGS.md)). Since 2026-08-19 the walkthrough also carries a **Linux device layer** and a **C4 training-set writer with its own verifier**, both described where they belong below.
 
@@ -30,7 +30,14 @@ The walkthrough proved the whole loop on macOS with two YAM arms. That covers ni
 
 ### Phase A (OS, drivers, ABC repo)
 
-The walkthrough deviated here completely and on purpose: everything ran on macOS, which the vendor SDK does not support. The workaround turned out to be one argument deep, not architectural (`bustype="gs_usb"` instead of libusb — [HISTORY §2.1](HISTORY.md)). For your rebuild on Ubuntu, Phase A applies as written, and none of the macOS workarounds travel. One thing does travel: the [README](../README.md) bring-up checklist. It holds the motor LED table, the order for reading fault codes, which recovery needs a USB replug and which needs a mains cycle, and the gripper's per-session encoder shift. All of that is hardware truth, independent of the OS.
+This phase went differently here, on purpose: everything ran on macOS, which the vendor SDK does not support. The fix was one argument, not a redesign: `bustype="gs_usb"` instead of libusb ([HISTORY §2.1](HISTORY.md)).
+
+For your rebuild on Ubuntu, Phase A applies as your guide writes it, and none of the macOS workarounds apply to you. One thing does apply: the [README](../README.md) bring-up checklist. It contains four things, all of them true of the hardware whatever operating system you run:
+>
+> - the motor LED table
+> - the order for reading fault codes
+> - which recovery needs a USB replug, and which needs a mains power cycle
+> - the gripper's per-session encoder shift
 
 ### Phase B (hardware and physical setup) — mostly proven, three corrections
 
@@ -45,7 +52,7 @@ The walkthrough deviated here completely and on purpose: everything ran on macOS
 - ⛔ **A D405 publishes three capture nodes on Linux and the FIRST one is depth.** `/dev/video2` is `Z16` depth, `/dev/video4` is infrared, `/dev/video6` is colour. Pick the node by reading its pixel formats, never by taking the first: opening depth and storing it as colour is a dataset that trains wrongly and raises nothing. Watch the ordering too, because the infrared node also offers `UYVY` ([FINDINGS §75.7](FINDINGS.md)).
 - ⛔ **Ask for MJPG, and ask for it BEFORE you ask for the size.** A C920 at 1280x720 in uncompressed YUYV is capped at **10.01 fps by its own firmware**; in MJPG the same camera does **29.92 fps**. YUYV is the format it advertises first, so it wins by default. Measured on Ubuntu 2026-08-19 ([FINDINGS §76.1](FINDINGS.md)). ⚠️ macOS ignores the request and chooses well by itself, which is exactly why this went unnoticed until Linux: the code that skipped the codec request looked fine on the machine it was written on.
 - ⛔ **A camera can accept a size and then deliver nothing at it, with no error anywhere.** The D405's colour node advertises 1280x720 at 30 fps, accepts it, reports it back, and on Ubuntu it delivered **zero frames**. At 848x480 and below the same node streams at up to 89.88 fps. `v4l2-ctl --stream-mmap` got nothing either, so this sits below OpenCV; the USB link is 5 Gbit/s, so it is not bandwidth. ⚠️ **And it is INTERMITTENT rather than dead**: the same mode was measured dead twice and alive twice within four hours ([FINDINGS §76.2](FINDINGS.md)). ⭐ **On macOS the pattern is inverse**: 1280x720 works there and 848x480 is broken. **A camera's usable modes belong to the camera plus the platform, and they can come and go.** So: read a real frame at open, take the size from that frame, and step the size down until one delivers. Never trust `cap.get` after `cap.set`, because it reports the request. ⚠️ Nothing needs 1280x720 from a wrist camera anyway, because the C4 export shrinks every view to 224x224.
-- ⛔⛔ THE ROOM CAN HALVE YOUR FRAME RATE, and the driver will keep reporting 30. V4L2 has a control called `exposure_dynamic_framerate`. When it is on, the camera may lengthen its exposure by slowing itself down. Measured on one C920, same size and format, hours apart: 29.92 fps in daylight and 14.98 fps in a dim room. Its kernel default is 0 and the station's camera reads 1 ([FINDINGS §76.16](FINDINGS.md)). ⛔ This is worse for a dataset than a consistently slow camera. Two demonstrations of one task, recorded morning and evening, carry twice as many images as each other and nothing in the file records why. That is a hidden variable in your training set. ⭐ Read the control at camera open and say so. Whether to turn it off is a real trade: a steady rate costs you darker pictures. `v4l2-ctl -d /dev/videoN --set-ctrl=exposure_dynamic_framerate=0`.
+- ⛔⛔ THE ROOM CAN HALVE YOUR FRAME RATE, and the driver will keep reporting 30. V4L2 has a control called `exposure_dynamic_framerate`. When it is on, the camera may lengthen its exposure by slowing itself down. Measured on one C920, same size and format, hours apart: 29.92 fps in daylight and 14.98 fps in a dim room. Its kernel default is 0 and the station's camera reads 1 ([FINDINGS §76.16](FINDINGS.md)). ⛔ This is worse for a dataset than a consistently slow camera. Two demonstrations of one task, recorded morning and evening, contain twice as many images as each other, and nothing in the file records why. That is a hidden variable in your training set. ⭐ Read the control at camera open and say so. Whether to turn it off is a real trade: a steady rate costs you darker pictures. `v4l2-ctl -d /dev/videoN --set-ctrl=exposure_dynamic_framerate=0`.
 - ⭐⭐ librealsense is a pip wheel rather than an apt install, and it needs no root at all. `uv run --with pyrealsense2` sees the camera in seconds with nothing compiled and nothing installed system-wide. Measured on Ubuntu 24.04: colour at 1280x720 at a steady 30.0 fps where plain V4L2 is intermittent, plus depth (z16) up to 1280x720 streaming alongside it ([FINDINGS §76.10](FINDINGS.md)). ⛔ If you use it, key camera identity on `asic_serial_number` and never on `serial_number`. The same D405 reports `260522273162` for one and `260323072846` for the other, and the USB descriptor, `/dev/v4l/by-id` and this walkthrough's recordings all use the ASIC one. Getting that wrong renames every camera in your dataset and reads on screen as "camera not attached" ([FINDINGS §76.11](FINDINGS.md)).
 - The C920 reports an empty USB serial ([FINDINGS §70.6](FINDINGS.md)), so a config that keys every camera by serial fails for it. Key the D405s by serial and the C920 by model name. Two identical D405s cannot be told apart by anything they capture. The identification chain that solves this without touching a lens: a USB camera's AVFoundation uniqueID is its location ID, vendor ID and product ID packed into one number, so serial to uniqueID resolves with no root access ([FINDINGS §70.15](FINDINGS.md), `yam/cameras/identity.py`). Only uniqueID to OpenCV index still needs one confirmation per port arrangement. On Ubuntu the whole question dissolves, because librealsense reads serials directly.
 
@@ -57,7 +64,11 @@ The walkthrough deviated here completely and on purpose: everything ran on macOS
 
 **IK chain (C1).** Proven with mink and MuJoCo at 90 Hz. Two IK solves cost 0.1 ms against a 10 ms budget. The guide's advice stands: use ABC's `yam.xml` as the robot model. One lesson worth reading even if nothing is broken: a pure rotation once dragged the tool point 44 cm sideways, and the fix explains how the solver thinks ([FINDINGS §18](FINDINGS.md)).
 
-**Robot loop (C2).** The shape that worked: the class decides, the script narrates. One `ArmSession` object per arm holds every decision; the loop reads inputs, calls methods and prints ([ROADMAP §9.5](ROADMAP.md)). On top of that, adopt your own policy-as-an-input idea: everything that produces commands (puck, keyboard, policy) sits behind one interface ([ROADMAP §10.6](ROADMAP.md)). Your `docs/ARCHITECTURE.mmd` already declares exactly this, and your `put_bottles` simulation runs beside it, so this seam is agreed on both sides.
+**Robot loop (C2).** The shape that worked: the class decides, the script narrates. One `ArmSession` object per arm holds every decision; the loop reads inputs, calls methods and prints ([ROADMAP §9.5](ROADMAP.md)). On top of that, adopt your own policy-as-an-input idea: everything that produces commands (puck, keyboard, policy) is reached through one interface.
+
+⛔ Here is the state of that interface on 2026-08-20. This plan used to claim it was finished on both sides, and it was finished on neither. Your `inputs/` directory names `policy.py` and `mcap_recording.py` beside `spacemouse.py`, which is the design decision that matters: a trained policy and a replayed recording are both command sources. Your `Input` base class then declares one method, `is_available()`, and says nothing about how a command is read. This repo had the opposite problem: a working `TwistReader.read()` returning six numbers, and no declared interface at all until 2026-08-20.
+
+⭐ So the two halves fit together, and neither side had both. The reading half is now declared here as `src/yam/seams.py::CommandSource`, one method, and `tests/test_seams.py` checks that the working class still satisfies it. What is left to agree is whether that method signature is the one you want. Once it is agreed, a policy driving the arms is a small piece of work rather than a design question. [BRIDGE.md](BRIDGE.md) section 5 is the whole comparison.
 
 **The speed model, measured once so nobody re-measures it wrong.**
 
@@ -68,7 +79,7 @@ The walkthrough deviated here completely and on purpose: everything ran on macOS
 
 **Recorder (C3): built and confirmed.** Every arm records into one timeline (ABC's 14-value shape). Provenance is stamped in two independent fields, so a simulated recording can never pass as real ([FINDINGS §60.2](FINDINGS.md)). Labels are marked while driving ([FINDINGS §70.10](FINDINGS.md)), grabs run through the jaw pause ([FINDINGS §70.5](FINDINGS.md)), and composite runs chain waypoints and recordings ([FINDINGS §70.12](FINDINGS.md)). The collection method is Julien's ruling after driving both: most demonstrations by hand-guiding and replay, with the SpaceMouse kept for corrections. Executing a task with the puck is hard; resetting the scene is trivial ([ROADMAP §6.6](ROADMAP.md)).
 
-**Export (C3/C4): the exporter writes the contract as written.** Exact topic names and dimensions, the 33,333,333 ns tick, joint-space actions, and the arm sides never defaulted ([FINDINGS §70.13](FINDINGS.md)). Camera frames ride the same ticks: the session saves JPEGs beside every recording, with dropped frames counted rather than silent, and the exporter joins them to the ticks by nearest timestamp. The camera-to-position mapping is as mandatory as the sides ([FINDINGS §71.2](FINDINGS.md)). This ran on the arms on 2026-08-19: camera-carrying recordings at 30 fps with zero drops, one exported as an episode with images, and all three cameras held 30 fps together on one USB tree ([FINDINGS §71.4](FINDINGS.md)). Two things stand between that and Gate C. First, a three-camera run inside a live session (the capture side is proven; the cost of three JPEG encoders inside the loop is the one open number). Second, C4 itself: convert a mini-sample and verify it against ABC's loader before collecting anything you intend to keep. The guide's warning is right — encoding mistakes are only repairable by recollecting. One trap we hit so you do not have to ([FINDINGS §71.5](FINDINGS.md)): a stale camera-index cache pointed both wrist cameras at the webcam, silently. Verify the model of a cache-resolved camera at open, every time.
+**Export (C3/C4): the exporter writes the contract as written.** Exact topic names and dimensions, the 33,333,333 ns tick, joint-space actions, and the arm sides never defaulted ([FINDINGS §70.13](FINDINGS.md)). Camera frames use the same ticks. The session saves JPEGs beside every recording, and dropped frames are counted rather than silent. The exporter joins them to the ticks by nearest timestamp. The camera-to-position mapping is as mandatory as the sides ([FINDINGS §71.2](FINDINGS.md)). This ran on the arms on 2026-08-19: camera-carrying recordings at 30 fps with zero drops, one exported as an episode with images, and all three cameras held 30 fps together on one USB tree ([FINDINGS §71.4](FINDINGS.md)). Two things stand between that and Gate C. First, a three-camera run inside a live session (the capture side is proven; the cost of three JPEG encoders inside the loop is the one open number). Second, C4 itself: convert a mini-sample and verify it against ABC's loader before collecting anything you intend to keep. The guide's warning is right — encoding mistakes are only repairable by recollecting. One trap we hit so you do not have to ([FINDINGS §71.5](FINDINGS.md)): a stale camera-index cache pointed both wrist cameras at the webcam, silently. Verify the model of a cache-resolved camera at open, every time.
 
 ### Phase D (training) and Phase E (deployment)
 
@@ -76,7 +87,7 @@ The walkthrough did not touch them, on purpose ([ROADMAP: deliberately-not-doing
 
 ## 3. The work packages
 
-Each package names its deliverable, what you can lift from this repo versus what you rebuild, and the trap that bites first. "Lift" means the logic and its tests translate nearly verbatim: plain Python on numpy, no macOS dependence unless the row says so.
+Each package names its deliverable, what you can copy from this repo, what you rebuild, and the mistake you are most likely to make first. "Lift" means the logic and its tests translate nearly verbatim: plain Python on numpy, no macOS dependence unless the row says so.
 
 | WP | Deliverable | Lift from here | The trap |
 |---|---|---|---|
@@ -96,7 +107,7 @@ Each package names its deliverable, what you can lift from this repo versus what
 
 - Joint-space actions. ABC's own choice, and what we command anyway.
 - Demonstrations mainly by guide-and-replay, with per-waypoint variation tolerance ([ROADMAP §6.6](ROADMAP.md)).
-- Collision avoidance stays manual at this bench spacing. Julien's ruling; bounding spheres cry wolf at 0.70 m ([FINDINGS §60.3](FINDINGS.md)).
+- Collision avoidance stays manual at this bench spacing. Julien's ruling; bounding spheres report a collision that is not one at 0.70 m ([FINDINGS §60.3](FINDINGS.md)).
 - Velocity feedforward capped at gain 1 ([FINDINGS §68.6](FINDINGS.md)).
 - The gripper's ±2π encoder shift is per-session state, never a config value ([FINDINGS §40](FINDINGS.md)).
 - No ZMQ for one station. Your guide's own advice, confirmed by one process driving both arms.
@@ -106,10 +117,10 @@ Each package names its deliverable, what you can lift from this repo versus what
 
 - The task. Julien and the team. Deliberately open — everything here was built task-agnostic.
 - The model. Probably diffusion/DiT; papers with the team.
-- The noise bound for varied replays. Julien, about two minutes ([ROADMAP §8.2](ROADMAP.md) item 9 carries the recommendation).
+- The noise bound for varied replays. Julien, about two minutes ([ROADMAP §8.2](ROADMAP.md) item 9 has the recommendation).
 - Raising kp for sub-centimetre grabs. Julien, a bench decision (item 17).
 - Camera mounts, aim and calibration. Deferred by ruling until the layout is final ([ROADMAP §8.4](ROADMAP.md)). Note that the walkthrough's C920 currently films a laptop lid, so its episodes are pipeline proofs, never data ([FINDINGS §72.6](FINDINGS.md)).
-- The gripper unit in the dataset. Team plus C4: your `Observation` carries the gripper in metres, this walkthrough's episodes carry it normalised 0 to 1, and C3 gives the end-effector dimension without a unit. ABC's `export_mcap.py` adjudicates, and whoever loses converts ([ROADMAP §10.6](ROADMAP.md)).
+- The gripper unit in the dataset. Team plus C4: your `Observation` stores the gripper in metres, this walkthrough's episodes store it normalised from 0 to 1, and C3 gives the end-effector dimension without a unit. ABC's `export_mcap.py` adjudicates, and whoever loses converts ([ROADMAP §10.6](ROADMAP.md)).
 
 ## 5. The method chapter — how this stack fails, and the defences that worked
 
@@ -117,7 +128,7 @@ Every defect that mattered produced a confident, plausible, wrong answer, and no
 
 1. Check values for plausibility, never just for the absence of an exception. Prefer a test that could falsify the claim over one that agrees with it.
 2. A written number is a cache with no invalidation. Replace claims with the command that recomputes them (`check_rig`, `check_recordings`, `check_arms_match`, and so on). This plan follows its own rule: it points, it does not copy.
-3. Every checker gets a falsifier that feeds it known-broken input and counts the catches. A green run plus a stable catch count is evidence. A green run alone is not. Three real disarmings were caught this way, one of them live in the middle of a refactor.
+3. Every checker gets a falsifier that feeds it known-broken input and counts the catches. A green run plus a stable catch count is evidence. A green run alone is not. Three times a checker had stopped detecting anything, and this is how each was found. One of them while a refactor was in progress.
 4. One suite, one command, one total (`checks/run_tests.py`). Two test files sat red for days because nothing ran everything ([FINDINGS §67.5](FINDINGS.md)). The total is the catch counter for the suite itself: a total that drops while staying green means a check was disarmed.
 5. Simulate the whole loop, not just the units. The lagging fake arm plus a scripted session caught what 616 unit tests could not.
 6. A verifier bounds errors of commission, never omission ([FINDINGS §50.2](FINDINGS.md)). Reading the code against its own claims found the defects no checker could. Budget reading time; it is where the expensive bugs died.
@@ -132,3 +143,13 @@ Every defect that mattered produced a confident, plausible, wrong answer, and no
 - Configurable dwell times for grabs. The jaws-only leg is the pause ([ROADMAP §6.6.2](ROADMAP.md)).
 - Index-based device selection of any kind.
 - Trusting `system_profiler` for USB facts on macOS ([FINDINGS §23](FINDINGS.md)).
+
+---
+
+**Where to go next**
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) for how the walkthrough's code is shaped, and section 2 for every word used here
+- [BRIDGE.md](BRIDGE.md) for how this maps onto your own repo, branch by branch, and what still has to meet
+- [PERFORMANCE.md](PERFORMANCE.md) before you decide a capture size or a compression quality
+- [COMMANDS.md](COMMANDS.md) for every command and key in the walkthrough
+- [FINDINGS.md](FINDINGS.md) for the evidence behind any claim above, by section number

@@ -14,7 +14,7 @@
 > 2. The words you need
 > 3. The whole thing in one picture
 > 4. What happens ninety times a second
-> 5. The safety layer, and why it sits at the very bottom
+> 5. The safety layer, and why every command passes through it last
 > 6. Where the decisions live
 > 7. How the software picks a device
 > 8. From a movement to a training file
@@ -140,7 +140,7 @@ Fourteen measured joint angles get added to the recording's table, seven for eac
 
 One detail of step 6 matters more than it looks. The numbers written into a recording are the angles the arm actually reached, read back from the motors. They are not the angles the program asked for. Those two are never quite the same. Writing down the wish would produce a dataset describing a robot that does not exist.
 
-## 5. The safety layer, and why it sits at the very bottom
+## 5. The safety layer, and why every command passes through it last
 
 In August 2026 an arm snapped into a fast unwanted movement. Nobody had sent a bad command on purpose. The cause was a stale variable. The code still remembered where the arm had been minutes earlier. When teleop was re-entered, it aimed at that old pose in a single jump.
 
@@ -148,7 +148,7 @@ Julien's conclusion at the time shaped the whole design:
 
 > "any type of safety would have to go lower than that."
 
-The point is that no amount of care inside the driving code protects you from a bug in the driving code. The guard has to sit somewhere the buggy code cannot reach around. So every command from every mode passes through one small object called `SafeRobot`, and it applies two limits.
+The point is that no amount of care inside the driving code protects you from a bug in the driving code. The guard has to be somewhere the buggy code cannot bypass. So every command from every mode passes through one small object called `SafeRobot`, and it applies two limits.
 
 **Limit one: how fast the command may change.**
 
@@ -162,7 +162,7 @@ This second limit deserves a worked example, because what it does is easy to gue
 
 Say you ask the arm to move 1.0 radian. On the first pass the command may sit at most 0.25 rad ahead of the arm, so it moves 0.25 rad and stops there. The arm starts following. Once the arm has covered 0.1 rad, the command is allowed forward to 0.35 rad. The arm follows again, the command creeps forward again. The motion becomes a ratchet. The arm moves, the command advances, repeat. It arrives in the end, and no single step is ever large.
 
-Now say the arm is blocked, because a jaw has closed on something solid or the arm is pressed against the table. The arm stops moving, so the command stops advancing, and it sits parked 0.25 rad past the arm. The push never grows. Bounding that push is the whole reason this limit exists.
+Now say the arm is blocked, because a jaw has closed on something solid or the arm is pressed against the table. The arm stops moving, so the command stops advancing, and it stays 0.25 rad past the arm. The push never grows. Bounding that push is the whole reason this limit exists.
 
 That also explains why the limit is deliberately loose instead of tight. The motors push in proportion to the gap between command and reality. Squeeze that gap to nothing and you also squeeze away the force the arm needs to overcome its own friction, and the arm goes sluggish.
 
@@ -203,9 +203,9 @@ The reason for the split is simple. A class with no hardware in it can be tested
 
 This rule was broken once, and the way it broke is a good illustration. The tested park code existed and was correct. The script also had its own older copy of park logic, and that copy was the one actually running. Nobody noticed, because the tests were green. They were testing code that nothing was using. Merging the two copies revealed two real bugs that had been live the whole time.
 
-There is a second rule about the loop. It is narrower, and it has paid for itself twice. State only advances in the branch where something arrives or completes. A park handing over to a playback happens in the branch where the park arrives. The next leg of a multi-step run starts in the branch where the previous leg finishes. It never happens in a key-press branch, and it never happens on a timer.
+There is a second rule about the loop. It is narrower, and it has caught two real bugs. State only advances in the branch where something arrives or completes. A park handing over to a playback happens in the branch where the park arrives. The next leg of a multi-step run starts in the branch where the previous leg finishes. It never happens in a key-press branch, and it never happens on a timer.
 
-On top of that, every park now carries a note saying what it is for, so an arrival can only be credited to the thing it was actually for. Before that note existed, one waypoint's arrival got credited to a playback that had been set up in the same keystroke. The arm then played a recording starting 1.28 radians away from the correct pose.
+On top of that, every park now records what it is for, so an arrival can only be credited to the thing it was actually for. Before that note existed, one waypoint's arrival got credited to a playback that had been set up in the same keystroke. The arm then played a recording starting 1.28 radians away from the correct pose.
 
 ## 7. How the software picks a device
 
@@ -220,9 +220,9 @@ So nothing here is ever selected by its position in a list. Every device is iden
 | the webcam (Logitech C920) | by model name | it reports an empty serial number, so keying it by serial cannot work |
 | the pucks | by a wiggle gesture at startup | they also report empty serials, so the program asks you to move the one you want and assigns whichever moves |
 
-Cameras carry an extra trap on top of that, and it is the kind of mistake that produces a broken dataset with no error message anywhere. A D405 does not appear as one camera. On the Linux station it publishes six video devices, and the first one is the depth stream instead of the colour stream. Open the first one, save it as if it were a photograph, and you have a dataset of depth maps labelled as pictures. Nothing would complain. So the software reads which pixel formats each device offers, identifies the colour one from that, and refuses to guess when it cannot read the formats at all.
+Cameras have one more way to go wrong, and it produces a broken dataset with no error message anywhere. A D405 does not appear as one camera. On the Linux station it publishes six video devices, and the first one is the depth stream instead of the colour stream. Open the first one, save it as if it were a photograph, and you have a dataset of depth maps labelled as pictures. Nothing would complain. So the software reads which pixel formats each device offers, identifies the colour one from that, and refuses to guess when it cannot read the formats at all.
 
-The same idea covers a remembered camera number. There is a small cache file mapping serials to device numbers, because resolving them from scratch takes a moment. A cached number is checked against the camera's model before it is trusted, every single time. That check earned its place immediately. Two stale entries were pointing both wrist cameras at the webcam.
+The same idea covers a remembered camera number. There is a small cache file mapping serials to device numbers, because resolving them from scratch takes a moment. A cached number is checked against the camera's model before it is trusted, every single time. That check caught something the first time it ran. Two stale entries were pointing both wrist cameras at the webcam.
 
 ## 8. From a movement to a training file
 
@@ -238,11 +238,11 @@ The cameras open first, each one identified and checked as described in section 
 
 **2. Start recording with `w`, and drive.**
 
-Every pass adds fourteen measured joint angles to the recording's table. Every camera hands its newest picture to its own writer thread. You can drive with the puck (`t`), hand-guide the arm (`g`), or let a saved waypoint sequence run (`p 1 2 3` then Enter). The recording carries straight through all of that, and it notes which modes it passed through. If a stretch goes badly you press `k`, and that span is marked inside the file as bad.
+Every pass adds fourteen measured joint angles to the recording's table. Every camera hands its newest picture to its own writer thread. You can drive with the puck (`t`), hand-guide the arm (`g`), or let a saved waypoint sequence run (`p 1 2 3` then Enter). The recording continues through all of that, and it records which modes it passed through. If a stretch goes badly you press `k`, and that span is marked inside the file as bad.
 
 **3. Stop with `w`, then press a digit to save.**
 
-The recording stops on the same line of code that stops the sampler, so no time accumulates while the save prompt waits for an answer. That bug existed once, and every file recorded before the fix carries seconds of dead time at the end.
+The recording stops on the same line of code that stops the sampler, so no time accumulates while the save prompt waits for an answer. That bug existed once, and every file recorded before the fix has seconds of dead time at the end.
 
 Pressing a digit writes `recordings/<slot>.json` and moves the pictures to `recordings/frames/<slot>/`. The file gets the git commit, the timestamp, the modes it passed through, and the per-camera picture counts stamped into it.
 
@@ -287,7 +287,7 @@ This re-opens the finished training directory and reads it back. It checks four 
 - whether the actions follow the stated rule
 - every property of the video the training loader depends on
 
-The C4 video's encoding is strict, because the loader calculates where frame number k sits in the file instead of decoding the video to find it. Encode it loosely and that calculation lands in the wrong place.
+The C4 video's encoding is strict, because the loader calculates where frame number k is in the file instead of decoding the video to find it. Encode it loosely and that calculation lands in the wrong place.
 
 One verification cannot be done on this bench, and it is honest to name it. Only the team's own loader can say whether a C4 directory is truly acceptable to it.
 
@@ -305,11 +305,11 @@ A refusal costs somebody a retry. A warning costs whatever the hazard was, becau
 
 **Rule 3. A number written into a document goes stale, and nothing tells you.**
 
-So live facts live in commands, and documents point at the command instead of copying its answer. This has been measured seven separate times in this repo. Every document that wrote a number down was wrong within days. That is why section 8 gives you commands to run instead of tables of results, and why you will not find a test count anywhere in this file.
+So a fact that changes is answered by a command, and documents name the command instead of copying its answer. This has been measured seven separate times in this repo. Every document that wrote a number down was wrong within days. That is why section 8 gives you commands to run instead of tables of results, and why you will not find a test count anywhere in this file.
 
 **Rule 4. A checker should have something that deliberately breaks it.**
 
-A checker that passes might be working, or it might have quietly stopped checking anything. You cannot tell which from a green run. So a checker gets a partner script that feeds it known-broken input and counts how many faults it catches. A green run plus a steady catch count is evidence. A green run on its own went blind three times here without anyone noticing. List `checks/falsify_*.py` to see which checkers have a partner. Some of them still have none.
+A checker that passes might be working, or it might have quietly stopped checking anything. You cannot tell which from a green run. So a checker gets a partner script that feeds it known-broken input and counts how many faults it catches. A green run plus a steady catch count is evidence. Three times here, a checker stopped detecting anything and kept passing, and nobody noticed. List `checks/falsify_*.py` to see which checkers have a partner. Some of them still have none.
 
 **Rule 5. Time in front of the hardware is the scarcest thing here.**
 
@@ -361,3 +361,13 @@ The library itself turns out to be easy: one command, no administrator password,
 ---
 
 *Written 2026-08-19, then rewritten the same day for a reader with no prior context. When a shape described here changes, change this file in the same commit. A map that is out of date is worse than no map, because it still reads as authoritative.*
+
+---
+
+**Where to go next**
+
+- [PLAN.md](PLAN.md) to build the real station from this one
+- [BRIDGE.md](BRIDGE.md) to see how this repo maps onto the team's repo
+- [PERFORMANCE.md](PERFORMANCE.md) for what is worth making faster, with the measurements
+- [COMMANDS.md](COMMANDS.md) when you want to actually drive the arms
+- [FINDINGS.md](FINDINGS.md) when you want the evidence behind a claim here. It is written for agents and it is dense

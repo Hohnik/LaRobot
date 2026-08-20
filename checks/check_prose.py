@@ -19,6 +19,7 @@
 - **Sentences over 30 words.** A tired reader must parse it once, left to right, without backtracking.
 - **Bold inside a sentence.** Bold a whole line or a heading, never a phrase mid-sentence.
 - **A few words he named**: `precisely`, `genuinely`, `load-bearing`, `the honest answer`, `surface` as a verb.
+- ⭐ **A metaphor standing in for a plain fact**, added 2026-08-20: `travel` for apply, `holds`/`carries` for contains, `bites` for the mistake you will make, `lives in` for is defined in, `rides` for is stored, `sits` for is, `earns its place` for caught a defect, `cries wolf` for reports non-faults, `goes blind` for stops detecting. Each report names the plain replacement, because a message that only says "wrong" makes every reader invent a different fix.
 
 ⛔ NOT ENFORCED, on purpose, and the reason matters. Mind Understanding's `scripts/check_style.py` is the canonical copy of these rules and it lints **chat drafts**, where `⭐`, `⛔` and ALL CAPS are shouting. In a repo file they are navigation, and his rule says so explicitly: *"Repo files keep their own conventions. This rule is about chat only."* So decoration characters and capitalised acronyms are left alone here. ⚠️ A checker that reports 219 faults on a healthy file is the cry-wolf failure, and this repo has met it twice already.
 
@@ -60,10 +61,12 @@ REPO = Path(__file__).resolve().parent.parent
 #: TEAM's own documents, quoted here rather than authored here, so they stay out too.
 HIS_DOCS: dict[str, int] = {
     "docs/ARCHITECTURE.md": 0,
-    "docs/PLAN.md": 40,
+    "docs/PLAN.md": 38,
     "docs/LINUX.md": 44,
     "docs/COMMANDS.md": 117,
-    "README.md": 28,
+    "docs/PERFORMANCE.md": 0,
+    "docs/BRIDGE.md": 0,
+    "README.md": 27,
 }
 
 #: ⛔ `docs/HISTORY.md` is deliberately absent. It is an ARCHIVE: the README's first two
@@ -71,6 +74,54 @@ HIS_DOCS: dict[str, int] = {
 #: "start here". Its prose is 12 days old and nobody reads it to find anything out, so
 #: holding it to a readability ceiling would be busywork on frozen text. ⚠️ It carries a
 #: 📖 REFERENCE banner saying exactly that, so nobody mistakes it for the live state.
+
+#: ⛔⭐⭐ A METAPHOR STANDING IN FOR A PLAIN FACT, with the plain word beside it. Added
+#: 2026-08-20 after he read `docs/PLAN.md`, found *"none of the macOS workarounds travel"*,
+#: and called it "unnecessary language flowering and unhelpfully worded"
+#: ([HANDOFF §4](../docs/HANDOFF.md) rule 8, fourth refinement).
+#:
+#: ⭐ Each entry carries its replacement, because a message that only says "this is wrong"
+#: makes the reader invent the fix, and different readers invent different ones.
+#:
+#: ⚠️ THIS LIST IS A FLOOR, NEVER A CEILING. It holds the metaphors seen so far. A new one
+#: will not be in it, and a clean run therefore says nothing about whether the prose is
+#: plain. That judgement is made by reading.
+#:
+#: ⚠️ Two of these have literal uses and are still listed, because in these documents they
+#: have never once been literal: `carries` has always meant "contains", and `sits` has always
+#: meant "is". If a genuinely literal use appears, phrase it another way rather than widening
+#: the list, because widening it is how a check goes quiet ([FINDINGS §59.1](../docs/FINDINGS.md)).
+FLOWERY = [
+    ("travel", "say \"apply\", \"be copied\" or \"is the same on both machines\""),
+    ("bites", "say what the mistake is"),
+    ("bite", "say what the mistake is"),
+    ("lives in", "say \"is defined in\" or \"is made in\""),
+    ("lives at", "say \"is at\""),
+    ("live in", "say \"are defined in\""),
+    ("rides", "say \"is stored in\" or \"is recorded in\""),
+    ("ride", "say \"is stored in\" or \"is recorded in\""),
+    ("earns", "say what it actually did"),
+    ("earned its place", "say what defect it caught"),
+    ("cries wolf", "say \"reports faults that are not faults\""),
+    ("cry wolf", "say \"report faults that are not faults\""),
+    ("went blind", "say \"stopped detecting anything, and still passed\""),
+    ("goes blind", "say \"stops detecting anything while still passing\""),
+    ("owes", "say what somebody still has to do"),
+    ("owed", "say what somebody still had to do"),
+    ("front door", "say which file or command it is"),
+    ("reaches around", "say \"bypasses\""),
+    ("reach around", "say \"bypass\""),
+    ("paid for itself", "say what it caught"),
+    ("wedged", "say \"stuck\" and say in what state"),
+    ("the tell", "say \"the sign\" or name the sign"),
+    ("signature failure", "say \"the failure this stack keeps producing\""),
+    ("carries", "say \"contains\", \"records\" or \"has\""),
+    ("carry", "say \"contain\", \"record\" or \"have\""),
+    ("sits", "say \"is\" and say where"),
+    ("hides", "say what is not visible, and to whom"),
+    ("buys", "say what you get"),
+    ("pays for it", "say what it costs"),
+]
 
 BANNED = [
     ("it's not", "\"it's not X, it's Y\". Say what it is."),
@@ -122,9 +173,14 @@ def prose_lines(text: str) -> list[tuple[int, str]]:
             continue
         if in_fence or not line.strip():
             continue
-        if re.match(r"^\s*(#|\|)", line) or THEMATIC_BREAK.match(line):
+        # ⛔ UNQUOTE FIRST, THEN DECIDE WHAT THE LINE IS. The quote marker used to be
+        # stripped last, so a table row inside a block quote (`> | a | b |`) was judged as
+        # prose, and this repo puts its most important tables inside block quotes. One such
+        # table was reported as a 173-word sentence. Found 2026-08-20.
+        bare = re.sub(r"^\s*>+\s*", "", line)
+        if re.match(r"^\s*(#|\|)", bare) or THEMATIC_BREAK.match(bare):
             continue
-        out.append((no, re.sub(r"^\s*>+\s*", "", line)))
+        out.append((no, bare))
     return out
 
 
@@ -145,10 +201,13 @@ def sentences(text: str) -> list[str]:
             in_fence = not in_fence
             keep.append("")
             continue
-        if in_fence or re.match(r"^\s*(#|\|)", line) or THEMATIC_BREAK.match(line):
+        # ⛔ Unquote first, same reason as `prose_lines`: a table row inside a block quote is
+        # a table row, and judging it as prose reported one table as a 173-word sentence.
+        bare = re.sub(r"^\s*>+\s*", "", line)
+        if in_fence or re.match(r"^\s*(#|\|)", bare) or THEMATIC_BREAK.match(bare):
             keep.append("")
             continue
-        keep.append(re.sub(r"^\s*>+\s*", "", line))
+        keep.append(bare)
     body = "\n".join(keep)
     for block in re.split(r"\n\s*(?:[-*+]|\d+[.)])\s+|\n\s*\n", body):
         block = re.sub(r"\s+", " ", strip_inline(block)).strip()
@@ -167,6 +226,11 @@ def faults(text: str) -> list[str]:
         for phrase, why in BANNED:
             if phrase in low:
                 out.append(f"L{no}: \"{phrase.strip()}\" — {why}")
+        for phrase, plain in FLOWERY:
+            # ⭐ Word boundaries, so "override" is not a hit for "ride" and "carrying" is
+            # not judged by the rule written for "carry".
+            if re.search(rf"\b{re.escape(phrase)}\b", low):
+                out.append(f"L{no}: \"{phrase}\" is a metaphor for a plain fact — {plain}.")
         if SURFACE_VERB.search(line):
             out.append(f"L{no}: \"surface\" as a verb. Use the ordinary word.")
         stripped = LIST_MARKER.sub("", raw).strip()

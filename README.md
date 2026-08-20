@@ -14,7 +14,35 @@
 > - Composite runs: waypoints and recorded movements in one sequence.
 > - Mirror mode (one arm follows the other), saved per-session settings, a simulator that lags like the real hardware and runs the whole loop with nothing attached, and safe-stop plus incident recording.
 >
-> **Read in this order:** this page → **[docs/PLAN.md](docs/PLAN.md)** (the rebuild plan, the deliverable this repo exists to produce) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (how the system is shaped and why, one level down from the plan) → [docs/HANDOFF.md](docs/HANDOFF.md) (the live state; its top block is always current) → [docs/FINDINGS.md](docs/FINDINGS.md) §0 (how this stack fails: by lying, never by crashing) → [docs/COMMANDS.md](docs/COMMANDS.md) (every command and key) → [docs/ROADMAP.md](docs/ROADMAP.md) (every open item, §8.2). **Running it on the Linux station: [docs/LINUX.md](docs/LINUX.md)** (the connection, the packages, and which parts of the port are proven). This page's own first two sessions are archived in [docs/HISTORY.md](docs/HISTORY.md) and are not part of that order.
+> ## Which file answers which question
+>
+> ⭐ Pick a row. You do not need to read anything else first.
+>
+> | I want to … | read | about |
+> |---|---|---|
+> | understand how the whole thing works, from nothing | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 20 min |
+> | build the real station | [docs/PLAN.md](docs/PLAN.md) | 20 min |
+> | see how this repo maps onto our team's repo, and what still has to meet | [docs/BRIDGE.md](docs/BRIDGE.md) | 10 min |
+> | drive the arms today: every command and every key | [docs/COMMANDS.md](docs/COMMANDS.md) | look up what you need |
+> | work on the Linux station | [docs/LINUX.md](docs/LINUX.md) | 10 min |
+> | know what is worth making faster, and what the numbers say | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 15 min |
+> | find out where the project stands right now | [docs/HANDOFF.md](docs/HANDOFF.md), top block only | 5 min |
+> | know why some decision was made | [docs/FINDINGS.md](docs/FINDINGS.md), by section number | look it up |
+> | see what is still open | [docs/ROADMAP.md](docs/ROADMAP.md) §8.2 | look it up |
+> | read the first two sessions' history | [docs/HISTORY.md](docs/HISTORY.md) | nothing to catch up on |
+>
+> ⚠️ Three of those are written for agents rather than people. HANDOFF, FINDINGS and ROADMAP are dense on purpose. The other seven are written to be read.
+>
+> | something is wrong … | read |
+> |---|---|
+> | a motor will not answer, or an arm sags | this page, the bring-up checklist below |
+> | a camera opens and records nothing, or records too few pictures | [docs/FINDINGS.md](docs/FINDINGS.md) §76 |
+> | the arms are on the Linux station and something differs from the Mac | [docs/LINUX.md](docs/LINUX.md) §5 |
+> | a recording looks wrong | `uv run checks/check_recordings.py` first, then [docs/COMMANDS.md](docs/COMMANDS.md) |
+> | the test total changed | `uv run checks/run_tests.py` and compare, then [docs/FINDINGS.md](docs/FINDINGS.md) §70.4 |
+> | you do not know a word used in any of these | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2 defines all of them |
+>
+> If you would rather read in one order than pick a row: this page → [docs/PLAN.md](docs/PLAN.md) → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) → [docs/BRIDGE.md](docs/BRIDGE.md) → [docs/COMMANDS.md](docs/COMMANDS.md). Running it on the Linux station: [docs/LINUX.md](docs/LINUX.md).
 >
 > ## Day one: prove the rig works, in three commands
 >
@@ -62,7 +90,8 @@
 > config/         measured calibration — tracked on purpose, so it TRAVELS between machines
 >                 (session_defaults.json is not; linux/ holds the two udev rules)
 > src/yam/files.py  the one listing helper: a name starting with `.` is never our data
-> docs/           ARCHITECTURE + PLAN + LINUX + COMMANDS are written to be READ by a person
+> docs/           ARCHITECTURE + PLAN + BRIDGE + PERFORMANCE + LINUX + COMMANDS are written
+>                 to be READ by a person
 >                 HANDOFF (live state) · FINDINGS (evidence) · ROADMAP are agent files, dense
 >                 on purpose. `uv run checks/check_prose.py` holds the first group readable.
 >                 HISTORY is this page's first two sessions, archived. Not the live state.
@@ -75,3 +104,9 @@
 > ## The project's early history has moved
 >
 > The first two sessions (2026-08-07 to 2026-08-10) used to sit below this line and made up two thirds of this page. They are now [docs/HISTORY.md](docs/HISTORY.md), with every section number unchanged. Nothing in them is the live state, and the live state is [docs/HANDOFF.md](docs/HANDOFF.md).
+
+---
+
+**Where to go next**
+
+Pick a row from the table at the top of this page. If you would rather be told: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) to understand the system, or [docs/PLAN.md](docs/PLAN.md) to build one.

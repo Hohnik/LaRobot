@@ -23,13 +23,13 @@
 >
 > ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
 >
-> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §76.14](FINDINGS.md) is the current his-list.
+> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §77.6](FINDINGS.md) is the current his-list, and [§77](FINDINGS.md) is the documentation pass of 2026-08-20.
 >
 > ⭐⭐ **TWO NUMBERS TO COMPARE AGAINST, and they are separate on purpose:**
 >
 > ```bash
-> uv run checks/run_tests.py        #  824/824 checks across 39 files
-> uv run checks/run_falsifiers.py   #  CATCH TOTAL: 50/50 across 5 falsifiers
+> uv run checks/run_tests.py        #  831/831 checks across 40 files
+> uv run checks/run_falsifiers.py   #  CATCH TOTAL: 71/71 across 5 falsifiers
 > ```
 >
 > ⚠️ **The suite total used to depend on whether you ran it from a terminal**, which is what made [FINDINGS §76.13](FINDINGS.md) look like a flake for two days. It is environment-independent now, verified with a pty and without one. **The falsifier total is new**: rule 4 always asked for a catch count and nothing had ever totalled one ([§76.7](FINDINGS.md)).
@@ -47,11 +47,11 @@
 > | what it is | macOS, gs_usb over libusb, AVFoundation cameras | `lavita@10.64.9.60` "RoVita", Ubuntu 24.04.4, 32 cores, 60 GB, **RTX 5090 32 GB** |
 > | the repo | `~/Developer/Projects/yam-robotics` | `~/yam-robotics` (the team's own repo sits beside it at `~/LaRobot`) |
 > | hardware today | nothing attached (it all moved) | both arms, the C920, one D405 (`260323072846`), one SpaceMouse |
-> | suite | 824/824 · falsifiers 50/50 | same totals |
+> | suite | 831/831 · falsifiers 71/71 | same totals until the next fast-forward |
 >
 > ⛔⭐⭐ **HOW CODE REACHES THE STATION: a git BUNDLE, never a push.** Pushing to `Hohnik/LaRobot` needs his word every time (§4 rule 9); a bundle needs nobody's. The three-command loop and every other operational fact is [docs/LINUX.md](LINUX.md) §2. ⚠️ `third_party/i2rt` is gitignored and does NOT travel in the bundle; it is cloned from upstream at `v1.3.1`.
 >
-> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN. ⛔ [FINDINGS §76.14](FINDINGS.md) IS THE AUTHORITY — it carries the commands and the reasoning, and this is the short form.** ⚠️ Two lists of what is owed will drift apart, and this one already had: it pointed at the superseded §76.9 and was missing two items. If they disagree, §76.14 wins.
+> ⬜⭐⭐ **WHAT IS ACTUALLY OPEN. ⛔ [FINDINGS §77.6](FINDINGS.md) IS THE AUTHORITY — it carries the commands and the reasoning, and this is the short form.** ⚠️ Two lists of what is owed will drift apart, and this one already had: it pointed at the superseded §76.9 and was missing two items. If they disagree, §76.14 wins.
 >
 > **Needs the arms** (unplugged on the evening of 2026-08-19, so this waits for a bench day):
 > 1. ⭐ **One camera-carrying recording on the station with the fixed code.** It confirms the whole session path rather than the pieces: `w` · drive · `w` · save · `check_recordings.py`. Expect `measured 1280x720 at 29.9 fps in MJPG`. ⚠️ **Re-record anything made there before `950a3fa`.**
@@ -89,7 +89,168 @@
 >
 > ⚠️⭐ **`config/` TRAVELS AND `recordings/` DOES NOT, and the difference is deliberate** ([FINDINGS §75.11](FINDINGS.md)). Waypoints, the axis map and the gripper limits are tracked in git, so his Mac-taught poses appeared on the station and `p 1` worked there at once. Recordings are gitignored: only what someone copies by hand exists on the other machine.
 >
-> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **824/824 across 39 files**, plus `run_falsifiers.py` at **50/50 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+> ⚠️ **Standing:** nothing is ever pushed without his word — and on 2026-08-19 his word came (*"just update that"*): **`julien/yam-teleop-wip` on `Hohnik/LaRobot` is CURRENT with main** (fast-forward `7040efe..1d2dd6f`), which is the branch the team reads. The repo still has no remote of Julien's own; the team branch is the share vehicle for now. His messages arrive through speech-to-text he never sees — **working-contract rule 12 in §4**: quote garbled phrases back with context, never guess-and-act. **Rule 11 in §4 is how he wants a session run.** Trust `check_rig.py` over any written camera/puck count, and `uv run checks/run_tests.py` is now the one-command suite (total today: **831/831 across 40 files**, plus `run_falsifiers.py` at **71/71 across 5** — a total that DROPS while green means a check was disarmed, [FINDINGS §70.4](FINDINGS.md)).
+>
+> ## ⭐⭐⭐ THE OUTSTANDING WORK OF 2026-08-20, as a plan a cold agent can execute
+>
+> ⛔ **Read this block before touching any document.** It is not a status note. It is the whole of what Julien asked for on 2026-08-20, what each part means, what "done" looks like, and the reasoning that would otherwise be re-derived wrongly. If a step below is already finished, its row says so.
+>
+> ### What he asked for, and what each part actually means
+>
+> His words, and they are five separate requests bundled into one message:
+>
+> 1. *"can you fully make sure that all relevant files are written in a clear style following the notes we go by"* — a style pass over the documents he and his friends read, and it is **deeper than the mechanical checker**. He named one example himself: `docs/PLAN.md` says *"none of the macOS workarounds travel"*, and his verdict was **"unnecessary language flowering and unhelpfully worded"**. See rule A below; this is a new rule, not a restatement of an old one.
+> 2. *"it should just be clear in the plan if there are any gaps anywhere, and at best the code should intelligently be designed in a way that the missing piece already has the most basic version of a defined interface where we could just integrate it into the running system"* — for every gap, either a real interface exists in code, or the gap is named plainly in the document a reader would look in. ⛔ **He said explicitly: "We don't need to build anything further."** So declaring the shape of a hole is in scope. Filling it is not.
+> 3. *"properly link all of the relevant files together"* and *"clear and helpfully detailed overview file/s ... so my friends and I know what to use for what and where"* and *"the better all of these separate files work as an interactive blueprint and textbook"* — the document set has to be navigable by question, not just listed.
+> 4. *"add clear info for the parts that could be done differently for possibly much better performance, and how these could be done"* — with his own example: *"does the 100Hz robot loop really have to be the same loop used for the camera reading and compression, if we only manage less than 90 Hz?"*
+> 5. *"note down everything latent and underlying ... so that any future contextless agent can continue exactly like you would have"* — this block.
+>
+> ⚠️ **One premise in his question 4 is wrong, and correcting it is more useful than answering it as asked.** The loop was measured at **~87 Hz before any camera code existed** ([§31.1](FINDINGS.md)), and 83-84 Hz was seen on the Mac with the cameras' contribution never isolated ([§34.5](FINDINGS.md)'s closing note). So the loop is not slow because of the cameras. The numbers are in [PERFORMANCE.md](PERFORMANCE.md); do not repeat the assumption.
+>
+> ### A. The new style rule: plain and direct
+>
+> ⛔ **THIS IS THE HEADLINE, and it is the fourth refinement of §4 rule 8.** His words: *"Explanatory language should be efficient and effective, always as long as it needs to be, never overly complicated or flowery, describing precisely what is relevant, without being pretentious, instead preferably simple and direct."*
+>
+> **What it forbids, concretely:** a metaphor standing in for a plain fact. His example, and the fix:
+>
+> | in the document | what it actually means |
+> |---|---|
+> | *"none of the macOS workarounds travel"* | none of the macOS workarounds apply to your build |
+> | *"it holds the motor LED table"* | it contains the motor LED table |
+> | *"all of that is hardware truth"* | all of that is true of the hardware, whatever the operating system |
+> | *"the trap that bites first"* | the mistake you are most likely to make first |
+> | *"the decision lives in `session.py`"* | the decision is made in `session.py` |
+> | *"labels ride inside the file"* | the labels are stored in the file |
+> | *"the clamp sits below all logic"* | every command passes through the clamp last |
+> | *"a checker that cries wolf"* | a checker that reports faults that are not faults |
+> | *"it earned its place"* | it caught a real defect |
+> | *"a green run went blind"* | the checker stopped detecting anything while still passing |
+> | *"what this file owes him"* | what he still has to read |
+>
+> ⚠️ **The rule is not "never use a vivid word".** It is: when a plain word exists and is the same length, use the plain word. `travel` is not shorter than `apply`. `holds` is not shorter than `contains`. The metaphor adds a decoding step and nothing else.
+>
+> ⛔ **AND THE SECOND HALF, which the word list cannot catch: abstract nouns doing a verb's job.** *"The workaround turned out to be one argument deep, not architectural"* has no metaphor in it and is still hard work: two abstractions and an antithesis. Plain: *"the fix was one argument, not a redesign"*. Even plainer: *"the fix was one argument: `bustype="gs_usb"` instead of libusb."*
+>
+> **Steps:**
+>
+> | # | step | done when |
+> |---|---|---|
+> | A1 | The rule in `~/.claude/working-style/turn_reminder.md`, the copy injected every turn | ✅ 2026-08-20 |
+> | A2 | Mirrored in `~/.claude/CLAUDE.md` | ✅ 2026-08-20 |
+> | A3 | Mirrored in §4 rule 8 below, the copy that goes with the repo | ✅ 2026-08-20 |
+> | A4 | Mechanical detection in `checks/check_prose.py`, as its own category with its own message | ✅ 2026-08-20, 29 words with their plain replacements |
+> | A5 | `checks/falsify_check_prose.py` covers it: each new word caught, and the healthy examples still left alone | ✅ 2026-08-20, **and it caught two metaphors in its own examples** |
+>
+> ⚠️ **A4's word list is a floor, never a ceiling.** It catches the words seen so far. A new metaphor will not be in it. **A clean run still means nothing about whether the prose is plain**; that judgement is made by reading.
+>
+> ### B. Applying it to the five documents he and his friends read
+>
+> The five are exactly `HIS_DOCS` in `checks/check_prose.py`. ⛔ **`docs/Setup-Anleitung.md` and `docs/Setup-Plan.md` stay untouched: they are the TEAM's own German documents from 2026-08-05/06, inputs to this repo rather than outputs of it.** Nobody should "tidy" them.
+>
+> | # | file | who reads it | done when |
+> |---|---|---|---|
+> | B1 | `README.md` | him, his friends, any newcomer | every metaphor replaced, ceiling lowered |
+> | B2 | `docs/ARCHITECTURE.md` | him, and it is the model for the others | as above |
+> | B3 | `docs/PLAN.md` | his friends, and it is the deliverable | as above, and it is the file he complained about |
+> | B4 | `docs/LINUX.md` | whoever operates the station | as above |
+> | B5 | `docs/COMMANDS.md` | whoever drives the arms | as above |
+> | B6 | ceilings lowered in `checks/check_prose.py` and `tests/test_prose.py` still green | one command shows it |
+
+> ✅ **B1 to B6 DONE 2026-08-20.** 28 metaphors replaced across the five documents. `docs/ARCHITECTURE.md` is at 0, `docs/PLAN.md` came down from 40 to **38**, and `README.md` from 28 to **27**. ⛔ `docs/LINUX.md` at 44 and `docs/COMMANDS.md` at 117 are unchanged, and those two are the remaining work: their counts are almost entirely bold labels run into a sentence, which is a mechanical fix nobody has done yet.
+>
+> ⚠️ **What is NOT done, and it is the harder half.** The metaphor list is mechanical. The second half of rule A, an abstract noun doing a verb's job, was fixed only where reading caught it. `docs/COMMANDS.md` in particular has never had a reading pass. **Do not read its count of 117 as "117 metaphors"; read it as "117 mechanical hits, mostly bold labels".**
+>
+> ⭐ **The worklist is a command, not a guess:** `uv run checks/check_prose.py -v` prints every hit with its line number. Work the list, then read the file aloud, because the list is the easy half.
+>
+> ### C. Navigation, so the set reads as one thing
+>
+> ⭐ **What he actually asked for is a question-to-file index, not another file list.** `README.md` already lists what each directory contains. That answers "what is this?" and not "where do I go for X?".
+>
+> | # | step | done when |
+> |---|---|---|
+> | C1 | `README.md` gains a table of "I want to … → read this → it takes about N minutes" | a newcomer can pick a file without reading any other file first |
+> | C2 | `README.md` gains a second table of "something went wrong … → read this" | the same, for problems |
+> | C3 | Every one of the five documents ends by naming where to go next | no document is a dead end |
+> | C4 | `checks/check_links.py` still resolves everything | one command |
+
+> ✅ **C1 to C4 DONE 2026-08-20.** `README.md` opens with two tables: "I want to … → read this → about N minutes" and "something is wrong … → read this". Every one of the seven documents now ends by naming where to go next, so none is a dead end. Links 1651/1651.
+>
+> ### D. Gaps, and the interface each one has
+>
+> ⛔⭐⭐ **THE FINDING THAT MADE THIS WORTH DOING: there was not one declared interface anywhere in `src/yam/`.** `grep -rn 'Protocol|abstractmethod|ABC)'` returned nothing but a comment. And [ROADMAP §10.6](ROADMAP.md) says, in the present tense, that *"everything that produces commands sits behind one interface"*. **It did not.** That is the same defect [§76](FINDINGS.md) kept finding in prose, now found in a design claim: a sentence written as an intention and read afterwards as a description.
+>
+> ⭐ **What makes a Protocol worth writing here, and it is a narrow test.** Write one only when the existing concrete class ALREADY satisfies it, so the file describes the code rather than hoping for it. A Protocol nothing implements is the same present-tense fiction in a new place.
+>
+> | # | gap | the seam, and whether it exists | plan |
+> |---|---|---|---|
+> | D1 | a trained policy driving the arms (Phase E) | ✅ `TwistReader.read() -> list[float]`, six numbers. Real, and a policy needs nothing else | declare `CommandSource` in `src/yam/seams.py`, and a test that `TwistReader` satisfies it |
+> | D2 | depth capture through librealsense | ✅ `CaptureSet.sample() -> dict[str, Frame or None]` plus `names`, `report`, `stop`. `Frame` already has a `depth` field, unused | declare `FrameSource`; note that `Frame.depth` is the empty slot |
+> | D3 | frames written by something other than the session | ✅ `FrameSink.offer(dict)` and `stop()` | declare `FrameConsumer`; it is also the seam for a separate camera process, see E |
+> | D4 | mesh-to-mesh collision distance | ⚠️ `yam/collision.py` is module-level functions, not a class. `closest_approach(...) -> Closest` is the shape to keep | no Protocol; note in the docs that the replacement keeps that signature |
+> | D5 | the C4 loader gate | ⛔ no code seam exists or can. It is a check run by the team's software on our output | name it plainly in `docs/PLAN.md` as the one thing this bench cannot answer |
+> | D6 | per-joint speed ceilings | ⚠️ `TrackingLog` already measures exactly this and MIRROR does not call it | no interface needed; it is a call site. Named in [§76.14](FINDINGS.md) |
+> | D7 | noise per waypoint | ⛔ gated on his safety decision, so no code at all | named in [ROADMAP §8.2](ROADMAP.md) item 9 with the recommended bound |
+
+> ✅ **D1 to D3 DONE 2026-08-20** as `src/yam/seams.py`: three Protocols, no behaviour, each naming the concrete class that already satisfies it. `tests/test_seams.py` (7 checks) asserts they still describe real code, so the interfaces cannot rot into the fiction that made them necessary.
+>
+> ⛔ **D4 to D7 are notes rather than code, on purpose**, and each is written where a reader will look: [BRIDGE.md](BRIDGE.md) section 7 has the whole table.
+>
+> ⚠️ **D1 to D3 are three Protocols and one test. That is the whole of the code in this plan.** If a future session finds itself writing behaviour, it has misread the instruction.
+>
+> ### E. Performance, and what the measurements actually say
+>
+> | # | step | done when |
+> |---|---|---|
+> | E1 | `docs/PERFORMANCE.md` written, in `HIS_DOCS`, linked from `README.md` and `ARCHITECTURE.md` | it answers his loop question with numbers |
+> | E2 | The wrong premise corrected where it appears | no document says the cameras slow the loop |
+
+> ✅ **E1 and E2 DONE 2026-08-20** as [PERFORMANCE.md](PERFORMANCE.md). It answers his loop question with measurements, corrects the premise, and names the two levers that would actually change numbers.
+>
+> ⭐ **The measurements, so nobody re-measures them:** encoding one 1280x720 JPEG at quality 90 costs **1.4 ms**, so three cameras at 30 fps cost about **0.13 s of encode per second**. That is not a load. Quality 90 gives 192 KB a frame and quality 75 gives 110 KB, and after the training format shrinks a view to 224x224 the difference between them is **RMSE 1.39 of 255, about half a percent**. 848x480 at quality 75 is 59 KB, which is 3.3x smaller than what is recorded now and still more than twice the training resolution in each direction.
+>
+> ⛔ **The conclusion, and it is the opposite of a redesign:** the reading and encoding are already off the loop on their own threads, the loop only passes references, and the arm's own following delay is 33 ms, so 83 Hz already has about three times the headroom anything measured needs. **The honest answer to "how could this be done differently to drastically improve performance" is that there is no performance problem to solve, and the two levers that would actually change the numbers are JPEG quality and capture resolution, both of which are data decisions rather than code.**
+>
+> ### F. What is deliberately NOT being done, and why
+>
+> ⛔ **A future session must not do these, and each one is a decision rather than an omission:**
+>
+> - **No new features.** His words: *"We don't need to build anything further."*
+> - **No filling of the gaps in D.** Declaring the interface is the whole task.
+> - **No restyling of `docs/HANDOFF.md`, `docs/FINDINGS.md` or `docs/ROADMAP.md`.** They are agent files, dense on purpose, and §4 rule 8's fourth refinement is about the reader rather than the medium.
+> - **No restyling of the two German setup documents.** They are the team's.
+> - **No change to JPEG quality or capture resolution.** Both change the recorded artefact, so both are his. [PERFORMANCE.md](PERFORMANCE.md) gives the numbers and the recommendation.
+> - **No separate camera process.** There is no measured problem it would fix. The seam is declared so the option stays open.
+>
+> ### G. The bridge to the team's repo — his mid-turn addition, 2026-08-20
+>
+> His words: *"make sure to have a file/s which clearly connects your implementation here and the plan in the files to our current existing state of the implementation in the relevant branches, and the plan for where we want to go."*
+>
+> ⭐ **Nothing mapped the two repos to each other, and the facts turned out to matter more than the document.** Read on the station from `~/LaRobot`, 2026-08-20:
+>
+> | branch on `Hohnik/LaRobot` | state | what is on it |
+> |---|---|---|
+> | `main` | `065a08e` | the skeleton: **122 lines of Python in total** |
+> | `feature/camera-framework` | **4 ahead, 0 behind — their active branch** | `src/robot/cameras/` with `camera.py`, `frame.py`, `config.py`, `SimCamera.py`, plus `record.py` |
+> | `feature/spacemouse` | 1 ahead, 4 behind | one `SpaceMouseReader` class |
+> | `julien/yam-teleop-wip` | 246 ahead, **8 behind** | ours, and its tip `834c876` predates all of [§76](FINDINGS.md) |
+>
+> ⛔ **`main` is a skeleton, and that is the single most useful fact for reading `docs/PLAN.md`.** `inputs/spacemouse.py`, `inputs/mouse.py`, `inputs/policy.py` and `inputs/mcap_recording.py` are **empty files**. `inputs/input.py` is 7 lines. `environment/simulation.py`'s 106 lines are the only substantial code. So the plan's work packages are not "port this into a half-built system", they are "build this, and here is the answer".
+>
+> ⛔⛔ **AND `docs/PLAN.md` CONTAINS A CLAIM THAT IS NOW MEASURABLY WRONG.** It says of the command-source seam: *"Your `docs/ARCHITECTURE.mmd` already declares exactly this ... so this seam is agreed on both sides."* Their `Input` ABC declares one method, `is_available()`, and nothing about how a command is read. Ours has no declared interface at all. **Neither side has the seam, and the plan told both sides the other did.** Fix the sentence, and see D1.
+>
+> ⭐⭐ **THE TIME-SENSITIVE PART: they are writing a camera framework this week, and four of yesterday's findings land directly on it.** Their `Camera` ABC is `is_available()`, `connect()`, `read() -> Frame`, `close()`, plus a context manager. Two things about it are worth telling them before they finish:
+>
+> - ⛔ **`read()` is a blocking pull.** Called from a control loop, the loop then runs at the camera's frame rate: three cameras at 30 fps caps the loop at 30 Hz or worse. This repo uses one reader thread per camera keeping only the newest frame, and [§21](FINDINGS.md) is the measurement from getting it wrong: **6 fps**. Their shape is fine as the device interface; something has to sit between it and the loop.
+> - ⛔ **Their `Frame` has no timestamp**, though its docstring says *"combined with a timestamp"*. The episode export joins camera frames to control ticks **by timestamp** ([§71.2](FINDINGS.md)), so a Frame without one cannot be joined. Ours carries `host_timestamp_ns` stamped under the same lock as the frame it stamps.
+>
+> ⭐ **And one thing their repo does better than this one, said plainly because it is true:** they declared the interfaces and left the bodies empty. This repo implemented the bodies and declared no interfaces. **The bridge is those two halves meeting**, which is why D1 to D3 should reuse their names and method shapes rather than invent new ones.
+>
+> | # | step | done when |
+> |---|---|---|
+> | G1 | `docs/BRIDGE.md` written: the branch table, the module-to-module map, what each side has, and what has to happen for the two to meet | ✅ 2026-08-20 |
+> | G2 | Linked from `README.md`, `docs/PLAN.md` and `docs/ARCHITECTURE.md`, and added to `HIS_DOCS` | ✅ 2026-08-20, at a ceiling of 0 |
+> | G3 | The wrong "agreed on both sides" sentence in `docs/PLAN.md` corrected | ✅ 2026-08-20, and it now names what is on each side |
+> | G4 | ⬜ **HIS DECISION: push to `julien/yam-teleop-wip`?** It is 8 behind and 3 days stale, so his friends currently read a `docs/PLAN.md` with none of §76 in it, including every camera finding, while they write a camera framework. ⛔ Pushing needs his word every time (§4 rule 9) | he answers |
 >
 > ## ✅✅⭐⭐ READ THIS FIRST — the state at the END OF 2026-08-14. The rig is healthy, single-arm is FINISHED and verified, and `--arms` now EXISTS but two arms still refuse to start
 >
@@ -546,6 +707,31 @@ These are not preferences, they were arrived at by things going wrong.
    - ⛔ **A POINTER MAY NOT STAND IN FOR AN EXPLANATION.** The old ARCHITECTURE.md said things like *"FINDINGS §37.0 is what happened when nobody knew this layer existed"*, and its own header announced that every claim links to its evidence *"instead of restating it"*. For an agent that is efficient. For him every one of those is a dead end, because he does not read FINDINGS. **A link may add evidence. It may never carry the meaning.**
 
    ⚠️ **Two more faults the word list cannot see, both taken from that document:** a heading that is a slogan rather than a description (*"ArmSession: the class decides, the script narrates"*), and a document that declares three audiences in its own opening paragraph. **One document, one reader.** A file written for him and for an agent at once drifts to agent density every time, because that is the cheaper thing to write.
+
+   ⭐⭐⭐ **REFINED A FOURTH TIME, 2026-08-20, AND THIS ONE IS ABOUT WORD CHOICE RATHER THAN STRUCTURE.** He read [PLAN.md](PLAN.md), found the sentence *"none of the macOS workarounds travel"*, and said:
+
+   > *"which is unnecessary language flowering and unhelpfully worded. Explanatory language should be efficient and effective, always as long as it needs to be, never overly complicated or flowery, describing precisely what is relevant, without being pretentious, instead preferably simple and direct."*
+
+   ⛔ **A METAPHOR MUST NOT STAND IN FOR A PLAIN FACT.** The metaphor adds a decoding step and nothing else, and it is almost always the same length as the plain word:
+
+   | written | means |
+   |---|---|
+   | the workarounds do not **travel** | the workarounds do not **apply to your build** |
+   | it **holds** the LED table | it **contains** the LED table |
+   | the trap that **bites** first | the mistake you are **most likely to make first** |
+   | the decision **lives in** `session.py` | the decision is **made in** `session.py` |
+   | the labels **ride** inside the file | the labels are **stored** in the file |
+   | the clamp **sits below** all logic | every command **passes through** the clamp **last** |
+   | a checker that **cries wolf** | a checker that **reports faults that are not faults** |
+   | it **earned its place** | it **caught a real defect** |
+   | the checker **went blind** | the checker **stopped detecting anything**, and still passed |
+   | what this file **owes** him | what he **still has to read** |
+
+   ⛔ **AND THE HALF NO WORD LIST CATCHES: an abstract noun doing a verb's job.** *"The workaround turned out to be one argument deep, not architectural"* contains no metaphor and is still work to read: two abstractions and an antithesis. Plain: *"the fix was one argument: `bustype="gs_usb"` instead of libusb."*
+
+   ⚠️ **LENGTH IS NOT THE TARGET.** His words are *"always as long as it needs to be"*. ⛔ Do not compress an explanation to obey this rule. Replace the decorated word with the plain word and leave the explanation intact. **Short and impenetrable is still worse than long and clear.**
+
+   ⚠️ **AND NOT PRETENTIOUS.** No phrase whose only job is to sound clever.
 
    ✅ **THE MECHANICAL DEFENCE, because this rule has now failed three times while being present and correct:** `uv run checks/check_prose.py`. It enforces the checkable half against the documents in `HIS_DOCS`, with a per-file ceiling that may go down and never up. `checks/falsify_check_prose.py` proves it catches the faults and, as importantly, leaves decoration, acronyms, tables and own-line bold labels alone. `docs/ARCHITECTURE.md` sits at **0** and is the reference for what clean looks like. ⛔ **A clean run is still not a passing grade**: it measures phrases and cannot see a slogan heading, an undefined term, or a pointer standing in for an explanation.
 

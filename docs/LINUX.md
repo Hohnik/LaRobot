@@ -182,3 +182,12 @@ ssh yam-pc "find ~/yam-robotics/recordings -name '._*' -delete"
 | single-motor tools (`ping_motors`, `move_one_motor`, `teleop_gripper`, …) | gs_usb index, serial re-verified after opening | SocketCAN interface, resolved from the serial before opening (nothing left to verify) |
 
 *Written 2026-08-19, when the connection did not exist yet. When it does, the first `check_platform.py --raw` on the real machine turns §4's second list into the first one, and this file should say so.*
+
+---
+
+**Where to go next**
+
+- [COMMANDS.md](COMMANDS.md) for what to run once you are connected
+- [FINDINGS.md](FINDINGS.md) §75 and §76 for everything the port and the first camera session found
+- [PERFORMANCE.md](PERFORMANCE.md) for the frame-rate measurements taken on this station
+- [ARCHITECTURE.md](ARCHITECTURE.md) §2 if a word here is unfamiliar
