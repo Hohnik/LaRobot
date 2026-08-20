@@ -28,6 +28,8 @@
 > | `uv run checks/run_tests.py` | **843/843 across 41 files** if nothing has rotted |
 > | `uv run checks/run_falsifiers.py` | **CATCH TOTAL 71/71 across 5** |
 >
+> ⭐⭐ **BOTH MACHINES ARE CURRENT AND BOTH ARE GREEN.** The Mac and the station are on the same commit, and the station's own clone reports the same 843/843 and 71/71. The station was brought forward with the git bundle loop in [LINUX.md](LINUX.md) section 2, so an agent picking this up needs no code transfer to start.
+>
 > ⛔ **Do not start by reading this file front to back.** It is 1100 lines and most of them are dated history kept for their reasoning.
 >
 > ⭐⭐⭐ **THE GOAL ([FINDINGS §67.0](FINDINGS.md)): this repo is a finished WALKTHROUGH, and its deliverable is [docs/PLAN.md](PLAN.md)** (ratified 2026-08-19). Julien's team rebuilds the real station from scratch; what this repo owes is every feature built once, proven on the hardware, and written down. **Nothing here needs hardening as if it were production.**

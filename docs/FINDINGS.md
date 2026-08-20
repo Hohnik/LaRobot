@@ -6156,6 +6156,17 @@ The number is small either way and the conclusion never changed. **The way it wa
 
 ⭐⭐ **The general rule, and it is the same one [§76](FINDINGS.md) spent a day on in a different form:** a number is a claim until its conditions are printed beside it. For a timing benchmark the conditions include **which code path ran** and **what the machine was doing just before**.
 
+✅⭐⭐ **THE TOOL WAS THEN RUN ON THE STATION AND REPRODUCED [§78.5](FINDINGS.md) EXACTLY**, which is what turns that section from a heredoc measurement into a repeatable one. `uv run apps/bench_loop.py --seconds 15` over `ssh yam-pc`, on the station's own clone at `442282a`:
+
+| | Mac | Linux station |
+|---|---|---|
+| `time.sleep(0.008)` returns late by | 2.0 ms median | **0.361 ms** median, 0.737 worst of 300 |
+| empty 100 Hz loop | 11.83 ms a pass, 84.5 Hz | **10.28 ms a pass, 97.3 Hz**, worst pass 10.67 |
+| loses to waiting | 15.5 Hz of 100 | **2.7 Hz of 100** |
+| `MirrorLink.step` while following | 7.9 µs | 16.7 µs |
+
+⚠️ **The station's mirror number is HIGHER than the Mac's, and that is the idle-clock effect again rather than a slower machine.** The station was idle apart from one SSH session, and the tool says to expect 15 to 19 µs on a processor just woken. It is 0.17% of a pass either way, so nothing about the conclusion moves. ⛔ **The lesson stands: quote the range and the conditions, never the single number.**
+
 #### 78.7.2 ⭐⭐ ONE COMMAND PER QUESTION — the whole tool set, for an agent with no context
 
 | the question | the command | what a good answer is |
