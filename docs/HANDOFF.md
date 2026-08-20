@@ -4,7 +4,7 @@
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) → [ROADMAP.md](ROADMAP.md). ⚠️ **§2 below is the live state, not the README** — the README's "what works right now" is session 2's snapshot and says so. `git log` carries the reasoning for every change, and the commit messages are deliberately long because they hold the *why*.
 >
-> ⭐⭐ **If you have no context, read these four things and nothing else first:**
+> ⭐⭐ **If you have no context, read these five things and nothing else first:**
 >
 > | read | why |
 > |---|---|
