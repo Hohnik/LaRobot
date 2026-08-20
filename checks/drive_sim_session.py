@@ -226,6 +226,11 @@ def main() -> int:
         ("composite completed", r"COMPOSITE RUN complete — all 3 leg"),
         ("both arms parked", r"arm G PARKED"),
         ("motors reported disabled", r"motors confirmed disabled: \[1, 2, 3, 4, 5, 6, 7\]"),
+        # ⭐ The worst single pass, added 2026-08-20. It is printed by the shutdown path, so
+        # this is the only check in the repo that proves the instrument is wired into the real
+        # loop rather than only into its own unit tests. ⚠️ The NUMBER here is meaningless: a
+        # simulated arm answers in microseconds (FINDINGS §76.12). Only the wiring is checked.
+        ("the worst loop pass is reported", r"loop: worst pass \d+\.\d+ ms at t="),
     ]
     # ⛔⭐ FINDINGS §72.1: the composite's take leg once started PLAYING while an arm still
     # had 1.28 rad of park left — a pose-leg arrival was credited to the take leg armed in

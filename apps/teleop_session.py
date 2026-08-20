@@ -149,6 +149,7 @@ from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
 from yam.cameras.specs import camera_dir_name, flatten_tokens, sim_camera_error  # noqa: E402
 from yam.files import listing  # noqa: E402 — the OS-litter filter, FINDINGS §76
+from yam.timing import LoopTimer  # noqa: E402 — the worst pass, PERFORMANCE.md §2
 from yam.cameras.open import SIZE_LADDER, TARGET_FPS, open_measured  # noqa: E402
 from yam.cameras.writer import (  # noqa: E402
     FrameSink,
@@ -2345,6 +2346,15 @@ def main() -> int:  # noqa: PLR0915
         # sleep at the bottom is `max(0, dt - elapsed)`, so a cycle that overruns is not
         # compensated: nominal time falls behind the wall clock, roughly 87 Hz against 100.
         #
+        # ⛔⭐⭐ AND THAT EXPLANATION WAS INCOMPLETE, corrected 2026-08-20. An overrunning
+        # cycle is not the main reason. `time.sleep` itself returns LATE, and on macOS it
+        # returns about 1.9 ms late at this scale, every pass. An empty loop with no arms,
+        # no cameras and no work at all, using this exact line, runs at 84.3 Hz on the Mac
+        # and 97.3 Hz on the Linux station. So the Mac's whole shortfall is the wait, the
+        # 87 Hz figure is a macOS number rather than a property of this program, and moving
+        # work off the loop cannot recover it. [PERFORMANCE.md](../docs/PERFORMANCE.md) §2
+        # has both machines' numbers; it answers ROADMAP §8.2 item 14.
+        #
         # ⛔ Anything that has to match real time must use `real_dt`, not `dt`. A playback
         # is exactly that: the whole point is reproducing the timing a hand taught.
         # ⚠️ Clamped, so one long stall (a slow disk, a thermal read retry) cannot make the
@@ -2352,6 +2362,8 @@ def main() -> int:  # noqa: PLR0915
         real_dt = dt
         prev_t = 0.0
         loop_hz = CONTROL_HZ
+        # ⭐⭐ THE WORST SINGLE PASS, which `loop_hz` cannot show because it is an average with a 0.02 time constant. [PERFORMANCE.md](../docs/PERFORMANCE.md) §2 named this as the one missing measurement and [FINDINGS §77.4](../docs/FINDINGS.md) as the one worth taking next: jitter is what moving the cameras to their own process would fix, and nobody has ever looked at it. It takes the RAW interval, not the clamped `real_dt` below, because that clamp is what would hide a stall.
+        loop_timer = LoopTimer(CONTROL_HZ)
         t0 = time.perf_counter()
         next_report = 1.0
 
@@ -2392,7 +2404,10 @@ def main() -> int:  # noqa: PLR0915
             while True:
                 loop_start = time.perf_counter()
                 t = loop_start - t0
-                real_dt = min(0.1, max(1e-4, t - prev_t))
+                raw_dt = t - prev_t
+                # ⛔ Recorded at the TOP of the pass, before anything can `break` out of the body, so no pass goes uncounted. The first sample is the interval from the loop's own zero point and `LoopTimer` discards it.
+                loop_timer.record(raw_dt, at_s=t)
+                real_dt = min(0.1, max(1e-4, raw_dt))
                 prev_t = t
                 # A slow exponential average, so the readout is a rate rather than noise.
                 loop_hz += 0.02 * (1.0 / real_dt - loop_hz)
@@ -4564,6 +4579,8 @@ def main() -> int:  # noqa: PLR0915
                         if abs(unaccounted) > 0.15 + 0.05 * elapsed:
                             print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
                                   f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
+                            # ⭐ The average explains the drift; the worst pass is what a stall looks like, and it is the number PERFORMANCE.md §2 was missing.
+                            print(f"     {loop_timer.line()}")
                         print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
                               f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
                         if replay_held_s > 0.15 * planned:
@@ -4634,6 +4651,7 @@ def main() -> int:  # noqa: PLR0915
                                     "held_s": round(replay_held_s, 3),
                                     "worst_lag_rad": round(replay_worst_lag, 5),
                                     "loop_hz": round(loop_hz, 1),
+                                    "loop_timing": loop_timer.to_dict(),
                                     "max_cursor_lag": MAX_CURSOR_LAG,
                                     "max_planned_joint_speed": args.teleop_speed,
                                     "safe_max_speed": args.max_speed,
@@ -4761,6 +4779,9 @@ def main() -> int:  # noqa: PLR0915
             # ---- controlled shutdown -----------------------------------------
             screen.done()
             print(f"\n⛔ stopping: {stop_reason}")
+            # ⭐ Printed for every session, not only a playback, because the worst pass is the one number about this loop that nothing recorded until 2026-08-20. ⚠️ On `--sim` it is Python-side jitter only: a fake arm answers in microseconds and a real one is 14 motors over two USB adapters ([FINDINGS §76.12](../docs/FINDINGS.md)).
+            if loop_timer.count:
+                print(f"⭐ {loop_timer.line()}")
 
             # ⭐ CTRL-C IS A GRACEFUL SHUTDOWN, NOT A QUESTION. Julien, 2026-08-12:
             # *"if we hit control c it should just instantly go back into the starting
@@ -5027,6 +5048,8 @@ def main() -> int:  # noqa: PLR0915
                     "reach_limit": args.reach,
                     "floor_limit": args.floor,
                     "loop_hz": _safe_fact(lambda: round(loop_hz, 1)),
+                    # ⛔ A LAMBDA, not `_safe_fact(loop_timer.to_dict)`. `_safe_fact`'s own docstring says a local here may be unbound if the loop never ran a cycle, and the attribute access in the shorter form happens OUTSIDE its try, so on the failed-build path it would raise and take the whole incident file with it.
+                    "loop_timing": _safe_fact(lambda: loop_timer.to_dict()),
                     "per_arm": [
                         {
                             "arm": one.name,

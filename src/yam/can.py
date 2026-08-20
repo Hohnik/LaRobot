@@ -151,6 +151,12 @@ def _wrap_parse_recv_message(original: Any) -> Any:
     loop's real shortfall is 83-87 Hz against 100, which is 1500-2000 µs — four
     orders of magnitude away. **So this cannot be a contributor to ROADMAP §8.2
     item 14**, and it is written down here so nobody has to wonder later.
+
+    ✅⭐ **Item 14 is answered as of 2026-08-20, and the answer is the wait rather
+    than any work**: `time.sleep` returns about 1.9 ms late per pass on macOS and
+    0.37 ms late on the Linux station, so an empty loop reaches 84.3 Hz on the Mac
+    and 97.3 Hz on the station. That 1500-2000 µs is the sleep overshoot almost
+    exactly. See [PERFORMANCE.md](../../docs/PERFORMANCE.md) §2.
     """
 
     def wrapper(self: Any, message: Any, motor_type: Any, ignore_error: bool = False) -> Any:

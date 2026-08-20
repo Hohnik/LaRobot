@@ -23,7 +23,7 @@
 >
 > ⛔⭐⭐⭐ **AND THEN HE PRESSED `w` ON THE STATION, WHICH IS [FINDINGS §76](FINDINGS.md). Read it before touching cameras, checkers, or anything that lists files.** The session did what he asked and **every camera line it printed was a claim rather than a measurement.** Two causes, both measured on the station: the Linux camera path never asked for MJPG, so the C920 recorded at **10.01 fps instead of 29.92** ([§76.1](FINDINGS.md)); and the D405 colour node **accepts 1280x720 and delivers nothing at it** while streaming fine at 848x480 and below, below OpenCV, with bandwidth and format ruled out ([§76.2](FINDINGS.md)). Separately, **813 macOS `._*` sidecar files** on the station broke four things at once, including a checker that crashed and a frame count that doubled and then accused real data ([§76.4](FINDINGS.md)).
 >
-> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §78.2](FINDINGS.md) is the current his-list, [§77](FINDINGS.md) is the documentation pass of 2026-08-20, and [§78](FINDINGS.md) is the evening of that day: the team branch is current at his word, and their own camera framework moved the same afternoon.
+> ⭐ **All of it is fixed, and the fix is CONFIRMED ON THE REAL CAMERAS.** `open_measured` reports **29.9 fps on the C920** (it was 10.01) and **30.0 on the D405**, through the session's own startup code against the physical devices. [FINDINGS §78.2](FINDINGS.md) is the current his-list, [§77](FINDINGS.md) is the documentation pass of 2026-08-20, and [§78](FINDINGS.md) is the evening of that day: the team branch is current at his word, their own camera framework moved the same afternoon, and ⛔⭐⭐ **[§78.5](FINDINGS.md) refuted a number this repo has repeated for a week — the loop's 87 Hz is a property of macOS, and the same loop reaches 97.3 Hz on the station.**
 >
 > ⭐⭐ **TWO NUMBERS TO COMPARE AGAINST, and they are separate on purpose:**
 >
@@ -58,15 +58,17 @@
 > 2. **Frame the top camera at the WORKSPACE** ([§73.2](FINDINGS.md): it films a close-up of one arm).
 >
 > **Needs a decision from him, and none of them block anything:**
-> 3. ⭐ **The frame-rate-against-brightness trade** ([§76.16](FINDINGS.md)), before real data is collected. Whatever he picks, pick it once: the hazard is the inconsistency.
-> 4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
-> 5. **Whether to build a librealsense capture backend**, the only route to depth ([§76.10](FINDINGS.md)). No password needed; nothing needs it yet.
-> 6. ✅ **~~Whether to push the current commits to the team branch~~ ANSWERED AND DONE** on the evening of 2026-08-20: *"Push recent changes to teleop wip if you know what I mean"*, fast-forward `834c876..cb5c446`, 29 commits ([FINDINGS §78.0](FINDINGS.md)). ⛔ The next push needs his word again.
+> 3. ⛔⭐⭐ **NEW, and it is the one with a safety edge: the loop's rate ceiling is the operating system's, not this program's** ([FINDINGS §78.5](FINDINGS.md)). An empty loop reaches 84.3 Hz on the Mac and **97.3 Hz on the station**, because `time.sleep` returns 1.9 ms late on macOS and 0.37 ms late on Linux. ⛔ **A per-cycle step limit produces MORE speed when the rate rises**, so `MAX_PLANNED_JOINT_SPEED = 0.015 × 100` and every constant derived from "87 Hz" deserves a look before the next fast bench run. His call, and nothing is changed yet.
+> 4. ⭐ **The frame-rate-against-brightness trade** ([§76.16](FINDINGS.md)), before real data is collected. Whatever he picks, pick it once: the hazard is the inconsistency.
+> 5. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9 carries the lean). Two minutes.
+> 6. **Whether to build a librealsense capture backend**, the only route to depth ([§76.10](FINDINGS.md)). No password needed; nothing needs it yet.
+> 7. ✅ **~~Whether to push the current commits to the team branch~~ ANSWERED AND DONE** on the evening of 2026-08-20: *"Push recent changes to teleop wip if you know what I mean"*, fast-forward `834c876..cb5c446`, 29 commits ([FINDINGS §78.0](FINDINGS.md)). ⛔ The next push needs his word again.
 >
 > **Needs the team:**
-> 7. **ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
+> 8. **ABC's `export_mcap.py` or `abc_minimal`** — the C4 gate, the per-view size and the gripper unit in one go ([§74.1](FINDINGS.md)).
 >
-> ⬜ **NOT his, and hardware-free, so a session with no bench time can take either** ([ROADMAP §8.2](ROADMAP.md)):
+> ⬜ **NOT his, and hardware-free** ([ROADMAP §8.2](ROADMAP.md)). ⚠️ Two items that used to be on this list are done: [LINUX.md](LINUX.md)'s reading pass ([§78.3](FINDINGS.md)) and the worst-loop-pass instrument ([§78.4](FINDINGS.md)). What is left:
+> - ⭐ **[COMMANDS.md](COMMANDS.md)'s reading pass, and it is a RESTRUCTURE rather than a phrase pass.** Its 117 mechanical hits are mostly the bold mode names inside the key table, where they belong. The real problem is that single table cells hold up to 250 words. [§78.3](FINDINGS.md) has the recommended shape and why it deserves its own session.
 > - **item 35, mesh-to-mesh collision distance.** It is the prerequisite for any collision warning: the bounding-sphere estimate reads 2.5 cm at rest at his spacing, so a warning built on it fires while the arms sit still. ⚠️ **His standing ruling is that collision avoidance stays manual** ([§60.3](FINDINGS.md)), so build the measurement, and changing the ruling is his.
 > - **item 37, the per-joint speed ceiling for all six joints.** MIRROR already produces the data and nothing collects it. The collection is hardware-free; the numbers arrive on the next mirror run.
 >

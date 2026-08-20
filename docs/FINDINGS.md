@@ -6015,16 +6015,17 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 
 1. ✅ **~~Push to `julien/yam-teleop-wip`~~ DONE this session** at his word, `834c876..cb5c446` ([§78.0](FINDINGS.md)). The next push needs his word again.
 2. ⛔ **One camera-carrying recording on the station** with the fixed code. Needs the arms, unplugged since 2026-08-19.
-3. ⭐ **The frame-rate against brightness decision** ([§76.16](FINDINGS.md)), before real data is collected.
-4. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9).
-5. **Frame the top camera at the workspace** ([§73.2](FINDINGS.md)).
-6. **From the team: the C4 loader check** ([BRIDGE.md](BRIDGE.md) section 7). ⭐ **New reason to ask now:** they are writing camera code this week, so the two warnings in [§78.1](FINDINGS.md) and this question travel in one message.
-7. ⬜ Whether to build a librealsense capture backend for depth ([§76.10](FINDINGS.md)).
+3. ⛔⭐⭐ **NEW, and the only one with a safety edge: the loop's rate ceiling belongs to the operating system** ([§78.5](FINDINGS.md)). 84.3 Hz on the Mac, **97.3 Hz on the station**, measured with an empty loop. ⛔ A per-cycle step limit produces MORE speed when the rate rises, so `MAX_PLANNED_JOINT_SPEED = 0.015 × 100` and every constant derived from "87 Hz" wants a look before the next fast bench run. Nothing is changed yet.
+4. ⭐ **The frame-rate against brightness decision** ([§76.16](FINDINGS.md)), before real data is collected.
+5. **The noise bound for varied replays** ([ROADMAP §8.2](ROADMAP.md) item 9).
+6. **Frame the top camera at the workspace** ([§73.2](FINDINGS.md)).
+7. **From the team: the C4 loader check** ([BRIDGE.md](BRIDGE.md) section 7). ⭐ **New reason to ask now:** they are writing camera code this week, so the two warnings in [§78.1](FINDINGS.md) and this question travel in one message.
+8. ⬜ Whether to build a librealsense capture backend for depth ([§76.10](FINDINGS.md)).
 
 **Not his, hardware-free:**
 
 - ✅ **~~`docs/LINUX.md` at 44~~ DONE this session, 44 → 0** ([§78.3](FINDINGS.md)). ⬜ **`docs/COMMANDS.md` at 117 still has not had one**, and it needs a restructure rather than a phrase pass: [§78.3](FINDINGS.md) says why and what the shape should be.
-- ⬜ **The worst single loop pass is unmeasured** ([§77.4](FINDINGS.md)). `TrackingLog` records `loop_hz` per run and never the worst pass. It is the number that would decide whether separating the camera process is worth anything, and the instrument is a small addition to a file that already exists.
+- ✅ **~~The worst single loop pass is unmeasured~~ DONE this session** ([§78.4](FINDINGS.md), [§78.5](FINDINGS.md)): `src/yam/timing.py`, 12 checks, wired into the loop and asserted end to end by `drive_sim_session`. ⭐ It answered [ROADMAP §8.2](ROADMAP.md) item 14 on the way, and that answer needs his eye: **the loop's rate ceiling is a property of the operating system**, the station may already run at 97 Hz rather than 87, and a rate that rises makes a per-cycle step limit produce more speed. ⬜ What is left is one real reading with the arms attached, and it now happens by itself.
 - ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).
 
 ### 78.3 ✅⭐⭐ THE READING PASS ON [LINUX.md](LINUX.md): 44 → 0, AND IT FOUND TWO STALE NUMBERS AND A LINE THAT CONTRADICTED THE FILE IT WAS IN
@@ -6048,3 +6049,56 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 ✅ **Guards run after the rewrite, because a prose pass can silently break a command:** `check_flags.py` green (every documented flag still exists and every shown value is still one the parser accepts), links 1715/1715, suite 831/831, falsifiers 71/71. ⭐ **And a token diff of the file before and after**: every one of the inline code spans and every URL survives the rewrite, checked rather than eyeballed.
 
 ⬜⭐⭐ **WHY [COMMANDS.md](COMMANDS.md) WAS NOT DONE IN THE SAME PASS, and this is a recommendation rather than a shortage of time.** Its 117 hits are almost all inside the key table, where the bold marks the mode name (`| `g` | **GUIDE** — zero gravity …`). Unbolding those would make the table worse, not better. ⛔ **The real readability problem in that file is not the bold: it is that single table cells hold up to 250 words.** The `l` row alone contains the playback prompt, the puck scrub, the speed dial, the stick-slip warning and four cross-references. **The fix is a restructure**: the table keeps one line per key, and every cell that grew a paragraph becomes a short section under it. That is a bigger, riskier edit on the file Julien reads at the bench, so it deserves its own session and its own reading, with `check_flags.py` as the guard that nothing typeable was lost.
+
+### 78.4 ✅⭐⭐ THE WORST SINGLE LOOP PASS IS MEASURED NOW — `src/yam/timing.py`, and its first reading found a 73 ms stall
+
+[§77.4](FINDINGS.md) named this as the one measurement worth taking next, and [PERFORMANCE.md](PERFORMANCE.md) §2 said in as many words that it was *"a small addition and it is not built"*. It is built.
+
+⭐ **`LoopTimer` records the interval between the start of one pass and the start of the next**, which is also the gap between two commands reaching the arm. Three properties are deliberate:
+
+- ⛔ **It takes the RAW interval, before the loop's own clamp.** `apps/teleop_session.py` clamps `real_dt` to 100 ms so one stall cannot make a playback cursor jump forward and command a step no hand taught. That clamp is right, and it would hide exactly the stall this class exists to find.
+- ⛔ **It is recorded at the TOP of the pass**, before anything in the body can `break` out, so no pass goes uncounted.
+- ⭐ **It keeps the FIVE slowest passes with the moment each one happened, not just the worst.** That number came from doing the work by hand: attributing the first stall took a temporary `print` in the loop and a log read, and the session's four slow passes had three different causes. One time is not a pattern.
+
+✅ **Where the numbers come out:** one line at the end of every session, `loop_timing` in every playback's tracking file, and the same block in an incident report, since a crash is exactly when the timing matters.
+
+⛔⭐ **A DEFECT I WROTE AND CAUGHT BY READING `_safe_fact`'s DOCSTRING.** The incident line was `_safe_fact(loop_timer.to_dict)`, and the attribute access in that form happens **outside** `_safe_fact`'s `try`. Its docstring says plainly that a local there *"may be unbound if the loop never ran a cycle"*, and on the failed-build path it would have raised and taken the whole incident file with it. `_safe_fact(lambda: loop_timer.to_dict())` is the correct form, proved both ways in one command. ⚠️ **The shorter form reads better and is wrong**, which is why the guard's own docstring is worth reading before using it.
+
+⭐ **The first readings, three runs of `checks/drive_sim_session.py` on the Mac**, and `drive_sim_session` now has a 32nd check asserting the line is printed at all, which is the only check in the repo that proves the instrument is wired into the real loop:
+
+| run | passes | mean | worst pass | over 33 ms | over 50 ms |
+|---|---|---|---|---|---|
+| 1 | 7143 | 11.8 ms (85 Hz) | 75.4 ms at t=19.7 s | 4 | 1 |
+| 2 | 7085 | 11.8 ms (85 Hz) | 67.8 ms at t=18.9 s | 3 | 1 |
+| 3 | 7010 | 11.8 ms (84 Hz) | 71.2 ms at t=18.5 s | 4 | 1 |
+
+⛔ **These are SIMULATED arms and the number is not the station's.** A fake arm answers in microseconds ([§76.12](FINDINGS.md) is the day that cost). What they do establish is that stalls are real and rare, about one pass in 1800 longer than the arm's own 33 ms response time, **in a session with no cameras attached at all**. So camera work is not the only source of jitter, and moving the cameras off the loop would not have prevented any of these four.
+
+⭐⭐ **WHAT THE WORST PASS ACTUALLY IS, and the first guess was wrong.** It is reproducible: 67 to 88 ms, always about 19 s in, immediately after the line `MODE: TELEOP on B+G`. **Entering teleop constructs the inverse-kinematics solver for each selected arm inside the loop's pass.** Measured on its own, the first `CartesianTeleop` of a process costs **33 ms** because MuJoCo loads its model, and later ones about 4 ms. ⚠️ The guess it replaced was the recording save, which writes a file from inside the loop and looked obvious. Timed directly, saving slot 8 (225 samples, 31 KB) takes **1.2 ms**. Two minutes of measuring beat a plausible story, again.
+
+⚠️ **Not fixed, on purpose.** The stall happens in HOLD when the operator presses `t`, before anything is being recorded, and the arm is stationary. Constructing the solver before the loop starts would remove it, and that is a change to the mode machine for no measured benefit. It is written here so the next person who sees a 70 ms pass at a mode change knows what it is.
+
+### 78.5 ⛔✅⭐⭐⭐ AND THEN THE INSTRUMENT ANSWERED A DIFFERENT QUESTION: THE LOOP MISSES 100 Hz BECAUSE `time.sleep` RETURNS LATE, WHICH MAKES IT A macOS NUMBER
+
+⭐⭐ **[ROADMAP §8.2](ROADMAP.md) item 14 has been open since 2026-08-13: *"find out why the control loop runs below 100 Hz"*.** Its candidates were the second D405 on the bus, machine load and the per-cycle tracking log. **All three are wrong.**
+
+⛔ **The mean pass in a full simulated session is 11.8 ms, and an EMPTY loop is also 11.8 ms.** No arms, no cameras, no inverse kinematics, no status line, nothing but this loop's own `time.sleep(max(0.0, dt - elapsed))` line. On the Mac that empty loop reaches **84.3 Hz**. A whole session with two arms, a recording, a playback and a composite run reaches **84 to 85 Hz**. The work is free; the wait is the whole cost.
+
+⭐⭐⭐ **Both machines, measured the same way on 2026-08-20:**
+
+| | Mac | ⭐ Linux station (RoVita) |
+|---|---|---|
+| `time.sleep(0.008)` returns late by | **1.88 ms** median, 2.08 ms worst of 300 | **0.366 ms** median, 0.615 ms worst of 300 |
+| empty 100 Hz loop | 11.87 ms a pass → **84.3 Hz** | 10.28 ms a pass → **97.3 Hz** |
+
+⛔⭐⭐ **SO "THE LOOP RUNS AT 87 Hz" WAS NEVER A PROPERTY OF THIS SYSTEM. It is a property of macOS**, and it is written as a plain fact in [PERFORMANCE.md](PERFORMANCE.md), [PLAN.md](PLAN.md), the [README](../README.md), `src/yam/can.py`, `src/yam/recording.py`, `src/yam/seams.py` and the loop's own comment. **This is [§76.2](FINDINGS.md)'s lesson in a new place**: there, a camera's usable sizes turned out to be a property of the camera *plus* the platform. Here it is a timing constant. ⚠️ The station's real loop, with arms attached, is still unmeasured, and its ceiling is now expected near 97 Hz rather than 87.
+
+⭐ **Three consequences, and the second is the useful one for his question:**
+
+- Moving the cameras off the loop cannot recover the Mac's missing 15 Hz. There is no work there to move. That is the sharpest form of the answer [§77.4](FINDINGS.md) gave.
+- ⭐ **The station may already be at 97 Hz and nobody knew.** Every constant derived from "the loop runs at 87" deserves a second look, starting with `MAX_PLANNED_JOINT_SPEED = 0.015 × 100` and item 14's own note that the real teleop ceiling was ~1.25 rad/s rather than 1.5 ([§34.2](FINDINGS.md)). ⛔ **A rate that rises makes a per-cycle step limit produce MORE speed, not less**, so this is a safety-relevant number and it is his call.
+- The lever, if anyone ever wants the last 3 Hz on the station, is the wait rather than the work: sleep short and spin the remainder. ⛔ **Nothing needs it.** The arm's own following delay is 33 ms, so 97 Hz is three times the headroom anything measured needs.
+
+⚠️ **What this does NOT explain:** the 87 → 83 Hz drift inside one afternoon on 2026-08-13. That residue is 4 Hz of a 16 Hz gap, and it stays open in item 14.
+
+✅ **How it was measured, so it can be repeated in one command on any machine:** the probe is fifteen lines of Python using nothing but `time.perf_counter` and `time.sleep`, run identically on the Mac and over `ssh yam-pc`. It touches no hardware, needs no root, and moves nothing.

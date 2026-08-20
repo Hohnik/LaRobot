@@ -18,36 +18,86 @@
 
 If you read nothing else:
 
-1. The loop is not slow because of the cameras. It was measured at about 87 passes a second before any camera code existed. The cameras cost a few passes a second on top of that, and the exact amount has never been isolated.
-2. The camera work is tiny. Compressing one 1280x720 picture takes 1.4 milliseconds. Three cameras at 30 pictures a second therefore need about 0.13 seconds of compression work per second of recording. That is not a load worth restructuring for.
-3. Reading and compressing already happen off the loop. Each camera has its own reader thread and its own writer thread. The loop hands over a reference and moves on.
-4. 83 passes a second is already about three times faster than the arm can respond to. The arm follows a moving target with a delay of about 0.033 seconds, so it behaves like something with a 30 Hz limit. Sending it setpoints at 83 Hz is not the constraint on anything.
-5. Two changes would actually move the numbers, and both are about the pictures rather than the code: the compression quality, and the size you capture at. Both change the recorded data, so both are Julien's decision.
+1. ⭐ The loop misses 100 passes a second because of the way it waits. No work it does is responsible. Measured on 2026-08-20: a loop with no arms, no cameras and no work at all, using this loop's own waiting line, runs at 84.3 passes a second on the Mac. The same loop runs at 97.3 on the Linux station. Section 2 has the numbers. So the shortfall everyone has been trying to explain is mostly macOS, and moving work out of the loop cannot recover it.
+2. The loop is not slow because of the cameras. It was measured at about 87 passes a second before any camera code existed. The cameras cost a few passes a second on top of that, and the exact amount has never been isolated.
+3. The camera work is tiny. Compressing one 1280x720 picture takes 1.4 milliseconds. Three cameras at 30 pictures a second therefore need about 0.13 seconds of compression work per second of recording. That is not a load worth restructuring for.
+4. Reading and compressing already happen off the loop. Each camera has its own reader thread and its own writer thread. The loop hands over a reference and moves on.
+5. 83 passes a second is already about three times faster than the arm can respond to. The arm follows a moving target with a delay of about 0.033 seconds, so it behaves like something with a 30 Hz limit. Sending it setpoints at 83 Hz is not the constraint on anything.
+6. Two changes would actually move the numbers for the pictures, and both are data decisions rather than code: the compression quality, and the size you capture at. Both change the recorded data, so both are Julien's decision.
 
 ## 2. Where the loop's time actually goes
 
 **What is measured.**
 
-The loop asks for 100 passes a second. It has never achieved that. [FINDINGS.md](FINDINGS.md) section 31.1 measured about 87 on the Mac. It was found because a playback summary did not add up: 4.0 seconds of work reported inside 4.6 seconds of wall clock. 4.0 ÷ 4.6 = 0.87.
+The loop asks for 100 passes a second. On the Mac it has never achieved that. [FINDINGS.md](FINDINGS.md) section 31.1 measured about 87. It was found because a playback summary did not add up: 4.0 seconds of work reported inside 4.6 seconds of wall clock. 4.0 ÷ 4.6 = 0.87.
 
-**What is not measured, and this matters.**
+**⭐⭐ And on 2026-08-20 the cause turned out to be the waiting, not the work.**
 
-Nothing has ever broken the pass down into its parts. The candidates, in the order they are likely to matter:
+The bottom of the loop is one line: `time.sleep(max(0.0, dt - elapsed))`. It asks the operating system to wake it up in the time left over from a 10 ms pass. An operating system may wake you later than you asked, and by how much is a property of the operating system rather than of this program.
+
+So it was measured on both machines, twice. How late does `time.sleep` return? And what does an empty loop achieve, using exactly this loop's own waiting line? No arms, no cameras, no inverse kinematics, no status line. Nothing but the wait.
+
+| | Mac (macOS, where the walkthrough was built) | Linux station (RoVita, Ubuntu 24.04) |
+|---|---|---|
+| `time.sleep(0.008)` returns late by | 1.88 ms (median), 2.08 ms (worst of 300) | 0.366 ms (median), 0.615 ms (worst of 300) |
+| an empty 100 Hz loop achieves | 11.87 ms a pass, so **84.3 Hz** | 10.28 ms a pass, so **97.3 Hz** |
+| the real session, with two simulated arms | 11.8 ms a pass, so 84 to 85 Hz | not measured yet |
+
+⛔ Read the third row against the second. On the Mac, a full session with two arms, a recording, a playback and a composite run is no slower than a loop that does nothing at all. Both come out at about 84 Hz.
+
+⛔ Every millisecond of the Mac's shortfall is the wait. None of it is the work.
+
+⭐ Three things follow, and the third one matters most for the station.
+
+- Moving the cameras, or anything else, out of the loop cannot recover the missing 15 Hz on the Mac. There is no work there to move.
+- The 87 Hz figure that appears throughout this repo is a macOS number. It was never a property of the system, and reading it as one is the same mistake as reading a camera's usable sizes off one platform ([FINDINGS §76.2](FINDINGS.md)).
+- The station's own loop, with the real arms, has still not been measured, and it now has a plausible ceiling near 97 Hz rather than 87. It measures itself from now on: every session prints its own numbers when it stops.
+
+**What is still not attributed.**
+
+Nothing has broken a *station* pass down into its parts. The candidates, with what is now known:
 
 | candidate | what is known |
 |---|---|
-| the CAN round trip | 14 motors are commanded and read every pass over two USB adapters at 12 Mbit/s each. Unmeasured, and the most likely largest share |
-| Python work per pass | mode logic, the status line, the tracking log. Unmeasured |
-| inverse kinematics | **measured: about 0.1 ms for both arms**, against roughly 10 ms available. Not the problem |
+| ⭐ the wait at the bottom of the loop | **measured, and it is the whole of the Mac's shortfall**: 1.88 ms a pass on macOS, 0.366 ms on the station |
+| the CAN round trip | 14 motors commanded and read every pass over two USB adapters. `apps/bench_can.py` measured a 7-motor cycle at 3.12 ms mean and 17.8 ms worst on the Mac ([HISTORY.md](HISTORY.md)). ⚠️ That is absorbed by the wait unless a pass exceeds 10 ms, which is why removing it in simulation changed nothing |
+| Python work per pass | mode logic, the status line, the tracking log. Unmeasured, and bounded above by the empty-loop result: on the Mac it costs less than the wait |
+| inverse kinematics | **measured: about 0.1 ms for both arms** while running, against roughly 10 ms available. ⚠️ Its **construction** is another matter, and it is the biggest stall this loop has: see the worst-pass numbers below |
 | camera hand-off | reading the newest frame reference and putting it on a queue. Microseconds |
 
-⛔ So the honest state is that the loop's own cost has never been attributed.
+⛔ Before anyone changes the design to make it faster, read the two rows above that say "measured". The one lever this section has found is the wait, and on the station it is already small.
 
-Before anyone changes the design to make it faster, measure where the pass goes. Changing an unmeasured thing is how you spend a week and learn nothing.
+⭐ The instrument exists, and as of 2026-08-20 it records the worst pass too.
 
-⭐ The instrument already exists.
+Every playback writes a tracking file that records `loop_hz`, so the average rate is captured per run rather than noticed once. What it did not record was the worst single pass, and the average cannot show one. `src/yam/timing.py` now measures it: every session prints one line when it stops, every playback's tracking file contains the numbers, and a crash report contains them as well.
 
-Every playback writes a tracking file that records `loop_hz`, so the rate is captured per run rather than noticed once. What it does not record is the worst single pass. That is the number that would tell you whether the cameras cause jitter. That is a small addition and it is not built.
+It keeps the five slowest passes, with the moment each one happened. Five rather than one, because one time is not a pattern. Finding the cause of the first worst pass ever measured meant putting a temporary `print` into the loop and reading the log for what had been printed just before it.
+
+**The first measurements, and read the warning under the table before using them.**
+
+Three runs of `checks/drive_sim_session.py` on the Mac. That driver runs a full session: two simulated arms, a recording, a playback and a composite run.
+
+| run | passes | mean | worst pass | over 33 ms | over 50 ms |
+|---|---|---|---|---|---|
+| 1 | 7143 | 11.8 ms (85 Hz) | 75.4 ms | 4 | 1 |
+| 2 | 7085 | 11.8 ms (85 Hz) | 67.8 ms | 3 | 1 |
+| 3 | 7010 | 11.8 ms (84 Hz) | 71.2 ms | 4 | 1 |
+
+⛔ These are simulated arms. A simulated arm answers in microseconds. A real one is 14 motors over two USB adapters, and that is the largest single item in a real pass. So these numbers are the jitter that Python and macOS contribute, and nothing else. The real ones arrive on the next bench session, automatically, because the line prints itself.
+
+⭐ What they do establish, and it is worth having:
+
+- The mean matches the 87 Hz measured in a completely different way in 2026-08-13, so the instrument agrees with the one number already known.
+- Four passes in about 7000 were longer than the arm's own 33 ms response time, so stalls are real and rare: about one pass in 1800.
+- Every one of those stalls happened in a session with no cameras attached at all. So camera work is not the only source of jitter, and moving the cameras off the loop would not have prevented any of these four.
+
+**What the worst pass turned out to be, in the simulated session**
+
+It is reproducible: 67 to 88 ms, always at about 19 seconds in, immediately after the line `MODE: TELEOP on B+G`. Entering teleop builds the inverse-kinematics solver for each selected arm inside the loop's pass. Measured on its own, the first `CartesianTeleop` of a process costs 33 ms because MuJoCo loads its model, and later ones cost about 4 ms each.
+
+The other three stalls are 36 to 40 ms, one at the start of a recording and two during replay.
+
+⚠️ A first guess was wrong, and measuring it took two minutes. That is the whole argument for measuring. Saving a recording looked like the obvious cause, because it writes a file from inside the loop. Timed directly, saving slot 8 (225 samples, 31 KB) takes 1.2 ms.
 
 ## 3. What the cameras actually cost
 
