@@ -5,8 +5,8 @@ have the second arm just mirror the exact movements with zero latency."*
 
 ⭐⭐ WHY THE FOLLOWER IS BEHIND, WRITTEN OUT FOR A READER: [docs/LAG.md](../../docs/LAG.md).
 He asked on 2026-08-20 why copying one arm's angles onto another can possibly be slow.
-It is not: `follower_target` costs 0.3 µs and the whole of `step` costs 5.5 µs, out of a
-11 800 µs pass. **Every millisecond of lag is a limit or a physical property**, and that
+It is not: `follower_target` costs 0.3 µs and the whole of `step` about 8 µs, out of a
+11 800 µs pass. `uv run apps/bench_loop.py` re-measures both. **Every millisecond of lag is a limit or a physical property**, and that
 file names each one with the line of code that causes it, in the order a pass meets them.
 
 **Why this is the right first two-arm feature, ahead of bimanual teleop.** It needs

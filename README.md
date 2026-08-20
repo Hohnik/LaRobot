@@ -6,7 +6,7 @@
 >
 > What it does today, all confirmed on hardware:
 >
-> - Two arms driven from one 90 Hz loop by SpaceMouse: the puck steers the gripper in cartesian space through inverse kinematics.
+> - Two arms driven from one loop by SpaceMouse: the puck steers the gripper in cartesian space through inverse kinematics. The loop asks for 100 passes a second and reaches about 85 on the Mac. ⭐ That shortfall is macOS waking a sleep late, and the same loop reaches 97 on the Linux station ([docs/PERFORMANCE.md](docs/PERFORMANCE.md) section 2).
 > - Hand-guiding: the arm goes weightless under gravity compensation and you move it by hand.
 > - Waypoint runs that can grab. The run pauses where only the jaws move and reports whether something was gripped.
 > - Recording and replaying hand-taught movements, with the puck as a scrub wheel for the playback clock.

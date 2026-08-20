@@ -6009,11 +6009,11 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 
 ### 78.2 ⬜⭐ WHAT IS OPEN AFTER THIS SESSION — supersedes [§77.6](FINDINGS.md)
 
-⭐ **Two numbers to compare against:** `uv run checks/run_tests.py` → **831/831 across 40 files**. `uv run checks/run_falsifiers.py` → **CATCH TOTAL 71/71 across 5**. Links **1690/1690**. All eight of his documents at or under their ceiling.
+⭐ **The numbers to compare against, at the end of 2026-08-20:** `uv run checks/run_tests.py` → **843/843 across 41 files**. `uv run checks/run_falsifiers.py` → **CATCH TOTAL 71/71 across 5**. `uv run checks/drive_sim_session.py` → **32/32**. Links **1850/1850**. All eight of his documents at or under their prose ceiling. ⛔ **Everything is committed and pushed**: `julien/yam-teleop-wip` on `Hohnik/LaRobot` is current with `main`, and [§78.7.4](FINDINGS.md) is the procedure for the next push.
 
 **His:**
 
-1. ✅ **~~Push to `julien/yam-teleop-wip`~~ DONE this session** at his word, `834c876..cb5c446` ([§78.0](FINDINGS.md)). The next push needs his word again.
+1. ✅ **~~Push to `julien/yam-teleop-wip`~~ DONE, twice, at his word**: `834c876..cb5c446` then on to `db0b52b` and the close-out commit ([§78.0](FINDINGS.md)). ⛔ The next push needs his word again.
 2. ⛔ **One camera-carrying recording on the station** with the fixed code. Needs the arms, unplugged since 2026-08-19.
 3. ⛔⭐⭐ **NEW, and the only one with a safety edge: the loop's rate ceiling belongs to the operating system** ([§78.5](FINDINGS.md)). 84.3 Hz on the Mac, **97.3 Hz on the station**, measured with an empty loop. ⛔ A per-cycle step limit produces MORE speed when the rate rises, so `MAX_PLANNED_JOINT_SPEED = 0.015 × 100` and every constant derived from "87 Hz" wants a look before the next fast bench run. Nothing is changed yet.
 4. ⭐ **The frame-rate against brightness decision** ([§76.16](FINDINGS.md)), before real data is collected.
@@ -6025,7 +6025,7 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 **Not his, hardware-free:**
 
 - ✅ **~~`docs/LINUX.md` at 44~~ DONE this session, 44 → 0** ([§78.3](FINDINGS.md)). ⬜ **`docs/COMMANDS.md` at 117 still has not had one**, and it needs a restructure rather than a phrase pass: [§78.3](FINDINGS.md) says why and what the shape should be.
-- ✅ **~~The worst single loop pass is unmeasured~~ DONE this session** ([§78.4](FINDINGS.md), [§78.5](FINDINGS.md)): `src/yam/timing.py`, 12 checks, wired into the loop and asserted end to end by `drive_sim_session`. ⭐ It answered [ROADMAP §8.2](ROADMAP.md) item 14 on the way, and that answer needs his eye: **the loop's rate ceiling is a property of the operating system**, the station may already run at 97 Hz rather than 87, and a rate that rises makes a per-cycle step limit produce more speed. ⬜ What is left is one real reading with the arms attached, and it now happens by itself.
+- ✅ **~~The worst single loop pass is unmeasured~~ DONE** ([§78.4](FINDINGS.md), [§78.5](FINDINGS.md)): `src/yam/timing.py`, 12 checks, wired into the loop and asserted end to end by `drive_sim_session`. ⭐ `apps/bench_loop.py` re-measures the machine's own ceiling in half a minute, with no hardware and no root. ⭐ It answered [ROADMAP §8.2](ROADMAP.md) item 14 on the way, and that answer needs his eye: **the loop's rate ceiling is a property of the operating system**, the station may already run at 97 Hz rather than 87, and a rate that rises makes a per-cycle step limit produce more speed. ⬜ What is left is one real reading with the arms attached, and it now happens by itself.
 - ⬜ Mesh-to-mesh collision distance ([ROADMAP §8.2](ROADMAP.md) item 35) and the per-joint speed ceilings (item 37), both unchanged from [§76.14](FINDINGS.md).
 
 ### 78.3 ✅⭐⭐ THE READING PASS ON [LINUX.md](LINUX.md): 44 → 0, AND IT FOUND TWO STALE NUMBERS AND A LINE THAT CONTRADICTED THE FILE IT WAS IN
@@ -6103,19 +6103,19 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 
 ✅ **How it was measured, so it can be repeated in one command on any machine:** the probe is fifteen lines of Python using nothing but `time.perf_counter` and `time.sleep`, run identically on the Mac and over `ssh yam-pc`. It touches no hardware, needs no root, and moves nothing.
 
-### 78.6 ✅⭐⭐ HIS MIRROR-LAG QUESTION, ANSWERED WITH NUMBERS — and my own chat sentence was wrong by a factor of six thousand
+### 78.6 ✅⭐⭐ HIS MIRROR-LAG QUESTION, ANSWERED WITH NUMBERS — and my own chat sentence was wrong by a factor of four thousand
 
 His question, 2026-08-20: *"why is the mirroring arm in mirror mode so far behind the first arm? I don't quite understand why I can't just read out the position data of the one arm and then basically paste it on the other arm. That should be really easy and really quick because nothing has to be calculated. It only has to be sent. Why does that take so long?"*
 
-⛔⭐⭐ **HE IS RIGHT ABOUT THE PASTE, AND THE NUMBER IS WORTH KNOWING.** Measured on the Mac, 2000 calls each:
+⛔⭐⭐ **HE IS RIGHT ABOUT THE PASTE, AND THE NUMBER IS WORTH KNOWING.** Measured on the Mac with `apps/bench_loop.py`, 3000 calls each, median:
 
 | what | cost |
 |---|---|
 | `mirror.follower_target()`, the copy and the three sign flips | **0.3 µs** |
-| `MirrorLink.step()` entire: copy, rate limit, speed estimates, per-joint gap diagnosis | **5.5 µs** |
+| `MirrorLink.step()` entire, with the link FOLLOWING: copy, rate limit, speed estimates, per-joint gap diagnosis | **about 8 µs** |
 | one pass of the loop at 85 Hz | 11 800 µs |
 
-**So the whole mirror decision is 0.05% of a pass.** Every millisecond of lag is a chosen limit or a physical property.
+**So the whole mirror decision is 0.07% of a pass.** Every millisecond of lag is a chosen limit or a physical property. ⚠️ [§78.7](FINDINGS.md) records two ways this number can be measured wrongly, and the first version of it was measured both ways.
 
 ⛔⭐⭐ **AND I TOLD HIM IN CHAT THAT "EACH ARM TAKES 33 MS TO PROCESS". THAT IS WRONG.** The 0.033 s is the speed-dependent half of the arm's measured following error ([§34.1](FINDINGS.md), [ROADMAP §8.2](ROADMAP.md) item 11), so it is travel-behind rather than compute time. The correction is written into [LAG.md](LAG.md) section 6 rather than left in chat, because a wrong number in a chat message is what the next question gets built on. ⚠️ **And that section also carries [§37.1](FINDINGS.md)'s doubt**: the delay is nearly identical across joints with very different gains, so the leading explanation is that the 0.033 s is `SafeRobot`'s own rate clamp. Unproven, and one run with `--max-speed` well above the commanded speeds would settle it.
 
@@ -6140,3 +6140,70 @@ His question, 2026-08-20: *"why is the mirroring arm in mirror mode so far behin
 ⚠️⭐ **TWO FAULTS THE SUITE CAUGHT IN MY OWN NEW FOOTER LINES**, and this is the ratchet doing its job: adding a "where to go next" row to `ARCHITECTURE.md` and `PERFORMANCE.md` put one prose fault in each, at documents whose ceiling is 0. `check_prose.py` alone reported them, `tests/test_prose.py` failed the suite, and the second fault appeared only after fixing the first, because a `·`-separated footer is read as one sentence and my line pushed it to 36 words. That footer is a list now.
 
 ⭐ **One stale path found while writing the table:** [FINDINGS §59.0](FINDINGS.md) and several other places name the lagging simulator as `src/fake_arm.py`. It is `src/yam/fake/arm.py`. The document says the real path; `check_links` would not have caught it, because those older mentions are not links.
+
+### 78.7 ⛔⭐⭐⭐ WHAT ONLY THIS SESSION KNEW — the latent notes, written down because Julien is leaving this part of the project for a while
+
+⭐ **His instruction, 2026-08-20 evening:** *"make sure everything is sensibly noted down in full detail... including all of the latent information and stuff only you know, so that any future contextless agent is able to continue working on this project seamlessly and sensibly without a problem. After you're done here, I will work on the project with my friends. So I won't be working on this part of the project for a while."*
+
+So this section is everything that lived only in this session's head. Nothing below is a status update; all of it is knowledge that would cost a rediscovery.
+
+#### 78.7.1 ⛔⭐⭐ THE MIRROR TIMING WAS MEASURED WRONGLY TWICE, AND BOTH WAYS ARE GENERAL
+
+The number is small either way and the conclusion never changed. **The way it was wrong is the point.**
+
+- ⛔ **A benchmark can measure an early return and look like a measurement of the work.** The first probe fed `MirrorLink.step` a leader running away from the follower. The link **stops itself** in that case, and a stopped link returns before the rate limiter and before the per-joint gap check. Median 5.5 µs, of a path that does not do the job. A link that keeps following costs about **8 µs**. ⭐ **The fix is in the tool rather than in the habit**: `apps/bench_loop.py` drives a slow leader, feeds the follower the previous command, and **prints which states it saw**, so the output says what was actually timed.
+- ⛔ **A microsecond-scale measurement taken straight after an idle wait reads about twice as high.** Same call, same process: 8.4 µs cold, **15.0 µs after six seconds inside a sleeping loop**, 9.5 µs on the next attempt. The processor drops its clock while the loop sleeps and the first fast measurement pays for the ramp back up. ⭐ So in `bench_loop.py` the microsecond measurement runs **first**, before the sleep tests, and the tool prints the caveat next to the number. ⚠️ A millisecond-scale measurement cannot see this at all, which is why only the one measurement had to move.
+
+⭐⭐ **The general rule, and it is the same one [§76](FINDINGS.md) spent a day on in a different form:** a number is a claim until its conditions are printed beside it. For a timing benchmark the conditions include **which code path ran** and **what the machine was doing just before**.
+
+#### 78.7.2 ⭐⭐ ONE COMMAND PER QUESTION — the whole tool set, for an agent with no context
+
+| the question | the command | what a good answer is |
+|---|---|---|
+| Is anything broken? | `uv run checks/run_tests.py` | **843/843 across 41 files.** A total that falls while green means a check was disarmed ([§70.4](FINDINGS.md)) |
+| Do the checkers still catch anything? | `uv run checks/run_falsifiers.py` | **CATCH TOTAL 71/71 across 5.** Same rule: a fall while green is the signal |
+| Does the whole session still run? | `uv run checks/drive_sim_session.py` | **32/32.** Needs no hardware. Anything on its command line is passed through to the session |
+| What state is the rig in? | `uv run checks/check_rig.py` | Recomputes it. ⛔ Never trust a written camera or puck count in any document |
+| Are the documents still readable? | `uv run checks/check_prose.py` | **8 documents at or under their ceiling.** `-v` lists every hit with its line |
+| Do the links still resolve? | `uv run checks/check_links.py` | **1808/1808** |
+| Do the documented commands still exist? | `uv run checks/check_flags.py` | Green. It validates every documented flag against the real parsers |
+| What can this machine's loop reach? | `uv run apps/bench_loop.py` | Mac 84.3 Hz, station 97.3 Hz. ⛔ No hardware, no root, safe any time |
+| What did the CAN bus cost? | `uv run apps/bench_can.py --yes` | 3.12 ms per 7-motor cycle on the Mac. ⛔ Needs an arm |
+| Is a recording sound? | `uv run checks/check_recordings.py` | Per slot, including the frame counts and the sidecar warning |
+| Is a document hard-wrapped? | `uv run apps/unwrap_markdown.py <files>` | "already one line per paragraph". ⛔ Run it BEFORE `check_prose` again, see below |
+
+#### 78.7.3 ⛔⭐ THREE TOOL INTERACTIONS THAT UNDO EACH OTHER
+
+- ⛔ **The unwrapper can undo a prose fix.** A bold label on one line with its text on the next renders as one paragraph, so `unwrap_markdown.py` correctly merges them and the bold lands back inside a sentence. **A blank line between them is what makes it survive.** Always unwrap first, then re-run `check_prose.py` ([§78.3](FINDINGS.md)).
+- ⛔ **`2b.` is not markdown list syntax, and the unwrapper merged one into the heading above it.** Inserting an item into a numbered list means renumbering the list. This happened in [HANDOFF.md](HANDOFF.md)'s his-list in this very session, and the same trap is written into the Mind Understanding workspace's rule 12.
+- ⛔ **The prose ratchet judges what you add to a finished document.** Two "where to go next" rows added in this session put one fault each into `ARCHITECTURE.md` and `PERFORMANCE.md`, whose ceilings are 0. ⚠️ **The second fault appeared only after the first was fixed**, because a `·`-separated footer is read as one sentence and the new clause pushed it past 31 words. That footer is a list now.
+
+#### 78.7.4 ⛔⭐⭐ THE PUSH PROTOCOL, in the exact order it was run twice today
+
+⛔ **Pushing needs his word every time** ([§4 rule 9](HANDOFF.md)). It came twice on 2026-08-20 and both pushes went the same way:
+
+```bash
+uv run checks/run_tests.py && uv run checks/run_falsifiers.py    # green first
+git status --short                                                # must be empty
+git fetch larobot
+git rev-list --left-right --count larobot/julien/yam-teleop-wip...main   # LEFT must be 0
+git push larobot main:julien/yam-teleop-wip
+```
+
+⭐ **The left number is the check worth keeping.** It counts commits on their branch that are not on ours. Zero means a fast-forward that discards nothing. Anything else means somebody committed to that branch and the push would need a merge instead.
+
+#### 78.7.5 ⭐⭐ WHAT THE TEAM NEEDS FROM THIS REPO, since that is where he goes next
+
+He is about to work on `Hohnik/LaRobot` with his friends. What this repo owes them is written and pushed, and [BRIDGE.md](BRIDGE.md) is the document that carries it. Three things are worth saying out loud:
+
+- ⛔ **Their `SimCamera.py` does not compile** at `3576ce1`, their newest camera commit, and nothing imports it because their camera test file is one comment line. Line 15 is `self._id = int | None = None`. [BRIDGE.md](BRIDGE.md) section 4 item 5 has all three faults and the one-line command that proves the first.
+- ⛔ **Their `Frame` has no timestamp field** while its own docstring says it is combined with one, and their `read()` is a blocking pull. The episode export joins pictures to control ticks by timestamp, so a picture without one cannot be joined ([§77.3](FINDINGS.md)).
+- ⭐ **Nobody has told them any of this.** It is written down and pushed to the branch they read. Sending it is his to do, and a message would take three lines.
+
+#### 78.7.6 ⚠️ SMALL THINGS THAT WOULD OTHERWISE BE REDISCOVERED
+
+- The lagging simulator is `src/yam/fake/arm.py`. Several older sections, including [§59.0](FINDINGS.md), call it `src/fake_arm.py`. Those mentions are prose rather than links, so `check_links` cannot see them.
+- `MirrorLink.follow_speed` is taken from the follower's `SafeRobot.max_speed` at engage time ([teleop_session.py:2978](../apps/teleop_session.py)), so `--max-speed` raises the mirror's own limit too. Nothing else does.
+- `drive_sim_session.py` passes its own command line straight through to the session, so a new flag can be exercised end to end without editing it: `uv run checks/drive_sim_session.py --vel-ff 0.5`.
+- The station probe of [§78.5](FINDINGS.md) ran over `ssh yam-pc` with a heredoc and needed no root, no hardware and no repo update. Any pure-Python measurement can be taken there the same way.
+- `python3 -m py_compile <file>` is enough to check a file another team wrote, from the fetched git objects, without importing anything or installing their dependencies.

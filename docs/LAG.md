@@ -8,13 +8,13 @@
 >
 > Julien asked on 2026-08-20: *"why is the mirroring arm in mirror mode so far behind the first arm? I don't quite understand why I can't just read out the position data of the one arm and then basically paste it on the other arm. That should be really easy and really quick because nothing has to be calculated. It only has to be sent. Why does that take so long?"*
 >
-> ⭐ The reading and the pasting are indeed free. Measured below: 5.5 microseconds of a 11 800 microsecond pass. Everything that makes the follower late happens after the paste. Most of it is a limit somebody chose on purpose.
+> ⭐ The reading and the pasting are indeed free. Measured below: about 8 microseconds of a 11 800 microsecond pass. Everything that makes the follower late happens after the paste. Most of it is a limit somebody chose on purpose.
 >
 > ⛔ Every number in this file was measured. Where something is a guess it says so.
 
 ## 1. The short answer
 
-1. Copying the leader's angles onto the follower costs 5.5 microseconds per pass, out of about 11 800. Your instinct is right: that part is free.
+1. Copying the leader's angles onto the follower costs about 8 microseconds per pass, out of about 11 800. Your instinct is right: that part is free.
 2. The follower is then only allowed to move at 1.0 radian per second, and that is a software limit this repo chose. Your hand, hand-guiding the leader, has been measured at 5.66 and 6.83 radians per second. So the follower falls behind at up to 5.8 radians per second while you move fast, and it has nothing to do with computing time.
 3. On top of that, the command is never allowed to be more than 0.25 radians ahead of where the follower actually is. That caps how hard the motor is asked to catch up, because the motor's push is proportional to that distance.
 4. Then physics adds its own share. The follower's motors only push while they are away from their target, so the arm always trails a moving command and always settles a little short of a still one. Measured: 0.04 to 0.10 radians short at rest, plus a delay of about 0.033 seconds while moving.
@@ -50,11 +50,13 @@ Every pass of the loop does these six things for mirror mode. The cost column is
 | 1 | Read the leader's seven joint angles from its motors, over its own USB CAN adapter | about 3 ms for seven motors, measured | [teleop_session.py:4182](../apps/teleop_session.py) |
 | 2 | Read the follower's seven angles the same way | about 3 ms | [teleop_session.py:4183](../apps/teleop_session.py) |
 | 3 | Copy the leader's angles into a target for the follower, negating three of them if you asked for `mirror` instead of `copy` | **0.3 µs** | [mirror.py:206](../src/yam/mirror.py) `follower_target` |
-| 4 | Decide the follower's command: move the previous command towards the target, by at most `follow_speed × dt` | **5.5 µs for all of step 4** | [mirror.py:532](../src/yam/mirror.py) |
+| 4 | Decide the follower's command: move the previous command towards the target, by at most `follow_speed × dt` | **about 8 µs for all of step 4** | [mirror.py:532](../src/yam/mirror.py) |
 | 5 | Clamp that command twice more: no faster than `max_speed × dt`, and no further than `max_lag` from where the follower actually is | microseconds | [robot.py:904](../src/yam/robot.py) and [robot.py:906](../src/yam/robot.py) |
 | 6 | Send it to the follower's motors | part of the CAN traffic above | inside the vendor library |
 
-⭐ Steps 3, 4 and 5 are the whole of the thinking, and together they take under 6 microseconds. That is 0.05% of one pass. Nothing in the software is slow.
+⭐ Steps 3, 4 and 5 are the whole of the thinking, and together they take about 8 microseconds. That is 0.07% of one pass. Nothing in the software is slow.
+
+⚠️ Two honest notes on that 8. It is a median of 3000 calls with the link actually following, because a stopped link returns early and times faster. And it doubles to 15 or 19 microseconds if the processor has just been idling, because the clock speed has to come back up. Neither changes the conclusion, and both are why the number comes with the command that produced it: `uv run apps/bench_loop.py`.
 
 ⚠️ Steps 1, 2 and 6 are the CAN traffic, and they are the real time cost inside a pass. About 3 milliseconds per arm, measured with `apps/bench_can.py` on the real hardware. Even so, they fit inside 11.8 milliseconds with room to spare, and none of that is what puts the follower behind.
 
@@ -107,7 +109,7 @@ The speed-dependent part is a delay of about 0.033 seconds. Section 6 is about w
 
 ## 6. The 33 milliseconds, and what that number actually measures
 
-⛔ In chat on 2026-08-20 this was described as each arm taking 33 milliseconds to process. That was wrong, and it is worth correcting properly. Nothing in this system takes 33 milliseconds to compute anything. The measured software cost of a mirror decision is 5.5 microseconds. That is six thousand times smaller.
+⛔ In chat on 2026-08-20 this was described as each arm taking 33 milliseconds to process. That was wrong, and it is worth correcting properly. Nothing in this system takes 33 milliseconds to compute anything. The measured software cost of a mirror decision is about 8 microseconds. That is roughly four thousand times smaller.
 
 What the 0.033 seconds is: the speed-dependent half of the arm's measured following error. Drive a joint at a steady speed and it trails its command by whatever it would have covered in 0.033 seconds. At 1 rad/s that is 0.033 radians of lag, and at 2 rad/s it is 0.066.
 
@@ -166,4 +168,4 @@ Three things, in the order they would be worth measuring.
 - [ARCHITECTURE.md](ARCHITECTURE.md) section 2 if a word in section 2 above was still unfamiliar
 - [FINDINGS.md](FINDINGS.md) section 62 for the two mirror runs quoted here
 
-*Written 2026-08-20, from the code as it stands and from measurements taken on your own arms between 2026-08-13 and 2026-08-18. The software timings in sections 3 and 4 were taken on the Mac on 2026-08-20 and can be re-taken in one command.*
+*Written 2026-08-20, from the code as it stands and from measurements taken on your own arms between 2026-08-13 and 2026-08-18. The software timings in sections 3 and 4 were taken on the Mac on 2026-08-20, and `uv run apps/bench_loop.py` re-takes all of them on any machine in about half a minute, with no hardware attached.*

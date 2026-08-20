@@ -10,7 +10,7 @@
 
 The walkthrough proved the whole loop on macOS with two YAM arms. That covers nine things:
 
-- **SpaceMouse teleop at 90 Hz.** The puck steers the gripper through space, and inverse kinematics works out the joint angles that put it there.
+- **SpaceMouse teleop at about 85 passes a second on the Mac.** The puck steers the gripper through space, and inverse kinematics works out the joint angles that put it there. The loop asks for 100. ⭐ On your Linux station the same loop reaches about 97, because the shortfall is macOS waking a sleep late rather than any work in the loop ([PERFORMANCE.md](PERFORMANCE.md) section 2).
 - **Hand-guiding.** The arm goes weightless under gravity compensation and you move it with your hands.
 - **Waypoint runs that can grab.** The run pauses at a leg where only the jaws move, and it reports whether anything was actually gripped.
 - **Recording and replaying hand-taught movements.**
@@ -41,7 +41,7 @@ For your rebuild on Ubuntu, Phase A applies as your guide writes it, and none of
 
 ### Phase B (hardware and physical setup) — mostly proven, three corrections
 
-**CAN and arms (B2): proven beyond the guide.** Two arms, two buses, one 90 Hz process, with roughly three times the timing headroom needed. Two rules from hard experience:
+**CAN and arms (B2): proven beyond the guide.** Two arms, two buses, one process at about 85 passes a second on the Mac and about 97 on Linux, with roughly three times the timing headroom needed. Two rules from hard experience:
 
 - Select adapters by serial number, never by index. The enumeration order changed twice in one session, and selecting by index would have moved the wrong arm ([FINDINGS §0](FINDINGS.md) #5).
 - Put the CAN adapters on a powered USB 3 hub, not behind a dock. The one hard crash this rig had was the whole USB bus sagging away mid-session: seven motors latched fault code `0xD`, and both adapters fell into their bootloaders ([FINDINGS §46.0](FINDINGS.md)). Budget for that hub.
@@ -62,7 +62,7 @@ For your rebuild on Ubuntu, Phase A applies as your guide writes it, and none of
 
 ### Phase C (teleop and recording) — the heart of the walkthrough, and where the traps live
 
-**IK chain (C1).** Proven with mink and MuJoCo at 90 Hz. Two IK solves cost 0.1 ms against a 10 ms budget. The guide's advice stands: use ABC's `yam.xml` as the robot model. One lesson worth reading even if nothing is broken: a pure rotation once dragged the tool point 44 cm sideways, and the fix explains how the solver thinks ([FINDINGS §18](FINDINGS.md)).
+**IK chain (C1).** Proven with mink and MuJoCo inside that loop. Two IK solves cost 0.1 ms against a 10 ms budget. The guide's advice stands: use ABC's `yam.xml` as the robot model. One lesson worth reading even if nothing is broken: a pure rotation once dragged the tool point 44 cm sideways, and the fix explains how the solver thinks ([FINDINGS §18](FINDINGS.md)).
 
 **Robot loop (C2).** The shape that worked: the class decides, the script narrates. One `ArmSession` object per arm holds every decision; the loop reads inputs, calls methods and prints ([ROADMAP §9.5](ROADMAP.md)). On top of that, adopt your own policy-as-an-input idea: everything that produces commands (puck, keyboard, policy) is reached through one interface.
 

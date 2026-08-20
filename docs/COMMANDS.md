@@ -319,7 +319,10 @@ uv run checks/check_recordings.py                   # what is in each recording 
 uv run checks/check_restructure.py                  # the N-arm restructure is still coherent
 uv run checks/check_collision.py --separation 0.9   # ⭐ how close can the two arms get?
 uv run checks/drive_sim_session.py                  # ⭐⭐ the WHOLE loop end to end, simulated
+uv run apps/bench_loop.py                           # ⭐ what rate can THIS machine's loop reach?
 ```
+
+⭐⭐ `bench_loop.py` answers why the loop reaches 85 passes a second against a target of 100, and the answer is the operating system. It touches no hardware, no motor, no camera. It measures three things: how late `time.sleep` returns, what an EMPTY loop reaches using the session's own waiting line, and what a mirror decision costs. Measured 2026-08-20 with the work removed entirely: 84.3 Hz on the Mac, and 97.3 Hz on the Linux station. ⛔ Safe to run at any time, including while somebody else is at the bench ([FINDINGS §78.5](FINDINGS.md), and [LAG.md](LAG.md) for what it means for the arms).
 
 ⭐⭐ `run_falsifiers.py` is the other half of the same discipline, and it was missing until 2026-08-19. [HANDOFF §4](HANDOFF.md) rule 4 says the evidence a checker works is a green run plus a stable catch count. Those counts had to be gathered by hand from five different summary formats. That is why nobody did it. Every falsifier ends with one machine-readable `CATCHES: n/m` line now, on its failing path as well as its passing one, and this command sums them.
 
