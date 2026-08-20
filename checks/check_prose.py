@@ -66,6 +66,7 @@ HIS_DOCS: dict[str, int] = {
     "docs/COMMANDS.md": 117,
     "docs/PERFORMANCE.md": 0,
     "docs/BRIDGE.md": 0,
+    "docs/LAG.md": 0,
     "README.md": 27,
 }
 

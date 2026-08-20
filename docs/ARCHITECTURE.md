@@ -369,5 +369,6 @@ The library itself turns out to be easy: one command, no administrator password,
 - [PLAN.md](PLAN.md) to build the real station from this one
 - [BRIDGE.md](BRIDGE.md) to see how this repo maps onto the team's repo
 - [PERFORMANCE.md](PERFORMANCE.md) for what is worth making faster, with the measurements
+- [LAG.md](LAG.md) for why an arm trails the command it was given. That is a separate question from how fast the loop runs
 - [COMMANDS.md](COMMANDS.md) when you want to actually drive the arms
 - [FINDINGS.md](FINDINGS.md) when you want the evidence behind a claim here. It is written for agents and it is dense

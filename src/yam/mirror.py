@@ -3,6 +3,12 @@
 ⭐ Julien's idea, 2026-08-11: *"be able to move one of the arms in the guide mode and
 have the second arm just mirror the exact movements with zero latency."*
 
+⭐⭐ WHY THE FOLLOWER IS BEHIND, WRITTEN OUT FOR A READER: [docs/LAG.md](../../docs/LAG.md).
+He asked on 2026-08-20 why copying one arm's angles onto another can possibly be slow.
+It is not: `follower_target` costs 0.3 µs and the whole of `step` costs 5.5 µs, out of a
+11 800 µs pass. **Every millisecond of lag is a limit or a physical property**, and that
+file names each one with the line of code that causes it, in the order a pass meets them.
+
 **Why this is the right first two-arm feature, ahead of bimanual teleop.** It needs
 no inverse kinematics, no second SpaceMouse, and nothing cartesian at all — the
 leader's *measured* joint angles are commanded straight to the follower. So it

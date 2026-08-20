@@ -6102,3 +6102,41 @@ The `git fetch` that the push needed also moved three of their refs. Read from t
 ⚠️ **What this does NOT explain:** the 87 → 83 Hz drift inside one afternoon on 2026-08-13. That residue is 4 Hz of a 16 Hz gap, and it stays open in item 14.
 
 ✅ **How it was measured, so it can be repeated in one command on any machine:** the probe is fifteen lines of Python using nothing but `time.perf_counter` and `time.sleep`, run identically on the Mac and over `ssh yam-pc`. It touches no hardware, needs no root, and moves nothing.
+
+### 78.6 ✅⭐⭐ HIS MIRROR-LAG QUESTION, ANSWERED WITH NUMBERS — and my own chat sentence was wrong by a factor of six thousand
+
+His question, 2026-08-20: *"why is the mirroring arm in mirror mode so far behind the first arm? I don't quite understand why I can't just read out the position data of the one arm and then basically paste it on the other arm. That should be really easy and really quick because nothing has to be calculated. It only has to be sent. Why does that take so long?"*
+
+⛔⭐⭐ **HE IS RIGHT ABOUT THE PASTE, AND THE NUMBER IS WORTH KNOWING.** Measured on the Mac, 2000 calls each:
+
+| what | cost |
+|---|---|
+| `mirror.follower_target()`, the copy and the three sign flips | **0.3 µs** |
+| `MirrorLink.step()` entire: copy, rate limit, speed estimates, per-joint gap diagnosis | **5.5 µs** |
+| one pass of the loop at 85 Hz | 11 800 µs |
+
+**So the whole mirror decision is 0.05% of a pass.** Every millisecond of lag is a chosen limit or a physical property.
+
+⛔⭐⭐ **AND I TOLD HIM IN CHAT THAT "EACH ARM TAKES 33 MS TO PROCESS". THAT IS WRONG.** The 0.033 s is the speed-dependent half of the arm's measured following error ([§34.1](FINDINGS.md), [ROADMAP §8.2](ROADMAP.md) item 11), so it is travel-behind rather than compute time. The correction is written into [LAG.md](LAG.md) section 6 rather than left in chat, because a wrong number in a chat message is what the next question gets built on. ⚠️ **And that section also carries [§37.1](FINDINGS.md)'s doubt**: the delay is nearly identical across joints with very different gains, so the leading explanation is that the 0.033 s is `SafeRobot`'s own rate clamp. Unproven, and one run with `--max-speed` well above the commanded speeds would settle it.
+
+⭐⭐ **THE CHAIN, IN THE ORDER A PASS MEETS IT**, which is what the document lays out with a line number for each:
+
+1. **The mirror's own rate limit** ([mirror.py:532](../src/yam/mirror.py)). `follow_speed × dt` = 1.0 × 0.0118 = **0.0118 rad per pass, 0.68°**. `follow_speed` is taken from the follower's `SafeRobot.max_speed`, so `--max-speed` raises both together.
+2. **`SafeRobot`'s speed budget** ([robot.py:904](../src/yam/robot.py)), the same 1.0 rad/s one layer down.
+3. **`SafeRobot`'s following-error clamp** ([robot.py:906](../src/yam/robot.py)), 0.25 rad. ⭐ This is the one that makes more `max_speed` stop helping: the motor's push is proportional to `command − measured`, so clamping that distance clamps the catch-up force.
+4. **Position control** — 0.04 to 0.10 rad short at rest, plus 0.033 s × speed while moving.
+
+✅⭐ **THE ARITHMETIC REPRODUCES BOTH OF HIS LOGGED STOPS from 2026-08-17** ([§62.0](FINDINGS.md)), which is what makes this an explanation rather than a story:
+
+| his run | allowed | leader | follower | gap grows at | 0.64 rad reached in | his log |
+|---|---|---|---|---|---|---|
+| 1 | 4.0 | 5.66 | (not reported) | 1.66 rad/s | 0.38 s | stopped at gap 0.636 |
+| 2 | 10 | 6.83 | **2.64 measured** | 4.19 rad/s | 0.15 s | stopped at gap 0.640 |
+
+⛔ **Run 2 is the one that settles what no flag can fix.** The follower was allowed 10 rad/s and delivered 2.64, so `gripper_twist` tops out near 2.6 rad/s physically and above that the software is not involved.
+
+✅ **[docs/LAG.md](LAG.md) is the answer, written to the document standard**: a glossary before any mechanism, one reader, every number dated and sourced, and a table of every file and line in the chain plus every FINDINGS section behind each number. It is in `HIS_DOCS` at a ceiling of **0**, linked from the [README](../README.md)'s two tables, [COMMANDS.md](COMMANDS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PERFORMANCE.md](PERFORMANCE.md), and from `src/yam/mirror.py`'s own docstring so the code points at it too.
+
+⚠️⭐ **TWO FAULTS THE SUITE CAUGHT IN MY OWN NEW FOOTER LINES**, and this is the ratchet doing its job: adding a "where to go next" row to `ARCHITECTURE.md` and `PERFORMANCE.md` put one prose fault in each, at documents whose ceiling is 0. `check_prose.py` alone reported them, `tests/test_prose.py` failed the suite, and the second fault appeared only after fixing the first, because a `·`-separated footer is read as one sentence and my line pushed it to 36 words. That footer is a list now.
+
+⭐ **One stale path found while writing the table:** [FINDINGS §59.0](FINDINGS.md) and several other places name the lagging simulator as `src/fake_arm.py`. It is `src/yam/fake/arm.py`. The document says the real path; `check_links` would not have caught it, because those older mentions are not links.

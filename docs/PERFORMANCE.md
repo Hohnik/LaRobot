@@ -239,6 +239,9 @@ a measurement without its conditions becomes a claim. The 1.4 milliseconds above
 
 **Where to go next:**
 
-[ARCHITECTURE.md](ARCHITECTURE.md) for how the system is built · [FINDINGS.md](FINDINGS.md) section 76 for the camera measurements this file draws on · [PLAN.md](PLAN.md) if you are rebuilding the station.
+- [LAG.md](LAG.md) if your question is why one arm trails the other, or why teleop feels delayed. That file covers the arm's own response and the speed limits. This one covers the loop and the cameras
+- [ARCHITECTURE.md](ARCHITECTURE.md) for how the system is built
+- [FINDINGS.md](FINDINGS.md) section 76 for the camera measurements this file draws on
+- [PLAN.md](PLAN.md) if you are rebuilding the station
 
 *Written 2026-08-20. Every number in it is dated by that. If you re-measure and get something different, change this file rather than trusting it.*

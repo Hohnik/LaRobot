@@ -440,6 +440,7 @@ uv run apps/teleop_session.py --yes --arm G
 
 **Where to go next**
 
+- [LAG.md](LAG.md) if the follower arm trails your hand, or mirror mode stops itself. It explains every limit in the chain and which flag moves which one
 - [ARCHITECTURE.md](ARCHITECTURE.md) for what these commands are doing, and section 2 for every word
 - [LINUX.md](LINUX.md) if you are running them on the station
 - [FINDINGS.md](FINDINGS.md) for why a flag or a default is what it is

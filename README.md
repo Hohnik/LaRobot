@@ -26,12 +26,13 @@
 > | drive the arms today: every command and every key | [docs/COMMANDS.md](docs/COMMANDS.md) | look up what you need |
 > | work on the Linux station | [docs/LINUX.md](docs/LINUX.md) | 10 min |
 > | know what is worth making faster, and what the numbers say | [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | 15 min |
+> | understand why an arm is behind your hand, in mirror mode or in teleop | [docs/LAG.md](docs/LAG.md) | 12 min |
 > | find out where the project stands right now | [docs/HANDOFF.md](docs/HANDOFF.md), top block only | 5 min |
 > | know why some decision was made | [docs/FINDINGS.md](docs/FINDINGS.md), by section number | look it up |
 > | see what is still open | [docs/ROADMAP.md](docs/ROADMAP.md) §8.2 | look it up |
 > | read the first two sessions' history | [docs/HISTORY.md](docs/HISTORY.md) | nothing to catch up on |
 >
-> ⚠️ Three of those are written for agents rather than people. HANDOFF, FINDINGS and ROADMAP are dense on purpose. The other seven are written to be read.
+> ⚠️ Three of those are written for agents rather than people. HANDOFF, FINDINGS and ROADMAP are dense on purpose. The other eight are written to be read.
 >
 > | something is wrong … | read |
 > |---|---|
@@ -39,6 +40,7 @@
 > | a camera opens and records nothing, or records too few pictures | [docs/FINDINGS.md](docs/FINDINGS.md) §76 |
 > | the arms are on the Linux station and something differs from the Mac | [docs/LINUX.md](docs/LINUX.md) §5 |
 > | a recording looks wrong | `uv run checks/check_recordings.py` first, then [docs/COMMANDS.md](docs/COMMANDS.md) |
+> | the follower arm lags, or mirror mode stops itself | [docs/LAG.md](docs/LAG.md) |
 > | the test total changed | `uv run checks/run_tests.py` and compare, then [docs/FINDINGS.md](docs/FINDINGS.md) §70.4 |
 > | you do not know a word used in any of these | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §2 defines all of them |
 >
