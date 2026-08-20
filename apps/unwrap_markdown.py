@@ -191,6 +191,19 @@ def main() -> int:
         if not path.is_file():
             print(f"  ?  {path} — not a file")
             continue
+        # ⛔⭐⭐ REFUSE ANYTHING THAT IS NOT MARKDOWN, and this is a data-loss guard rather
+        # than tidiness. On 2026-08-20 the Mind Understanding copy of this tool was pointed
+        # at a `.py` file by mistake. `--check` saved it; without `--check` it would have
+        # joined the Python source into one line per block and DESTROYED the file.
+        # ⚠️ The whitespace-only safety check would have PASSED, because joining lines only
+        # moves whitespace. This tool never parses the language it edits, so it cannot know
+        # that a newline in Python is syntax. Same shape as the YAML frontmatter break, one
+        # level worse: a joined `.py` file does not lose meaning, it stops being valid code.
+        if path.suffix.lower() != ".md":
+            print(f"  ⛔ {path} — not markdown. This tool joins lines, which destroys "
+                  "source code. It only ever edits `.md`.")
+            refused += 1
+            continue
         changed, note = process(path, write=not args.check)
         if note.startswith("⛔"):
             refused += 1
