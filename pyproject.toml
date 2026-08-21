@@ -20,4 +20,5 @@ build-backend = "uv_build"
 dev = [
     "pytest>=8",
     "pybind11-stubgen>=2.5.5",
+    "ipykernel>=7.3.0",
 ]

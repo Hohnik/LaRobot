@@ -1,22 +1,19 @@
 import itertools
-import time
-
-import mujoco
-import numpy as np
 
 from robot.cameras.camera import Camera
 from robot.cameras.frame import Frame
 from robot.environment.simulation import Simulation
 
+
 class SimCamera(Camera):
     def __init__(self, sim: Simulation, name: str) -> None:
-        self.sim = sim
-        self.name = name
-        self._id = int | None = None
+        self.sim: Simulation = sim
+        self.name: str = name
+        self._id: int | None = None
         self._sequence = itertools.count(1)
 
     @classmethod
-    def available(cls) -> bool:
+    def is_available(cls) -> bool:
         return True
 
     def connect(self) -> None:
@@ -28,4 +25,7 @@ class SimCamera(Camera):
 
     def read(self) -> Frame:
         # TODO: Return the last frame written to the stream
-        return 
+        return
+
+    def close(self) -> None:
+        pass
