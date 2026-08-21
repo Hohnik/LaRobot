@@ -6,8 +6,7 @@ import warnings
 import mujoco
 import numpy as np
 
-from robot import CONTROL_HZ, Observation
-from robot.cameras.frame import Frame
+from robot import CONTROL_HZ
 
 # 0-5 => Joints in radians, 6 => Gripper in m. Twice over: left arm, then right arm.
 INIT_POS = (0, np.pi / 3, np.pi / 3, 0, 0, 0, 0) * 2
@@ -22,37 +21,28 @@ class Simulation:
     def __init__(
         self,
         scene: str,
-        height=168,
-        width=224,
-        realtime=False,
+        realtime: bool = False,
     ):
-        self.height = height
-        self.width = width
-        self.realtime = realtime  # hold step() to the wall clock, for a live viewer
-        self.model = mujoco.MjModel.from_xml_path(scene)  # All fixed data
+        self.model: mujoco.MjModel = mujoco.MjModel.from_xml_path(
+            scene
+        )  # All fixed data
         self.model.opt.timestep = TIMESTEP
-        self.data = mujoco.MjData(self.model)  # All variable data
-        self.qadr = self.model.jnt_qposadr[
+        self.data: mujoco.MjData = mujoco.MjData(self.model)  # All variable data
+        self.qadr: np.ndarray = self.model.jnt_qposadr[
             self.model.actuator_trnid[:, 0]
         ]  # 14 actuated joints
-        self._renderer = None
-        self._next = 0.0  # wall-clock deadline of the next tick
+        self._next: float = 0.0  # wall-clock deadline of the next tick
+        self.realtime: bool = (
+            realtime  # hold step() to the wall clock, for a live viewer
+        )
         self.reset()
 
     @property
     def state(self):
         return self.data.qpos[self.qadr].astype(np.float32)
 
-    def reset(self) -> Observation:
-        mujoco.mj_resetData(self.model, self.data)
-        self.data.qpos[self.qadr] = INIT_POS
-        self.data.ctrl[:] = INIT_POS
-        mujoco.mj_forward(self.model, self.data)
-        self._next = time.perf_counter()
-        return self.observation()
-
-    def step(self, action) -> Observation:
-        """Apply the action, let one control tick of time pass, then read the result.
+    def step(self, action):
+        """Apply the action and wait for next control tick of time to pass
 
         The real arm runs these same three lines. Only the clock is different:
         there, _wait_for_tick is how the time passes; here, mj_step already
@@ -63,7 +53,6 @@ class Simulation:
         for _ in range(SUBSTEPS):
             mujoco.mj_step(self.model, self.data)
         self._waif_for_next_action_timestep()
-        return self.state
 
     def _waif_for_next_action_timestep(self):
         """Sleep until the next action should be applied, to keep the control rate at CONTROL_HZ."""
@@ -76,20 +65,12 @@ class Simulation:
             self._next = time.perf_counter()  # drop the debt, do not sprint to catch up
         time.sleep(max(0.0, -late))
 
+    def reset(self):
+        mujoco.mj_resetData(self.model, self.data)
+        self.data.qpos[self.qadr] = INIT_POS
+        self.data.ctrl[:] = INIT_POS
+        mujoco.mj_forward(self.model, self.data)
+        self._next = time.perf_counter()
 
-    def frames(self) -> list[Frame]:
-        """Renders every 30Hz a frame from each camera"""
-        frames = []
-        for camera in self.cameras:
-            self.renderer.update_scene(self.data, camera=camera)
-            frame = Frame(camera.name, self.renderer.render())
-        
-            frames.append()
-        return frames
-
-
-    @property
-    def renderer(self):
-        if self._renderer is None:
-            self._renderer = mujoco.Renderer(self.model, self.height, self.width)
-        return self._renderer
+    def list_cameras(self) -> list[str]:
+        return [cam.name for cam in self.model.cam]

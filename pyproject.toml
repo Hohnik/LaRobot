@@ -22,3 +22,7 @@ dev = [
     "pybind11-stubgen>=2.5.5",
     "ipykernel>=7.3.0",
 ]
+
+
+[tool.basedpyright]
+reportUnknownMemberType = "none"
