@@ -1,12 +1,12 @@
-# Frame class for handling camera frames
-
 from dataclasses import dataclass
+
 import numpy as np
 from numpy.typing import NDArray
 
+
 @dataclass(frozen=True, slots=True)
 class Frame:
-    '''A single camera frame that combined with a timestamp'''
+    """A single frame from one named camera."""
 
     camera_name: str
 

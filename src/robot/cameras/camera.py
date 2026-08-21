@@ -8,10 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class Camera(ABC):
-    """Abstract interface for a camera that produces frames.
-
-    Example: 
-    """
+    """Abstract interface for a camera that produces frames."""
 
     name: str
 
@@ -22,7 +19,7 @@ class Camera(ABC):
 
     @abstractmethod
     def connect(self) -> None:
-        """"Connect to and initialize the camera."""
+        """Connect to and initialize the camera."""
 
     @abstractmethod
     def read(self) -> Frame:
@@ -30,14 +27,14 @@ class Camera(ABC):
 
     @abstractmethod
     def close(self) -> None:
-        """"Release the device"""
+        """Release the device"""
 
     def __enter__(self) -> Self:
         try:
             self.connect()
         except BaseException:
             self.close()
-            raise    
+            raise
         logger.info("%s connected", self.name)
         return self
 
