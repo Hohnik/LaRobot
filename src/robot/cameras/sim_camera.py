@@ -15,6 +15,7 @@ def _shared_renderer(sim: Simulation, width: int, height: int) -> mujoco.Rendere
 
 class SimCamera(Camera):
     """Renders its view of the scene at its own rate, like a real camera stream"""
+
     def __init__(
         self,
         sim: Simulation,
@@ -24,11 +25,11 @@ class SimCamera(Camera):
         fps: int = 10,
         offset: float = 0.0,
     ) -> None:
-        self.sim = sim
-        self.name = name
-        self.width = width
-        self.height = height
-        self._min_interval = 1 / fps
+        self.sim: Simulation = sim
+        self.name: str = name
+        self.width: int = width
+        self.height: int = height
+        self._min_interval: float = 1 / fps
         self._offset: float = offset
         self._camera_id: int | None = None
         self._latest: Frame | None = None
@@ -45,7 +46,7 @@ class SimCamera(Camera):
 
     @override
     def connect(self) -> None:
-        names = [self.sim.model.cam(i).name for i in range(self.sim.model.ncam)]
+        names = [self.sim.model.cam(i).name for i in range(self.sim.model.ncam)]  # pyright: ignore[reportAny]
         try:
             self._camera_id = names.index(self.name)
         except ValueError:
@@ -55,7 +56,7 @@ class SimCamera(Camera):
 
         # Render once to pre compile graphics shaders
         # Reset the time to the camera's offset
-        self.read()
+        _ = self.read()
         self._latest_time = -self._offset
 
     @property
@@ -71,7 +72,7 @@ class SimCamera(Camera):
         )
 
     @override
-    def read(self) -> Frame:
+    def read(self) -> Frame | None:
         """Read the latest frame from the camera"""
         if self._camera_id is None:
             raise RuntimeError(f"{self.name}: call connect() before read()")
@@ -87,3 +88,4 @@ class SimCamera(Camera):
     @override
     def close(self) -> None:
         self._camera_id = None
+        self._latest = None

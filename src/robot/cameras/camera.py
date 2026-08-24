@@ -22,7 +22,7 @@ class Camera(ABC):
         """Connect to and initialize the camera."""
 
     @abstractmethod
-    def read(self) -> Frame:
+    def read(self) -> Frame | None:
         """One Frame from the current state"""
 
     @abstractmethod
