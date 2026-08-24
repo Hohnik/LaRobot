@@ -20,5 +20,5 @@ class Recorder:
         # TODO: Implement writing to file
         self.step += 1
 
-    def __exit__(self, type, value, traceback):
+    def __exit__(self, exc_type, exc_value, traceback) -> bool:
         return False
