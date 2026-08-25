@@ -1,0 +1,335 @@
+"""⭐ Joint-space paths that curve THROUGH waypoints instead of stopping at each.
+
+    path = JointPath([q_now, q1, q2, q3], blend=0.15)
+    q = path.point_at(s)          # s in radians of max-joint travel
+
+⛔ WHAT THIS FIXES, and it is a correction of something I built wrongly on
+2026-08-12. Julien asked for smooth motion between saved poses. I implemented a
+trapezoidal **speed ramp along each leg** — ease in, cruise, ease out — which makes a
+single move gentler but leaves the arm **coming to a full stop at every waypoint**.
+His description of what he actually wanted is precise:
+
+    *"if it does a ninety degree turn, then instead of moving and then jittering
+    ninety degrees to the next side, in a smooth curve it would go to the next point,
+    and then in a smooth curve it would move on to connect to the next point — so
+    that we have one smooth motion of specific waypoints."*
+
+That is **corner blending**, not speed shaping. The two are independent and both are
+wanted: the ramp decides *how fast* the cursor moves, this decides *what shape* it
+follows.
+
+WHY JOINT SPACE AND NOT CARTESIAN
+---------------------------------
+The waypoints are recorded joint poses, so a joint-space path needs no IK, cannot hit
+a singularity, and — see `point_at` — provably stays inside the joint range the
+waypoints already occupy. A Cartesian blend would look smoother in the world at the
+cost of an IK solve per sample and a singularity risk on every corner, for poses that
+were never Cartesian to begin with.
+
+WHY MAX-NORM
+------------
+Distance between two poses is `max |Δjoint|` (Chebyshev), everywhere. That is
+deliberate: it makes "cursor speed" mean **the fastest-moving joint's speed in
+rad/s**, which is exactly what `PARK_SPEED` has always meant, so the existing feel
+and the existing stall thresholds carry over unchanged.
+
+⚠️ ONE REAL BEHAVIOUR CHANGE, stated because it will be felt. `advance_park_command`
+moves *every* joint at up to the step size independently, so joints with less to do
+arrive early and the arm's pose drifts through a shape nobody chose. A path moves all
+joints in proportion, so **they arrive together** and the motion is the straight line
+(or blended curve) between poses. Same duration — the longest joint still sets it —
+but a different, and predictable, shape.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+# How finely each rounded corner is sampled. 12 is smooth to the eye at these speeds
+# and keeps a 10-waypoint path in the low hundreds of points, which is nothing.
+CORNER_SAMPLES = 12
+
+
+@dataclass(frozen=True)
+class Easing:
+    """A named velocity profile — how the move starts and stops.
+
+    ⭐ Corner blending and easing are **independent axes** and Julien wants both
+    adjustable: blending decides the *shape* the arm follows, easing decides the
+    *speed along it*. Naming them the way an editor does (Premiere's ease in / ease
+    out / ease both) is deliberate — it is the vocabulary he used, and each name says
+    exactly what it does to the two ends of the move.
+    """
+
+    name: str
+    ease_in: bool
+    ease_out: bool
+    smooth: bool = False        # smoothstep the ramp instead of a straight line
+
+
+# ⚠️ `none` is not decoration: Julien on the Ctrl-C park — *"I don't want to have to
+# wait until the movement has been smoothed out, I want it to move into its parking
+# position quickly and swiftly, without the excessive starting and pausing."* A
+# shutdown move wants to leave immediately; only the landing needs to be soft.
+EASINGS = [
+    Easing("none", False, False),
+    Easing("in", True, False),
+    Easing("out", False, True),
+    Easing("both", True, True),
+    Easing("s-curve", True, True, smooth=True),
+]
+
+
+def easing_factor(easing: Easing, travelled: float, remaining: float, ramp: float,
+                  floor: float = 0.2) -> float:
+    """Speed multiplier in `[floor, 1]` for a move `travelled` in and `remaining` to go.
+
+    ⛔⭐ THE SHAPE IS `sqrt`, NOT A STRAIGHT LINE, AND THE REASON IS THE COMPLAINT THAT
+    PRODUCED IT. Julien, 2026-08-12: *"it shouldn't take the same amount of time to go
+    from one to zero point one as it takes from zero point one to zero — that is too
+    long at the bottom end."*
+
+    He had found a real property, not a tuning annoyance. With a **straight** ramp the
+    speed is proportional to the distance left, `v ∝ s`, which is an exponential decay:
+    `s` halves in equal time steps and **never actually reaches zero**. Every decade
+    costs the same time as the one before it, which is exactly what he described.
+
+    Constant deceleration — what a car does when braking normally, and what every
+    motion controller means by a trapezoidal profile — is `v ∝ √s`. That one *does*
+    arrive, in finite time, and the last tenth takes a small fraction of the time
+    rather than the same again. Same softness at the end, no crawl.
+
+    ⚠️ `floor` is still load-bearing: it bounds the very last instant so the arm cannot
+    creep, which the stall detector would eventually — and wrongly — call an
+    obstruction. It is 0.2 rather than 0.15 for the same reason the shape changed.
+
+    ⭐ `smooth` (the `s-curve` profile) instead applies smoothstep, `3f² − 2f³`. That
+    eases the **acceleration** as well as the speed: the arm does not merely start
+    slowly, it starts *gently*, with no step change in the force it applies. It is the
+    gentlest profile here and the slowest off the mark.
+    """
+    if ramp <= 0:
+        return 1.0
+    f = 1.0
+    if easing.ease_in:
+        f = min(f, travelled / ramp)
+    if easing.ease_out:
+        f = min(f, remaining / ramp)
+    f = max(0.0, min(1.0, f))
+    f = f * f * (3.0 - 2.0 * f) if easing.smooth else f ** 0.5
+    return max(floor, f)
+
+
+def _dist(a, b) -> float:  # noqa: ANN001
+    """Chebyshev distance — the largest single-joint move. See the module docstring."""
+    return float(np.max(np.abs(np.asarray(a, dtype=float) - np.asarray(b, dtype=float))))
+
+
+class JointPath:
+    """A polyline through joint-space waypoints, with rounded corners.
+
+    `blend` is how far, in radians of max-joint travel, the path may leave a corner
+    early to curve into the next segment. `blend=0` reproduces the old behaviour
+    exactly: straight to each waypoint, sharp turn, straight to the next.
+
+    ⭐ EACH CORNER IS A QUADRATIC BÉZIER, which buys three properties worth having:
+
+    1. **Velocity direction is continuous** at both joins, which is precisely the
+       "jitter" being removed — the arm never reverses or snaps direction.
+    2. ⛔ **The curve stays inside the convex hull of its control points**, and all
+       three lie on the original straight segments. So a blended path can never take
+       a joint outside the range the waypoints themselves span — it cannot invent a
+       joint-limit violation, and `test_blending_cannot_leave_the_joint_range_the_
+       waypoints_span` pins that.
+    3. The blend distance is clipped to **half** the shorter adjoining segment, so
+       neighbouring corners can never overlap and eat a waypoint.
+
+    ⚠️ The path is sampled to a polyline at construction and then measured exactly,
+    rather than parameterised analytically. Arc length of a Bézier has no closed form,
+    and a wrong length would make the cursor speed wrong — which is a *safety* number
+    here, not a cosmetic one, because the stall thresholds are calibrated in rad/s.
+    Sampling makes the length exactly what the arm will travel.
+    """
+
+    def __init__(self, waypoints, blend: float = 0.0,
+                 corner_samples: int = CORNER_SAMPLES) -> None:  # noqa: ANN001
+        pts = [np.asarray(w, dtype=float) for w in waypoints]
+        # ⚠️ Consecutive duplicates have no direction, so they would produce a
+        # zero-length unit vector and a NaN corner. Dropping them is not cosmetic.
+        cleaned = [pts[0]] if pts else []
+        for p in pts[1:]:
+            if _dist(p, cleaned[-1]) > 1e-9:
+                cleaned.append(p)
+        self.waypoints = cleaned
+        self.blend = max(0.0, float(blend))
+
+        self.points: list[np.ndarray] = self._build(corner_samples)
+        self._cum = [0.0]
+        for a, b in zip(self.points, self.points[1:]):
+            self._cum.append(self._cum[-1] + _dist(a, b))
+
+    # ----------------------------------------------------------- building ----
+
+    def _build(self, corner_samples: int) -> list[np.ndarray]:
+        pts = self.waypoints
+        if len(pts) < 3 or self.blend <= 0.0:
+            return list(pts)
+
+        out = [pts[0]]
+        for i in range(1, len(pts) - 1):
+            a, p, b = pts[i - 1], pts[i], pts[i + 1]
+            in_len, out_len = _dist(a, p), _dist(p, b)
+            # Half the shorter neighbour, so two corners can never overlap.
+            radius = min(self.blend, 0.5 * in_len, 0.5 * out_len)
+            if radius <= 1e-9:
+                out.append(p)
+                continue
+            start = p + (a - p) * (radius / in_len)     # leave the corner early
+            end = p + (b - p) * (radius / out_len)      # rejoin after it
+            out.append(start)
+            for k in range(1, corner_samples):
+                t = k / corner_samples
+                out.append((1 - t) ** 2 * start + 2 * (1 - t) * t * p + t ** 2 * end)
+            out.append(end)
+        out.append(pts[-1])
+        return out
+
+    # ------------------------------------------------------------ queries ----
+
+    @property
+    def length(self) -> float:
+        """Total travel, in radians of the fastest joint."""
+        return self._cum[-1] if self._cum else 0.0
+
+    def point_at(self, s: float):  # noqa: ANN201
+        """The pose at arc length `s`, clamped to the ends."""
+        if not self.points:
+            raise ValueError("an empty path has no points")
+        if s <= 0 or len(self.points) == 1:
+            return self.points[0].copy()
+        if s >= self.length:
+            return self.points[-1].copy()
+        i = int(np.searchsorted(self._cum, s, side="right")) - 1
+        i = min(max(i, 0), len(self.points) - 2)
+        span = self._cum[i + 1] - self._cum[i]
+        t = 0.0 if span <= 0 else (s - self._cum[i]) / span
+        return self.points[i] + (self.points[i + 1] - self.points[i]) * t
+
+    def arrival_lengths(self) -> list[float]:
+        """Arc length at which the path is nearest each original waypoint.
+
+        ⭐ This is how the session reports *"now heading for slot 3"* during a
+        continuous run. Without it a blended path has no notion of "which waypoint am
+        I at", which was the honest objection to blending in the first place — so it
+        is answered rather than dropped.
+        """
+        marks = []
+        for w in self.waypoints:
+            best_i = min(range(len(self.points)), key=lambda i: _dist(self.points[i], w))
+            marks.append(self._cum[best_i])
+        return marks
+
+
+# ⚠️ How much the gripper command must change before a leg counts as "the jaws move".
+#
+# ⛔ IN NORMALISED UNITS, 0 CLOSED TO 1 OPEN, and getting this wrong once is why it says so
+# loudly. A saved pose does NOT hold raw motor radians for the gripper: the SDK normalises
+# joint 7 against the calibrated limits, so `get_joint_pos()[6]` is already a fraction of
+# the stroke. Verified against the real files on 2026-08-13 — every recording reads 0.036,
+# which is the same number the startup message prints as *"jaws normalise to 0.036"*.
+#
+# The jaws' full stroke is 96 mm (`gripper_stroke: 0.096` in linear_4310.yml), so 0.05 is
+# about 5 mm: large enough to ignore sensor noise and a re-saved pose, far below any
+# deliberate open or close, which moves most of the range.
+GRIPPER_MOVE_THRESHOLD = 0.05
+
+
+@dataclass(frozen=True)
+class RunPlan:
+    """How a waypoint run has to be broken up so the gripper can actually work.
+
+    ⛔⭐ THE PROBLEM THIS SOLVES, and it blocks every grab. Blending means the arm curves
+    *through* a waypoint without stopping, which is the smooth motion Julien asked for and
+    confirmed on the arm. But the gripper is simply another number in the joint vector, so a
+    blended corner between "above the object, jaws open" and "at the object, jaws closed"
+    **closes the jaws during the descent.** The object is either grabbed early or shoved
+    away. A grab needs the arm to stop, the jaws to travel, and time to pass.
+
+    ⭐⭐ AND THE PAUSE NEEDS NO CONFIGURATION, WHICH IS THE POINT. The obvious design is a
+    dwell time saved against each waypoint, which needs a storage change and a new way to
+    type it. It is not needed: **a leg where the gripper command changes and the arm does
+    not IS the pause**, and how long it should last is not a preference, it is however long
+    the jaws take. That can be measured while it happens rather than guessed in advance.
+
+    - `segments` groups waypoint indices. Each group becomes one blended `JointPath`.
+    - `gripper_legs` are the `(from, to)` pairs between groups. The arm holds still, the
+      jaws are commanded, and the run waits for them.
+    - `warnings` name legs that move the arm **and** the gripper together. Those cannot be
+      fixed automatically, because only the operator knows which he meant, so they keep
+      today's behaviour and say so.
+    """
+
+    segments: list[list[int]]
+    gripper_legs: list[tuple[int, int]]
+    warnings: list[str]
+
+
+def plan_gripper_stops(poses, gripper_index: int,
+                       threshold: float = GRIPPER_MOVE_THRESHOLD,
+                       arm_tolerance: float = 0.02) -> RunPlan:  # noqa: ANN001
+    """Split a waypoint run wherever the jaws have to move on their own.
+
+    `poses[0]` is where the arm is now; the rest are the saved waypoints in order.
+
+    ⭐ A run saved the natural way needs no thought from the operator:
+
+        w0 now · w1 above the object, open · w2 at the object, open
+        w3 at the object, closed · w4 lifted, closed
+
+    The only leg that changes the gripper is `w2 → w3`, and it leaves the arm where it is.
+    So the plan is: blend through `w0 w1 w2`, stop, close the jaws, wait, blend through
+    `w3 w4`. **The arm arrives at the object exactly, because the corner it would otherwise
+    have rounded is now the end of a segment.**
+
+    ⚠️ A leg that moves the arm and the gripper at once is reported rather than split. Both
+    readings are defensible (close while approaching, or stop and close), and guessing wrong
+    on 4.3 kg is worse than saying so.
+
+    ⚠️ `poses[i][gripper_index]` is a NORMALISED jaw opening, 0 closed to 1 open, because
+    that is what `get_joint_pos()` returns. See `GRIPPER_MOVE_THRESHOLD`.
+    """
+    import numpy as np  # noqa: PLC0415
+
+    pts = [np.asarray(p, dtype=float) for p in poses]
+    if len(pts) < 2:
+        return RunPlan(segments=[list(range(len(pts)))], gripper_legs=[], warnings=[])
+
+    segments: list[list[int]] = []
+    gripper_legs: list[tuple[int, int]] = []
+    warnings: list[str] = []
+    current = [0]
+
+    for i in range(len(pts) - 1):
+        a, b = pts[i], pts[i + 1]
+        has_gripper = len(a) > gripper_index and len(b) > gripper_index
+        jaws_move = has_gripper and abs(b[gripper_index] - a[gripper_index]) > threshold
+        arm_moves = bool(np.any(np.abs(b[:gripper_index] - a[:gripper_index]) > arm_tolerance))
+
+        if jaws_move and not arm_moves:
+            segments.append(current)
+            gripper_legs.append((i, i + 1))
+            current = [i + 1]
+        elif jaws_move and arm_moves:
+            warnings.append(
+                f"leg {i}→{i + 1} moves the arm AND the gripper together, so the jaws "
+                "travel while the arm does. Save a waypoint where only the jaws change "
+                "if you meant to grip something"
+            )
+            current.append(i + 1)
+        else:
+            current.append(i + 1)
+
+    segments.append(current)
+    return RunPlan(segments=segments, gripper_legs=gripper_legs, warnings=warnings)

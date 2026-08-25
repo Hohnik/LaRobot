@@ -1,0 +1,195 @@
+{
+  "arms": {
+    "B": {
+      "1": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004448262974619865,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 1,
+        "inertia": 1.7169109923997894e-05,
+        "master_id": 17,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "2": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004377428907901049,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 2,
+        "inertia": 2.625721026561223e-05,
+        "master_id": 18,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "3": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.00443775299936533,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 3,
+        "inertia": 1.7414489775546826e-05,
+        "master_id": 19,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "4": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004405965097248554,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 4,
+        "inertia": 1.7976162780541927e-05,
+        "master_id": 20,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "5": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.00436428003013134,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 5,
+        "inertia": 1.753730066411663e-05,
+        "master_id": 21,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "6": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004411580041050911,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 6,
+        "inertia": 1.8023700249614194e-05,
+        "master_id": 22,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "7": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004474937915802002,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 7,
+        "inertia": 1.8008260667556897e-05,
+        "master_id": 23,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      }
+    },
+    "G": {
+      "1": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004453268833458424,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 1,
+        "inertia": 1.6964389942586422e-05,
+        "master_id": 17,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "2": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004455700051039457,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 2,
+        "inertia": 2.6341989723732695e-05,
+        "master_id": 18,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "3": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.00444635096937418,
+        "gear_eff": 1.0,
+        "gear_ratio": 40.0,
+        "id": 3,
+        "inertia": 1.746891030052211e-05,
+        "master_id": 19,
+        "sw_ver": 925970741,
+        "timeout": 8000
+      },
+      "4": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004425430204719305,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 4,
+        "inertia": 1.7868300346890464e-05,
+        "master_id": 20,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "5": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004427830222994089,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 5,
+        "inertia": 1.8050299331662245e-05,
+        "master_id": 21,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "6": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.004448859952390194,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 6,
+        "inertia": 1.7767679310054518e-05,
+        "master_id": 22,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      },
+      "7": {
+        "KT_value": 0.0,
+        "OT_value": 100.0,
+        "flux": 0.0044381641782820225,
+        "gear_eff": 1.0,
+        "gear_ratio": 10.0,
+        "id": 7,
+        "inertia": 1.762690044415649e-05,
+        "master_id": 23,
+        "sw_ver": 925970485,
+        "timeout": 8000
+      }
+    }
+  },
+  "commit": "2f70f6e",
+  "note": "Baseline for scripts/check_arms_match.py. Every value is a register READ from a motor; nothing here is a setting and nothing here should be edited by hand. If a value moves between two runs, something wrote it. See docs/FINDINGS.md \u00a738.",
+  "read_at": "2026-08-14T09:10:39+02:00",
+  "registers": [
+    "KT_value",
+    "OT_value",
+    "master_id",
+    "id",
+    "timeout",
+    "inertia",
+    "sw_ver",
+    "flux",
+    "gear_ratio",
+    "gear_eff"
+  ],
+  "skipped": {
+    "B": [],
+    "G": []
+  }
+}
