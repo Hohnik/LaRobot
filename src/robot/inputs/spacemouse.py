@@ -5,6 +5,7 @@ import threading
 import select
 import time
 
+# to get standard axe indices of the spacemouse
 AXES = (
     ecodes.REL_X,
     ecodes.REL_Y,
@@ -28,10 +29,23 @@ def open_spacemouse() -> InputDevice:
 
 
 class SpaceMouseReader:
-    def __init__(self, zero_timeout: float = 0.05):
+    def __init__(
+        self,
+        perm=(1, 0, 2, 3, 4, 5),
+        signs=(1, -1, -1, 1, 1, 1),
+        zero_timeout: float = 0.05,
+        expo=1.6,
+        lin_scale=0.12,
+        ang_scale=0.8,
+    ):
         self._dev = open_spacemouse()
         self._idx = {code: i for i, code in enumerate(AXES)}
         self.zero_timeout = zero_timeout
+        self.perm = list(perm)
+        self.signs = np.asarray(signs, dtype=float)
+        self.expo = expo
+        self.lin_scale = lin_scale
+        self.ang_scale = ang_scale
 
         self._buttons = [False, False]
         self._raw = np.zeros(6)
@@ -45,7 +59,7 @@ class SpaceMouseReader:
         self._thread.start()
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc):  # *exc is for conventions in threading
         self._stop.set()
         self._thread.join(timeout=1.0)
         self._dev.close()
@@ -59,6 +73,7 @@ class SpaceMouseReader:
                     self._handle(e)
 
     def _handle(self, e):
+        """update classes raw values"""
         now = time.monotonic()  # forward passing time
         with self._lock:
             if e.type == ecodes.EV_REL:
@@ -70,7 +85,8 @@ class SpaceMouseReader:
                     e.value != 0
                 )  # 256 to 0 and 257 to 1
 
-    def snapshot(self):
+    def _snapshot(self):
+        """get the current raw outputs of spacemouse"""
         now = time.monotonic()
         with self._lock:  # should not be read and written at the same time
             raw = self._raw.copy()
@@ -80,14 +96,28 @@ class SpaceMouseReader:
         raw[(now - t) > self.zero_timeout] = 0.0
         return raw, buttons
 
+    def get_twist(self):
+        """get velocity"""
+        raw, buttons = self._snapshot()
+        v = raw[(self.perm)] * self.signs
+        v = np.clip(v, -1.0, 1.0)
+
+        smoothed = np.sign(v) * np.abs(v) ** self.expo
+
+        twist = np.empty(6)
+        twist[:3] = smoothed[:3] * self.lin_scale
+        twist[3:] = smoothed[3:] * self.ang_scale
+
+        return twist, buttons
+
 
 if __name__ == "__main__":
     with SpaceMouseReader() as sm:
         try:
             while True:
-                raw, btns = sm.snapshot()
+                velo, btns = sm.get_twist()
                 print(
-                    "\r" + " ".join(f"{v:+.2f}" for v in raw) + f" {btns}",
+                    "\r" + " ".join(f"{v:+.2f}" for v in velo) + f" {btns}",
                     end="",
                     flush=True,
                 )
