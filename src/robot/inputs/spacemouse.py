@@ -31,8 +31,8 @@ def open_spacemouse() -> InputDevice:
 class SpaceMouseReader:
     def __init__(
         self,
-        perm=(1, 0, 2, 3, 4, 5),
-        signs=(1, -1, -1, 1, 1, 1),
+        perm=(0, 1, 2, 3, 4, 5),
+        signs=(1, -1, -1, 1, -1, -1),
         zero_timeout: float = 0.05,
         expo=1.6,
         lin_scale=0.12,
@@ -111,16 +111,58 @@ class SpaceMouseReader:
         return twist, buttons
 
 
+class CartesianTarget:
+    def __init__(self, p=(0.35, 0.0, 0.25)):
+        self.p = np.asarray(
+            p, dtype=float
+        )  # guessed values, here arm is 35cm in front, 25cm above the base
+        self.R = np.eye(3)
+        self._steps = 0
+
+    def exp_so3(self, w):
+        """compute the rotation matrix"""
+        theta = np.linalg.norm(w)
+        if theta < 1e-12:
+            return np.eye(3)
+        k = w / theta
+        K = np.cross(np.eye(3), k)
+        return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+
+    def integrate(self, twist, dt):
+        self.p = self.p + twist[:3] * dt
+        self.R = self.exp_so3(twist[3:] * dt) @ self.R
+
+        self._steps += 1
+        if self._steps % 200 == 0:  # to avoid accumulative error
+            u, _, vt = np.linalg.svd(self.R)
+            self.R = u @ vt  # leave out dilution by S
+
+
 if __name__ == "__main__":
+    target = CartesianTarget()
+
+    # DEBUG
+    R = target.exp_so3([0, 0, np.pi / 2])
+    print(f"sollte 1 sein: {np.linalg.det(R)}")
+    print(f"sollte einheitsmatrix sein: {R.T @ R}")
+    print(f"[0, 1, 0]: {R @ np.array([1, 0, 0])}")  # does it turn the right way?
+    print(f"[0, 0, 1]: {R @ np.array([0, 0, 1])}")
+    R = np.eye(3)
+    for _ in range(1000):
+        R = target.exp_so3(np.array([0, 0, np.pi / 2 / 1000])) @ R
+    print(f"[0, 1, 0] {R @ np.array([1, 0, 0])}")
+    print(f"1.0: {np.linalg.det(R)}")
+
     with SpaceMouseReader() as sm:
         try:
+            t_prev = time.monotonic()
             while True:
-                velo, btns = sm.get_twist()
-                print(
-                    "\r" + " ".join(f"{v:+.2f}" for v in velo) + f" {btns}",
-                    end="",
-                    flush=True,
-                )
+                t_now = time.monotonic()
+                dt = t_now - t_prev
+                t_prev = t_now
+                twist, btns = sm.get_twist()
+                target.integrate(twist, dt)
+                print(target.R @ np.array([0, 0, 1]), target.R @ np.array([1, 0, 0]))
                 time.sleep(0.02)
         except KeyboardInterrupt:
             print()
