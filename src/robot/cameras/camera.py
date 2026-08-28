@@ -1,6 +1,6 @@
 import logging
-from typing import Self
 from abc import ABC, abstractmethod
+from typing import Self
 
 from robot.cameras.frame import Frame
 

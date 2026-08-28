@@ -1,8 +1,14 @@
-from evdev import InputDevice, list_devices, ecodes
-import numpy as np
-import threading
+import grp
+import os
 import select
+import threading
 import time
+from collections.abc import Sequence
+from typing import Self
+
+import numpy as np
+import numpy.typing as npt
+from evdev import InputDevice, InputEvent, ecodes, list_devices
 
 # to get standard axe indices of the spacemouse
 AXES = (
@@ -15,21 +21,22 @@ AXES = (
 )
 
 
-def open_spacemice():
+def open_spacemice() -> list:
     """
     get InputDevices for all connected Spacemice
-    Make sure the user has read/write access (sudo usermod -aG input $USER)
     """
+
+    assert grp.getgrnam("input").gr_gid in os.getgroups(), (
+        "add user to input group: 'sudo usermod -aG input $USER'"
+    )
 
     devices = [InputDevice(path) for path in list_devices()]
     mice = []
     for device in devices:
         if "3dconnexion" in device.name.lower():
-            path = device.path
-            mice.append(InputDevice(path))
-            break
-    else:
-        raise ConnectionError("No Spacemouse found")
+            mice.append(device)
+    if mice == []:
+        raise ConnectionError("No spacemouse found")
     return mice
 
 
@@ -45,13 +52,13 @@ class SpaceMouseReader:
     def __init__(
         self,
         dev: InputDevice,
-        perm=(0, 1, 2, 3, 4, 5),
-        signs=(1, -1, -1, 1, -1, -1),
+        perm: Sequence[int] = (0, 1, 2, 3, 4, 5),
+        signs: Sequence[float] = (1.0, -1.0, -1.0, 1.0, -1.0, -1.0),
         zero_timeout: float = 0.05,
-        expo=1.6,
-        lin_scale=0.12,
-        ang_scale=0.8,
-    ):
+        expo: float = 1.6,
+        lin_scale: float = 0.12,
+        ang_scale: float = 0.8,
+    ) -> None:
         self._dev = dev
         self._idx = {code: i for i, code in enumerate(AXES)}
         self.zero_timeout = zero_timeout
@@ -69,16 +76,16 @@ class SpaceMouseReader:
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._lock = threading.Lock()
 
-    def __enter__(self):
+    def __enter__(self) -> Self:
         self._thread.start()
         return self
 
-    def __exit__(self, *exc):  # *exc is for conventions in threading
+    def __exit__(self, *exc: object) -> None:  # *exc is for conventions in threading
         self._stop.set()
         self._thread.join(timeout=1.0)
         self._dev.close()
 
-    def _run(self):
+    def _run(self) -> None:
         while not self._stop.is_set():
             if select.select([self._dev.fd], [], [], 0.05)[
                 0
@@ -86,7 +93,7 @@ class SpaceMouseReader:
                 for e in self._dev.read():
                     self._handle(e)
 
-    def _handle(self, e):
+    def _handle(self, e: InputEvent) -> None:
         """update classes raw values"""
         now = time.monotonic()  # forward passing time
         with self._lock:
@@ -99,7 +106,7 @@ class SpaceMouseReader:
                     e.value != 0
                 )  # 256 to 0 and 257 to 1
 
-    def _snapshot(self):
+    def _snapshot(self) -> tuple[npt.NDArray[np.float64], tuple[bool, ...]]:
         """get the current raw outputs of spacemouse"""
         now = time.monotonic()
         with self._lock:  # should not be read and written at the same time
@@ -110,7 +117,7 @@ class SpaceMouseReader:
         raw[(now - t) > self.zero_timeout] = 0.0
         return raw, buttons
 
-    def get_twist(self):
+    def get_twist(self) -> tuple[npt.NDArray[np.float64], tuple[bool, ...]]:
         """get velocity"""
         raw, buttons = self._snapshot()
         v = raw[(self.perm)] * self.signs
@@ -126,15 +133,19 @@ class SpaceMouseReader:
 
 
 class CartesianTarget:
-    def __init__(self, p=(0.35, 0.0, 0.25)):
+    def __init__(self, p: Sequence[float] = (0.35, 0.0, 0.25)) -> None:
         self.p = np.asarray(
             p, dtype=float
         )  # guessed values, here arm is 35cm in front, 25cm above the base
         self.R = np.eye(3)
         self._steps = 0
 
-    def exp_so3(self, w):
-        """compute the rotation matrix"""
+    @staticmethod
+    def exp_so3(w: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
+        """
+        compute the rotation matrix
+        w: the last 3 values of the twist
+        """
         theta = np.linalg.norm(w)
         if theta < 1e-12:
             return np.eye(3)
@@ -142,14 +153,15 @@ class CartesianTarget:
         K = np.cross(np.eye(3), k)
         return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
 
-    def integrate(self, twist, dt):
+    def integrate(self, twist: npt.NDArray[np.float64], dt: float) -> None:
         self.p = self.p + twist[:3] * dt
         self.R = self.exp_so3(twist[3:] * dt) @ self.R
 
         self._steps += 1
         if self._steps % 200 == 0:  # to avoid accumulative error
             u, _, vt = np.linalg.svd(self.R)
-            self.R = u @ vt  # leave out dilution by S
+            d = np.linalg.det(u @ vt)
+            self.R = u @ np.diag([1.0, 1.0, d]) @ vt  # leave out dilution by S
 
 
 if __name__ == "__main__":

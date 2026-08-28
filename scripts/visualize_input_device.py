@@ -4,16 +4,16 @@ import matplotlib
 
 matplotlib.use("TkAgg")  # backend
 import matplotlib.pyplot as plt
-import numpy as np
 
-from spacemouse import CartesianTarget, SpaceMouseReader
+from robot.inputs.spacemouse import CartesianTarget, SpaceMouseReader, open_spacemice
 
 fig = plt.figure(figsize=(6, 6))
 ax = fig.add_subplot(projection="3d")
 plt.ion()
 plt.show()
 
-with SpaceMouseReader() as sm:
+dev = open_spacemice()[0]
+with SpaceMouseReader(dev) as sm:
     target = CartesianTarget()
     t_prev = time.monotonic()
 
