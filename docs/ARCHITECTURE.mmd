@@ -1,0 +1,59 @@
+classDiagram
+    %% Inputs produce actions. Keyboard and Spacemouse are teleop, Policy is learned.
+    class Input{
+        <<interface>>
+        is_available()*$ bool
+    }
+    class Keyboard{
+    }
+    class Spacemouse{
+    }
+    class Policy{
+    }
+    Input <|-- Keyboard
+    Input <|-- Spacemouse
+    Input <|-- Policy
+
+    %% Cameras produce frames. SimCamera renders its own view at fps of sim time,
+    %% staggered by offset; all cameras share one offscreen renderer per scene.
+    class Camera{
+        <<interface>>
+        is_available()*$ bool
+        connect() void
+        read()* Frame
+        close() void
+    }
+    class SimCamera{
+    }
+    Camera <|-- SimCamera
+    class Frame{
+        camera_name str
+        rgb uint8_HxWx3
+        depth uint16_or_none
+    }
+
+    %% The simulation owns physics only. One step() is one control tick.
+    class Simulation{
+        step(action) void
+        reset() void
+        state ndarray
+    }
+    SimCamera --> Simulation : renders a view of
+
+    %% Recording writes frames and states to disk.
+    class Recorder{
+        record(frames, states) void
+    }
+    Recorder ..> Frame : receives
+
+    %% Planned: real and simulated arms behind one interface.
+    class Robot{
+        <<interface>>
+        act(action) void
+    }
+    class RealArm{
+    }
+    class SimArm{
+    }
+    Robot <|-- RealArm
+    Robot <|-- SimArm
