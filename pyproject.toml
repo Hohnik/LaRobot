@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "evdev>=2.0.0",
     "mjviser>=0.0.14",
     "mujoco>=3.11.0",
     "numpy>=2.5.2",

@@ -1,4 +1,3 @@
-# TODO: add evdev to uv
 from evdev import InputDevice, list_devices, ecodes
 import numpy as np
 import threading
@@ -16,21 +15,36 @@ AXES = (
 )
 
 
-# Make sure the user has read/write access (sudo usermod -aG input $USER)
-def open_spacemouse() -> InputDevice:
+def open_spacemice():
+    """
+    get InputDevices for all connected Spacemice
+    Make sure the user has read/write access (sudo usermod -aG input $USER)
+    """
+
     devices = [InputDevice(path) for path in list_devices()]
+    mice = []
     for device in devices:
         if "3dconnexion" in device.name.lower():
             path = device.path
+            mice.append(InputDevice(path))
             break
     else:
-        raise ConnectionError("SpaceMouse not found")
-    return InputDevice(path)
+        raise ConnectionError("No Spacemouse found")
+    return mice
 
 
 class SpaceMouseReader:
+    """
+    perm: permutations to switch out axes of the mouse
+    signs: directions of movement
+    zero_timeout: after this time raw values will be set to zero, prevent getting stuck
+    expo: exponent to smooth out movement speed
+    scales: scaling for linear and angular movements
+    """
+
     def __init__(
         self,
+        dev: InputDevice,
         perm=(0, 1, 2, 3, 4, 5),
         signs=(1, -1, -1, 1, -1, -1),
         zero_timeout: float = 0.05,
@@ -38,7 +52,7 @@ class SpaceMouseReader:
         lin_scale=0.12,
         ang_scale=0.8,
     ):
-        self._dev = open_spacemouse()
+        self._dev = dev
         self._idx = {code: i for i, code in enumerate(AXES)}
         self.zero_timeout = zero_timeout
         self.perm = list(perm)
@@ -140,20 +154,21 @@ class CartesianTarget:
 
 if __name__ == "__main__":
     target = CartesianTarget()
-
-    # DEBUG
-    R = target.exp_so3([0, 0, np.pi / 2])
-    print(f"sollte 1 sein: {np.linalg.det(R)}")
-    print(f"sollte einheitsmatrix sein: {R.T @ R}")
-    print(f"[0, 1, 0]: {R @ np.array([1, 0, 0])}")  # does it turn the right way?
-    print(f"[0, 0, 1]: {R @ np.array([0, 0, 1])}")
-    R = np.eye(3)
-    for _ in range(1000):
-        R = target.exp_so3(np.array([0, 0, np.pi / 2 / 1000])) @ R
-    print(f"[0, 1, 0] {R @ np.array([1, 0, 0])}")
-    print(f"1.0: {np.linalg.det(R)}")
-
-    with SpaceMouseReader() as sm:
+    #
+    # # DEBUG
+    # R = target.exp_so3([0, 0, np.pi / 2])
+    # print(f"sollte 1 sein: {np.linalg.det(R)}")
+    # print(f"sollte einheitsmatrix sein: {R.T @ R}")
+    # print(f"[0, 1, 0]: {R @ np.array([1, 0, 0])}")  # does it turn the right way?
+    # print(f"[0, 0, 1]: {R @ np.array([0, 0, 1])}")
+    # R = np.eye(3)
+    # for _ in range(1000):
+    #     R = target.exp_so3(np.array([0, 0, np.pi / 2 / 1000])) @ R
+    # print(f"[0, 1, 0] {R @ np.array([1, 0, 0])}")
+    # print(f"1.0: {np.linalg.det(R)}")
+    #
+    dev = open_spacemice()[0]
+    with SpaceMouseReader(dev) as sm:
         try:
             t_prev = time.monotonic()
             while True:
@@ -162,7 +177,11 @@ if __name__ == "__main__":
                 t_prev = t_now
                 twist, btns = sm.get_twist()
                 target.integrate(twist, dt)
-                print(target.R @ np.array([0, 0, 1]), target.R @ np.array([1, 0, 0]))
+                print(
+                    target.R @ np.array([0, 0, 1]),
+                    target.R @ np.array([1, 0, 0]),
+                    flush=True,
+                )
                 time.sleep(0.02)
         except KeyboardInterrupt:
             print()
