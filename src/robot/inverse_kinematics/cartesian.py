@@ -90,3 +90,37 @@ class CartesianIK:
         self.configuration.integrate_inplace(velocity, dt)
 
         return self.configuration.q[:ARM_JOINTS].copy()
+
+    def solve_target(
+        self,
+        current_joint_positions: np.ndarray,
+        target_position: np.ndarray,
+        target_rotation: np.ndarray,
+        dt: float = 1 / CONTROL_HZ,
+    ) -> np.ndarray:
+
+        target_position = np.asarray(target_position, dtype=float)
+        target_rotation = np.asarray(target_rotation, dtype=float)
+
+        if target_position.shape != (3,):
+            raise ValueError(
+                f"expected target position shape (3,), "
+                f"got {target_position.shape}"
+            )
+
+        if target_rotation.shape != (3, 3):
+            raise ValueError(
+                f"expected target rotation shape (3, 3), "
+                f"got {target_rotation.shape}"
+            )
+        # SpaceMouse uses 2 steps, mink uses homogenous transforms (4, 4)
+        target_pose = np.eye(4)
+        target_pose[:3, :3] = target_rotation
+        target_pose[:3, 3] = target_position
+        
+        # IK calculation
+        return self.solve_step(
+            current_joint_positions,
+            target_pose,
+            dt=dt,
+        )   

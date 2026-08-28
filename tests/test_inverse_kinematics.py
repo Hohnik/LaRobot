@@ -25,8 +25,8 @@ def test_forward_kinematics_returns_valid_pose():
 
     assert pose.shape == (4, 4)
     assert np.all(np.isfinite(pose))
-
-def test_solve_step_moves_grasp_site_towards_target():
+    
+def test_solve_target_moves_grasp_site_towards_target():
     ik = CartesianIK(MODEL_PATH, site_name="grasp_site")
 
     current_joints = np.array(
@@ -35,21 +35,23 @@ def test_solve_step_moves_grasp_site_towards_target():
 
     current_pose = ik.forward_kinematics(current_joints)
 
-    target_pose = current_pose.copy()
-    target_pose[0, 3] += 0.01
+    target_position = current_pose[:3, 3].copy()
+    target_position[0] += 0.01
+    target_rotation = current_pose[:3, :3].copy()
 
-    new_joints = ik.solve_step(
+    new_joints = ik.solve_target(
         current_joints,
-        target_pose,
+        target_position,
+        target_rotation,
     )
 
     new_pose = ik.forward_kinematics(new_joints)
 
     old_error = np.linalg.norm(
-        target_pose[:3, 3] - current_pose[:3, 3]
+        target_position - current_pose[:3, 3]
     )
     new_error = np.linalg.norm(
-        target_pose[:3, 3] - new_pose[:3, 3]
+        target_position - new_pose[:3, 3]
     )
 
     assert new_joints.shape == (ARM_JOINTS,)
