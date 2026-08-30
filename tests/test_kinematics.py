@@ -1,8 +1,8 @@
 from pathlib import Path 
-from robot.inverse_kinematics.cartesian import ARM_JOINTS, CartesianIK
+import mujoco
+import numpy as np
 
-import numpy as np 
-
+from robot.kinematics.cartesian import ARM_JOINTS, CartesianKinematics
 ROOT = Path(__file__).resolve().parents[1]
 
 MODEL_PATH = (
@@ -14,39 +14,40 @@ MODEL_PATH = (
     / "yam.xml"
 )
 
-def test_forward_kinematics_returns_valid_pose():
-    ik = CartesianIK(MODEL_PATH, site_name="grasp_site")
+MODEL = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+
+def test_forward_returns_valid_pose():
+    kinematics = CartesianKinematics(MODEL, site_name="grasp_site")
 
     home_joints = np.array(
         [0.0, np.pi / 3, np.pi / 3, 0.0, 0.0, 0.0]
     )
 
-    pose = ik.forward_kinematics(home_joints)
+    pose = kinematics.forward(home_joints)
 
     assert pose.shape == (4, 4)
     assert np.all(np.isfinite(pose))
     
-def test_solve_target_moves_grasp_site_towards_target():
-    ik = CartesianIK(MODEL_PATH, site_name="grasp_site")
+def test_inverse_target_moves_grasp_site_towards_target():
+    kinematics = CartesianKinematics(MODEL, site_name="grasp_site")
 
     current_joints = np.array(
         [0.0, np.pi / 3, np.pi / 3, 0.0, 0.0, 0.0]
     )
 
-    current_pose = ik.forward_kinematics(current_joints)
+    current_pose = kinematics.forward(current_joints)
 
     target_position = current_pose[:3, 3].copy()
     target_position[0] += 0.01
     target_rotation = current_pose[:3, :3].copy()
 
-    new_joints = ik.solve_target(
+    new_joints = kinematics.inverse(
         current_joints,
         target_position,
         target_rotation,
     )
 
-    new_pose = ik.forward_kinematics(new_joints)
-
+    new_pose = kinematics.forward(new_joints)
     old_error = np.linalg.norm(
         target_position - current_pose[:3, 3]
     )

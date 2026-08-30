@@ -1,16 +1,16 @@
 from pathlib import Path
 
 import numpy as np 
-
+import mujoco
 from robot.environment.simulation import Simulation
-from robot.inverse_kinematics.cartesian import ARM_JOINTS, CartesianIK
+from robot.kinematics.cartesian import ARM_JOINTS, CartesianKinematics
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 SCENE = ROOT / "assets" / "put_bottles" / "put_bottle.xml" 
 
-IK_MODEL = (
+KINEMATICS_MODEL_PATH = (
     ROOT
     / "assets"
     / "put_bottles"
@@ -18,6 +18,8 @@ IK_MODEL = (
     / "i2rt_yam"
     / "yam.xml"
 )
+
+KINEMATICS_MODEL = mujoco.MjModel.from_xml_path(str(KINEMATICS_MODEL_PATH))
 # bcs we have 12 joints + 2 grippers:
 LEFT_ARM = slice(0, ARM_JOINTS) #left joints 
 LEFT_GRIPPER = ARM_JOINTS # left gripper
@@ -25,10 +27,13 @@ RIGHT_SIDE = slice(ARM_JOINTS + 1, 14) # right joints + right gripper
 
 def test_ik_moves_only_left_arm_towards_target():
     sim = Simulation(str(SCENE))
-    ik = CartesianIK(IK_MODEL, site_name="grasp_site")
+    kinematics = CartesianKinematics(
+        KINEMATICS_MODEL,
+        site_name="grasp_site",
+    )
 
     initial_state = sim.state.copy() #14 Zustandswerte der Simulation [q1L, q2L,...,q6L,...,greiferL,...]
-    initial_pose = ik.forward_kinematics( #räumliche Position und Ausrichtung als 4x4 Matrix
+    initial_pose = kinematics.forward( #räumliche Position und Ausrichtung als 4x4 Matrix
         initial_state[LEFT_ARM]
     )
 
@@ -44,7 +49,7 @@ def test_ik_moves_only_left_arm_towards_target():
         state = sim.state
         action = state.copy()
 
-        action[LEFT_ARM] = ik.solve_target(  #Berechnung der Gelenkziele basierend auf target_position und rotation
+        action[LEFT_ARM] = kinematics.inverse(  #Berechnung der Gelenkziele basierend auf target_position und rotation
             state[LEFT_ARM],
             target_position,
             target_rotation
@@ -53,7 +58,7 @@ def test_ik_moves_only_left_arm_towards_target():
         sim.step(action)
 
     final_state = sim.state
-    final_pose = ik.forward_kinematics( #Berechung von FK zur Evaluierung wo der Greifer tatsächlich angekommen ist.
+    final_pose = kinematics.forward( #Berechung von FK zur Evaluierung wo der Greifer tatsächlich angekommen ist.
         final_state[LEFT_ARM]
     )
 
