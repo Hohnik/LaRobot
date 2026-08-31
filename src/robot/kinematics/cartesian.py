@@ -26,6 +26,9 @@ class CartesianKinematics:
 
         self.limits = [
             mink.ConfigurationLimit(self.model),
+            mink.VelocityLimit(
+                self.model, {f"joint{i}": RADS_PER_SECOND for i in range(1, ARM_JOINTS + 1)}
+            ),
         ]
 
     def forward(self, joint_positions: np.ndarray) -> np.ndarray:
