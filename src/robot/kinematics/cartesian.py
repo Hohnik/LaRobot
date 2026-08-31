@@ -5,6 +5,7 @@ import numpy as np
 from robot import CONTROL_HZ
 
 ARM_JOINTS = 6 
+RADS_PER_SECOND = 1.0
 
 class CartesianKinematics: 
     def __init__(
