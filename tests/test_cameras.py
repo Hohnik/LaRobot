@@ -15,7 +15,9 @@ def test_read_returns_the_cached_frame_until_the_interval_passed():
         first = cam.read()
         assert cam.read() is first  # same tick: no re-render
         for _ in range(4):  # 4/30 s of sim time is more than 1/10 s
-            sim.step(np.zeros(sim.model.nu))
+            action = np.zeros(sim.model.nu)
+            left, right = action[0:7], action[7:]
+            sim.step(left, right)
         assert cam.read() is not first
 
 
