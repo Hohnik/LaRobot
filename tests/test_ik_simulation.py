@@ -1,29 +1,25 @@
 from pathlib import Path
 
-import numpy as np 
 import mujoco
+import numpy as np
+
 from robot.environment.simulation import Simulation
 from robot.kinematics.cartesian import ARM_JOINTS, CartesianKinematics
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
-SCENE = ROOT / "assets" / "put_bottles" / "put_bottle.xml" 
+SCENE = ROOT / "assets" / "put_bottles" / "put_bottle.xml"
 
 KINEMATICS_MODEL_PATH = (
-    ROOT
-    / "assets"
-    / "put_bottles"
-    / "assets"
-    / "i2rt_yam"
-    / "yam.xml"
+    ROOT / "assets" / "put_bottles" / "assets" / "i2rt_yam" / "yam.xml"
 )
 
 KINEMATICS_MODEL = mujoco.MjModel.from_xml_path(str(KINEMATICS_MODEL_PATH))
 # bcs we have 12 joints + 2 grippers:
-LEFT_ARM = slice(0, ARM_JOINTS) #left joints 
-LEFT_GRIPPER = ARM_JOINTS # left gripper
-RIGHT_SIDE = slice(ARM_JOINTS + 1, 14) # right joints + right gripper
+LEFT_ARM = slice(0, ARM_JOINTS)  # left joints
+LEFT_GRIPPER = ARM_JOINTS  # left gripper
+RIGHT_SIDE = slice(ARM_JOINTS + 1, 14)  # right joints + right gripper
+
 
 def test_ik_moves_only_left_arm_towards_target():
     sim = Simulation(str(SCENE))
@@ -32,39 +28,40 @@ def test_ik_moves_only_left_arm_towards_target():
         site_name="grasp_site",
     )
 
-    initial_state = sim.state.copy() #14 Zustandswerte der Simulation [q1L, q2L,...,q6L,...,greiferL,...]
-    initial_pose = kinematics.forward( #räumliche Position und Ausrichtung als 4x4 Matrix
-        initial_state[LEFT_ARM]
+    initial_state = (
+        sim.state.copy()
+    )  # 14 Zustandswerte der Simulation [q1L, q2L,...,q6L,...,greiferL,...]
+    initial_pose = (
+        kinematics.forward(  # räumliche Position und Ausrichtung als 4x4 Matrix
+            initial_state[LEFT_ARM]
+        )
     )
 
-    target_position = initial_pose[:3, 3].copy() #liefert x,y,z
+    target_position = initial_pose[:3, 3].copy()  # liefert x,y,z
     target_position[0] += 0.01
-    target_rotation = initial_pose[:3, :3].copy() # liefert rotationsmatrix
+    target_rotation = initial_pose[:3, :3].copy()  # liefert rotationsmatrix
 
-    old_error = np.linalg.norm(
-        target_position - initial_pose[:3, 3]
-    )
+    old_error = np.linalg.norm(target_position - initial_pose[:3, 3])
 
     for _ in range(30):
         state = sim.state
         action = state.copy()
 
-        action[LEFT_ARM] = kinematics.inverse(  #Berechnung der Gelenkziele basierend auf target_position und rotation
-            state[LEFT_ARM],
-            target_position,
-            target_rotation
+        action[LEFT_ARM] = (
+            kinematics.inverse(  # Berechnung der Gelenkziele basierend auf target_position und rotation
+                state[LEFT_ARM], target_position, target_rotation
+            )
         )
 
-        sim.step(action)
+        left, right = action[:7], action[7:]
+        sim.step(left, right)
 
     final_state = sim.state
-    final_pose = kinematics.forward( #Berechung von FK zur Evaluierung wo der Greifer tatsächlich angekommen ist.
+    final_pose = kinematics.forward(  # Berechung von FK zur Evaluierung wo der Greifer tatsächlich angekommen ist.
         final_state[LEFT_ARM]
     )
 
-    new_error = np.linalg.norm(
-        target_position - final_pose[:3, 3]
-    )
+    new_error = np.linalg.norm(target_position - final_pose[:3, 3])
 
     assert new_error < old_error
     assert np.isclose(
@@ -78,4 +75,3 @@ def test_ik_moves_only_left_arm_towards_target():
         initial_state[RIGHT_SIDE],
         atol=1e-3,
     )
-
