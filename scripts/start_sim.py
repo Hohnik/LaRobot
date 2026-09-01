@@ -51,7 +51,8 @@ def main() -> None:
                 recorder.record([camera.read() for camera in cameras], sim.state)
 
                 action = np.array([slider.value for slider in sliders], np.float32)
-                sim.step(action)
+                left, right = action[:7], action[7:]
+                sim.step(left, right)
                 view.update_from_mjdata(sim.data)
 
 
