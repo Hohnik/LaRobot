@@ -27,7 +27,7 @@ with SpaceMouseReader(dev) as sm:
             target.integrate(twist, dt)
 
             ax.clear()
-            p, R = target.p, target.R
+            p, R = target.point, target.rotation
 
             for col, color, label in zip(R.T, ("r", "g", "b"), ("x", "y", "z")):
                 ax.quiver(*p, *(col * 0.1), color=color)
