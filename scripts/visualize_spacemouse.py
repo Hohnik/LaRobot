@@ -5,33 +5,32 @@ import matplotlib
 matplotlib.use("TkAgg")  # backend
 import matplotlib.pyplot as plt
 
-from robot.inputs.spacemouse import CartesianTarget, SpaceMouseReader, open_spacemice
+from robot.inputs.spacemouse import SpaceMouse
+from robot.kinematics.cartesian_target import CartesianTarget
 
 fig = plt.figure(figsize=(6, 6))
 ax = fig.add_subplot(projection="3d")
 plt.ion()
 plt.show()
 
-dev = open_spacemice()[0]
-with SpaceMouseReader(dev) as sm:
+with SpaceMouse() as sm:
     target = CartesianTarget()
-    t_prev = time.monotonic()
+    now = time.perf_counter()
+    prev = None
 
     try:
         while plt.fignum_exists(fig.number):
-            t_now = time.monotonic()
-            dt = t_now - t_prev
-            t_prev = t_now
+            prev, now = now, time.perf_counter()
 
-            twist, btns = sm.get_twist()
-            target.integrate(twist, dt)
+            velocities, btns = sm.read()
+            target.integrate(velocities, abs(now - prev))
 
             ax.clear()
-            p, R = target.point, target.rotation
+            p, R = target.position, target.rotation
 
             for col, color, label in zip(R.T, ("r", "g", "b"), ("x", "y", "z")):
                 ax.quiver(*p, *(col * 0.1), color=color)
-                ax.text(*(p + col * 0.12), label, color=color)
+                ax.text(*(p + col * 0.12), s=label, color=color)
 
             ax.set_xlim(-0.2, 0.8)
             ax.set_ylim(-0.5, 0.5)

@@ -32,7 +32,7 @@ class SimCamera(Camera):
         self._min_interval: float = 1 / fps
         self._offset: float = offset
         self._camera_id: int | None = None
-        self._latest: Frame | None = None
+        self._last_frame: Frame | None = None
         self._latest_time: float = -offset
 
     @property
@@ -66,13 +66,13 @@ class SimCamera(Camera):
     def _render_due(self, now: float) -> bool:
         """True when the cached frame is missing, older than the interval, or pre-reset"""
         return (
-            self._latest is None
+            self._last_frame is None
             or now - self._latest_time >= self._min_interval
             or now < self._latest_time
         )
 
     @override
-    def read(self) -> Frame | None:
+    def read(self) -> Frame:
         """Read the latest frame from the camera"""
         if self._camera_id is None:
             raise RuntimeError(f"{self.name}: call connect() before read()")
@@ -81,11 +81,12 @@ class SimCamera(Camera):
         if self._render_due(now):
             renderer = self._renderer
             renderer.update_scene(self.sim.data, camera=self._camera_id)
-            self._latest = Frame(camera_name=self.name, rgb=renderer.render())
+            self._last_frame = Frame(camera_name=self.name, rgb=renderer.render())
             self._latest_time = now
-        return self._latest
+        assert self._last_frame is not None  # _render_due() covers the None case
+        return self._last_frame
 
     @override
     def close(self) -> None:
         self._camera_id = None
-        self._latest = None
+        self._last_frame = None

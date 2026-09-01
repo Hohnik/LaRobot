@@ -1,59 +1,105 @@
-"""Teleop demo: drive the simulated arms with GUI sliders and record."""
-
-from contextlib import ExitStack
 from pathlib import Path
 
+import mujoco
 import numpy as np
 import viser
 from mjviser import ViserMujocoScene
 
-from robot.cameras.sim_camera import SimCamera
 from robot.environment.simulation import Simulation
-from robot.recording.recorder import Recorder
+from robot.inputs.keyboard import Keyboard
+from robot.inputs.spacemouse import SpaceMouse
+from robot.kinematics.cartesian_kinematics import CartesianKinematics
+from robot.kinematics.cartesian_target import CartesianTarget
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-CAMERA_NAMES = ("left", "right", "overhead")
-CAMERA_FPS = 6  # one render costs ~30 ms; three at 30 Hz would not fit a tick
+LEFT_JOINTS = slice(0, 6)
+RIGHT_JOINTS = slice(6, 14)
+GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
+LAG_LIMIT = 0.03
 
 
-def main() -> None:
+def main(args) -> None:
     sim = Simulation(str(SCENE), realtime=True)
 
     server = viser.ViserServer(port=8080)
+    # NOTE: Values are not perfectly aligned with camera position!!!
+    server.initial_camera.position = (0.086, 0.0, 1.6)
+    server.initial_camera.look_at = (1.086, 0.0, 0)
+    server.initial_camera.fov = np.radians(60)
+
     view = ViserMujocoScene(server, sim.model, num_envs=1)
-    low, high = sim.model.actuator_ctrlrange.T
-    sliders = [
-        server.gui.add_slider(
-            label=f"a{i}",
-            min=low[i],
-            max=high[i],
-            step=1e-3,
-            initial_value=float(sim.state[i]),
-        )
-        for i in range(sim.model.nu)
-    ]
+    view.camera_tracking_enabled = False
 
-    with ExitStack() as stack:
-        cameras = [
-            stack.enter_context(
-                SimCamera(
-                    sim,
-                    name=name,
-                    fps=CAMERA_FPS,
-                    offset=i / CAMERA_FPS / len(CAMERA_NAMES),
-                )
+    kin = CartesianKinematics(sim.model)
+    left_joint_incides = kin.left_qpos_indices
+
+    pose = kin.forward(sim.data.qpos[left_joint_incides])
+    target = CartesianTarget.from_pose(pose=pose)
+
+    # marker
+    marker_body_id = sim.model.body("target_marker").id
+    marker_mocap_id = sim.model.body_mocapid[marker_body_id]
+
+    match args.device[0]:
+        case "spacemouse":
+            device = SpaceMouse(expo=0.4, lin_scale=0.5, ang_scale=2.5)
+        case "keyboard":
+            device = Keyboard()
+
+    with device as dev:
+        gripper = GRIPPER_OPEN
+        while True:
+            measured_joints = sim.data.qpos[left_joint_incides]
+
+            # spacemouse - where to
+            velocities, buttons = dev.read()
+            target.integrate(velocities)
+
+            # lag - only move in a radius
+            kin_position = kin.forward(measured_joints)[:3, 3]
+
+            delta = target.position - kin_position
+            distance = np.linalg.norm(delta)
+
+            if distance > LAG_LIMIT:
+                target.position = kin_position + delta / distance * LAG_LIMIT
+
+            # update joints
+            joints = kin.inverse(
+                measured_joints,
+                target_position=target.position,
+                target_rotation=target.rotation,
             )
-            for i, name in enumerate(CAMERA_NAMES)
-        ]
-        with Recorder(ROOT / "recordings" / "last_session") as recorder:
-            while True:
-                recorder.record([camera.read() for camera in cameras], sim.state)
 
-                action = np.array([slider.value for slider in sliders], np.float32)
-                sim.step(action)
-                view.update_from_mjdata(sim.data)
+            # gripper
+            if buttons[0] and gripper >= GRIPPER_SHUT:
+                gripper -= 0.005
+            elif buttons[1] and gripper <= GRIPPER_OPEN:
+                gripper += 0.005
+
+            # marker
+            quat = np.empty(4)
+            mujoco.mju_mat2Quat(quat, target.rotation.ravel())
+            sim.data.mocap_pos[marker_mocap_id] = target.position
+            sim.data.mocap_quat[marker_mocap_id] = quat
+
+            sim.step(left=np.append(joints, gripper))
+
+            view.update_from_mjdata(sim.data)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(usage="%(prog)s [options]")
+    parser.add_argument(
+        "--device",
+        "-d",
+        choices=["spacemouse", "keyboard"],
+        nargs=1,
+        help="select a input device",
+        required=True,
+    )
+    args = parser.parse_args()
+    main(args)
