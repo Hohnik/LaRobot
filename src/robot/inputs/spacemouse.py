@@ -133,12 +133,18 @@ class SpaceMouseReader:
 
 
 class CartesianTarget:
-    def __init__(self, p: Sequence[float] = (0.35, 0.0, 0.25)) -> None:
-        self.p = np.asarray(
-            p, dtype=float
-        )  # guessed values, here arm is 35cm in front, 25cm above the base
-        self.R = np.eye(3)
+    def __init__(
+        self,
+        point: np.ndarray = np.zeros(3),
+        rotation: np.ndarray = np.eye(3),
+    ) -> None:
+        self.point = point
+        self.rotation = rotation
         self._steps = 0
+
+    @classmethod
+    def from_pose(cls, pose: np.ndarray) -> Self:
+        return cls(point=pose[:3, 3], rotation=pose[:3, :3])
 
     @staticmethod
     def exp_so3(w: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
@@ -154,14 +160,14 @@ class CartesianTarget:
         return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
 
     def integrate(self, twist: npt.NDArray[np.float64], dt: float) -> None:
-        self.p = self.p + twist[:3] * dt
-        self.R = self.exp_so3(twist[3:] * dt) @ self.R
+        self.point = self.point + twist[:3] * dt
+        self.rotation = self.exp_so3(twist[3:] * dt) @ self.rotation
 
         self._steps += 1
         if self._steps % 200 == 0:  # to avoid accumulative error
-            u, _, vt = np.linalg.svd(self.R)
+            u, _, vt = np.linalg.svd(self.rotation)
             d = np.linalg.det(u @ vt)
-            self.R = u @ np.diag([1.0, 1.0, d]) @ vt  # leave out dilution by S
+            self.rotation = u @ np.diag([1.0, 1.0, d]) @ vt  # leave out dilution by S
 
 
 if __name__ == "__main__":
@@ -190,8 +196,8 @@ if __name__ == "__main__":
                 twist, btns = sm.get_twist()
                 target.integrate(twist, dt)
                 print(
-                    target.R @ np.array([0, 0, 1]),
-                    target.R @ np.array([1, 0, 0]),
+                    target.rotation @ np.array([0, 0, 1]),
+                    target.rotation @ np.array([1, 0, 0]),
                     flush=True,
                 )
                 time.sleep(0.02)
