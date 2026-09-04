@@ -1,205 +1,159 @@
-import grp
-import os
-import select
-import threading
-import time
-from collections.abc import Sequence
-from typing import Self
+from typing import Annotated, Self, override
 
 import numpy as np
 import numpy.typing as npt
-from evdev import InputDevice, InputEvent, ecodes, list_devices
+import pyspacemouse
+from pyspacemouse import AxisConvention
 
-# to get standard axe indices of the spacemouse
-AXES = (
-    ecodes.REL_X,
-    ecodes.REL_Y,
-    ecodes.REL_Z,
-    ecodes.REL_RX,
-    ecodes.REL_RY,
-    ecodes.REL_RZ,
-)
+from robot.inputs.input import Input
 
-
-def open_spacemice() -> list:
-    """
-    get InputDevices for all connected Spacemice
-    """
-
-    assert grp.getgrnam("input").gr_gid in os.getgroups(), (
-        "add user to input group: 'sudo usermod -aG input $USER'"
-    )
-
-    devices = [InputDevice(path) for path in list_devices()]
-    mice = []
-    for device in devices:
-        if "3dconnexion" in device.name.lower():
-            mice.append(device)
-    if mice == []:
-        raise ConnectionError("No spacemouse found")
-    return mice
+Velocities = Annotated[
+    npt.NDArray[np.float64], "3D linear velocity + 3D angular velocity"
+]
+Vector3 = Annotated[npt.NDArray[np.float64], "3D vector"]
+Rotation = Annotated[npt.NDArray[np.float64], "3x3 rotation matrix"]
+Pose = Annotated[npt.NDArray[np.float64], "4x4 homogeneous transformation matrix"]
 
 
-class SpaceMouseReader:
-    """
-    perm: permutations to switch out axes of the mouse
-    signs: directions of movement
-    zero_timeout: after this time raw values will be set to zero, prevent getting stuck
-    expo: exponent to smooth out movement speed
-    scales: scaling for linear and angular movements
-    """
-
+class SpaceMouseInput(Input):
     def __init__(
         self,
-        dev: InputDevice,
-        perm: Sequence[int] = (0, 1, 2, 3, 4, 5),
-        signs: Sequence[float] = (1.0, -1.0, -1.0, 1.0, -1.0, -1.0),
-        zero_timeout: float = 0.05,
-        expo: float = 1.6,
+        expo: float = 0.6,
         lin_scale: float = 0.12,
         ang_scale: float = 0.8,
     ) -> None:
-        self._dev = dev
-        self._idx = {code: i for i, code in enumerate(AXES)}
-        self.zero_timeout = zero_timeout
-        self.perm = list(perm)
-        self.signs = np.asarray(signs, dtype=float)
         self.expo = expo
         self.lin_scale = lin_scale
         self.ang_scale = ang_scale
+        self._spacemouse: pyspacemouse.SpaceMouseDevice | None = None
 
-        self._buttons = [False, False]
-        self._raw = np.zeros(6)
-        self._t = np.full(6, time.monotonic())
-
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._lock = threading.Lock()
+    @classmethod
+    @override
+    def is_available(cls) -> bool:
+        return pyspacemouse.get_connected_devices() != []
 
     def __enter__(self) -> Self:
-        self._thread.start()
+        assert self.is_available(), ConnectionError("SpaceMouse is not available")
+        self._spacemouse = pyspacemouse.open(axis_convention=AxisConvention.ROS)
         return self
 
-    def __exit__(self, *exc: object) -> None:  # *exc is for conventions in threading
-        self._stop.set()
-        self._thread.join(timeout=1.0)
-        self._dev.close()
+    def __exit__(self, *_: object) -> None:
+        assert self._spacemouse is not None
+        self._spacemouse.close()
 
-    def _run(self) -> None:
-        while not self._stop.is_set():
-            if select.select([self._dev.fd], [], [], 0.05)[
-                0
-            ]:  # either if event is in or time passed, for stopping
-                for e in self._dev.read():
-                    self._handle(e)
+    def read(self) -> tuple[Velocities, list[int]]:
+        """Get the current velocity and button states from the SpaceMouse."""
 
-    def _handle(self, e: InputEvent) -> None:
-        """update classes raw values"""
-        now = time.monotonic()  # forward passing time
-        with self._lock:
-            if e.type == ecodes.EV_REL:
-                i = self._idx[e.code]
-                self._raw[i] = e.value / 350.0  # max value
-                self._t[i] = now
-            elif e.type == ecodes.EV_KEY:
-                self._buttons[e.code - ecodes.BTN_0] = (
-                    e.value != 0
-                )  # 256 to 0 and 257 to 1
+        assert self._spacemouse is not None, (
+            "SpaceMouse is not initialized. Use 'with SpaceMouseInput() as sm:'"
+        )
 
-    def _snapshot(self) -> tuple[npt.NDArray[np.float64], tuple[bool, ...]]:
-        """get the current raw outputs of spacemouse"""
-        now = time.monotonic()
-        with self._lock:  # should not be read and written at the same time
-            raw = self._raw.copy()
-            t = self._t.copy()
-            buttons = tuple(self._buttons)
+        # NOTE: Each read() takes one queued report. Keep going until the
+        # timestamp stops changing, meaning the queue is empty.
+        state = self._spacemouse.read()
+        for _ in range(64):
+            t = state.t
+            state = self._spacemouse.read()
+            if state.t == t:
+                break
 
-        raw[(now - t) > self.zero_timeout] = 0.0
-        return raw, buttons
+        if not state.has_motion(0.01):
+            return np.zeros(6, dtype=np.float64), state.buttons
 
-    def get_twist(self) -> tuple[npt.NDArray[np.float64], tuple[bool, ...]]:
-        """get velocity"""
-        raw, buttons = self._snapshot()
-        v = raw[(self.perm)] * self.signs
-        v = np.clip(v, -1.0, 1.0)
+        velocities: Velocities = np.array(
+            [state.x, state.y, state.z, state.roll, state.pitch, state.yaw],
+            dtype=np.float64,
+        )
 
-        smoothed = np.sign(v) * np.abs(v) ** self.expo
+        velocities[:3] = (
+            (1 - self.expo) * velocities[:3] + self.expo * velocities[:3] ** 3
+        ) * self.lin_scale
+        velocities[3:] = (
+            (1 - self.expo) * velocities[3:] + self.expo * velocities[3:] ** 3
+        ) * self.ang_scale
 
-        twist = np.empty(6)
-        twist[:3] = smoothed[:3] * self.lin_scale
-        twist[3:] = smoothed[3:] * self.ang_scale
-
-        return twist, buttons
+        return velocities, state.buttons
 
 
 class CartesianTarget:
     def __init__(
         self,
-        point: np.ndarray = np.zeros(3),
-        rotation: np.ndarray = np.eye(3),
+        position: Vector3 | None = None,
+        rotation: Rotation | None = None,
     ) -> None:
-        self.point = point
-        self.rotation = rotation
+        position = np.zeros(3) if position is None else np.array(position)
+        rotation = np.eye(3) if rotation is None else np.array(rotation)
+        assert position.shape == (3,), (
+            f"position must be a 3D vector, got {position.shape}"
+        )
+        assert rotation.shape == (3, 3), (
+            f"rotation must be a 3x3 matrix, got {rotation.shape}"
+        )
+
+        self.position: Vector3 = position
+        self.rotation: Rotation = rotation
         self._steps = 0
 
     @classmethod
-    def from_pose(cls, pose: np.ndarray) -> Self:
-        return cls(point=pose[:3, 3], rotation=pose[:3, :3])
+    def from_pose(cls, pose: Pose) -> Self:
+        return cls(position=pose[:3, 3], rotation=pose[:3, :3])
+
+    @property
+    def pose(self) -> Pose:
+        pose = np.eye(4)
+        pose[:3, 3] = self.position
+        pose[:3, :3] = self.rotation
+        return pose
 
     @staticmethod
-    def exp_so3(w: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
-        """
-        compute the rotation matrix
-        w: the last 3 values of the twist
-        """
-        theta = np.linalg.norm(w)
-        if theta < 1e-12:
-            return np.eye(3)
-        k = w / theta
-        K = np.cross(np.eye(3), k)
-        return np.eye(3) + np.sin(theta) * K + (1 - np.cos(theta)) * (K @ K)
+    def rotation_matrix(axis_angle: Vector3) -> Rotation:
+        """Rotation matrix from an axis-angle vector (Rodrigues' formula).
 
-    def integrate(self, twist: npt.NDArray[np.float64], dt: float) -> None:
-        self.point = self.point + twist[:3] * dt
-        self.rotation = self.exp_so3(twist[3:] * dt) @ self.rotation
+        Direction of `axis_angle` is the rotation axis, its length is the angle in radians.
+        """
+        angle = np.linalg.norm(axis_angle)
+        if angle < 1e-12:
+            return np.eye(3)
+        x, y, z = axis_angle / angle
+        K = np.array(
+            [[0, -z, y], [z, 0, -x], [-y, x, 0]]
+        )  # cross-product matrix: K @ v == axis × v
+        return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
+
+    def integrate(self, velocities: Velocities, dt: float) -> Pose:
+        """Advance the pose by one step. velocity = (linear xyz, angular xyz)."""
+        linear, angular = velocities[:3], velocities[3:]
+        self.position = self.position + linear * dt
+        self.rotation = self.rotation_matrix(angular * dt) @ self.rotation
 
         self._steps += 1
-        if self._steps % 200 == 0:  # to avoid accumulative error
-            u, _, vt = np.linalg.svd(self.rotation)
-            d = np.linalg.det(u @ vt)
-            self.rotation = u @ np.diag([1.0, 1.0, d]) @ vt  # leave out dilution by S
+        if self._steps % 200 == 0:
+            self._reorthogonalize()
+        return self.pose
+
+    def _reorthogonalize(self) -> None:
+        """Snap self.rotation back to the nearest proper rotation matrix.
+
+        Floating-point drift slowly makes it non-orthogonal. Setting all singular
+        values to 1 fixes that; the det sign prevents flipping into a reflection.
+        """
+        u, _, vt = np.linalg.svd(self.rotation)
+        sign = np.sign(np.linalg.det(u @ vt))
+        self.rotation = u @ np.diag([1.0, 1.0, sign]) @ vt
 
 
 if __name__ == "__main__":
-    target = CartesianTarget()
-    #
-    # # DEBUG
-    # R = target.exp_so3([0, 0, np.pi / 2])
-    # print(f"sollte 1 sein: {np.linalg.det(R)}")
-    # print(f"sollte einheitsmatrix sein: {R.T @ R}")
-    # print(f"[0, 1, 0]: {R @ np.array([1, 0, 0])}")  # does it turn the right way?
-    # print(f"[0, 0, 1]: {R @ np.array([0, 0, 1])}")
-    # R = np.eye(3)
-    # for _ in range(1000):
-    #     R = target.exp_so3(np.array([0, 0, np.pi / 2 / 1000])) @ R
-    # print(f"[0, 1, 0] {R @ np.array([1, 0, 0])}")
-    # print(f"1.0: {np.linalg.det(R)}")
-    #
-    dev = open_spacemice()[0]
-    with SpaceMouseReader(dev) as sm:
-        try:
-            t_prev = time.monotonic()
-            while True:
-                t_now = time.monotonic()
-                dt = t_now - t_prev
-                t_prev = t_now
-                twist, btns = sm.get_twist()
-                target.integrate(twist, dt)
-                print(
-                    target.rotation @ np.array([0, 0, 1]),
-                    target.rotation @ np.array([1, 0, 0]),
-                    flush=True,
-                )
-                time.sleep(0.02)
-        except KeyboardInterrupt:
-            print()
+    import time
+
+    assert SpaceMouseInput.is_available(), "SpaceMouse is not available"
+
+    with SpaceMouseInput() as sm:
+        target = CartesianTarget()
+
+        while True:
+            velocities, buttons = sm.read()
+            pose = target.integrate(velocities, 0.001)
+            print(buttons)
+            # print(pose.round(4))
+
+            time.sleep(0.001)

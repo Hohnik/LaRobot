@@ -5,14 +5,14 @@ import numpy as np
 from robot import CONTROL_HZ
 
 ARM_JOINTS = 6
-RADS_PER_SECOND = 1.0
+RADS_PER_SECOND = 3.0
 
 
 class CartesianKinematics:
     def __init__(
         self,
         model: mujoco.MjModel,
-        site_name: str = "left_grasp_site",
+        site_name: str = "left_tcp_site",  # ['left_tcp_site', 'left_grasp_site', 'right_tcp_site', 'right_grasp_site']
     ):
         self.model = model
         self.configuration = mink.Configuration(self.model)
@@ -33,6 +33,13 @@ class CartesianKinematics:
             ),
         ]
 
+        self.left_qpos_indices = np.array(
+            [
+                self.model.jnt_qposadr[self.model.joint(f"left_joint{i}").id]
+                for i in range(1, 7)
+            ]
+        )
+
     def forward(self, joint_positions: np.ndarray) -> np.ndarray:
         joint_positions = np.asarray(joint_positions, dtype=float)
 
@@ -42,7 +49,7 @@ class CartesianKinematics:
             )
 
         qpos = self.configuration.q.copy()
-        qpos[:ARM_JOINTS] = joint_positions
+        qpos[self.left_qpos_indices] = joint_positions
         self.configuration.update(qpos)
 
         pose = self.configuration.get_transform_frame_to_world(
@@ -85,7 +92,7 @@ class CartesianKinematics:
         target_pose[:3, 3] = target_position
 
         qpos = self.configuration.q.copy()
-        qpos[:ARM_JOINTS] = current_joint_positions
+        qpos[self.left_qpos_indices] = current_joint_positions
         self.configuration.update(qpos)
 
         self.frame_task.set_target(mink.SE3.from_matrix(target_pose))
@@ -101,5 +108,4 @@ class CartesianKinematics:
 
         self.configuration.integrate_inplace(velocity, dt)
 
-        return self.configuration.q[:ARM_JOINTS].copy()
-
+        return self.configuration.q[self.left_qpos_indices].copy()
