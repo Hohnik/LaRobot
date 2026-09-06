@@ -10,6 +10,7 @@ from mjviser import ViserMujocoScene
 from robot.cameras.sim_camera import SimCamera
 from robot.environment.simulation import Simulation
 from robot.recording.recorder import Recorder
+from robot.recording.sample import Sample
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
@@ -48,13 +49,21 @@ def main() -> None:
         ]
         with Recorder(ROOT / "recordings" / "last_session") as recorder:
             while True:
-                recorder.record([camera.read() for camera in cameras], sim.state)
-
+                frames = tuple(camera.read() for camera in cameras)
+                state = sim.state.copy()
                 action = np.array([slider.value for slider in sliders], np.float32)
-                left, right = action[:7], action[7:]
-                sim.step(left, right)
-                view.update_from_mjdata(sim.data)
 
+                sample = Sample( # capture the current observaiton
+                    timestamp_s=float(sim.data.time),
+                    frames=frames,
+                    state=state,
+                    action=action.copy(),
+                )
+                recorder.record(sample) # record it with the action about to be applied
+
+                left, right = action[:7], action[7:]
+                sim.step(left,right) # advance simulation
+                view.update_from_mjdata(sim.data)
 
 if __name__ == "__main__":
     main()

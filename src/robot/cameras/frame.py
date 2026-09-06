@@ -12,4 +12,5 @@ class Frame:
 
     # Depth can be none because of the C920
     rgb: NDArray[np.uint8]
+    timestamp_s: float
     depth: NDArray[np.uint16] | None = None
