@@ -1,17 +1,18 @@
 import mink
 import mujoco
-import numpy as np 
+import numpy as np
 
 from robot import CONTROL_HZ
 
-ARM_JOINTS = 6 
-RADS_PER_SECOND = 1.0
+ARM_JOINTS = 6
+RADS_PER_SECOND = 10.0
 
-class CartesianKinematics: 
+
+class CartesianKinematics:
     def __init__(
-            self,
-            model: mujoco.MjModel,
-            site_name: str = "grasp_site",
+        self,
+        model: mujoco.MjModel,
+        site_name: str = "left_tcp_site",  # ['left_tcp_site', 'left_grasp_site', 'right_tcp_site', 'right_grasp_site']
     ):
         self.model = model
         self.configuration = mink.Configuration(self.model)
@@ -27,12 +28,20 @@ class CartesianKinematics:
         self.limits = [
             mink.ConfigurationLimit(self.model),
             mink.VelocityLimit(
-                self.model, {f"joint{i}": RADS_PER_SECOND for i in range(1, ARM_JOINTS + 1)}
+                self.model,
+                {f"left_joint{i}": RADS_PER_SECOND for i in range(1, ARM_JOINTS + 1)},
             ),
         ]
 
+        self.left_qpos_indices = np.array(
+            [
+                self.model.jnt_qposadr[self.model.joint(f"left_joint{i}").id]
+                for i in range(1, 7)
+            ]
+        )
+
     def forward(self, joint_positions: np.ndarray) -> np.ndarray:
-        joint_positions = np.asarray(joint_positions, dtype=float) 
+        joint_positions = np.asarray(joint_positions, dtype=float)
 
         if joint_positions.shape != (ARM_JOINTS,):
             raise ValueError(
@@ -40,7 +49,7 @@ class CartesianKinematics:
             )
 
         qpos = self.configuration.q.copy()
-        qpos[:ARM_JOINTS] = joint_positions
+        qpos[self.left_qpos_indices] = joint_positions
         self.configuration.update(qpos)
 
         pose = self.configuration.get_transform_frame_to_world(
@@ -50,11 +59,11 @@ class CartesianKinematics:
         return pose.as_matrix()
 
     def inverse(
-            self,
-            current_joint_positions: np.ndarray,
-            target_position: np.ndarray,
-            target_rotation: np.ndarray,
-            dt: float = 1 / CONTROL_HZ,
+        self,
+        current_joint_positions: np.ndarray,
+        target_position: np.ndarray,
+        target_rotation: np.ndarray,
+        dt: float = 1 / CONTROL_HZ,
     ) -> np.ndarray:
         current_joint_positions = np.asarray(
             current_joint_positions,
@@ -65,20 +74,17 @@ class CartesianKinematics:
 
         if current_joint_positions.shape != (ARM_JOINTS,):
             raise ValueError(
-                f"expected {ARM_JOINTS} arm joints, "
-                f"got {current_joint_positions.shape}"
+                f"expected {ARM_JOINTS} arm joints, got {current_joint_positions.shape}"
             )
 
         if target_position.shape != (3,):
             raise ValueError(
-                f"expected target position shape (3,), "
-                f"got {target_position.shape}"
+                f"expected target position shape (3,), got {target_position.shape}"
             )
-        
+
         if target_rotation.shape != (3, 3):
             raise ValueError(
-                f"expected target rotation shape (3, 3), "
-                f"got {target_rotation.shape}"
+                f"expected target rotation shape (3, 3), got {target_rotation.shape}"
             )
 
         target_pose = np.eye(4)
@@ -86,12 +92,10 @@ class CartesianKinematics:
         target_pose[:3, 3] = target_position
 
         qpos = self.configuration.q.copy()
-        qpos[:ARM_JOINTS] = current_joint_positions
+        qpos[self.left_qpos_indices] = current_joint_positions
         self.configuration.update(qpos)
 
-        self.frame_task.set_target(
-            mink.SE3.from_matrix(target_pose)
-        )
+        self.frame_task.set_target(mink.SE3.from_matrix(target_pose))
 
         velocity = mink.solve_ik(
             self.configuration,
@@ -104,4 +108,4 @@ class CartesianKinematics:
 
         self.configuration.integrate_inplace(velocity, dt)
 
-        return self.configuration.q[:ARM_JOINTS].copy()
+        return self.configuration.q[self.left_qpos_indices].copy()

@@ -1,77 +1,111 @@
+"""Closed-loop tests: IK on the measured joints -> position actuators -> physics.
+
+These check the simulated tool site, not the kinematic model's FK, so they cover
+the whole chain the SpaceMouse bridge relies on.
+"""
+
 from pathlib import Path
 
-import mujoco
 import numpy as np
+import pytest
 
-from robot.environment.simulation import Simulation
-from robot.kinematics.cartesian import ARM_JOINTS, CartesianKinematics
+from robot import CONTROL_HZ
+from robot.environment.simulation import INIT_POS_LEFT, LEFT, RIGHT, Simulation
+from robot.kinematics.cartesian_kinematics import ARM_JOINTS, CartesianKinematics
 
-ROOT = Path(__file__).resolve().parents[1]
+SCENE = str(Path(__file__).parents[1] / "assets/put_bottles/put_bottle.xml")
+SITE = "left_tcp_site"
+JOINTS, GRIPPER = slice(0, ARM_JOINTS), ARM_JOINTS  # within one arm's 7 values
 
-SCENE = ROOT / "assets" / "put_bottles" / "put_bottle.xml"
+# The actuators are plain PD controllers, so under gravity the closed loop settles
+# about a millimetre and a fraction of a degree short of the target.
+POSITION_TOLERANCE = 0.002  # m
+ROTATION_TOLERANCE = 1.0  # deg
 
-KINEMATICS_MODEL_PATH = (
-    ROOT / "assets" / "put_bottles" / "assets" / "i2rt_yam" / "yam.xml"
+
+@pytest.fixture(scope="module")
+def loaded_sim() -> Simulation:
+    return Simulation(SCENE)  # parsing the scene takes about a second
+
+
+@pytest.fixture
+def sim(loaded_sim: Simulation) -> Simulation:
+    loaded_sim.reset()
+    return loaded_sim
+
+
+@pytest.fixture
+def kin(sim: Simulation) -> CartesianKinematics:
+    return CartesianKinematics(sim.model, site_name=SITE)
+
+
+def rotation_angle(a: np.ndarray, b: np.ndarray) -> float:
+    """Angle in degrees between two rotation matrices"""
+    cos = (np.trace(a.T @ b) - 1) / 2
+    return float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
+
+
+def rotated_about_tool_z(rotation: np.ndarray, degrees: float) -> np.ndarray:
+    c, s = np.cos(np.radians(degrees)), np.sin(np.radians(degrees))
+    return rotation @ np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+
+
+def tcp_pose(sim: Simulation) -> tuple[np.ndarray, np.ndarray]:
+    """Position and rotation of the simulated tool site"""
+    site = sim.data.site(SITE)
+    return site.xpos.copy(), site.xmat.reshape(3, 3).copy()
+
+
+def track(
+    sim: Simulation,
+    kin: CartesianKinematics,
+    position: np.ndarray,
+    rotation: np.ndarray,
+    seconds: float = 1.0,
+) -> None:
+    """Run the control loop like the bridge does: IK on the measured left joints,
+    gripper held, right arm left at its reset command."""
+    for _ in range(round(seconds * CONTROL_HZ)):
+        joints = kin.inverse(sim.state[LEFT][JOINTS], position, rotation)
+        sim.step(left=np.append(joints, INIT_POS_LEFT[GRIPPER]))
+
+
+@pytest.mark.parametrize(
+    "offset",
+    [[0.03, 0.0, 0.0], [0.0, -0.03, 0.0], [0.0, 0.0, 0.03]],
+    ids=["x", "y", "z"],
 )
+def test_the_tcp_reaches_a_shifted_target(
+    sim: Simulation, kin: CartesianKinematics, offset: list[float]
+):
+    position, rotation = tcp_pose(sim)
+    target = position + offset
 
-KINEMATICS_MODEL = mujoco.MjModel.from_xml_path(str(KINEMATICS_MODEL_PATH))
-# bcs we have 12 joints + 2 grippers:
-LEFT_ARM = slice(0, ARM_JOINTS)  # left joints
-LEFT_GRIPPER = ARM_JOINTS  # left gripper
-RIGHT_SIDE = slice(ARM_JOINTS + 1, 14)  # right joints + right gripper
+    track(sim, kin, target, rotation)
+
+    reached_position, reached_rotation = tcp_pose(sim)
+    assert np.linalg.norm(reached_position - target) < POSITION_TOLERANCE
+    assert rotation_angle(reached_rotation, rotation) < ROTATION_TOLERANCE
 
 
-def test_ik_moves_only_left_arm_towards_target():
-    sim = Simulation(str(SCENE))
-    kinematics = CartesianKinematics(
-        KINEMATICS_MODEL,
-        site_name="grasp_site",
-    )
+def test_the_tcp_reaches_a_rotated_target(sim: Simulation, kin: CartesianKinematics):
+    position, rotation = tcp_pose(sim)
+    target = rotated_about_tool_z(rotation, 20)
 
-    initial_state = (
-        sim.state.copy()
-    )  # 14 Zustandswerte der Simulation [q1L, q2L,...,q6L,...,greiferL,...]
-    initial_pose = (
-        kinematics.forward(  # räumliche Position und Ausrichtung als 4x4 Matrix
-            initial_state[LEFT_ARM]
-        )
-    )
+    track(sim, kin, position, target)
 
-    target_position = initial_pose[:3, 3].copy()  # liefert x,y,z
-    target_position[0] += 0.01
-    target_rotation = initial_pose[:3, :3].copy()  # liefert rotationsmatrix
+    reached_position, reached_rotation = tcp_pose(sim)
+    assert rotation_angle(reached_rotation, target) < ROTATION_TOLERANCE
+    assert np.linalg.norm(reached_position - position) < POSITION_TOLERANCE
 
-    old_error = np.linalg.norm(target_position - initial_pose[:3, 3])
 
-    for _ in range(30):
-        state = sim.state
-        action = state.copy()
+def test_only_the_left_arm_moves(sim: Simulation, kin: CartesianKinematics):
+    initial = sim.state.copy()
+    position, rotation = tcp_pose(sim)
 
-        action[LEFT_ARM] = (
-            kinematics.inverse(  # Berechnung der Gelenkziele basierend auf target_position und rotation
-                state[LEFT_ARM], target_position, target_rotation
-            )
-        )
+    track(sim, kin, position + [0.03, 0.0, 0.0], rotation)
 
-        left, right = action[:7], action[7:]
-        sim.step(left, right)
-
-    final_state = sim.state
-    final_pose = kinematics.forward(  # Berechung von FK zur Evaluierung wo der Greifer tatsächlich angekommen ist.
-        final_state[LEFT_ARM]
-    )
-
-    new_error = np.linalg.norm(target_position - final_pose[:3, 3])
-
-    assert new_error < old_error
-    assert np.isclose(
-        final_state[LEFT_GRIPPER],
-        initial_state[LEFT_GRIPPER],
-        atol=1e-3,
-    )
-
-    assert np.allclose(
-        final_state[RIGHT_SIDE],
-        initial_state[RIGHT_SIDE],
-        atol=1e-3,
-    )
+    final = sim.state
+    assert np.abs(final[LEFT][JOINTS] - initial[LEFT][JOINTS]).max() > 0.05
+    assert final[LEFT][GRIPPER] == pytest.approx(initial[LEFT][GRIPPER], abs=1e-3)
+    assert np.allclose(final[RIGHT], initial[RIGHT], atol=1e-3)
