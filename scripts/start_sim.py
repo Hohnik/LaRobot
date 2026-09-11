@@ -13,9 +13,8 @@ from robot.kinematics.cartesian_target import CartesianTarget
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-LEFT_JOINTS = slice(0, 6)
-RIGHT_JOINTS = slice(6, 14)
 GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
+GRIPPER_STEP = 0.005
 LAG_LIMIT = 0.03
 
 
@@ -38,7 +37,7 @@ def main(args) -> None:
     target = CartesianTarget.from_pose(pose=pose)
 
     # marker
-    marker_body_id = sim.model.body("target_marker").id
+    marker_body_id = sim.model.body("target_marker_left").id
     marker_mocap_id = sim.model.body_mocapid[marker_body_id]
 
     match args.device[0]:
@@ -73,10 +72,10 @@ def main(args) -> None:
             )
 
             # gripper
-            if buttons[0] and gripper >= GRIPPER_SHUT:
-                gripper -= 0.005
-            elif buttons[1] and gripper <= GRIPPER_OPEN:
-                gripper += 0.005
+            if buttons[0]:
+                gripper = max(GRIPPER_SHUT, gripper - GRIPPER_STEP)
+            elif buttons[1]:
+                gripper = min(GRIPPER_OPEN, gripper + GRIPPER_STEP)
 
             # marker
             quat = np.empty(4)

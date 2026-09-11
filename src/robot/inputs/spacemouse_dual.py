@@ -125,9 +125,9 @@ class SpaceMouseDual(Input):
 if __name__ == "__main__":
     import time
 
-    assert SpaceMouse.is_available(), "SpaceMouse is not available"
+    assert SpaceMouseDual.is_available(), "SpaceMouse is not available"
 
-    with SpaceMouse() as sm:
+    with SpaceMouseDual() as sm:
         while True:
             velocities_left, velocities_right, buttons_left, buttons_right = sm.read()
             print(velocities_left, velocities_right, buttons_left, buttons_right)

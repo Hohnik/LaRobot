@@ -6,16 +6,16 @@ import viser
 from mjviser import ViserMujocoScene
 
 from robot.environment.simulation import Simulation
-from robot.inputs.keyboard import Keyboard
+
+# from robot.inputs.keyboard import Keyboard
 from robot.inputs.spacemouse_dual import SpaceMouseDual
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-LEFT_JOINTS = slice(0, 6)
-RIGHT_JOINTS = slice(6, 14)
 GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
+GRIPPER_STEP = 0.005
 LAG_LIMIT = 0.03
 
 
@@ -98,15 +98,15 @@ def main(args) -> None:
             )
 
             # gripper
-            if buttons_left[1] and gripper_left >= GRIPPER_SHUT:
-                gripper_left -= 0.005
-            elif buttons_left[0] and gripper_left <= GRIPPER_OPEN:
-                gripper_left += 0.005
+            if buttons_left[1]:
+                gripper_left = max(GRIPPER_SHUT, gripper_left - GRIPPER_STEP)
+            elif buttons_left[0]:
+                gripper_left = min(GRIPPER_OPEN, gripper_left + GRIPPER_STEP)
 
-            if buttons_right[0] and gripper_right >= GRIPPER_SHUT:
-                gripper_right -= 0.005
-            elif buttons_right[1] and gripper_right <= GRIPPER_OPEN:
-                gripper_right += 0.005
+            if buttons_right[0]:
+                gripper_right = max(GRIPPER_SHUT, gripper_right - GRIPPER_STEP)
+            elif buttons_right[1]:
+                gripper_right = min(GRIPPER_OPEN, gripper_right + GRIPPER_STEP)
 
             # marker
             quat_left = np.empty(4)
