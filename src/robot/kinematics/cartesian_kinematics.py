@@ -1,3 +1,5 @@
+from typing import Literal
+
 import mink
 import mujoco
 import numpy as np
@@ -5,18 +7,20 @@ import numpy as np
 from robot import CONTROL_HZ
 
 ARM_JOINTS = 6
-RADS_PER_SECOND = 10.0
+RADS_PER_SECOND = 6.0
 
 
 class CartesianKinematics:
     def __init__(
         self,
         model: mujoco.MjModel,
-        site_name: str = "left_tcp_site",  # ['left_tcp_site', 'left_grasp_site', 'right_tcp_site', 'right_grasp_site']
+        side: Literal["left", "right"],
+        site_name: Literal["tcp", "grasp"] = "tcp",
     ):
         self.model = model
         self.configuration = mink.Configuration(self.model)
-        self.site_name = site_name
+        self.side = side
+        self.site_name = f"{side}_{site_name}_site"
         self.frame_task = mink.FrameTask(
             frame_name=self.site_name,
             frame_type="site",
@@ -29,13 +33,16 @@ class CartesianKinematics:
             mink.ConfigurationLimit(self.model),
             mink.VelocityLimit(
                 self.model,
-                {f"left_joint{i}": RADS_PER_SECOND for i in range(1, ARM_JOINTS + 1)},
+                {
+                    f"{self.side}_joint{i}": RADS_PER_SECOND
+                    for i in range(1, ARM_JOINTS + 1)
+                },
             ),
         ]
 
-        self.left_qpos_indices = np.array(
+        self.qpos_indices = np.array(
             [
-                self.model.jnt_qposadr[self.model.joint(f"left_joint{i}").id]
+                self.model.jnt_qposadr[self.model.joint(f"{self.side}_joint{i}").id]
                 for i in range(1, 7)
             ]
         )
@@ -49,7 +56,7 @@ class CartesianKinematics:
             )
 
         qpos = self.configuration.q.copy()
-        qpos[self.left_qpos_indices] = joint_positions
+        qpos[self.qpos_indices] = joint_positions
         self.configuration.update(qpos)
 
         pose = self.configuration.get_transform_frame_to_world(
@@ -92,7 +99,7 @@ class CartesianKinematics:
         target_pose[:3, 3] = target_position
 
         qpos = self.configuration.q.copy()
-        qpos[self.left_qpos_indices] = current_joint_positions
+        qpos[self.qpos_indices] = current_joint_positions
         self.configuration.update(qpos)
 
         self.frame_task.set_target(mink.SE3.from_matrix(target_pose))
@@ -108,4 +115,4 @@ class CartesianKinematics:
 
         self.configuration.integrate_inplace(velocity, dt)
 
-        return self.configuration.q[self.left_qpos_indices].copy()
+        return self.configuration.q[self.qpos_indices].copy()

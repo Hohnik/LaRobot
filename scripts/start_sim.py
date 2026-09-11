@@ -31,8 +31,8 @@ def main(args) -> None:
     view = ViserMujocoScene(server, sim.model, num_envs=1)
     view.camera_tracking_enabled = False
 
-    kin = CartesianKinematics(sim.model)
-    left_joint_incides = kin.left_qpos_indices
+    kin = CartesianKinematics(sim.model, side="left")
+    left_joint_incides = kin.qpos_indices
 
     pose = kin.forward(sim.data.qpos[left_joint_incides])
     target = CartesianTarget.from_pose(pose=pose)
