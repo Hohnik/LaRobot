@@ -16,10 +16,12 @@ Buttons = Annotated[list[int], "Length 2 list with close=0, open=1"]
 class SpaceMouse(Input):
     def __init__(
         self,
+        device_index: int,
         expo: float = 0.6,
         lin_scale: float = 0.12,
         ang_scale: float = 0.8,
     ) -> None:
+        self.device_index = device_index
         self.expo = expo
         self.lin_scale = lin_scale
         self.ang_scale = ang_scale
@@ -32,11 +34,19 @@ class SpaceMouse(Input):
 
     def __enter__(self) -> Self:
         assert self.is_available(), ConnectionError("SpaceMouse is not available")
-        self._spacemouse = pyspacemouse.open(axis_convention=AxisConvention.ROS)
+        self._spacemouse = pyspacemouse.open(
+            device_index=self.device_index, axis_convention=AxisConvention.ROS
+        )
+        if self.device_index == 0:
+            self._spacemouse.set_led(True)
+        else:
+            self._spacemouse.set_led(False)
         return self
 
     def __exit__(self, *_: object) -> None:
         assert self._spacemouse is not None
+        if self.device_index == 0:
+            self._spacemouse.set_led(False)
         self._spacemouse.close()
 
     def read(self) -> tuple[Velocities, Buttons]:
@@ -78,7 +88,7 @@ if __name__ == "__main__":
 
     assert SpaceMouse.is_available(), "SpaceMouse is not available"
 
-    with SpaceMouse() as sm:
+    with SpaceMouse(device_index=0) as sm:
         while True:
             velocities, buttons = sm.read()
             print(velocities, buttons)

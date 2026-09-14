@@ -6,9 +6,7 @@ import viser
 from mjviser import ViserMujocoScene
 
 from robot.environment.simulation import Simulation
-
-# from robot.inputs.keyboard import Keyboard
-from robot.inputs.spacemouse_dual import SpaceMouseDual
+from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
 
@@ -17,16 +15,18 @@ SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
 GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
 GRIPPER_STEP = 0.005
 LAG_LIMIT = 0.03
+EXPO, LIN_SCALE, ANG_SCALE = 0.6, 0.4, 1.5
+POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)  # Camera
 
 
-def main(args) -> None:
+def main() -> None:
     sim = Simulation(str(SCENE), realtime=True)
 
     server = viser.ViserServer(port=8080)
     # NOTE: Values are not perfectly aligned with camera position!!!
-    server.initial_camera.position = (0.086, 0.0, 1.6)
-    server.initial_camera.look_at = (1.086, 0.0, 0)
-    server.initial_camera.fov = np.radians(60)
+    server.initial_camera.position = POSITION
+    server.initial_camera.look_at = LOOK_AT
+    server.initial_camera.fov = FOV
 
     view = ViserMujocoScene(server, sim.model, num_envs=1)
     view.camera_tracking_enabled = False
@@ -49,13 +49,14 @@ def main(args) -> None:
     marker_body_right_id = sim.model.body("target_marker_right").id
     marker_mocap_right_id = sim.model.body_mocapid[marker_body_right_id]
 
-    match args.device[0]:
-        case "spacemouse":
-            device = SpaceMouseDual(expo=0.6, lin_scale=0.4, ang_scale=1.5)
-        # case "keyboard":
-        #     device = Keyboard()
+    dev0 = SpaceMouse(
+        device_index=0, expo=EXPO, lin_scale=LIN_SCALE, ang_scale=ANG_SCALE
+    )
+    dev1 = SpaceMouse(
+        device_index=1, expo=EXPO, lin_scale=LIN_SCALE, ang_scale=ANG_SCALE
+    )
 
-    with device as dev:
+    with dev0 as dev_left, dev1 as dev_right:
         gripper_left = GRIPPER_OPEN
         gripper_right = GRIPPER_OPEN
 
@@ -64,7 +65,8 @@ def main(args) -> None:
             measured_joints_right = sim.data.qpos[right_joint_indices]
 
             # spacemouse - where to
-            velocities_left, velocities_right, buttons_left, buttons_right = dev.read()
+            velocities_left, buttons_left = dev_left.read()
+            velocities_right, buttons_right = dev_right.read()
             target_left.integrate(velocities_left)
             target_right.integrate(velocities_right)
 
@@ -127,16 +129,4 @@ def main(args) -> None:
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(usage="%(prog)s [options]")
-    parser.add_argument(
-        "--device",
-        "-d",
-        choices=["spacemouse", "keyboard"],
-        nargs=1,
-        help="select a input device",
-        required=True,
-    )
-    args = parser.parse_args()
-    main(args)
+    main()
