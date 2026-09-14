@@ -173,7 +173,17 @@
     <geom group="3" name="floor_collision" rgba="0 0 0 0" size="0 0 0.05" type="plane"></geom>
     <geom conaffinity="0" contype="0" density="0" group="2" mesh="base_visual_gate" rgba="0.60 0.62 0.68 1" type="mesh"></geom>
     <geom group="3" pos="0 0 0.375" rgba="1 0 0 0.0" size="0.2975 0.65 0.375" type="box"></geom>
-    <body mocap="true" name="target_marker">
+    <body mocap="true" name="target_marker_left">
+      <!-- origin -->
+      <geom conaffinity="0" contype="0" rgba="1 1 1 1" size="0.015" type="sphere"></geom>
+      <!-- X -->
+      <geom conaffinity="0" contype="0" fromto="0 0 0  0.08 0 0" rgba="1 0 0 1" size="0.005" type="capsule"></geom>
+      <!-- Y -->
+      <geom conaffinity="0" contype="0" fromto="0 0 0  0 0.08 0" rgba="0 1 0 1" size="0.005" type="capsule"></geom>
+      <!-- Z -->
+      <geom conaffinity="0" contype="0" fromto="0 0 0  0 0 0.08" rgba="0 0 1 1" size="0.005" type="capsule"></geom>
+    </body>
+    <body mocap="true" name="target_marker_right">
       <!-- origin -->
       <geom conaffinity="0" contype="0" rgba="1 1 1 1" size="0.015" type="sphere"></geom>
       <!-- X -->

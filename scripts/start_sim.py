@@ -13,10 +13,11 @@ from robot.kinematics.cartesian_target import CartesianTarget
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-LEFT_JOINTS = slice(0, 6)
-RIGHT_JOINTS = slice(6, 14)
 GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
+GRIPPER_STEP = 0.005
 LAG_LIMIT = 0.03
+EXPO, LIN_SCALE, ANG_SCALE = 0.6, 0.4, 1.5
+POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)  # Camera
 
 
 def main(args) -> None:
@@ -24,26 +25,28 @@ def main(args) -> None:
 
     server = viser.ViserServer(port=8080)
     # NOTE: Values are not perfectly aligned with camera position!!!
-    server.initial_camera.position = (0.086, 0.0, 1.6)
-    server.initial_camera.look_at = (1.086, 0.0, 0)
-    server.initial_camera.fov = np.radians(60)
+    server.initial_camera.position = POSITION
+    server.initial_camera.look_at = LOOK_AT
+    server.initial_camera.fov = FOV
 
     view = ViserMujocoScene(server, sim.model, num_envs=1)
     view.camera_tracking_enabled = False
 
-    kin = CartesianKinematics(sim.model)
-    left_joint_incides = kin.left_qpos_indices
+    kin = CartesianKinematics(sim.model, side="left")
+    left_joint_incides = kin.qpos_indices
 
     pose = kin.forward(sim.data.qpos[left_joint_incides])
     target = CartesianTarget.from_pose(pose=pose)
 
     # marker
-    marker_body_id = sim.model.body("target_marker").id
+    marker_body_id = sim.model.body("target_marker_left").id
     marker_mocap_id = sim.model.body_mocapid[marker_body_id]
 
     match args.device[0]:
         case "spacemouse":
-            device = SpaceMouse(expo=0.4, lin_scale=0.5, ang_scale=2.5)
+            device = SpaceMouse(
+                device_index=0, expo=EXPO, lin_scale=LIN_SCALE, ang_scale=ANG_SCALE
+            )
         case "keyboard":
             device = Keyboard()
 
@@ -73,10 +76,10 @@ def main(args) -> None:
             )
 
             # gripper
-            if buttons[0] and gripper >= GRIPPER_SHUT:
-                gripper -= 0.005
-            elif buttons[1] and gripper <= GRIPPER_OPEN:
-                gripper += 0.005
+            if buttons[0]:
+                gripper = max(GRIPPER_SHUT, gripper - GRIPPER_STEP)
+            elif buttons[1]:
+                gripper = min(GRIPPER_OPEN, gripper + GRIPPER_STEP)
 
             # marker
             quat = np.empty(4)
