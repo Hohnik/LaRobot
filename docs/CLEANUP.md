@@ -2,6 +2,8 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
+The subsequent [architecture review](RESTRUCTURING.md) records measured file sizes, newly verified contract gaps and the proposed responsibility map. Its restructuring is proposed, not implemented. Start there for the next code increment, and here for completed work and preservation details.
+
 ## Status
 
 The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed checkpoints cover startup/shutdown ownership (`c72686b`), the shared recording lifecycle (`de6bae7`), and the readability/save-failure continuation described below. The latest full suite passes 902/902 checks across 48 files, 71/71 falsifier catches, and 32/32 full simulated interaction checks. All 1,861 documentation links resolve. No physical hardware has been operated and nothing has been pushed. The original teleop/training refs and all original recordings remain preserved.
@@ -63,7 +65,7 @@ The builder now refuses when verification fails, closes its acquired handle, and
 
 ## Evidence and limits
 
-The first lifecycle runs passed 883/883 checks across 45 files, 71/71 falsifier catches, and 1,860/1,860 documentation links. A later full run caught two README prose regressions introduced while writing launch instructions; these were fixed without raising a ceiling. The final 891/891 run includes all completed code and documentation changes. Logs are in `agents/codex/validation/lifecycle-*.txt`.
+The first lifecycle runs passed 883/883 checks across 45 files, 71/71 falsifier catches, and 1,860/1,860 documentation links. A later full run caught two README prose regressions introduced while writing launch instructions; these were fixed without raising a ceiling. The recording-lifecycle checkpoint passed 891/891. The later readability/save checkpoint passed 902/902, as reported in Status. Logs for the first increment are in `agents/codex/validation/lifecycle-*.txt`.
 
 Baseline earlier today: 843/843 checks across 41 test files; 71/71 catches across five deliberately broken-input scripts. These were run with the isolated Python 3.12 environment. All existing documentation links resolved. No physical hardware claim follows from these checks.
 
@@ -77,7 +79,7 @@ The dedicated root launcher `./teleop` uses Python 3.12 and `.venv-teleop`, leav
 
 Both camera factories now own captures immediately and close partially started readers after failure. FrameSink also stops writers already started if a later writer cannot start. Teardown attempts all readers/writers even when one fails, reporting the collected failures. Device-reader release runs even when joining its thread fails.
 
-The shared trajectory lifecycle is now extracted, as detailed below. Per-take camera ownership, safe slot persistence, replay, and terminal coordination remain. Do not call the entire architectural cleanup complete after these two increments.
+The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. Per-take camera ownership, completion validation, replay and terminal coordination remain. The architectural cleanup is still incomplete.
 
 ## Decisions still reserved for the operator
 
@@ -94,6 +96,8 @@ The application now imports `git_commit` and `dt_now` from `yam.provenance`. The
 At the recording-lifecycle checkpoint, the operator `main()` still spanned roughly 3,900 lines. The later readability pass below reduces that further; architectural work remains. Camera state, slot persistence, replay/composite coordination, terminal prompts, and the control loop still meet in that function. Reducing a line count is not the acceptance criterion; removing duplicated decisions and testing the actual application boundary is.
 
 ## Next work, in order
+
+The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) refines this sequence with shared camera-library extraction and explicit interface contracts. Its first priority is complete take ownership: an unfinished camera report is currently accepted by the store, so the new rollback boundary alone is insufficient.
 
 1. **Camera I/O failure containment.** Trajectory append and slot-save errors are now contained, but writer startup, frame sampling, and stop/flush errors still have paths to the outer exception handler. Characterize each with injected camera failures. Keep motion policy separate from recording error handling, and retain a recoverable take where possible. Also characterize writers that report `flushed: false`; a live encoder must not mutate a frame set while it is published or discarded.
 2. **Finish recording ownership and recovery tooling.** Slot publication now lives in `yam.recording_store`; per-take writer/report ownership remains in the application. Keep long-lived camera readers outside the take owner. The recovery directory currently contains both versions and instructions, and blocks another overwrite of that slot. A future recovery command should inspect the actual files and validate metadata/frame agreement before making changes. Do not silently guess after a crash.
