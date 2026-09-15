@@ -130,9 +130,17 @@ class FrameSink:
                  encode: Callable[[Any], bytes] = encode_jpeg,
                  queue_frames: int = QUEUE_FRAMES) -> None:
         self.root = Path(root)
-        self._writers = {name: FrameWriter(name, self.root / camera_dir_name(name),
-                                           encode, queue_frames)
-                         for name in camera_names}
+        self._writers = {}
+        try:
+            for name in camera_names:
+                self._writers[name] = FrameWriter(
+                    name, self.root / camera_dir_name(name), encode, queue_frames)
+        except BaseException as failure:
+            try:
+                self.stop()
+            except Exception as cleanup:
+                failure.add_note(f"Frame writer startup cleanup failed: {cleanup!r}")
+            raise
         self._last_seq = {name: 0 for name in camera_names}
 
     @property
@@ -150,7 +158,17 @@ class FrameSink:
 
     def stop(self) -> dict[str, dict[str, Any]]:
         """Stop every writer; the per-camera indexes, keyed by camera name."""
-        return {name: w.stop() for name, w in self._writers.items()}
+        reports = {}
+        failures = []
+        for name, writer in self._writers.items():
+            try:
+                reports[name] = writer.stop()
+            except Exception as exc:
+                exc.add_note(f"Frame writer: {name}")
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("Frame writers failed to stop", failures)
+        return reports
 
 
 # ---------------------------------------------------------------- take directories ----

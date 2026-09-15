@@ -98,5 +98,7 @@ class FrameGrabber:
     def stop(self) -> None:
         """⚠️ Always call this. A daemon thread holding the camera open keeps the device busy for the next process, and Julien asked specifically that every test be quittable."""
         self._running = False
-        self._thread.join(timeout=1.0)
-        self._cap.release()
+        try:
+            self._thread.join(timeout=1.0)
+        finally:
+            self._cap.release()

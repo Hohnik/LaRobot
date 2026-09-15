@@ -145,6 +145,7 @@ from yam.teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
+from yam.cameras.startup import CameraStartup  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
 from yam.cameras.specs import camera_dir_name, flatten_tokens, sim_camera_error  # noqa: E402
@@ -950,109 +951,108 @@ def _open_session_cameras_linux(specs_text: str) -> tuple[CaptureSet, list[str]]
 
     ⭐ The recorded camera NAME is built exactly as on macOS (model word + full serial, e.g. `d405-260323072846`), so a recording made on the Linux PC and one made on the Mac name their cameras identically and the episode exporter's role flags are unchanged across platforms.
     """
-    import cv2  # noqa: PLC0415
+    with CameraStartup() as startup:
+        import cv2  # noqa: PLC0415
 
-    from yam.cameras.identity import linux_camera_for_spec  # noqa: PLC0415
-    from yam.platform import dynamic_framerate_allowed, read_v4l_cameras  # noqa: PLC0415
+        from yam.cameras.identity import linux_camera_for_spec  # noqa: PLC0415
+        from yam.platform import dynamic_framerate_allowed, read_v4l_cameras  # noqa: PLC0415
 
-    listed = read_v4l_cameras()
-    grabbers: dict[str, FrameGrabber] = {}
-    for spec in flatten_tokens([specs_text]):
-        try:
-            cam = linux_camera_for_spec(spec, listed)
-        except ValueError as e:
-            raise SystemExit(f"⛔ {spec}: {e}") from e
-        model_word = spec.partition(":")[0]
-        name = camera_dir_name(f"{model_word}:{cam.serial}" if cam.serial else model_word)
-        if name in grabbers:
-            raise SystemExit(f"⛔ --cameras names {name!r} twice.")
-        # ⛔⭐ A metadata node opens fine and delivers nothing (FINDINGS §75.6), so refuse
-        # one outright rather than recording a camera that produces no frames. `cam.index`
-        # is already a capture node when udev could be asked; this guards the explicit
-        # `--cameras <N>` spelling, where the operator picks the number.
-        if cam.capture_nodes and cam.index not in cam.capture_nodes:
-            raise SystemExit(
-                f"⛔ {spec}: /dev/video{cam.index} is not a CAPTURE node on this camera "
-                f"(its capture nodes are {list(cam.capture_nodes)}).\n"
-                "  A metadata node opens successfully and delivers no frames, which is why "
-                "this refuses instead of recording nothing."
-            )
-        # ⭐ Say which stream is being opened and how that was decided. A D405's FIRST
-        # capture node is DEPTH (Z16), so "opened the first one" would be a silent wrong
-        # answer — the formats are read and the COLOUR node chosen (FINDINGS §75.7).
-        if cam.index_reason == "colour-format":
-            print(f"  ✓ {name}: /dev/video{cam.index} is the COLOUR stream, identified from "
-                  "its pixel formats")
-        elif len(cam.capture_nodes) > 1:
-            raise SystemExit(
-                f"⛔ {spec}: this camera has {len(cam.capture_nodes)} capture streams "
-                f"{list(cam.capture_nodes)} and their pixel formats could not be read, so "
-                "the COLOUR one cannot be identified.\n"
-                "  On a D405 the first stream is DEPTH, and recording it as if it were a "
-                "photograph is exactly the silent-wrong-answer this refuses to make.\n"
-                "  Fix: join the `video` group (`sudo usermod -aG video $USER`, then log out "
-                "and back in), or pass the node directly, e.g. --cameras "
-                f"{cam.capture_nodes[-1]}."
-            )
-        cap = cv2.VideoCapture(cam.index)
-        if not cap.isOpened():
-            cap.release()
-            raise SystemExit(
-                f"⛔ {spec} resolved to {cam.device} (index {cam.index}) and would not open.\n"
-                "  On Linux this is almost always group membership: the user must be in "
-                "`video`.\n  Check with `id`, and see docs/LINUX.md."
-            )
-        # ⛔⭐⭐ THE WORD "delivering" USED TO BE A CLAIM. This block used to set the size,
-        # read the size back with `cap.get`, and print it as what the camera was delivering.
-        # On 2026-08-19 that printed "delivering 1280x720" for a D405 that delivered ZERO
-        # frames for the whole session, and for a C920 running at 10 fps instead of 30
-        # because no MJPG was requested. Both are in FINDINGS §76. `open_measured` reads
-        # real frames, counts them, steps the size down when nothing arrives, and every
-        # number below comes out of a frame that actually existed.
-        opened = open_measured(cap)
-        if opened is None:
-            cap.release()
-            for g in grabbers.values():
-                g.stop()
-            raise SystemExit(
-                f"⛔ {spec}: {cam.device} (index {cam.index}) opened and delivered NO FRAMES "
-                f"at any of {SIZE_LADDER}.\n"
-                "  It accepted the settings and produced nothing, which is why this refuses "
-                "instead of recording an empty camera.\n"
-                f"  Check the device on its own:  v4l2-ctl -d {cam.device} "
-                "--stream-mmap --stream-count=5 --stream-to=/dev/null\n"
-                "  If that also hangs, the camera or its cable is the problem, not this "
-                "session. See docs/LINUX.md."
-            )
-        grabbers[name] = FrameGrabber(cap)
-        print(f"  📷 {name} open on {cam.device} (index {cam.index}), "
-              f"measured {opened.line()}.")
-        if opened.stepped_down:
-            print(f"     ⚠️ stepped down from {opened.asked[0]}x{opened.asked[1]}: this "
-                  "camera accepted that size and delivered no frames at it.")
-        # ⛔⭐⭐ THE ROOM CAN HALVE THE FRAME RATE, AND ONLY THIS LINE SAYS SO. A C920 with
-        # `exposure_dynamic_framerate` on drops from 29.92 fps to 14.98 in a dim room, at the
-        # same size and format, while the driver keeps reporting 30 (FINDINGS §76.16). So the
-        # same rig yields 30 fps by day and 15 by night with nothing on screen to show it.
-        # ⭐ Reported, never changed: turning it off buys a steady rate and pays in darker
-        # pictures, and that trade is the operator's, like which arm stands on the left.
-        dyn = dynamic_framerate_allowed(cam.device)
-        if dyn:
-            print("     ⚠️ this camera may HALVE its own frame rate to lengthen exposure in a "
-                  "dim room, and the driver still reports 30.")
-            print("        Steady rate instead of brighter pictures:  v4l2-ctl -d "
-                  f"{cam.device} --set-ctrl=exposure_dynamic_framerate=0")
-        if opened.slow:
-            print(f"     ⛔ {opened.fps:.1f} fps is well under {TARGET_FPS:.0f}. The episode "
-                  "exporter fills 30 ticks a second, so a camera this slow makes every")
-            print("        tick repeat frames.")
+        listed = read_v4l_cameras()
+        grabbers: dict[str, FrameGrabber] = {}
+        for spec in flatten_tokens([specs_text]):
+            try:
+                cam = linux_camera_for_spec(spec, listed)
+            except ValueError as e:
+                raise SystemExit(f"⛔ {spec}: {e}") from e
+            model_word = spec.partition(":")[0]
+            name = camera_dir_name(f"{model_word}:{cam.serial}" if cam.serial else model_word)
+            if name in grabbers:
+                raise SystemExit(f"⛔ --cameras names {name!r} twice.")
+            # ⛔⭐ A metadata node opens fine and delivers nothing (FINDINGS §75.6), so refuse
+            # one outright rather than recording a camera that produces no frames. `cam.index`
+            # is already a capture node when udev could be asked; this guards the explicit
+            # `--cameras <N>` spelling, where the operator picks the number.
+            if cam.capture_nodes and cam.index not in cam.capture_nodes:
+                raise SystemExit(
+                    f"⛔ {spec}: /dev/video{cam.index} is not a CAPTURE node on this camera "
+                    f"(its capture nodes are {list(cam.capture_nodes)}).\n"
+                    "  A metadata node opens successfully and delivers no frames, which is why "
+                    "this refuses instead of recording nothing."
+                )
+            # ⭐ Say which stream is being opened and how that was decided. A D405's FIRST
+            # capture node is DEPTH (Z16), so "opened the first one" would be a silent wrong
+            # answer — the formats are read and the COLOUR node chosen (FINDINGS §75.7).
+            if cam.index_reason == "colour-format":
+                print(f"  ✓ {name}: /dev/video{cam.index} is the COLOUR stream, identified from "
+                      "its pixel formats")
+            elif len(cam.capture_nodes) > 1:
+                raise SystemExit(
+                    f"⛔ {spec}: this camera has {len(cam.capture_nodes)} capture streams "
+                    f"{list(cam.capture_nodes)} and their pixel formats could not be read, so "
+                    "the COLOUR one cannot be identified.\n"
+                    "  On a D405 the first stream is DEPTH, and recording it as if it were a "
+                    "photograph is exactly the silent-wrong-answer this refuses to make.\n"
+                    "  Fix: join the `video` group (`sudo usermod -aG video $USER`, then log out "
+                    "and back in), or pass the node directly, e.g. --cameras "
+                    f"{cam.capture_nodes[-1]}."
+                )
+            cap = startup.own(cv2.VideoCapture(cam.index))
+            if not cap.isOpened():
+                startup.release(cap)
+                raise SystemExit(
+                    f"⛔ {spec} resolved to {cam.device} (index {cam.index}) and would not open.\n"
+                    "  On Linux this is almost always group membership: the user must be in "
+                    "`video`.\n  Check with `id`, and see docs/LINUX.md."
+                )
+            # ⛔⭐⭐ THE WORD "delivering" USED TO BE A CLAIM. This block used to set the size,
+            # read the size back with `cap.get`, and print it as what the camera was delivering.
+            # On 2026-08-19 that printed "delivering 1280x720" for a D405 that delivered ZERO
+            # frames for the whole session, and for a C920 running at 10 fps instead of 30
+            # because no MJPG was requested. Both are in FINDINGS §76. `open_measured` reads
+            # real frames, counts them, steps the size down when nothing arrives, and every
+            # number below comes out of a frame that actually existed.
+            opened = open_measured(cap)
+            if opened is None:
+                startup.release(cap)
+                raise SystemExit(
+                    f"⛔ {spec}: {cam.device} (index {cam.index}) opened and delivered NO FRAMES "
+                    f"at any of {SIZE_LADDER}.\n"
+                    "  It accepted the settings and produced nothing, which is why this refuses "
+                    "instead of recording an empty camera.\n"
+                    f"  Check the device on its own:  v4l2-ctl -d {cam.device} "
+                    "--stream-mmap --stream-count=5 --stream-to=/dev/null\n"
+                    "  If that also hangs, the camera or its cable is the problem, not this "
+                    "session. See docs/LINUX.md."
+                )
+            grabbers[name] = startup.start_reader(cap, FrameGrabber)
+            print(f"  📷 {name} open on {cam.device} (index {cam.index}), "
+                  f"measured {opened.line()}.")
+            if opened.stepped_down:
+                print(f"     ⚠️ stepped down from {opened.asked[0]}x{opened.asked[1]}: this "
+                      "camera accepted that size and delivered no frames at it.")
+            # ⛔⭐⭐ THE ROOM CAN HALVE THE FRAME RATE, AND ONLY THIS LINE SAYS SO. A C920 with
+            # `exposure_dynamic_framerate` on drops from 29.92 fps to 14.98 in a dim room, at the
+            # same size and format, while the driver keeps reporting 30 (FINDINGS §76.16). So the
+            # same rig yields 30 fps by day and 15 by night with nothing on screen to show it.
+            # ⭐ Reported, never changed: turning it off buys a steady rate and pays in darker
+            # pictures, and that trade is the operator's, like which arm stands on the left.
+            dyn = dynamic_framerate_allowed(cam.device)
             if dyn:
-                print("        ⭐ MOST LIKELY THE LINE ABOVE, because the control is on and "
-                      "this rate is about half of 30.")
-            else:
-                print("        Usually the format: check that MJPG is offered with  "
-                      f"v4l2-ctl --list-formats-ext -d {cam.device}")
-    return CaptureSet(grabbers), list(grabbers)
+                print("     ⚠️ this camera may HALVE its own frame rate to lengthen exposure in a "
+                      "dim room, and the driver still reports 30.")
+                print("        Steady rate instead of brighter pictures:  v4l2-ctl -d "
+                      f"{cam.device} --set-ctrl=exposure_dynamic_framerate=0")
+            if opened.slow:
+                print(f"     ⛔ {opened.fps:.1f} fps is well under {TARGET_FPS:.0f}. The episode "
+                      "exporter fills 30 ticks a second, so a camera this slow makes every")
+                print("        tick repeat frames.")
+                if dyn:
+                    print("        ⭐ MOST LIKELY THE LINE ABOVE, because the control is on and "
+                          "this rate is about half of 30.")
+                else:
+                    print("        Usually the format: check that MJPG is offered with  "
+                          f"v4l2-ctl --list-formats-ext -d {cam.device}")
+        return CaptureSet(grabbers), list(grabbers)
 
 
 def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
@@ -1064,110 +1064,111 @@ def open_session_cameras(specs_text: str) -> tuple[CaptureSet, list[str]]:
 
     ⛔ Runs in the operator's own terminal because macOS grants camera capture per app (FINDINGS §61.3) — an agent shell can never hold this permission, which is why every failure message below tells the operator what to run rather than retrying.
     """
-    from yam.platform import IS_LINUX  # noqa: PLC0415
+    with CameraStartup() as startup:
+        from yam.platform import IS_LINUX  # noqa: PLC0415
 
-    if IS_LINUX:
-        return _open_session_cameras_linux(specs_text)
+        if IS_LINUX:
+            return _open_session_cameras_linux(specs_text)
 
-    from camera_view import (  # noqa: PLC0415 — OpenCV + AVFoundation load only when cameras are asked for
-        CameraLookupError,
-        hinted_index,
-        mac_cameras,
-        model_discriminating_mode,
-        open_camera,
-        resolve_camera,
-    )
-    from yam.cameras.identity import (  # noqa: PLC0415
-        devices_matching_serial,
-        read_ioreg,
-        usb_unique_id,
-    )
+        from camera_view import (  # noqa: PLC0415 — OpenCV + AVFoundation load only when cameras are asked for
+            CameraLookupError,
+            hinted_index,
+            mac_cameras,
+            model_discriminating_mode,
+            open_camera,
+            resolve_camera,
+        )
+        from yam.cameras.identity import (  # noqa: PLC0415
+            devices_matching_serial,
+            read_ioreg,
+            usb_unique_id,
+        )
 
-    grabbers: dict[str, FrameGrabber] = {}
-    for spec in flatten_tokens([specs_text]):
-        expect_uid = None
-        if spec.isdigit():
-            name, idx = camera_dir_name(spec), int(spec)
-        elif ":" in spec:
-            model, serial = spec.split(":", 1)
-            matches = devices_matching_serial(serial, read_ioreg())
-            if not matches:
-                raise SystemExit(
-                    f"⛔ {spec}: no attached USB device's serial starts with "
-                    f"{serial.strip()!r} — `uv run checks/check_rig.py` shows what is there."
-                )
-            if len(matches) > 1:
-                listing = ", ".join(d["serial"] for d in matches)
-                raise SystemExit(f"⛔ {spec}: {serial.strip()!r} matches more than one "
-                                 f"device ({listing}) — type more of the serial.")
-            dev = matches[0]
-            expect_uid = usb_unique_id(dev["location_id"], dev["vid"], dev["pid"])
-            name = camera_dir_name(f"{model}:{dev['serial']}")
-            idx = hinted_index(expect_uid)
-            if idx is None:
-                raise SystemExit(
-                    f"⛔ {spec}: the serial resolves (uniqueID {expect_uid}) but no "
-                    "confirmed OpenCV index is on file for it. Two identical D405s cannot "
-                    "be told apart by any measurement (FINDINGS §67.12), so the mapping "
-                    "needs one physical confirmation per port arrangement: run `uv run "
-                    "apps/capture_probe.py --indices 1 2 --seconds 3 --save`, look at the "
-                    "two saved pictures, and say which index shows which view — "
-                    "config/camera_index_hint.json then pins it (FINDINGS §71.5)."
-                )
-        else:
-            name = camera_dir_name(spec)
-            try:
-                idx, _, found_cap = resolve_camera(spec)
-            except CameraLookupError as e:
-                raise SystemExit(f"⛔ {e}") from e
-            # The resolver may hand the device back already open, unconfigured. Release it and reopen below with the recording mode, so every camera goes through ONE configuration path.
-            if found_cap is not None:
-                found_cap.release()
-        if name in grabbers:
-            raise SystemExit(f"⛔ --cameras names {name!r} twice.")
-        cap = open_camera(idx, 1280, 720, 30)
-        if cap is None:
-            raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open. "
-                             "`uv run apps/camera_view.py --list` shows what is there.")
-        checked = ""
-        if expect_uid is not None:
-            cams_listed = mac_cameras()
-            target = next((c for c in cams_listed if c.unique_id == expect_uid), None)
-            if target is None:
-                cap.release()
-                raise SystemExit(f"⛔ {spec}: ioreg sees the device but AVFoundation lists "
-                                 f"no camera with uniqueID {expect_uid} — replug it, then "
-                                 "`uv run apps/camera_view.py --list`.")
-            probe = model_discriminating_mode(target, cams_listed)
-            if probe is None:
-                print(f"  ⚠️ {name}: every mode is shared with another model, so the "
-                      "hinted index cannot be model-checked.")
-            else:
-                import cv2  # noqa: PLC0415
-
-                cap.set(cv2.CAP_PROP_FRAME_WIDTH, probe[0])
-                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, probe[1])
-                got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
-                       int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-                cap.release()
-                if got != probe:
+        grabbers: dict[str, FrameGrabber] = {}
+        for spec in flatten_tokens([specs_text]):
+            expect_uid = None
+            if spec.isdigit():
+                name, idx = camera_dir_name(spec), int(spec)
+            elif ":" in spec:
+                model, serial = spec.split(":", 1)
+                matches = devices_matching_serial(serial, read_ioreg())
+                if not matches:
                     raise SystemExit(
-                        f"⛔ {spec}: index {idx} did not answer {probe[0]}x{probe[1]}, a "
-                        f"mode only a {target.short} offers — the hint in "
-                        "config/camera_index_hint.json is STALE and would have recorded "
-                        "the wrong camera under this name (FINDINGS §71.5). Re-establish "
-                        "it: `uv run apps/capture_probe.py --indices 1 2 --seconds 3 "
-                        "--save`, look at the pictures, say which is which."
+                        f"⛔ {spec}: no attached USB device's serial starts with "
+                        f"{serial.strip()!r} — `uv run checks/check_rig.py` shows what is there."
                     )
-                # Reopened rather than reconfigured: the probe changed the mode, and one configuration path (open_camera) beats trusting set() to restore fps as well as size.
-                cap = open_camera(idx, 1280, 720, 30)
-                if cap is None:
-                    raise SystemExit(f"⛔ {spec}: index {idx} passed the model check and "
-                                     "then refused to reopen — replug it and retry.")
-                checked = f", model-checked at {probe[0]}x{probe[1]}"
-        grabbers[name] = FrameGrabber(cap)
-        print(f"  📷 {name} open on index {idx} (asked for 1280x720@30{checked}).")
-    return CaptureSet(grabbers), list(grabbers)
+                if len(matches) > 1:
+                    listing = ", ".join(d["serial"] for d in matches)
+                    raise SystemExit(f"⛔ {spec}: {serial.strip()!r} matches more than one "
+                                     f"device ({listing}) — type more of the serial.")
+                dev = matches[0]
+                expect_uid = usb_unique_id(dev["location_id"], dev["vid"], dev["pid"])
+                name = camera_dir_name(f"{model}:{dev['serial']}")
+                idx = hinted_index(expect_uid)
+                if idx is None:
+                    raise SystemExit(
+                        f"⛔ {spec}: the serial resolves (uniqueID {expect_uid}) but no "
+                        "confirmed OpenCV index is on file for it. Two identical D405s cannot "
+                        "be told apart by any measurement (FINDINGS §67.12), so the mapping "
+                        "needs one physical confirmation per port arrangement: run `uv run "
+                        "apps/capture_probe.py --indices 1 2 --seconds 3 --save`, look at the "
+                        "two saved pictures, and say which index shows which view — "
+                        "config/camera_index_hint.json then pins it (FINDINGS §71.5)."
+                    )
+            else:
+                name = camera_dir_name(spec)
+                try:
+                    idx, _, found_cap = resolve_camera(spec)
+                except CameraLookupError as e:
+                    raise SystemExit(f"⛔ {e}") from e
+                # The resolver may hand the device back already open, unconfigured. Release it and reopen below with the recording mode, so every camera goes through ONE configuration path.
+                if found_cap is not None:
+                    startup.release(startup.own(found_cap))
+            if name in grabbers:
+                raise SystemExit(f"⛔ --cameras names {name!r} twice.")
+            cap = startup.own(open_camera(idx, 1280, 720, 30))
+            if cap is None:
+                raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open. "
+                                 "`uv run apps/camera_view.py --list` shows what is there.")
+            checked = ""
+            if expect_uid is not None:
+                cams_listed = mac_cameras()
+                target = next((c for c in cams_listed if c.unique_id == expect_uid), None)
+                if target is None:
+                    startup.release(cap)
+                    raise SystemExit(f"⛔ {spec}: ioreg sees the device but AVFoundation lists "
+                                     f"no camera with uniqueID {expect_uid} — replug it, then "
+                                     "`uv run apps/camera_view.py --list`.")
+                probe = model_discriminating_mode(target, cams_listed)
+                if probe is None:
+                    print(f"  ⚠️ {name}: every mode is shared with another model, so the "
+                          "hinted index cannot be model-checked.")
+                else:
+                    import cv2  # noqa: PLC0415
+
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, probe[0])
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, probe[1])
+                    got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)),
+                           int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+                    startup.release(cap)
+                    if got != probe:
+                        raise SystemExit(
+                            f"⛔ {spec}: index {idx} did not answer {probe[0]}x{probe[1]}, a "
+                            f"mode only a {target.short} offers — the hint in "
+                            "config/camera_index_hint.json is STALE and would have recorded "
+                            "the wrong camera under this name (FINDINGS §71.5). Re-establish "
+                            "it: `uv run apps/capture_probe.py --indices 1 2 --seconds 3 "
+                            "--save`, look at the pictures, say which is which."
+                        )
+                    # Reopened rather than reconfigured: the probe changed the mode, and one configuration path (open_camera) beats trusting set() to restore fps as well as size.
+                    cap = startup.own(open_camera(idx, 1280, 720, 30))
+                    if cap is None:
+                        raise SystemExit(f"⛔ {spec}: index {idx} passed the model check and "
+                                         "then refused to reopen — replug it and retry.")
+                    checked = f", model-checked at {probe[0]}x{probe[1]}"
+            grabbers[name] = startup.start_reader(cap, FrameGrabber)
+            print(f"  📷 {name} open on index {idx} (asked for 1280x720@30{checked}).")
+        return CaptureSet(grabbers), list(grabbers)
 
 
 def main() -> int:  # noqa: PLR0915
@@ -1185,9 +1186,8 @@ def main() -> int:  # noqa: PLR0915
     ap.add_argument("--arm", default=None, choices=sorted(ARM_SERIALS),
                     help=f"the arm, when there is one (default {DEFAULT_ARM})")
     ap.add_argument("--arms", default=None, metavar="B[,G]",
-                    help="the arms this session drives, comma separated. ⛔ Two arms is "
-                         "not runnable yet (ROADMAP §6.1 step 3) and passing two errors "
-                         "out — see the refusal for what is still missing")
+                    help="the arms this session drives, comma separated; use "
+                         "--start-mode hold when starting both arms")
     ap.add_argument("--start-mode", default="guide", choices=["guide", "hold", "teleop"])
     ap.add_argument("--no-gripper", action="store_true",
                     help="run the 6 arm joints only and leave motor 7 free — the escape hatch if the "
@@ -1221,7 +1221,7 @@ def main() -> int:  # noqa: PLR0915
                     help=f"how far the tip may go from the BASE, in metres (default "
                          f"{REACH_LIMIT}). Replaced a ±0.30 m cube that re-centred on "
                          f"wherever TELEOP was entered, so the wall moved every session "
-                         f"and stopped him at 71% of the arm's reach. The arm can reach "
+                         f"and stopped him at 71%% of the arm's reach. The arm can reach "
                          f"about 0.74 m. ⛔ A safety limit: raise it deliberately.")
     ap.add_argument("--floor", type=float, default=FLOOR_LIMIT,
                     help=f"lowest the tip may go, in metres relative to the base plane "
@@ -1419,7 +1419,6 @@ def main() -> int:  # noqa: PLR0915
     # number rather than a constant and a flag that can disagree. `MAX_JOINT_STEP` remains as
     # the documented default and is what the flag's own default comes from.
     joint_step = args.teleop_speed / CONTROL_HZ
-    threading.excepthook = _quiet_expected_server_exit
     rotation = not args.no_rotation
     start_frame = args.frame
     # ⛔ The store decides WHICH map this arm uses — its own override if it has one,
@@ -1729,184 +1728,185 @@ def main() -> int:  # noqa: PLR0915
 
     # ⭐ Cameras open FIRST, before the puck wiggle and before anything can energise: a camera refusal here costs nothing, while the same refusal after the wiggle would waste the operator's assignment gesture. `capture` outlives every take (opening costs seconds per device); the per-take writers below are the cheap part.
     capture: CaptureSet | None = None
-    capture_names: list[str] = []
-    if args.cameras:
-        # ⚠️ Platform-aware since FINDINGS §75.10: this line claimed a macOS permission on the
-        # Linux station, where the gate is group membership instead. Two different facts, and
-        # printing the wrong one teaches the reader a wrong thing about their own machine.
-        from yam.platform import IS_LINUX  # noqa: PLC0415
-
-        print("opening cameras "
-              + ("(this needs the `video` group, which this user has):" if IS_LINUX
-                 else "(this holds the macOS capture permission of THIS terminal):"))
-        capture, capture_names = open_session_cameras(args.cameras)
-
-    # ⚠️ ONE PUCK, and with two arms this becomes arm call per arm with `exclude=` holding
-    # the ones already taken — `pick_device_by_wiggle` already supports that and it is
-    # tested (`tests/test_puck_assignment.py`). Not wired yet: ROADMAP §6.1 step 2.
-    # ⭐⭐ ONE PUCK PER ARM, ASSIGNED BY BEING MOVED. Two SpaceMice both report an EMPTY
-    # serial number (measured 2026-08-10), so the trick that made the CAN adapters
-    # unambiguous — select by serial, never by position — does not transfer. The device
-    # identifies itself by being wiggled.
-    #
-    # ⛔ `exclude` IS THE PART THAT MATTERS WITH TWO ARMS, and without it this function can
-    # hand the SAME puck to both: the single-device shortcut returns it unconditionally, and
-    # nothing stops the operator moving the arm they already assigned. Both failures are
-    # silent, and the symptom — two arms following arm hand — reads as a control bug rather
-    # than a device-assignment bug (`src/yam/inputs/spacemouse.py`, 6 tests).
-    #
-    # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
-    # returns here, with nothing energised.
     pucks: dict[str, Any] = {}
-    if args.sim:
-        # ⭐⭐ NO SPACEMOUSE IN SIMULATION, and a still puck rather than a random one.
-        # The whole point of --sim is running on a machine with nothing attached, and the
-        # wiggle assignment below cannot work without a device to wiggle.
-        #
-        # ⚠️ A puck reporting ZERO deflection is the honest stand-in: nobody's hand is on
-        # it, so TELEOP holds still. That is not a limitation to work around — the parts
-        # of the loop worth testing without hardware are the mode transitions, the
-        # cursors, the playback sequencing and the teardown, and every one of those is
-        # driven by KEYS. ⛔ It does mean --sim can say nothing about driving feel or about
-        # the axis map, which needs a real hand on a real puck.
-        for name in arm_names:
-            pucks[name] = {"path": f"sim:{name}", "handle": None,
-                           "reader": StillPuck()}
-        print("⭐ SIMULATED PUCKS — both report zero deflection, so TELEOP holds still.\n"
-              "   Drive the loop with the KEYS: modes, p, w, l, a, i, q.\n")
-    for name in arm_names if not args.sim else []:
-        # ⭐⭐ AN ARM WITHOUT A PUCK STILL JOINS THE SESSION (item 47, FINDINGS §68.5).
-        # With one SpaceMouse and two arms this used to refuse outright — which killed
-        # MIRROR and two-arm playback, although a mirror follower and a replaying arm
-        # never need a hand. If every attached puck is already assigned, the remaining
-        # arm gets the same zero-deflection reader --sim uses: HOLD, GUIDE, playback,
-        # scrub and MIRROR-follower all work; only its own TELEOP is inert.
-        # ⚠️ Deliberately ONLY when no unassigned device exists. If a free puck IS
-        # attached and the operator just did not move it, the abort below stands —
-        # falling back silently there would hand him a dead TELEOP he asked to assign.
-        already = {h["path"] for h in pucks.values()}
-        if pucks and not [d for d in find_all_devices() if d.get("path") not in already]:
-            pucks[name] = {"path": f"none:{name}", "handle": None, "reader": StillPuck()}
-            print(f"\n⚠️  arm {name} has NO puck — every attached SpaceMouse is already "
-                  f"assigned.\n   It still joins the session: HOLD, GUIDE, playback, "
-                  f"scrub and MIRROR-follower\n   all work. Only its own TELEOP is dead "
-                  f"(its puck reads zero deflection).\n   Attach a second SpaceMouse and "
-                  f"restart to give it one.\n")
-            continue
-        info = pick_device_by_wiggle(label=name,
-                                     exclude=[h["path"] for h in pucks.values()])
-        if info is None:
-            print(f"No SpaceMouse found for arm {name} (or none was moved).")
-            for opened in pucks.values():
-                # ⛔ Close what was already opened. Returning without this leaves a claimed
-                # HID device behind, and the next run's wiggle then cannot see it.
-                try:
-                    opened["handle"].close()
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            return 1
-        countdown_hands_off(3)
-        handle = open_device(info)
-        handle.set_nonblocking(True)
-        pucks[name] = {"path": info["path"], "handle": handle,
-                       "reader": TwistReader(handle)}
-
-    # ⚠️ `robot = None` was declared here. Every robot handle now lives on its own
-    # `ArmSession`, and the teardown iterates `arms`, which is empty when nothing was built.
-    # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
-    #
-    # The closing summary at the bottom of this function reads a field off `arm`, and it
-    # runs on the path where `build_robot()` FAILED — the `except Exception` prints the
-    # error and falls through. That is the path Julien sees whenever the CAN adapters are
-    # in DFU, which happens often. Without this declaration that line would raise
-    # `UnboundLocalError` and replace a clear "No candleLight CAN adapter found" with a
-    # traceback.
-    #
-    # ⚠️ So every read of `arm` outside the `try` MUST be guarded by `if arm is not None`.
-    # `checks/check_restructure.py` finds the construction point by locating the
-    # `ArmSession(` call rather than this line, so it can still catch a genuine
-    # use-before-build.
-    # ⭐⭐ ONE PUCK, N ARMS → THE PUCK FOLLOWS THE SELECTION. His design, 2026-08-18
-    # (FINDINGS §68.8): with a single real SpaceMouse in a multi-arm session, `a` aims
-    # the puck as well as the mode keys — B, then G, then BOTH, where BOTH drives both
-    # arms at once, each from its own pose (his call: no mirror needed for that).
-    # Unaimed arms read a centred puck. With one puck per arm nothing changes.
-    _real_pucks = [p for p in pucks.values()
-                   if not isinstance(p.get("reader"), StillPuck)]
-    shared_puck = (_real_pucks[0]["reader"]
-                   if len(arm_names) > 1 and len(_real_pucks) == 1 else None)
-    if shared_puck is not None:
-        print("⭐ ONE puck for the whole session — it FOLLOWS THE SELECTION: press a to")
-        print("   aim it (B → G → BOTH). BOTH drives both arms at once, each from its")
-        print("   own pose. Unaimed arms read a centred puck and hold their position.\n")
-    arm: ArmSession | None = None
-    # ⛔⭐ DECLARED HERE FOR THE SAME REASON `arm` IS, and the reason is now stronger than
-    # it was for `arm`. The `finally` block and the closing summary both iterate `arms` —
-    # to save each arm's axis map, and to report it — and both run on the path where
-    # `build_robot()` FAILED. An unbound name there would replace *"No candleLight CAN
-    # adapter found"* with a `NameError`, on the failure Julien hits most often.
-    # ⭐ An empty list is better than a `None` guard: the loops simply do not run, so
-    # there is no second code path to keep correct. FINDINGS §48.3.
     arms: list[ArmSession] = []
-    # ⛔⭐⭐ `start_mode` IS A SEPARATE NAME FROM `arm.mode`, AND THAT IS THE WHOLE REASON
-    # `mode` WAS THE LAST FIELD TO MOVE. `build_robot()` below is called with
-    # `zero_gravity=(start_mode == "guide")`, and it runs BEFORE the robot exists — so
-    # before the `ArmSession` that would hold the mode can exist either. The name with the
-    # most references (48) was therefore the last arm that could move, which is the
-    # opposite of the order anyone would choose for comfort. FINDINGS §50.
-    #
-    # ⚠️ It is deliberately NOT the same variable. Keeping arm `mode` and assigning it
-    # twice would put the script and the object out of step for the lines in between,
-    # which is the state neither models.
-    start_mode = args.start_mode
+    # Own a robot as soon as its builder returns, before wrapping or reading it.
+    # A failed ArmSession constructor must not leave an enabled handle unowned.
+    robots: dict[str, Any] = {}
     stop_reason: str | None = None
-    # ⚠️ `teleop` was declared here as None. It is `ArmSession.teleop` now, and the class's
-    # own constructor already sets it to None. ⛔ Leaving this line would run before `arm`
-    # exists, which the ordering check in checks/check_restructure.py catches.
-    # ⚠️ The thermal guard used to be created here. It is `ArmSession`'s now, built by its
-    # constructor from the same `warn_at=TEMP_WARN, stop_at=TEMP_STOP` this line passed.
-    # ⛔ Leaving it here as `arm.thermal = …` would run before `arm` exists.
-    #
-    # ⭐ It stays an object rather than a pair of floats, and the reason is worth keeping:
-    # "I cannot read the temperature" is a state that has to be tracked and acted on, and
-    # it used to be indistinguishable from 0 °C. See `ThermalGuard`.
-    # ⚠️ `hottest` and `jaw_temp` were declared here. They are `ArmSession` fields now, so
-    # each arm reports its OWN temperatures on its own status row — as session locals they
-    # were arm arm's reading painted on whichever row was being drawn.
-    # ⛔ Not left here as `arm.hottest = None`: that would run before `arm` exists, which
-    # is the ordering fault `checks/check_restructure.py` check 3 catches.
-    next_park_report = 0.0
-    # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
-    # `ArmSession` fields, and the class's own constructor sets exactly the same values
-    # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
-    # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
-    # ordering check in checks/check_restructure.py.
-
-    # ⭐⭐ SIMULATED RECORDINGS GO SOMEWHERE ELSE. Defence in depth alongside the
-    # metadata stamp: `recordings/sim/` never contains a real demonstration, so a glob
-    # over `recordings/*.json` cannot pick one up by accident.
-    takes_dir = (TAKES_DIR / "sim") if args.sim else TAKES_DIR
-    tracking_dir = takes_dir / "tracking"
-
-    def slot_for_reading(digit: str) -> Path:
-        """Where to LOOK for a recording. Writes always go to `takes_dir`.
-
-        ⭐⭐ A --sim SESSION CAN STILL PLAY A REAL RECORDING, and that is deliberate. When
-        the folder split was first written it applied to reads as well, which quietly
-        removed one of the best uses of a simulator: **replaying a real take against
-        simulated arms to check the playback before committing it to 4.3 kg of hardware.**
-        Sim recordings win when both exist, so a sim session never silently reaches past
-        its own work.
-        """
-        mine = takes_dir / f"{digit}.json"
-        if mine.is_file() or takes_dir == TAKES_DIR:
-            return mine
-        return TAKES_DIR / f"{digit}.json"
-    if args.sim:
-        print(f"⭐ SIMULATED recordings go to {takes_dir.relative_to(REPO)}/, never "
-              f"alongside the real ones, and each is stamped simulated=true.\n")
-
+    exit_code = 0
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    previous_thread_hook = threading.excepthook
+    threading.excepthook = _quiet_expected_server_exit
+    _SHUTTING_DOWN["yes"] = False
     try:
+        capture_names: list[str] = []
+        if args.cameras:
+            # ⚠️ Platform-aware since FINDINGS §75.10: this line claimed a macOS permission on the
+            # Linux station, where the gate is group membership instead. Two different facts, and
+            # printing the wrong one teaches the reader a wrong thing about their own machine.
+            from yam.platform import IS_LINUX  # noqa: PLC0415
+
+            print("opening cameras "
+                  + ("(this needs the `video` group, which this user has):" if IS_LINUX
+                     else "(this holds the macOS capture permission of THIS terminal):"))
+            capture, capture_names = open_session_cameras(args.cameras)
+
+        # ⚠️ ONE PUCK, and with two arms this becomes arm call per arm with `exclude=` holding
+        # the ones already taken — `pick_device_by_wiggle` already supports that and it is
+        # tested (`tests/test_puck_assignment.py`). Not wired yet: ROADMAP §6.1 step 2.
+        # ⭐⭐ ONE PUCK PER ARM, ASSIGNED BY BEING MOVED. Two SpaceMice both report an EMPTY
+        # serial number (measured 2026-08-10), so the trick that made the CAN adapters
+        # unambiguous — select by serial, never by position — does not transfer. The device
+        # identifies itself by being wiggled.
+        #
+        # ⛔ `exclude` IS THE PART THAT MATTERS WITH TWO ARMS, and without it this function can
+        # hand the SAME puck to both: the single-device shortcut returns it unconditionally, and
+        # nothing stops the operator moving the arm they already assigned. Both failures are
+        # silent, and the symptom — two arms following arm hand — reads as a control bug rather
+        # than a device-assignment bug (`src/yam/inputs/spacemouse.py`, 6 tests).
+        #
+        # ⚠️ Opened BEFORE `build_robot()`, deliberately: if a puck is missing the session
+        # returns here, with nothing energised.
+        if args.sim:
+            # ⭐⭐ NO SPACEMOUSE IN SIMULATION, and a still puck rather than a random one.
+            # The whole point of --sim is running on a machine with nothing attached, and the
+            # wiggle assignment below cannot work without a device to wiggle.
+            #
+            # ⚠️ A puck reporting ZERO deflection is the honest stand-in: nobody's hand is on
+            # it, so TELEOP holds still. That is not a limitation to work around — the parts
+            # of the loop worth testing without hardware are the mode transitions, the
+            # cursors, the playback sequencing and the teardown, and every one of those is
+            # driven by KEYS. ⛔ It does mean --sim can say nothing about driving feel or about
+            # the axis map, which needs a real hand on a real puck.
+            for name in arm_names:
+                pucks[name] = {"path": f"sim:{name}", "handle": None,
+                               "reader": StillPuck()}
+            print("⭐ SIMULATED PUCKS — both report zero deflection, so TELEOP holds still.\n"
+                  "   Drive the loop with the KEYS: modes, p, w, l, a, i, q.\n")
+        for name in arm_names if not args.sim else []:
+            # ⭐⭐ AN ARM WITHOUT A PUCK STILL JOINS THE SESSION (item 47, FINDINGS §68.5).
+            # With one SpaceMouse and two arms this used to refuse outright — which killed
+            # MIRROR and two-arm playback, although a mirror follower and a replaying arm
+            # never need a hand. If every attached puck is already assigned, the remaining
+            # arm gets the same zero-deflection reader --sim uses: HOLD, GUIDE, playback,
+            # scrub and MIRROR-follower all work; only its own TELEOP is inert.
+            # ⚠️ Deliberately ONLY when no unassigned device exists. If a free puck IS
+            # attached and the operator just did not move it, the abort below stands —
+            # falling back silently there would hand him a dead TELEOP he asked to assign.
+            already = {h["path"] for h in pucks.values()}
+            if pucks and not [d for d in find_all_devices() if d.get("path") not in already]:
+                pucks[name] = {"path": f"none:{name}", "handle": None, "reader": StillPuck()}
+                print(f"\n⚠️  arm {name} has NO puck — every attached SpaceMouse is already "
+                      f"assigned.\n   It still joins the session: HOLD, GUIDE, playback, "
+                      f"scrub and MIRROR-follower\n   all work. Only its own TELEOP is dead "
+                      f"(its puck reads zero deflection).\n   Attach a second SpaceMouse and "
+                      f"restart to give it one.\n")
+                continue
+            info = pick_device_by_wiggle(label=name,
+                                         exclude=[h["path"] for h in pucks.values()])
+            if info is None:
+                print(f"No SpaceMouse found for arm {name} (or none was moved).")
+                return 1
+            countdown_hands_off(3)
+            handle = open_device(info)
+            pucks[name] = {"path": info["path"], "handle": handle}
+            handle.set_nonblocking(True)
+            pucks[name]["reader"] = TwistReader(handle)
+
+        # ⚠️ `robot = None` was declared here. Every robot handle now lives on its own
+        # `ArmSession`, and the teardown iterates `arms`, which is empty when nothing was built.
+        # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
+        #
+        # The closing summary at the bottom of this function reads a field off `arm`, and it
+        # runs on the path where `build_robot()` FAILED — the `except Exception` prints the
+        # error and falls through. That is the path Julien sees whenever the CAN adapters are
+        # in DFU, which happens often. Without this declaration that line would raise
+        # `UnboundLocalError` and replace a clear "No candleLight CAN adapter found" with a
+        # traceback.
+        #
+        # ⚠️ So every read of `arm` outside the `try` MUST be guarded by `if arm is not None`.
+        # `checks/check_restructure.py` finds the construction point by locating the
+        # `ArmSession(` call rather than this line, so it can still catch a genuine
+        # use-before-build.
+        # ⭐⭐ ONE PUCK, N ARMS → THE PUCK FOLLOWS THE SELECTION. His design, 2026-08-18
+        # (FINDINGS §68.8): with a single real SpaceMouse in a multi-arm session, `a` aims
+        # the puck as well as the mode keys — B, then G, then BOTH, where BOTH drives both
+        # arms at once, each from its own pose (his call: no mirror needed for that).
+        # Unaimed arms read a centred puck. With one puck per arm nothing changes.
+        _real_pucks = [p for p in pucks.values()
+                       if not isinstance(p.get("reader"), StillPuck)]
+        shared_puck = (_real_pucks[0]["reader"]
+                       if len(arm_names) > 1 and len(_real_pucks) == 1 else None)
+        if shared_puck is not None:
+            print("⭐ ONE puck for the whole session — it FOLLOWS THE SELECTION: press a to")
+            print("   aim it (B → G → BOTH). BOTH drives both arms at once, each from its")
+            print("   own pose. Unaimed arms read a centred puck and hold their position.\n")
+        arm: ArmSession | None = None
+        # ⛔⭐ DECLARED HERE FOR THE SAME REASON `arm` IS, and the reason is now stronger than
+        # it was for `arm`. The `finally` block and the closing summary both iterate `arms` —
+        # to save each arm's axis map, and to report it — and both run on the path where
+        # `build_robot()` FAILED. An unbound name there would replace *"No candleLight CAN
+        # adapter found"* with a `NameError`, on the failure Julien hits most often.
+        # ⭐ An empty list is better than a `None` guard: the loops simply do not run, so
+        # there is no second code path to keep correct. FINDINGS §48.3.
+        # ⛔⭐⭐ `start_mode` IS A SEPARATE NAME FROM `arm.mode`, AND THAT IS THE WHOLE REASON
+        # `mode` WAS THE LAST FIELD TO MOVE. `build_robot()` below is called with
+        # `zero_gravity=(start_mode == "guide")`, and it runs BEFORE the robot exists — so
+        # before the `ArmSession` that would hold the mode can exist either. The name with the
+        # most references (48) was therefore the last arm that could move, which is the
+        # opposite of the order anyone would choose for comfort. FINDINGS §50.
+        #
+        # ⚠️ It is deliberately NOT the same variable. Keeping arm `mode` and assigning it
+        # twice would put the script and the object out of step for the lines in between,
+        # which is the state neither models.
+        start_mode = args.start_mode
+        # ⚠️ `teleop` was declared here as None. It is `ArmSession.teleop` now, and the class's
+        # own constructor already sets it to None. ⛔ Leaving this line would run before `arm`
+        # exists, which the ordering check in checks/check_restructure.py catches.
+        # ⚠️ The thermal guard used to be created here. It is `ArmSession`'s now, built by its
+        # constructor from the same `warn_at=TEMP_WARN, stop_at=TEMP_STOP` this line passed.
+        # ⛔ Leaving it here as `arm.thermal = …` would run before `arm` exists.
+        #
+        # ⭐ It stays an object rather than a pair of floats, and the reason is worth keeping:
+        # "I cannot read the temperature" is a state that has to be tracked and acted on, and
+        # it used to be indistinguishable from 0 °C. See `ThermalGuard`.
+        # ⚠️ `hottest` and `jaw_temp` were declared here. They are `ArmSession` fields now, so
+        # each arm reports its OWN temperatures on its own status row — as session locals they
+        # were arm arm's reading painted on whichever row was being drawn.
+        # ⛔ Not left here as `arm.hottest = None`: that would run before `arm` exists, which
+        # is the ordering fault `checks/check_restructure.py` check 3 catches.
+        next_park_report = 0.0
+        # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
+        # `ArmSession` fields, and the class's own constructor sets exactly the same values
+        # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
+        # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
+        # ordering check in checks/check_restructure.py.
+
+        # ⭐⭐ SIMULATED RECORDINGS GO SOMEWHERE ELSE. Defence in depth alongside the
+        # metadata stamp: `recordings/sim/` never contains a real demonstration, so a glob
+        # over `recordings/*.json` cannot pick one up by accident.
+        takes_dir = (TAKES_DIR / "sim") if args.sim else TAKES_DIR
+        tracking_dir = takes_dir / "tracking"
+
+        def slot_for_reading(digit: str) -> Path:
+            """Where to LOOK for a recording. Writes always go to `takes_dir`.
+
+            ⭐⭐ A --sim SESSION CAN STILL PLAY A REAL RECORDING, and that is deliberate. When
+            the folder split was first written it applied to reads as well, which quietly
+            removed one of the best uses of a simulator: **replaying a real take against
+            simulated arms to check the playback before committing it to 4.3 kg of hardware.**
+            Sim recordings win when both exist, so a sim session never silently reaches past
+            its own work.
+            """
+            mine = takes_dir / f"{digit}.json"
+            if mine.is_file() or takes_dir == TAKES_DIR:
+                return mine
+            return TAKES_DIR / f"{digit}.json"
+        if args.sim:
+            print(f"⭐ SIMULATED recordings go to {takes_dir.relative_to(REPO)}/, never "
+                  f"alongside the real ones, and each is stamped simulated=true.\n")
+
         n_motors = N_ARM if args.no_gripper else N_ARM + 1
         # ⭐⭐⭐ ONE ROBOT PER ARM, BUILT IN ORDER. ROADMAP §6.1 step 3.
         #
@@ -1935,6 +1935,7 @@ def main() -> int:  # noqa: PLR0915
                                           max_speed=args.max_speed, max_lag=args.max_lag)
             # ⭐ On the SafeRobot in both modes, so a simulated session exercises the same
             # feedforward plumbing the arm gets (the fake records the setpoints, item 44).
+            robots[name] = robot
             robot.vel_ff = args.vel_ff
             print(f"  {note}\n")
 
@@ -4828,6 +4829,8 @@ def main() -> int:  # noqa: PLR0915
             # themselves.
             planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
             unplanned = not planned_quit
+            if unplanned:
+                exit_code = 130 if interrupted else 1
             auto_parked = False
             # ⚠️ `any(...)` rather than `all(...)`: if one chain has died the other arm can
             # still be parked, and parking it is better than leaving it holding. `park_arms`
@@ -4930,31 +4933,60 @@ def main() -> int:  # noqa: PLR0915
                 print("   They will be sagging under gravity. Support them now if raised.")
 
     except KeyboardInterrupt:
+        exit_code = 130
+        stop_reason = "interrupted during startup or shutdown"
         print("\ninterrupted.")
     except Exception as exc:  # noqa: BLE001
-        print(f"\n⛔ {type(exc).__name__}: {exc}")
+        exit_code = 1
+        stop_reason = f"{type(exc).__name__}: {exc}"
+        print(f"\n⛔ {stop_reason}")
+        for note in getattr(exc, "__notes__", []):
+            print(f"   {note}")
     finally:
-        # Hand SIGINT back before anything else, so a Ctrl-C during shutdown behaves
-        # the way the shell expects rather than being swallowed by our handler.
+        # Snapshot initialized sessions before disabling their underlying handles.
+        # The cleanup list also includes robots whose session never initialized.
+        alive_at_teardown = {one.name: _safe_fact(lambda one=one: bool(one.alive()))
+                             for one in arms}
+        if robots:
+            _SHUTTING_DOWN["yes"] = True
+        for name, robot in robots.items():
+            try:
+                disabled = shutdown_robot(robot)
+                print(f"\narm {name} motors confirmed disabled: {disabled}")
+                missing = sorted(set(range(1, n_motors + 1)) - set(disabled))
+                if missing:
+                    exit_code = 1
+                    print(f"\n⛔ arm {name}: could not confirm motors {missing} disabled.")
+                    print("   Treat that arm as live. Support it and cut the mains.")
+            except Exception as exc:  # noqa: BLE001
+                exit_code = 1
+                print(f"\n⛔ arm {name}: could not confirm the motors are disabled: "
+                      f"{type(exc).__name__}: {exc}")
+                print("   Treat that arm as live. Support it and cut the mains.")
+        # Peripheral cleanup may wait for camera frames or disk writes. Motors
+        # have already been processed; one peripheral failure must not skip another.
+        for one_puck in pucks.values():
+            handle = one_puck.get("handle")
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception as exc:  # noqa: BLE001
+                    exit_code = 1
+                    print(f"\n⚠️ could not close SpaceMouse: {exc}")
+        for label, cleanup in (
+            ("frame writers", lambda: frame_sink.stop() if frame_sink is not None else None),
+            ("camera readers", lambda: capture.stop() if capture is not None else None),
+            ("unsaved frames", lambda: discard_frames(pending_frames)),
+        ):
+            try:
+                cleanup()
+            except Exception as exc:  # noqa: BLE001
+                exit_code = 1
+                print(f"\n⚠️ could not clean up {label}: {exc}")
+        threading.excepthook = previous_thread_hook
         try:
-            signal.signal(signal.SIGINT, signal.SIG_DFL)
-        except Exception:  # noqa: BLE001, S110
-            pass
-        try:
-            for one_puck in pucks.values():
-                one_puck["handle"].close()
-        except Exception:  # noqa: BLE001, S110
-            pass
-        # ⭐ Item 48 teardown: stop the readers so no daemon thread keeps a camera busy for the next process (the grabber docstring's warning), and discard frames that never reached a slot — a quit with the save prompt open, or Ctrl-C mid-recording. Wrapped like the puck close: camera cleanup must never stand between the motors and their disable below.
-        try:
-            if frame_sink is not None:
-                frame_sink.stop()
-            if capture is not None:
-                capture.stop()
-            if pending_frames is not None:
-                discard_frames(pending_frames)
-                print("  📷 unsaved take frames discarded.")
-        except Exception:  # noqa: BLE001, S110
+            signal.signal(signal.SIGINT, previous_sigint)
+        except Exception:  # noqa: BLE001
             pass
         # ⛔ DO NOT make this an unconditional save again.
         #
@@ -4983,31 +5015,7 @@ def main() -> int:  # noqa: PLR0915
                 print(f"  previous contents kept in {BACKUP_FILE.relative_to(REPO)}")
             except Exception as exc:  # noqa: BLE001
                 print(f"\n⚠️  could not save the axis map: {type(exc).__name__}: {exc}")
-        # ⛔⭐ EVERY ARM IS DISABLED, and each one is wrapped on its own. If the FIRST
-        # `shutdown_robot()` raised, an unwrapped loop would leave the second arm's motors
-        # ENERGISED and unattended, which is the worst possible outcome of a teardown. An
-        # arm is appended to `arms` the moment it is constructed, so a session whose second
-        # build failed still disables the first arm here.
-        if arms:
-            _SHUTTING_DOWN["yes"] = True
-            # ⭐ Capture each arm's liveness BEFORE the motors are disabled. The incident
-            # block below runs after `shutdown_robot()` on purpose, so a read taken down
-            # there is False for every arm on every path and says nothing — which is how
-            # every incident file ever written carried the same value (FINDINGS §58.45,
-            # ROADMAP §8.2 item 31). This local is the last moment the answer to "was the
-            # chain alive when the teardown began?" still exists. That distinction is the
-            # one that decided whether a park was possible on 2026-08-14 (FINDINGS §46.0).
-            alive_at_teardown = {one.name: _safe_fact(lambda one=one: bool(one.alive()))
-                                 for one in arms}
-            for one in arms:
-                try:
-                    disabled = shutdown_robot(one.robot)
-                    print(f"\narm {one.name} motors confirmed disabled: {disabled}")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"\n⛔ arm {one.name}: could not confirm the motors are disabled: "
-                          f"{type(exc).__name__}: {exc}")
-                    print("   ⚠️ TREAT THAT ARM AS LIVE. Cut the mains if it is raised.")
-
+        if robots:
             # ⭐⭐ RECORD THE MOMENT, IF SOMETHING WENT WRONG. FINDINGS §45.
             #
             # On 2026-08-14 the arm fell because a motor stopped answering the CAN bus,
@@ -5032,7 +5040,8 @@ def main() -> int:  # noqa: PLR0915
             # cannot be tested should not be able to add a second traceback on top of the
             # one the operator is already reading.
             try:
-                bad_stop = bool(stop_reason) and "quit requested" not in (stop_reason or "")
+                bad_stop = exit_code != 0 or (
+                    bool(stop_reason) and "quit requested" not in (stop_reason or ""))
                 # ⚠️ Every value below is the LAST one the loop managed to read, not a
                 # fresh read. A fresh read on a dead chain raises, and the last good
                 # reading is what actually describes the failure. Each arm keeps its own
@@ -5045,6 +5054,7 @@ def main() -> int:  # noqa: PLR0915
                 facts = {} if not bad_stop else {
                     "stop_reason": stop_reason,
                     "arms": [one.name for one in arms] or arm_names,
+                    "acquired_robots": list(robots),
                     "reach_limit": args.reach,
                     "floor_limit": args.floor,
                     "loop_hz": _safe_fact(lambda: round(loop_hz, 1)),
@@ -5138,7 +5148,7 @@ def main() -> int:  # noqa: PLR0915
         print(f"\naxis map {arm_names[0]}: "
               f"{map_store.for_arm(arm_names[0], start_frame).one_line(start_frame)}")
         print("     nothing was edited — the robot was never built.")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

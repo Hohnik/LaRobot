@@ -98,5 +98,12 @@ class CaptureSet:
 
     def stop(self) -> None:
         """Stop every reader. ⚠️ Always called, even after an error — a daemon thread holding a camera keeps the device busy for the next process."""
-        for grab in self._grabbers.values():
-            grab.stop()
+        failures = []
+        for name, grab in self._grabbers.items():
+            try:
+                grab.stop()
+            except Exception as exc:
+                exc.add_note(f"Camera reader: {name}")
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("Camera readers failed to stop", failures)

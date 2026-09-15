@@ -1,5 +1,32 @@
 # yam-robotics — the YAM bimanual teleop walkthrough
 
+## Run this checkout
+
+Use `./teleop` from the repository root. It installs the locked Python 3.12 dependencies into `.venv-teleop` on first use and preserves the training environment in `.venv`.
+
+```bash
+./teleop --help
+./teleop --arms B,G --start-mode hold             # print the plan; no devices opened
+./teleop --sim --arms B,G --start-mode hold --yes  # interactive simulation
+```
+
+For the physical arms, follow the bring-up checklist below, then run the same command **without `--sim`**, adding `--yes` only when ready to enable them. Starting both arms in HOLD avoids the unsupported two-arm GUIDE startup.
+
+Current cleanup status, preservation details, validation limits, and remaining work: [docs/CLEANUP.md](docs/CLEANUP.md). Fable's original handoff is preserved at `499d0b7`; the cleanup changes have software and simulation validation only.
+
+After the launcher has created the environment, run checks with:
+
+```bash
+.venv-teleop/bin/python checks/run_tests.py
+.venv-teleop/bin/python checks/run_falsifiers.py
+```
+
+The older `uv run ...` examples below also work after `export UV_PROJECT_ENVIRONMENT="$PWD/.venv-teleop"`. Use that setting before `uv sync` too, to preserve a training environment in `.venv`. The automated simulator driver overwrites simulation slots: run it in a disposable checkout, not against recordings you want to keep.
+
+## Original walkthrough and hardware evidence
+
+The feature claims below summarize the August handoff. They do not establish hardware validation of subsequent cleanup changes.
+
 > ## What this repo is
 >
 > **A finished, hardware-proven walkthrough of a bimanual YAM arm setup, built so a team can rebuild it from scratch** (Julien's ruling, [docs/FINDINGS.md](docs/FINDINGS.md) §67.0). Every feature here was built once, tested without hardware first, and then confirmed on the real arms. The findings, the dead ends and the measured numbers are all written down. The deliverable is the rebuild plan, [docs/PLAN.md](docs/PLAN.md), and the rebuild works from it.

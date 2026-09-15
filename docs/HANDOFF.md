@@ -1,5 +1,13 @@
 # Handoff — start here if you have no context
 
+## Current continuation — September 15, 2026
+
+Start with [CLEANUP.md](CLEANUP.md) for the current branch, preserved training work and recordings, implementation decisions, checks, and next steps. [README.md](../README.md) has the dedicated launcher commands. Fable's final commit was `499d0b7`, exactly the version Julien recalled; the cleanup continues from it on `codex/teleop-cleanup`. The Linux station has not been rechecked in this continuation.
+
+## Archived August handoff
+
+The dated state and counts below describe the original close-out. They remain useful for its reasoning and hardware evidence; current status lives in CLEANUP.
+
 > **Written 2026-08-10, kept current — last updated 2026-08-20, the close-out session before Julien left this repo to work on the team's own with his friends.** This file exists so a fresh agent, or Julien in a month, can rebuild the *whole* picture without reading the chat that produced it.
 >
 > **Read in this order:** this file → [FINDINGS.md](FINDINGS.md) → [COMMANDS.md](COMMANDS.md) → [ROADMAP.md](ROADMAP.md). ⚠️ **§2 below is the live state, not the README** — the README's "what works right now" is session 2's snapshot and says so. `git log` carries the reasoning for every change, and the commit messages are deliberately long because they hold the *why*.

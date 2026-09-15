@@ -1,0 +1,8 @@
+#!/bin/sh
+# Keep this branch's runtime separate from the training environment in .venv.
+set -eu
+project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$project_dir"
+export UV_PROJECT_ENVIRONMENT="$project_dir/.venv-teleop"
+unset VIRTUAL_ENV
+exec uv run --python 3.12 --frozen apps/teleop_session.py "$@"

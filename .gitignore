@@ -29,6 +29,9 @@ recordings/
 captures/
 frames/
 
+# Runtime used by ./teleop; .venv may belong to the training branch.
+.venv-teleop/
+
 # Local agent/editor state that is per-machine
 .claude/settings.local.json
 agents/

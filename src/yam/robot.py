@@ -664,6 +664,17 @@ def read_raw_gripper_position(arm: str) -> float | None:
         iface.close()
 
 
+def _close_failed_build(robot: Any, failure: BaseException, n_motors: int) -> None:
+    """Release a handle that cannot be returned, preserving the startup error."""
+    try:
+        disabled = shutdown_robot(robot)
+        missing = sorted(set(range(1, n_motors + 1)) - set(disabled))
+        if missing:
+            failure.add_note(f"Could not confirm motors {missing} disabled after startup failed.")
+    except Exception as cleanup_error:  # noqa: BLE001
+        failure.add_note(f"Could not confirm robot shutdown: {cleanup_error}")
+
+
 def build_robot(
     arm: str = DEFAULT_ARM,
     *,
@@ -728,8 +739,13 @@ def build_robot(
             ee_mass=GRIPPER_MASS_KG,
             sim=False,
         )
-        return SafeRobot(get_yam_robot(**kwargs), max_speed=max_speed,
-                         max_lag=max_lag), (
+        robot = get_yam_robot(**kwargs)
+        try:
+            wrapped = SafeRobot(robot, max_speed=max_speed, max_lag=max_lag)
+        except BaseException as failure:
+            _close_failed_build(robot, failure, 6)
+            raise
+        return wrapped, (
             f"gripper NOT controlled (6 DoF) — motor 7 is left free, and the gravity model "
             f"carries ee_mass={GRIPPER_MASS_KG} kg so the arm still holds itself "
             f"(~0.19 Nm residual at the elbow)."
@@ -788,41 +804,23 @@ def build_robot(
         )
     robot = get_yam_robot(**kwargs)
 
-    # ⛔ VERIFY, do not trust. frame_correct_gripper_limits() predicts the wrap the
-    # runtime will apply; this checks the prediction against what the runtime
-    # actually reports, BEFORE any control loop starts. A normalised gripper
-    # position outside [0,1] gets clipped onto a limit by motor_chain_robot.py:390
-    # and the motor then pushes into a stop indefinitely — the failure that cooked
-    # motor 7 three times. Better to refuse to start than to discover it thermally.
+    # The builder owns the enabled handle until it can return a verified wrapper.
+    # A failed read is not evidence that the gripper frame is safe to command.
     try:
         norm = float(robot.get_joint_pos()[6])
         if not (-0.02 <= norm <= 1.02):
-            for mid in (1, 2, 3, 4, 5, 6, 7):
-                try:
-                    robot.motor_chain.motor_interface.motor_off(mid)
-                except Exception:  # noqa: BLE001, S110
-                    pass
-            try:
-                robot.close()
-            except Exception:  # noqa: BLE001, S110
-                pass
             raise RuntimeError(
-                f"⛔ GRIPPER FRAME CHECK FAILED — shut down before the control loop ran.\n"
-                f"   The runtime reports a normalised jaw position of {norm:.3f}; it must be within [0,1].\n"
-                f"   Anything outside is clipped onto a mechanical stop and held there, which is what\n"
-                f"   cooked motor 7 on 2026-08-10. Limits passed were {[round(v, 3) for v in saved]}.\n"
-                f"   Re-measure:  uv run scripts/calibrate_gripper.py --yes --arm {arm}\n"
-                f"   Or run without it:  add --no-gripper to the session."
+                f"GRIPPER FRAME CHECK FAILED: normalised jaw position {norm:.3f}; "
+                "expected a value within [0,1]. Recalibrate before using the gripper."
             )
+        wrapped = SafeRobot(robot, max_speed=max_speed, max_lag=max_lag)
         note += f"; jaws normalise to {norm:.3f} ✓"
-    except RuntimeError:
+        return wrapped, note
+    except BaseException as failure:
+        # Includes interruption between acquisition and handing ownership to the caller.
+        _close_failed_build(robot, failure, 7)
         raise
-    except Exception:  # noqa: BLE001, S110
-        pass
 
-    # ⭐ Everything above this line is I2RT's; everything that touches the robot
-    # from here on goes through the rate limiter. See SafeRobot for why.
-    return SafeRobot(robot, max_speed=max_speed, max_lag=max_lag), note
 
 
 class SafeRobot:
