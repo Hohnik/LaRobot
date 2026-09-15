@@ -97,11 +97,12 @@ from yam.cameras.writer import (  # noqa: E402
     pending_frames_dir,
 )
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
+from yam.ui.park_prompt import ParkAction, ParkPrompt  # noqa: E402
+from yam.ui.session_plan import session_plan_lines  # noqa: E402
+from yam.ui.settings_panel import SettingsAction, SettingsPanel  # noqa: E402
 from yam.settings import (  # noqa: E402
     LIVE_ORDER,
     adjust as adjust_setting,
-    live_lines,
-    one_line as setting_line,
     defaults_path,
     describe as describe_defaults,
     effective as effective_settings,
@@ -763,11 +764,6 @@ def main() -> int:  # noqa: PLR0915
     scrub_ref_t = scrub_ref_s = scrub_ref_h = 0.0
     # Initialize overwrite-prompt state before the first save, even if no guard ran yet.
     replace_slot: str | None = None     # the occupied slot the guard is asking about
-    # ⭐ Where the six live-editable settings stood when the session began, so `0` in the
-    # SETTINGS screen can put them back. ⚠️ Taken AFTER the file and the flags have been
-    # layered, so "how this session started" means what the plan printed, not the built-ins.
-    settings_at_start = {k: getattr(args, k) for k in LIVE_ORDER if hasattr(args, k)}
-    settings_pick: str = LIVE_ORDER[0]  # which setting -/+ moves in the SETTINGS screen
     # Capture each arrival's purpose before advancing a composite leg (FINDINGS §72.1).
     park_purpose: dict[str, str] = {}
     # Mirror state belongs to the session: the link relates a leader and follower.
@@ -779,93 +775,16 @@ def main() -> int:  # noqa: PLR0915
     mirror_follower: ArmSession | None = None
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
-    park_sequence: list[str] = []      # "3" = pose slot, "w3" = recording (take) slot
-    park_take_next = False             # w inside the p prompt arms "the next digit is a take"
+    park_prompt = ParkPrompt()
     angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
     # The active control and button binding belong to the selected ArmSession.
 
-    print("=== plan ===")
-    # ⭐ Named ARMS, plural, and it prints the serial of each. With arm arm the line reads
-    # exactly as it did before apart from the label, so nothing he checks before pressing
-    # --yes has moved.
-    for name in arm_names:
-        print(f"  ARM         : {name}  (serial {ARM_SERIALS[name]})")
-    print(f"  gripper     : {'NOT controlled — motor 7 left free' if args.no_gripper else 'controlled (o/c), frame-checked at startup'}")
-    if args.no_gripper:
-        # This is a safety fact and belongs in front of him BEFORE he runs it, not
-        # only in the build note. --no-gripper swaps the gravity model, and on
-        # 2026-08-10 that dropped the arm in GUIDE mode.
-        print("  ⚠️  gravity   : --no-gripper also swaps the DYNAMICS model, so ee_mass=0.695 kg is")
-        print("                passed to keep the arm holding itself. Without it the elbow is 39%")
-        print("                short and the arm falls in GUIDE. See FINDINGS §11.")
-    print(f"  start mode  : {args.start_mode}")
-    print(f"  speed       : {args.linear_scale} m/s linear, "
-          f"{ANGULAR_SCALE if rotation else 0} rad/s angular  (rotation {'ON' if rotation else 'OFF'}, toggle with r)")
-    # ⭐ One map line per arm, read from the store — the same values the arms are about to
-    # be built with. With arm arm the line reads as it always did apart from the arm's name.
-    for name in arm_names:
-        plan_map = map_store.for_arm(name, start_frame)
-        print(f"  axis map {name}  : {plan_map.one_line(start_frame)}   (m to change it live)")
-        print(f"  map scope   : {map_store.scope_note(name)}")
-        if plan_map.unbound():
-            names = ", ".join(motions_for(start_frame)[i]["short"] for i in plan_map.unbound())
-            print(f"  ⚠️  UNBOUND  : {names} — arm {name} will NOT perform these until they "
-                  "are bound (m)")
-    print(f"  control fr. : {CartesianTeleop.FRAME_NOTES[start_frame]}  (v cycles it live)")
-    for name in arm_names:
-        base = saved_slots[name].get(BASE_SLOT)
-        print(f"  park pose {name} : "
-              f"{np.round(base, 3).tolist() if base else 'none saved — press s to set arm'}")
-    print(f"  workspace   : {args.reach} m from the base, tip stays above {args.floor} m")
-    # Show the effective cap below mode-specific limits so the operator can see what binds.
-    raised = []
-    if args.max_speed != SAFE_MAX_SPEED:
-        raised.append("--max-speed")
-    if args.teleop_speed != MAX_PLANNED_JOINT_SPEED:
-        raised.append("--teleop-speed")
-    note = f"  ⚠️ RAISED: {', '.join(raised)}" if raised else ""
-    print(f"  joint speed : teleop {min(args.teleop_speed, args.max_speed):.2f} · "
-          f"planned {min(args.teleop_speed, args.max_speed):.2f} · "
-          f"mirror {args.max_speed:.2f} rad/s{note}")
-    if args.mirror_catchup > 0.0:
-        # ⭐ Say it in the plan, because it changes what the follower does and a control term
-        # nobody can see on startup is one nobody can rule out later.
-        print(f"  mirror fix  : ON at {args.mirror_catchup:g}/s — corrects the follower's "
-              f"standing offset while the leader is slow, clamped to 0.06 rad")
-    if args.vel_ff > 0.0:
-        # ⭐ Same rule as mirror-catchup: a control term that changes what the arm does is
-        # named in the plan, so it can be ruled out (or blamed) later.
-        shown_ff = min(args.vel_ff, VEL_FF_CEILING)
-        capped = "" if args.vel_ff <= VEL_FF_CEILING else \
-            f"  ⚠️ capped from {args.vel_ff:g}: above 1 is a measured dead end " \
-            f"(FINDINGS §68.6)"
-        print(f"  feedforward : ON at {shown_ff:g} — motors also receive that "
-              f"fraction of the command's own speed, so torque starts before error builds "
-              f"(item 44; jaw excluded){capped}")
-    lag_note = "" if args.max_lag == SAFE_MAX_LAG else "  ⚠️ RAISED"
-    # ⭐⭐ THE PLAN NOW SAYS WHAT EACH LIMIT DOES, NOT JUST ITS VALUE. Julien, 2026-08-17:
-    # *"I want to understand what MaxLag exactly does. I think I understand Max speed… but then
-    # what does MaxLag mean?"* ⚠️ The line above already printed both numbers and neither
-    # meaning, which is the same fault as printing a limit's value without its flag name.
-    print(f"                (SafeRobot caps everything at {args.max_speed:.2f} rad/s AND holds "
-          f"the command within {args.max_lag:.2f} rad of the measured pose{lag_note})")
-    print(f"  what limits  : ⭐ FOUR limits in series, and the SMALLEST one binds:")
-    print(f"                 linear {args.linear_scale:.2f} m/s  how fast a full puck push "
-          f"asks the TIP to move  (- / + or setting 8)")
-    print(f"                 teleop {args.teleop_speed:.2f} rad/s  how far the IK answer may "
-          f"move any ONE JOINT per cycle")
-    print(f"                 max-speed {args.max_speed:.2f} rad/s  the same cap again, below "
-          f"all control logic, so nothing can reach around it")
-    print(f"                 max-lag {args.max_lag:.2f} rad  ⭐ how far the COMMAND may run "
-          f"ahead of where the arm actually IS.")
-    print(f"                   ⚠️ This is not a speed. The command is pulled back to "
-          f"measured+{args.max_lag:.2f} every cycle, so")
-    print(f"                   reaching a far target becomes a ratchet: the arm moves, the "
-          f"command advances, repeat. A")
-    print(f"                   BLOCKED joint therefore never gets there, and that is the "
-          f"point — it bounds the push.")
-    print(f"  temperature : warn {TEMP_WARN}°C, stop {TEMP_STOP}°C")
+    for line in session_plan_lines(
+            args, arm_names, map_store, saved_slots, angular_scale=ANGULAR_SCALE,
+            base_slot=BASE_SLOT, planned_speed_default=MAX_PLANNED_JOINT_SPEED,
+            temp_warn=TEMP_WARN, temp_stop=TEMP_STOP):
+        print(line)
     # ⭐⭐ SAY WHICH SETTINGS CAME FROM THE FILE, AND FLAG A PERMANENT LOOSENING. A flag
     # typed on the command line is visible in the shell history and on screen; a saved
     # default is not. ⛔ Without these lines a session could run at three times the built-in
@@ -1090,11 +1009,6 @@ def main() -> int:  # noqa: PLR0915
             """
             return Layout(tuple(one.name for one in arms), arms[0].robot.num_dofs())
 
-        def park_seq_shown() -> str:
-            """The typed sequence as the operator should read it: `1 -> >2 -> 3`."""
-            return " → ".join(("▶" + e[1:]) if e.startswith("w") else e
-                              for e in park_sequence)
-
         def park_plan_line(one: ArmSession) -> str:
             """The one line showing what a run will do and how it will feel.
 
@@ -1107,15 +1021,15 @@ def main() -> int:  # noqa: PLR0915
             resolves it follows ROADMAP §6: the knob keys aim at the selection, exactly
             like the mode keys. Not implemented while two arms cannot run.
             """
-            seq = park_seq_shown() if park_sequence else "0"
+            seq = park_prompt.shown if park_prompt.entries else "0"
             name, radius = BLEND_MODES[blend_idx]
             # ⭐ A grab is visible BEFORE Enter (ROADMAP §6.6.2 item 4): a leg where only
             # the jaws move splits the run and pauses it, and the count says so here,
             # while the sequence is still being typed.
             # ⚠️ Take legs (`w<digit>`, ROADMAP §6.6.1a) are counted separately: their
             # jaw motion is whatever the hand taught, so no stop-counting applies.
-            poses = [e for e in (park_sequence[:] or ["0"]) if not e.startswith("w")]
-            takes = [e[1:] for e in park_sequence if e.startswith("w")]
+            poses = [e for e in (park_prompt.entries or ["0"]) if not e.startswith("w")]
+            takes = [e[1:] for e in park_prompt.entries if e.startswith("w")]
             if poses:
                 legs, _ = resolve_park_legs(poses, one.base_pose, one.slots)
             else:
@@ -1253,6 +1167,37 @@ def main() -> int:  # noqa: PLR0915
         composite = CompositeRun(load_take=load_take, begin_path=begin_path,
                                  start_take=start_take, emit=print,
                                  clear_hint=lambda: hint(""))
+
+        # The panel owns selection and reset values; live-device application stays here.
+        def apply_live(name: str, value: float) -> None:
+            setattr(args, name, value)
+            for one_arm in arms:
+                if name == "max_speed":
+                    one_arm.robot.max_speed = value
+                elif name == "max_lag":
+                    one_arm.robot.max_lag = value
+                elif name == "vel_ff":
+                    one_arm.robot.vel_ff = value
+            if name == "mirror_gap" and mirror_link is not None:
+                mirror_link.max_gap = value
+            if name == "mirror_catchup" and mirror_link is not None:
+                mirror_link.catchup = value
+
+        def show_settings_status() -> None:
+            for one_arm in arms:
+                print("     " + status_row(
+                    one_arm, "", args.reach, args.floor,
+                    note=(mirror_link.status(
+                        mirror_leader.robot.get_joint_pos(),
+                        one_arm.robot.get_joint_pos())
+                        if mirror_link is not None
+                        and one_arm.mode == "mirror" else "")))
+
+        settings_panel = SettingsPanel(
+            values=lambda: {name: getattr(args, name) for name in LIVE_ORDER},
+            apply=apply_live, save=lambda: save_defaults(settings_file, effective_settings(args)),
+            show_status=show_settings_status, emit=print, builtin=builtin_defaults,
+            settings_file=settings_file, mode_keys=MODE_KEYS)
 
         # ⭐ Each arm enters its start mode, per arm. It used to run once, after the single
         # build, reading the one `robot` local.
@@ -1552,119 +1497,11 @@ def main() -> int:  # noqa: PLR0915
                         continue
 
                     if pending == "settings":
-                        # ⛔⭐⭐ max_speed AND max_lag ARE PUSHED ONTO THE LIVE ROBOTS. They
-                        # are `SafeRobot` attributes read on every command, so assigning them
-                        # here changes what bounds 4.3 kg **on the next cycle**. That is the
-                        # point of a live editor, and it is also why this screen says so.
-                        def apply_live(name: str, value: float) -> None:
-                            setattr(args, name, value)
-                            for one_arm in arms:
-                                if name == "max_speed":
-                                    one_arm.robot.max_speed = value
-                                elif name == "max_lag":
-                                    one_arm.robot.max_lag = value
-                                elif name == "vel_ff":
-                                    one_arm.robot.vel_ff = value
-                            if name == "mirror_gap" and mirror_link is not None:
-                                mirror_link.max_gap = value
-                            if name == "mirror_catchup" and mirror_link is not None:
-                                # ⭐ Reaches a RUNNING mirror, so he can watch the follower
-                                # close onto the leader while holding it still. That is the
-                                # whole reason this belongs on the live screen.
-                                mirror_link.catchup = value
-
-                        # Arrow keys move the settings selection; they do not modify the selected value.
-                        show_all = k == "?"
-                        if k in ("\x1b[A", "\x1b[B"):
-                            step = -1 if k == "\x1b[A" else 1
-                            here = LIVE_ORDER.index(settings_pick)
-                            settings_pick = LIVE_ORDER[(here + step) % len(LIVE_ORDER)]
-                            print(setting_line(settings_pick,
-                                               float(getattr(args, settings_pick)),
-                                               builtin=builtin_defaults))
-                            continue
-                        elif k == "n":
-                            # ⭐ `n` CLOSES it, the way `i` toggles mirror. He pressed n inside
-                            # the screen and was told it does nothing; toggling is the obvious
-                            # meaning of pressing the key that opened something.
+                        action = settings_panel.handle(k)
+                        if action is not SettingsAction.STAY:
                             pending = None
-                            print("\n  ⭐ SETTINGS closed. The values are live; press n then s "
-                                  "to write them to the file.\n")
-                            continue
-                        elif k in "123456789":
-                            idx = int(k) - 1
-                            if idx < len(LIVE_ORDER):
-                                settings_pick = LIVE_ORDER[idx]
-                            print(setting_line(settings_pick,
-                                               float(getattr(args, settings_pick)),
-                                               builtin=builtin_defaults))
-                            continue
-                        elif k in "+=" or k == "-":
-                            was = float(getattr(args, settings_pick))
-                            apply_live(settings_pick,
-                                       adjust_setting(settings_pick, was, k != "-"))
-                            print(setting_line(settings_pick,
-                                               float(getattr(args, settings_pick)),
-                                               before=was, builtin=builtin_defaults))
-                            # ⭐⭐ THE ARM'S LIVE ROW PRINTS UNDER EVERY CHANGE (item 43).
-                            # He tuned mirror_catchup with 33 presses and vel_ff blind on
-                            # 2026-08-18, because this screen covered the one row showing
-                            # the effect. A live editor whose effect is invisible while
-                            # editing is half a feature (FINDINGS §65.4).
-                            for one_arm in arms:
-                                print("     " + status_row(
-                                    one_arm, "", args.reach, args.floor,
-                                    note=(mirror_link.status(
-                                        mirror_leader.robot.get_joint_pos(),
-                                        one_arm.robot.get_joint_pos())
-                                        if mirror_link is not None
-                                        and one_arm.mode == "mirror" else "")))
-                            continue
-                        elif k == "0":
-                            for name, value in settings_at_start.items():
-                                apply_live(name, value)
-                            print("\n  ⭐ back to the values this session started with.\n")
-                        elif k == "s":
-                            save_defaults(settings_file, effective_settings(args))
-                            print(f"\n  ⭐ SAVED to {settings_file.parent.name}/"
-                                  f"{settings_file.name}. Every later session starts with "
-                                  f"these.\n")
-                            pending = None
-                            continue
-                        elif k in MODE_KEYS or k in ("\r", "\n", " "):
-                            pending = None
-                            # ⚠️ A mode key LEAVES rather than also switching mode. Pushing
-                            # it back onto the reader would need a queue the key reader does
-                            # not have, and silently changing mode on the way out of a
-                            # settings screen is the kind of surprise that moves an arm.
-                            print("\n  ⭐ leaving SETTINGS. The values are live; nothing was "
-                                  "written to the file.\n     Press n then s to make them "
-                                  "permanent. Press the mode key again to change mode.\n")
-                            continue
-                        elif k == "q":
-                            # ⭐ He pressed q HERE twice on 2026-08-18, wanting to quit, and
-                            # got "(does nothing here)" both times (FINDINGS §67.10). The
-                            # intent is unambiguous: close the screen and hand the key's
-                            # meaning to the session's own quit flow, which holds every arm
-                            # and asks before anything is released.
-                            pending = None
-                            print("\n  ⭐ SETTINGS closed — over to the quit menu. The values "
-                                  "stay live; they were not saved.\n")
+                        if action is SettingsAction.QUIT:
                             stop = StopRequest(StopCause.QUIT, "quit requested")
-                            continue
-                        elif k != "?":
-                            # ⚠️ Escape sequences are NAMED rather than echoed. `\x1b[C` on
-                            # screen is noise; "left/right arrow" is information.
-                            shown = {"\x1b[C": "right arrow", "\x1b[D": "left arrow"}.get(
-                                k, repr(k) if k.isprintable() else "that key")
-                            print(f"\n  ({shown} does nothing here — 1-9 or up/down to pick, "
-                                  f"-/+ to change, 0 revert, s save, q quit, "
-                                  f"n or t/g/h to leave)\n")
-                        if show_all or k == "0":
-                            for line in live_lines(
-                                    {kk: getattr(args, kk) for kk in LIVE_ORDER},
-                                    settings_pick, builtin_defaults):
-                                print(line)
                         continue
 
                     if pending == "take_play":
@@ -1772,7 +1609,7 @@ def main() -> int:  # noqa: PLR0915
                             print("\n  mirror cancelled.\n")
                         continue
 
-                    if pending in ("park", "confirm"):
+                    if pending == "park":
                         # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
                         # moving. Julien: *"I can change the park speeds whilst it's
                         # parking, but not whilst I'm putting in the numbers, which is
@@ -1816,94 +1653,44 @@ def main() -> int:  # noqa: PLR0915
                             hint(park_plan_line(edit_arm)); continue
 
                     if pending == "park":
-                        if k == "w":
-                            # A composite queue combines pose legs and validated trajectory legs.
-                            # Keep one shared cursor and require every participating arm to reach its start.
-                            park_take_next = True
-                            hint(f"  park sequence: {park_seq_shown()}   "
+                        choice = park_prompt.handle(k)
+                        if choice.action is ParkAction.TAKE_DIGIT:
+                            hint(f"  park sequence: {park_prompt.shown}   "
                                  "▶ next digit names a RECORDING to play as a leg")
-                            continue
-                        if k.isdigit():
-                            if park_take_next:
-                                park_take_next = False
-                                park_sequence.append("w" + k)
-                            else:
-                                park_sequence.append(k)
-                            # ⛔ A HINT, NOT THE STATUS ROW. This used to `print(…,
-                            # end="")`, which the shadowed print routes to `screen.set`
-                            # — the heartbeat row. So the echo of what you were typing
-                            # replaced the temperature readout and was then wiped by
-                            # the next once-a-second repaint: the one piece of feedback
-                            # in a modal state that drives 4.3 kg, flickering.
-                            hint(f"  park sequence: {park_seq_shown()}"
-                                 f"   (another digit, w+digit for a take, or Enter)")
-                            continue
-                        if k in ("\r", "\n", " ", "p"):
-                            # ⭐ ONE pose runs immediately, so `p Enter` for the base and
-                            # `p 1 Enter` for a waypoint stay two keystrokes — the muscle
-                            # memory Ctrl-C also depends on. TWO OR MORE shows the plan
-                            # and waits for a second Enter, because a multi-pose run is a
-                            # trajectory and how it moves is worth a glance first.
-                            if len(park_sequence) >= 2:
-                                pending = "confirm"
-                                hint(park_plan_line(edit_arm))
-                                continue
-                            pending = None
-                            wanted = park_sequence[:] or ["0"]
-                            park_sequence.clear()
-                            if any(e.startswith("w") for e in wanted):
-                                composite.begin(wanted, aimed)
-                                continue
-                            # ⭐ EACH SELECTED ARM RUNS ITS OWN SEQUENCE, resolved against
-                            # its own slots. Two arms driving to their own saved poses at the
-                            # same time is what a two-arm waypoint run means.
-                            # ⚠️ A slot empty on ONE arm is skipped for that arm only, never
-                            # substituted, and never cancels the other arm's run.
-                            ran = False
-                            for one in aimed:
-                                legs, missing = resolve_park_legs(wanted, one.base_pose,
-                                                                  one.slots)
-                                if missing:
-                                    print(f"\n  ⚠️  arm {one.name}: nothing saved in slot "
-                                          f"{', '.join(missing)} — press s then that digit "
-                                          "to record one.\n")
-                                if legs:
-                                    begin_path(one, legs, f"slot {legs[0][0]}")
-                                    ran = True
-                            if not ran:
-                                print("\n  nothing to park to.\n")
-                            continue
-                        pending = None
-                        park_sequence.clear()
-                        hint("")
-                        print("\n  park cancelled.\n")
-                        continue
-
-                    if pending == "confirm":
-                        pending = None
-                        if k in ("\r", "\n", " ", "p"):
-                            wanted = park_sequence[:]
-                            park_sequence.clear()
-                            if any(e.startswith("w") for e in wanted):
-                                composite.begin(wanted, aimed)
-                                continue
-                            ran = False
-                            for one in aimed:
-                                legs, missing = resolve_park_legs(wanted, one.base_pose,
-                                                                  one.slots)
-                                if missing:
-                                    print(f"\n  ⚠️  arm {one.name}: skipping empty slot(s) "
-                                          f"{', '.join(missing)}.\n")
-                                if legs:
-                                    begin_path(one, legs, " → ".join(n for n, _ in legs))
-                                    ran = True
-                            if not ran:
-                                print("\n  nothing to park to.\n")
+                        elif choice.action is ParkAction.UPDATE:
+                            hint(f"  park sequence: {park_prompt.shown}"
+                                 "   (another digit, w+digit for a take, or Enter)")
+                        elif choice.action is ParkAction.CONFIRM:
+                            hint(park_plan_line(edit_arm))
                         else:
-                            park_sequence.clear()
-                            # Clear the previous hint when a prompt changes so keys cannot target stale instructions.
-                            hint("")
-                            print("\n  run cancelled.\n")
+                            pending = None
+                            if choice.action is ParkAction.CANCEL:
+                                hint("")
+                                print("\n  run cancelled.\n" if choice.confirmed
+                                      else "\n  park cancelled.\n")
+                            elif any(entry.startswith("w") for entry in choice.entries):
+                                composite.begin(choice.entries, aimed)
+                            else:
+                                # Resolve each arm's own slots; an empty slot never substitutes base.
+                                ran = False
+                                for one in aimed:
+                                    legs, missing = resolve_park_legs(
+                                        choice.entries, one.base_pose, one.slots)
+                                    if missing:
+                                        if choice.confirmed:
+                                            print(f"\n  ⚠️  arm {one.name}: skipping empty slot(s) "
+                                                  f"{', '.join(missing)}.\n")
+                                        else:
+                                            print(f"\n  ⚠️  arm {one.name}: nothing saved in slot "
+                                                  f"{', '.join(missing)} — press s then that digit "
+                                                  "to record one.\n")
+                                    if legs:
+                                        label = (" → ".join(n for n, _ in legs) if choice.confirmed
+                                                 else f"slot {legs[0][0]}")
+                                        begin_path(one, legs, label)
+                                        ran = True
+                                if not ran:
+                                    print("\n  nothing to park to.\n")
                         continue
 
                     # ---- device configuration: works in EVERY mode ------------
@@ -2001,18 +1788,8 @@ def main() -> int:  # noqa: PLR0915
                               "cancels\n")
                         continue
                     if k == "n":
-                        # ⭐⭐ THE SETTINGS SCREEN. His request, 2026-08-17: *"all of these
-                        # flags should be default options that can be changed in some
-                        # controls mode and then should be saved."* The axis map is the
-                        # precedent — edited live with keys, written to a config file.
-                        #
-                        # ⚠️ `n` because s, m, e, v, b and i are all taken. It shows the
-                        # screen and waits; nothing changes until a key is pressed.
                         pending = "settings"
-                        for line in live_lines(
-                                {kk: getattr(args, kk) for kk in LIVE_ORDER},
-                                settings_pick, builtin_defaults):
-                            print(line)
+                        settings_panel.show()
                         continue
 
                     if k == "v":
@@ -2327,7 +2104,7 @@ def main() -> int:  # noqa: PLR0915
                               f"        any other key cancels\n")
                     elif k == "p":
                         pending = "park"
-                        park_sequence.clear()
+                        park_prompt.open()
                         have = "; ".join(
                             f"{one.name}: " + (", ".join(sorted(n for n in one.slots
                                                                 if n != BASE_SLOT)) or "none")

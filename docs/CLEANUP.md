@@ -2,11 +2,11 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Operator prompts, entry-point assembly and acquired-device cleanup still need work.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings and park prompts now own their key transitions, and startup plan formatting is separate. Other prompts, argument assembly and acquired-device cleanup still need work.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, and explicit shutdown causes. Current validation passes 959/959 checks across 54 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park prompt ownership and startup plan formatting. Current validation passes 980/980 checks across 56 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -99,8 +99,8 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-1. Extract acquired-device cleanup and terminal prompt ownership in bounded steps. Explicit shutdown causes and the controlled stop interaction are complete; partial-startup ownership and motor-first cleanup must remain intact.
-2. Separate argument/plan assembly and thin the entry point after the remaining owners are explicit. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
+1. Extract acquired-device cleanup and the remaining prompt owners (recording slots, playback confirmation, mirror confirmation and controls editing). Settings and park-sequence prompts are complete. Preserve partial-startup ownership, motor-first cleanup and key-consumption order.
+2. Separate argument assembly and thin the entry point after the remaining owners are explicit. Plan formatting is complete; parser extraction also requires teaching the flag checker to follow its new owner. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
 3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
 4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
 
@@ -223,3 +223,28 @@ Six old tests copied a stopping expression or inspected source strings. Their si
 The structural checker now uses Python's symbol tables for global-name resolution. Its previous flat scan rejected a valid lambda parameter and could also let an unrelated function's local import or assignment hide a missing global. Eight tests check callbacks, closures, real imports, missing imports, sibling scopes, f-string reads and the actual application. This check does not prove that every local has been assigned before each runtime read.
 
 The operator is now 3,372 physical lines, and the controlled-stop module is 111. Its remaining size is mostly prompt dispatch, configuration/plan assembly and cycle coordination, with further historical prose to shorten selectively. Moving all of that into one new runtime class would not complete the architecture. Next extractions should own transitions or resources, preserve command order and confirmations, and execute their application call sites in tests. No user decision is pending for that software work.
+
+
+## Settings and park prompts; startup plan formatting
+
+Three application consumers now use small modules under `yam.ui`:
+
+- [SettingsPanel](../src/yam/ui/settings_panel.py) owns the selected setting, a copied snapshot for revert, key interpretation and panel messages. It returns stay/close/quit. The operator still applies values to both live robots and the current mirror link, renders measured arm status, persists explicit saves and enters the existing quit flow. The first mode key closes settings; a second press is required to change mode. Revert uses the effective session-start values after defaults and flags, not built-ins. Saving is still synchronous and save exceptions still reach the outer cleanup; this extraction does not add background settings persistence or a new failure policy.
+- [ParkPrompt](../src/yam/ui/park_prompt.py) owns entered pose/take legs, the pending recording prefix and the second-confirmation state. It returns immutable choices. A single pose (or empty/base choice) runs on the first acceptance; multiple legs still require a second acceptance. Speed, corners and easing keys remain intercepted by the operator before prompt decoding, so they can be changed without starting the run. The operator resolves each selected arm's own slots and routes take legs through the existing composite validation. No file lookup or robot command occurs in the prompt owner.
+- [session_plan_lines](../src/yam/ui/session_plan.py) formats resolved settings, maps and saved poses. The application still loads configuration, prints the plan and saved-default provenance, performs any explicitly requested defaults save, then handles dry-run exit before acquiring devices. Five dry runs matched the previous stdout, stderr and exit code exactly: ordinary defaults, two simulated arms, no gripper/no rotation, custom limits/feedforward and a tool-frame configuration. This verifies presentation compatibility, not physical operation.
+
+### Demonstrated stale-prefix defect
+
+Before extraction, `park_take_next` was separate from the entered sequence and was not cleared on cancel or reopen. The actual-application test reproduced `p`, `w`, cancel (`x`), then `p 1 Enter` interpreting the digit as **recording 1** instead of **pose 1**. The temporary test setup had no recording 1, so the application refused it; an existing compatible take could instead have entered its park-to-start flow. `ParkPrompt.open()` and every completed/cancelled choice now clear the marker and confirmation together. The same test now invokes arm B's pose-1 path and starts no composite. The existing behavior of accepting an unfinished `w` with no digit as the empty/base selection is preserved; this change does not redefine that key sequence.
+
+### Verification and remaining scope
+
+Eight settings-panel tests cover selection without mutation, bounded adjustment through the existing ladder, apply-before-status ordering, copied revert values, consumed mode keys, explicit save/failure reporting, quit and named unknown keys. Eight park-prompt tests cover first/second confirmation, one-use take prefixes, cancellation/reopening, immutable choices and existing base behavior. Five additional application tests verify changes/revert reach both live fake robots, the two-press settings-to-mode transition, temporary settings persistence, stale-prefix isolation and second confirmation before starting a multi-pose path.
+
+The save-retry application test also lost a timing assumption: retry and quit now follow the RecordingSession's observed error/completion state. An independently launched test run had exposed that fixed cycle numbers could send retry before the worker completed. The full suite passed before that correction, but the separate failure was real test instability; the final suite passes after the state-based correction.
+
+Final software evidence: 980/980 checks across 56 files, 71/71 falsifier catches, structural/flag/prose/link checks, five matching dry-run outputs, and 32/32 isolated simulator interactions. All original recording hashes still match. Logs use `agents/codex/validation/prompts-*`; the simulator-copy file identifies its disposable data directory. No real hardware was opened and no changes were pushed.
+
+The operator is 3,149 lines, down from 3,372 at `5e0fa0b`; the settings, park-prompt and plan modules are 86, 67 and 88 lines. This is a reduction in shared state and duplicated prompt branches, not completion of the entire restructure. Historical explanations removed from these blocks remain in `5e0fa0b` and their cited FINDINGS sections. The remaining single key-dispatch loop still coordinates other modal prompts, per-arm actions and shared modes.
+
+`checks/check_flags.py::read_parser` currently reads `add_argument` calls from each application's source; it does not follow an imported parser builder. Moving argument definitions without adapting that check would break its evidence. Preserve the existing deliberately-invalid-command checks when making that later extraction. No additional user decision is needed for these software steps.

@@ -1,4 +1,4 @@
-"""Drive actual application keys through a failed save and a refused GUIDE mode."""
+"""Exercise actual operator workflows with fake arms and disposable recordings/config."""
 from contextlib import ExitStack, redirect_stdout
 import importlib.util
 import io
@@ -80,10 +80,31 @@ def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
     return (code, output.getvalue(), saved, sessions, take)
 
 def test_failed_save_keeps_same_take_for_a_different_slot():
-    (code, text, saved, _, take) = run_session({1: 'w', 5: 'w', 7: '4', 9: '5', 11: 'q'}, fail_save=True)
+    schedule, owners, phase = {1: 'w', 5: 'w'}, [], []
+    original = app.RecordingSession
+    def recording():
+        owner = original()
+        owners.append(owner)
+        return owner
+    def cycle(number, arms, root):
+        owner = owners[0]
+        if owner.busy:
+            return
+        if owner.pending is not None and not phase:
+            schedule[number] = '4'
+            phase.append('first save')
+        elif owner.save_error is not None and phase == ['first save']:
+            schedule[number] = '5'
+            phase.append('retry')
+        elif owner.saved is not None:
+            schedule[number] = 'q'
+    with patch.object(app, 'RecordingSession', recording):
+        code, text, saved, _, take = run_session(schedule, fail_save=True,
+                                                on_cycle=cycle, max_cycles=200)
     assert code == 0, text
+    assert phase == ['first save', 'retry']
     assert len(saved) == 2 and saved[0] is saved[1]
-    assert take is not None and len(take) >= 2 and (take.meta['arms'] == ['B', 'G'])
+    assert take is not None and len(take) >= 2 and take.meta['arms'] == ['B', 'G']
     assert 'injected disk failure' in text and 'still pending' in text
     assert 'recording 5 saved' in text
 
@@ -356,6 +377,84 @@ def test_renamed_application_quit_keeps_menu_and_success_status():
     assert 'Every arm is HOLDING its pose' in text
     assert events == [('shutdown', None), ('shutdown', None)]
     assert all(not a.alive() for a in arms)
+
+
+def test_settings_changes_and_revert_reach_both_live_robots():
+    initial, observed = {}, []
+    def cycle(number, arms, root):
+        if number == 1:
+            initial['speed'] = arms[0].robot.max_speed
+        elif number == 2:
+            expected = app.adjust_setting('max_speed', initial['speed'], True)
+            assert all(a.robot.max_speed == expected for a in arms)
+            observed.append('changed')
+        elif number == 4:
+            assert all(a.robot.max_speed == initial['speed'] for a in arms)
+            observed.append('reverted')
+    code, text, _, _, _ = run_session({1: 'n1+', 3: '0', 5: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['changed', 'reverted'], text
+    assert 'SETTINGS closed — over to the quit menu' in text
+
+
+def test_settings_mode_key_only_closes_until_pressed_again():
+    observed = []
+    def cycle(number, arms, root):
+        if number == 2:
+            assert all(a.mode == 'hold' for a in arms)
+            observed.append('closed')
+        elif number == 4:
+            assert arms[0].mode == 'teleop' and arms[1].mode == 'hold'
+            observed.append('teleop')
+    code, text, _, _, _ = run_session({1: 'nt', 3: 't', 5: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['closed', 'teleop'], text
+
+
+def test_settings_explicit_save_writes_current_values_to_temporary_config():
+    observed = []
+    def cycle(number, arms, root):
+        if number == 2:
+            values = app.load_defaults(app.defaults_path(root))
+            assert values['max_speed'] == arms[0].robot.max_speed
+            assert 'yes' not in values and 'sim' not in values
+            observed.append('saved')
+    code, text, _, _, _ = run_session({1: 'n1+s', 3: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['saved'], text
+
+
+def test_cancelled_take_marker_cannot_change_next_pose_prompt_into_playback():
+    calls = []
+    original = app.ArmSession.begin_path
+    def begin(arm, legs, *args, **kwargs):
+        calls.append((arm.name, [leg.name for leg in legs]))
+        return original(arm, legs, *args, **kwargs)
+    def cycle(number, arms, root):
+        if number == 1:
+            arms[0].slots['1'] = list(arms[0].robot.get_joint_pos())
+    with patch.object(app.ArmSession, 'begin_path', begin):
+        code, text, _, _, _ = run_session({1: 'pw', 2: 'x', 3: 'p1\n', 5: 'q'}, on_cycle=cycle)
+    assert code == 0 and calls == [('B', ['1'])], text
+    assert 'COMPOSITE RUN' not in text
+
+
+def test_multiple_pose_prompt_waits_for_second_confirmation():
+    calls, observed = [], []
+    original = app.ArmSession.begin_path
+    def begin(arm, legs, *args, **kwargs):
+        calls.append((arm.name, [leg.name for leg in legs]))
+        return original(arm, legs, *args, **kwargs)
+    def cycle(number, arms, root):
+        if number == 1:
+            for digit in ('1', '2'):
+                arms[0].slots[digit] = list(arms[0].robot.get_joint_pos())
+        elif number == 2:
+            assert not calls
+            observed.append('waiting')
+        elif number == 4:
+            assert calls == [('B', ['1', '2'])]
+            observed.append('confirmed')
+    with patch.object(app.ArmSession, 'begin_path', begin):
+        code, text, _, _, _ = run_session({1: 'p12\n', 3: '\n', 5: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['waiting', 'confirmed'], text
 
 
 def main():

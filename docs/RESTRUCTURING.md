@@ -1,6 +1,10 @@
 # Teleop architecture review
 
-Reviewed September 15, 2026 against `c8069cc`. The findings below describe that reviewed snapshot. Recording completion, interface corrections, shared camera services, camera rendering, replay state and composite sequencing are now implemented; [CLEANUP](CLEANUP.md#recording-completion-and-interface-continuation) records its behavior, validation and limits. Explicit stop causes and the controlled stop interaction are also implemented in `yam.lifecycle`; acquired-device cleanup remains in the application. The remaining structure is proposed. The replay owners are `yam.playback_session.PlaybackSession` and `yam.composite.CompositeRun`; loading, measured start verification, arm commands and prompts still belong to the operator. See [current replay behavior](CLEANUP.md#replay-state-and-composite-sequencing).
+Reviewed September 15, 2026 against `c8069cc`. The findings below describe that snapshot; several are now resolved. [CLEANUP](CLEANUP.md) records current behavior, validation and remaining work.
+
+Implemented since the review: recording completion, corrected interfaces, shared camera services/rendering, replay state, composite sequencing, explicit stop causes and the controlled stop interaction. Settings and park prompts now own their transitions, and startup plan formatting is separate. See [prompt ownership](CLEANUP.md#settings-and-park-prompts-startup-plan-formatting) for the latest changes.
+
+Acquired-device cleanup, argument assembly, the remaining modal prompts and control-cycle coordination still live in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
 
 ## Decision
 
