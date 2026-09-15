@@ -5,9 +5,11 @@ Run ./teleop --help for flags and docs/COMMANDS.md for keys. Without --yes
 the program prints its plan and opens no devices. --sim uses fake arms and
 still pucks. Physical operation needs a clear workspace and an operator.
 
-This application coordinates acquisition, the shared control loop, prompts and
-shutdown. ArmSession owns per-arm modes. RecordingSession owns the trajectory
-lifecycle. Historical source notes are in docs/archive/teleop-source-notes.md.
+This application coordinates acquisition, the shared control loop and prompts.
+ArmSession owns per-arm modes; RecordingSession owns take completion;
+PlaybackSession and CompositeRun own replay state and sequencing. The controlled
+stop interaction lives in yam.lifecycle; acquired-device cleanup stays here.
+Historical source notes are in docs/archive/teleop-source-notes.md.
 """
 
 from __future__ import annotations
@@ -81,6 +83,7 @@ from yam.teleop import (  # noqa: E402
 )
 from yam.recording_store import save_take  # noqa: E402
 from yam.recording_session import RecordingSession  # noqa: E402
+from yam.lifecycle import StopCause, StopRequest, controlled_stop  # noqa: E402
 from yam.composite import CompositeRun  # noqa: E402
 from yam.playback_session import PlaybackSession  # noqa: E402
 from yam.provenance import dt_now, git_commit  # noqa: E402
@@ -894,7 +897,7 @@ def main() -> int:  # noqa: PLR0915
     # Own a robot as soon as its builder returns, before wrapping or reading it.
     # A failed ArmSession constructor must not leave an enabled handle unowned.
     robots: dict[str, Any] = {}
-    stop_reason: str | None = None
+    stop: StopRequest | None = None
     exit_code = 0
     previous_sigint = signal.getsignal(signal.SIGINT)
     previous_thread_hook = threading.excepthook
@@ -1304,8 +1307,10 @@ def main() -> int:  # noqa: PLR0915
                 loop_hz += 0.02 * (1.0 / real_dt - loop_hz)
 
                 if interrupted:
-                    stop_reason = ("Ctrl-C — the loop is stopping, and the arm is NOT "
-                                   "released until you choose below (Ctrl-C again forces it)")
+                    stop = StopRequest(
+                        StopCause.INTERRUPT,
+                        "Ctrl-C — the loop is stopping, and the arm is NOT "
+                        "released until you choose below (Ctrl-C again forces it)")
                     break
 
                 # ---- 1. is every robot still there? -----------------------
@@ -1320,12 +1325,12 @@ def main() -> int:  # noqa: PLR0915
                 # is recorded in the loop and acted on after it.
                 for one in arms:
                     if not one.alive():
-                        stop_reason = (
+                        stop = StopRequest(
+                            StopCause.FAULT,
                             f"arm {one.name}: the motor chain STOPPED — I2RT's control "
                             "thread exited, almost certainly on a motor fault. Commands "
-                            "are no longer reaching the arm."
-                        )
-                if stop_reason:
+                            "are no longer reaching the arm.")
+                if stop:
                     break
 
                 # ---- 2. temperatures and the gripper stall guard -----------
@@ -1421,8 +1426,8 @@ def main() -> int:  # noqa: PLR0915
                     # ⚠️ A thermal stop on ONE arm stops the session, same ruling as a chain
                     # death: the alternative is one arm cooking while the other is driven.
                     if verdict.stop_reason:
-                        stop_reason = f"arm {one.name}: {verdict.stop_reason}"
-                if stop_reason:
+                        stop = StopRequest(StopCause.FAULT, f"arm {one.name}: {verdict.stop_reason}")
+                if stop:
                     break
 
                 had_finishing_sink = recording.active is None and recording.sink is not None
@@ -1645,7 +1650,7 @@ def main() -> int:  # noqa: PLR0915
                             pending = None
                             print("\n  ⭐ SETTINGS closed — over to the quit menu. The values "
                                   "stay live; they were not saved.\n")
-                            stop_reason = "quit requested"
+                            stop = StopRequest(StopCause.QUIT, "quit requested")
                             continue
                         elif k != "?":
                             # ⚠️ Escape sequences are NAMED rather than echoed. `\x1b[C` on
@@ -2053,7 +2058,7 @@ def main() -> int:  # noqa: PLR0915
                         active = wizard.last_active_axis
                         driven = wizard.axis_map.motion_driven_by(active) if active is not None else None
                         if k == "q":
-                            stop_reason = "quit requested"
+                            stop = StopRequest(StopCause.QUIT, "quit requested")
                         elif k in "tghm":
                             print("\n  controls now:")
                             print(wizard.axis_map.describe(wizard.frame))
@@ -2163,7 +2168,7 @@ def main() -> int:  # noqa: PLR0915
                     # which looked exactly like "park just went to hold". A control
                     # character must never be an action.
                     if k == "q":
-                        stop_reason = "quit requested"
+                        stop = StopRequest(StopCause.QUIT, "quit requested")
                     elif k == "m" and len(aimed) > 1:
                         # ⛔ CONTROLS EDITS ONE MAP FROM ONE WIGGLE, so it cannot be aimed at
                         # two arms. Refused rather than silently applied to the first: the
@@ -2482,7 +2487,7 @@ def main() -> int:  # noqa: PLR0915
                     playback.finish()
                     composite.abandon("the playback was abandoned")
                     hint("")
-                if stop_reason:
+                if stop:
                     break
 
                 # Sample every arm in layout order on one recording clock.
@@ -2548,10 +2553,11 @@ def main() -> int:  # noqa: PLR0915
                     except Exception as exc:  # noqa: BLE001
                         # Same graceful stop as the per-arm guard below (FINDINGS §68.2).
                         shared_axes = [0.0] * 6
-                        if not stop_reason:
-                            stop_reason = (f"the shared SpaceMouse stopped answering "
-                                           f"({type(exc).__name__}) — unplugged?")
-                            print(f"\n⛔ {stop_reason}")
+                        if not stop:
+                            stop = StopRequest(
+                                StopCause.FAULT, "the shared SpaceMouse stopped answering "
+                                f"({type(exc).__name__}) — unplugged?")
+                            print(f"\n⛔ {stop}")
                             print("   Treating it as centred and parking safely.\n")
                 for one in arms:
                     if shared_axes is not None:
@@ -2566,11 +2572,11 @@ def main() -> int:  # noqa: PLR0915
                             # A puck read failure requests the controlled stop path rather than escaping
                             # the loop directly and disabling raised arms.
                             one.raw_axes = [0.0] * 6
-                            if not stop_reason:
-                                stop_reason = (f"arm {one.name}'s SpaceMouse stopped "
-                                               f"answering ({type(exc).__name__}) — "
-                                               f"unplugged?")
-                                print(f"\n⛔ {stop_reason}")
+                            if not stop:
+                                stop = StopRequest(
+                                    StopCause.FAULT, f"arm {one.name}'s SpaceMouse stopped "
+                                    f"answering ({type(exc).__name__}) — unplugged?")
+                                print(f"\n⛔ {stop}")
                                 print("   Treating that puck as centred and parking "
                                       "safely.\n")
                             continue
@@ -3185,119 +3191,25 @@ def main() -> int:  # noqa: PLR0915
 
             # ---- controlled shutdown -----------------------------------------
             screen.done()
-            print(f"\n⛔ stopping: {stop_reason}")
+            print(f"\n⛔ stopping: {stop}")
             # ⭐ Printed for every session, not only a playback, because the worst pass is the one number about this loop that nothing recorded until 2026-08-20. ⚠️ On `--sim` it is Python-side jitter only: a fake arm answers in microseconds and a real one is 14 motors over two USB adapters ([FINDINGS §76.12](../docs/FINDINGS.md)).
             if loop_timer.count:
                 print(f"⭐ {loop_timer.line()}")
 
-            # Controlled interrupt/fault stops attempt a guarded park for each live arm.
-            # A dead CAN chain cannot park. Failed parks return to the operator consent flow.
-            # Successful automatic parks disable afterward; planned q keeps the quit menu.
-            # Exceptions escaping this flow still reach the outer cleanup handler.
-            planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
-            unplanned = not planned_quit
-            if unplanned:
-                exit_code = 130 if interrupted else 1
-            auto_parked = False
-            # ⚠️ `any(...)` rather than `all(...)`: if one chain has died the other arm can
-            # still be parked, and parking it is better than leaving it holding. `park_arms`
-            # skips the dead one and names it.
-            live = [one for one in arms if one.alive()]
-            if live and (interrupted or unplanned) and any(
-                    one.base_pose is not None for one in live):
-                for one in live:
-                    one.enter_hold()
-                if interrupted:
-                    print("\n⭐ Ctrl-C — parking to the pose this session started in, then")
-                else:
-                    print(f"\n⭐ SAFE STOP after {stop_reason!r} — the chain is still alive, so")
-                    print("   the arms are being parked to the pose this session started in, then")
-                print("   disabling. Press any key to stop the motion; Ctrl-C again forces out.")
-                outcome = park_arms(live, keys, clamp_gripper)
-                if outcome == "arrived":
-                    auto_parked = True
-                    print("\n   Disabling the motors now.\n")
-                else:
-                    print(f"\n⚠️  the automatic park ended as {outcome!r}, so nothing is "
-                          "being released. Choose below.")
-
-            if any(one.alive() for one in arms) and not auto_parked:
-                for one in arms:
-                    if one.alive():
-                        one.enter_hold()
-                print("\nEvery arm is HOLDING its pose. Nothing is released until you choose.")
-                print("   q = PARK then DISABLE — the whole shutdown in one key")
-                print("   p = PARK — drive back to the park pose, then it holds there")
-                print("   g = go weightless so you can park it by hand")
-                print("   d = disable now (⚠️ a raised arm will sag)")
-                # ⭐ Discoverability, not a new feature. `p` in a NORMAL session already
-                # parks and leaves the arm holding, so `t` afterwards carries straight on.
-                # Julien described wanting *"q p doing the base position and then going
-                # back to teleoperate and continuing"*, and the plain `p` key does that
-                # today without quitting at all. Saying so here costs one line.
-                print("   ⭐ to park WITHOUT quitting, use p in the session itself, then t")
-                while True:
-                    k = keys.get()
-                    if k == "q":
-                        # The quit-menu q option parks all live arms and disables only after successful arrival.
-                        outcome = park_arms([one for one in arms if one.alive()],
-                                            keys, clamp_gripper)
-                        if outcome == "arrived":
-                            print("\n   Parked. Disabling the motors now.\n")
-                            break
-                        for one in arms:
-                            if one.alive():
-                                one.enter_hold()
-                        print(f"\n⚠️  the park ended as {outcome!r}, so nothing is being "
-                              "released.")
-                        print("   q = try again    p = park    g = weightless    d = disable")
-                    elif k == "p":
-                        # ⭐ Julien's request: *"it would also be good to do park mode
-                        # [at quit], because then I can do park mode and then disable…
-                        # I don't have to do anything with my hands."* With the park
-                        # pose defaulting to wherever the arm started, `q p d` is a
-                        # complete hands-free shutdown — and Ctrl-C now does the same
-                        # thing in one keystroke.
-                        park_arms([one for one in arms if one.alive()], keys, clamp_gripper)
-                        for one in arms:
-                            if one.alive():
-                                one.enter_hold()
-                        print("   q = park+disable    p = park again    g = weightless    d = disable")
-                    elif k == "g":
-                        # ⛔ EVERY arm, and with two that is 8.6 kg going weightless at once.
-                        # The operator asked for it at the quit menu, where the alternative is
-                        # disabling, so it is the safer of the two. The banner says how much.
-                        for one in arms:
-                            if one.alive():
-                                guide_warn = one.enter_guide()
-                                if guide_warn:
-                                    print(f"\n  ⚠️  {guide_warn}\n")
-                        guided = "+".join(one.name for one in arms
-                                          if one.alive() and one.mode == "guide")
-                        if guided:
-                            print(f"\n⭐ weightless: {guided}"
-                                  " — park them by hand, then press d to disable.")
-                    elif k == "d":
-                        break
-                    time.sleep(0.05)
-                    if not any(one.alive() for one in arms):
-                        print("\n⚠️  every chain died while waiting — disabling now.")
-                        break
-            elif not any(one.alive() for one in arms):
-                # ⚠️ `elif not chain_alive(...)`, not a bare `else`. With the Ctrl-C
-                # auto-park above, a plain `else` would fire on the SUCCESS path and
-                # announce a dead chain to someone whose arm had just parked fine.
-                print("⚠️  every chain is already dead, so no arm is being commanded.")
-                print("   They will be sagging under gravity. Support them now if raised.")
+            if stop is None:
+                stop = StopRequest(StopCause.FAULT, "control loop ended without a stop cause")
+            exit_code = stop.exit_code
+            controlled_stop(stop, arms, keys,
+                            lambda live: park_arms(live, keys, clamp_gripper), emit=print)
 
     except KeyboardInterrupt:
         exit_code = 130
-        stop_reason = "interrupted during startup or shutdown"
+        stop = StopRequest(StopCause.INTERRUPT, "interrupted during startup or shutdown")
         print("\ninterrupted.")
     except Exception as exc:  # noqa: BLE001
         exit_code = 1
-        stop_reason = f"{type(exc).__name__}: {exc}"
-        print(f"\n⛔ {stop_reason}")
+        stop = StopRequest(StopCause.FAULT, f"{type(exc).__name__}: {exc}")
+        print(f"\n⛔ {stop}")
         for note in getattr(exc, "__notes__", []):
             print(f"   {note}")
     finally:
@@ -3363,12 +3275,12 @@ def main() -> int:  # noqa: PLR0915
             # Write incident facts after attempting device shutdown. Capture cached state
             # with guarded reads so incomplete startup or a dead chain cannot hide the original fault.
             try:
-                bad_stop = exit_code != 0 or (
-                    bool(stop_reason) and "quit requested" not in (stop_reason or ""))
+                bad_stop = exit_code != 0 or (stop is not None and stop.cause is not StopCause.QUIT)
                 # Use the last available cycle values. Fresh reads from a failed device can raise
                 # and would erase the evidence of the state before shutdown.
                 facts = {} if not bad_stop else {
-                    "stop_reason": stop_reason,
+                    "stop_reason": str(stop) if stop is not None else None,
+                    "stop_cause": stop.cause.value if stop is not None else None,
                     "arms": [one.name for one in arms] or arm_names,
                     "acquired_robots": list(robots),
                     "reach_limit": args.reach,
@@ -3411,7 +3323,7 @@ def main() -> int:  # noqa: PLR0915
                     ],
                 }
                 if bad_stop:
-                    print("\n" + describe(write_incident(stop_reason or "unknown", facts)))
+                    print("\n" + describe(write_incident(str(stop) if stop is not None else "unknown", facts)))
             except Exception as exc:  # noqa: BLE001
                 # ⛔ Swallowed on purpose. The motors are already disabled; a traceback
                 # here would sit on top of the real failure and read like a second fault.

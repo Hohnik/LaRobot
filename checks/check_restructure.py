@@ -35,6 +35,7 @@ import argparse
 import ast
 import builtins
 import sys
+import symtable
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -137,41 +138,30 @@ def main_function(tree: ast.Module) -> ast.FunctionDef:
     raise SystemExit("⛔ no main() in the target file")
 
 
-def defined_names(tree: ast.Module, fn: ast.FunctionDef) -> set[str]:
-    """Everything a name inside `fn` could legitimately resolve to.
+def undefined_globals(source: str, scope: str = "main") -> list[str]:
+    """Find unresolved global reads with Python's lexical scope rules.
 
-    ⚠️ Module-level `def` and `class` names are included deliberately. Leaving them
-    out made the first version of this check report eleven false positives, including
-    `git_commit` and `load_json`, which are module-level functions in the target.
+    Local callback parameters and closure variables are bound in their own scope.
+    An import or assignment inside an unrelated function cannot bind a global.
+    This is not definite-assignment analysis: conditional or early local reads can
+    still fail at runtime even when a name has a binding somewhere in its scope.
     """
-    names: set[str] = set(dir(builtins))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names.update(a.asname or a.name.split(".")[0] for a in node.names)
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
-                names.add(sub.id)
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            names.add(node.id)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            names.add(node.name)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            a = node.args
-            names.update(x.arg for x in [*a.posonlyargs, *a.args, *a.kwonlyargs])
-            for x in (a.vararg, a.kwarg):
-                if x:
-                    names.add(x.arg)
-        if isinstance(node, ast.ExceptHandler) and node.name:
-            names.add(node.name)
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            names.update(a.asname or a.name.split(".")[0] for a in node.names)
-        if isinstance(node, ast.withitem) and isinstance(node.optional_vars, ast.Name):
-            names.add(node.optional_vars.id)
-    return names
+    module = symtable.symtable(source, "<checked source>", "exec")
+    known = set(dir(builtins)) | {"__name__", "__file__", "__package__", "__builtins__",
+                                "__doc__", "__spec__", "__loader__", "__cached__"}
+    known.update(s.get_name() for s in module.get_symbols()
+                 if s.is_assigned() or s.is_imported())
+    target = next(t for t in module.get_children() if t.get_name() == scope)
+    missing: set[str] = set()
+
+    def visit(table):
+        missing.update(s.get_name() for s in table.get_symbols()
+                       if s.is_referenced() and s.is_global() and s.get_name() not in known)
+        for child in table.get_children():
+            visit(child)
+
+    visit(target)
+    return sorted(missing)
 
 
 def run(moved: list[str]) -> int:
@@ -316,15 +306,12 @@ def run(moved: list[str]) -> int:
     # 4. Nothing may be undefined. This is the scan that caught a NameError before it
     #    reached the arm on 2026-08-13 (FINDINGS, session 21): `replay_step` was called
     #    and never imported, so the first playback would have raised with motors live.
-    known = defined_names(tree, fn)
-    unknown = sorted({n.id for n in ast.walk(fn)
-                      if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
-                      and n.id not in known})
+    unknown = undefined_globals(src)
     if unknown:
         faults += len(unknown)
         print(f"⛔ used in main() but never assigned or imported: {unknown}")
     else:
-        print("✓ every name used in main() resolves to something")
+        print("✓ no unresolved global reads in main() or its nested scopes")
 
     # 5. ⛔⭐⭐ EVERY PER-ARM HELPER IS CALLED WITH AN ARM, AND WITH THE RIGHT COUNT.
     #

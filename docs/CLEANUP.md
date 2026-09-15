@@ -2,11 +2,11 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. Operator terminal interaction and lifecycle coordination still need work.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Operator prompts, entry-point assembly and acquired-device cleanup still need work.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state and composite sequencing. Current validation passes 941/941 checks across 52 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, and explicit shutdown causes. Current validation passes 959/959 checks across 54 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -99,8 +99,8 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-1. Make shutdown causes explicit, independent of message text. Then extract lifecycle coordination while preserving partial-startup ownership and motor-first cleanup.
-2. Separate terminal prompt state, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
+1. Extract acquired-device cleanup and terminal prompt ownership in bounded steps. Explicit shutdown causes and the controlled stop interaction are complete; partial-startup ownership and motor-first cleanup must remain intact.
+2. Separate argument/plan assembly and thin the entry point after the remaining owners are explicit. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
 3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
 4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
 
@@ -208,3 +208,18 @@ Two reset details are explicit: replacing a composite clears its old pose-arriva
 The operator is now 3,460 lines, down from 3,624 at the camera checkpoint and 5,055 before the readability work. The two new owners total about 200 lines. This is still an incomplete architectural cleanup: prompt decoding, physical command dispatch, replay plan/loading, measured start verification and report persistence remain in the operator. The owners do not introduce background robot control or establish hardware stopping performance.
 
 Six composite tests and six playback tests cover validation before motion, arm ordering, all-arm arrival gates, cancellation, replacement, shared-clock lag behavior and tracking order. An additional actual-application test starts a two-arm replay and changes only the selected arm to HOLD, verifying both arms leave replay. The old source-name assertion was updated as supplementary evidence. The full suite passes 941/941 across 52 files, falsifiers 71/71, and the isolated interaction driver 32/32. Logs use `agents/codex/validation/playback-*`; the disposable simulator copy contains its own synthetic recordings.
+
+
+## Explicit stop causes and controlled shutdown interaction
+
+`yam.lifecycle.StopRequest` records a `StopCause` (quit, interrupt or fault) separately from its display message. Every application stop site supplies that category. Changing wording cannot turn a fault into an intentional quit. Incidents retain their string `stop_reason` and now also include `stop_cause`; a failed device cleanup still produces a failed run even after a planned quit.
+
+`controlled_stop` owns the existing live-arm park/quit interaction. Planned quit keeps the menu. Interrupts and controlled faults attempt the existing guarded park when live arms have a base pose. A failed park returns to HOLD and the menu; it does not authorize release. Dead arms are omitted from motion, successful automatic parking does not print a dead-chain warning, and a second interrupt propagates into the outer cleanup. GUIDE banners name only arms that actually entered GUIDE.
+
+The operator retains acquired handles, the actual `park_arms` command implementation, signal handling, motor-disable attempts, recording/camera completion and incident persistence. No hardware motion policy, calibration or limit has changed. The new module calls the supplied park action and never disables devices itself. This separation makes the interaction executable in isolation without hiding resource ownership inside it.
+
+Six old tests copied a stopping expression or inspected source strings. Their six behavioral equivalents now execute the production flow, alongside seven additional cases for failed parks, menu return, GUIDE refusal, liveness loss, missing base poses and interruption. Three actual-application regressions verify that a fault containing the words `quit requested` still auto-parks and returns failure, a second interrupt still shuts down both fake arms before reporting an incident, and a renamed planned quit retains its menu and returns success. The full suite passes 959/959 across 54 files; isolated simulation passes 32/32. Source and documentation checks pass, and falsifiers retain 71/71 catches. Logs use `agents/codex/validation/stop-*`.
+
+The structural checker now uses Python's symbol tables for global-name resolution. Its previous flat scan rejected a valid lambda parameter and could also let an unrelated function's local import or assignment hide a missing global. Eight tests check callbacks, closures, real imports, missing imports, sibling scopes, f-string reads and the actual application. This check does not prove that every local has been assigned before each runtime read.
+
+The operator is now 3,372 physical lines, and the controlled-stop module is 111. Its remaining size is mostly prompt dispatch, configuration/plan assembly and cycle coordination, with further historical prose to shorten selectively. Moving all of that into one new runtime class would not complete the architecture. Next extractions should own transitions or resources, preserve command order and confirmations, and execute their application call sites in tests. No user decision is pending for that software work.

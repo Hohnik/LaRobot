@@ -153,67 +153,7 @@ def test_incidents_land_under_recordings_which_is_gitignored() -> None:
 
 
 
-# ── the safe-stop decision, added 2026-08-14 (FINDINGS §46) ──────────────────
-#
-# Julien: *"when the robot is being moved and stuff, and then it crashes for some reason,
-# it should always resort to trying to do the safe crash… It should be, like, when I do
-# control c."* The condition in `teleop_session.py` decides whether a stop parks the arm
-# or hands it to a menu, and it cannot be reached by any headless test because it lives
-# inside `main()`'s shutdown path. So the rule is duplicated here and pinned, and a test
-# asserts the script still spells it the same way.
-
-
-def should_auto_park(stop_reason: str | None, interrupted: bool) -> bool:
-    """The rule, restated. Parks on Ctrl-C and on every UNPLANNED stop; not on `q`."""
-    planned_quit = bool(stop_reason) and "quit requested" in (stop_reason or "")
-    return interrupted or not planned_quit
-
-
-def test_ctrl_c_parks() -> None:
-    assert should_auto_park("Ctrl-C — the loop is stopping", interrupted=True)
-
-
-def test_a_crash_parks_which_is_the_whole_point() -> None:
-    """⭐ Previously a crash with a live chain left the arm holding until a human
-    answered a menu. Julien may not be watching the terminal when it happens."""
-    for reason in ("the motor chain STOPPED", "a motor is too hot", "IK failed"):
-        assert should_auto_park(reason, interrupted=False), reason
-
-
-def test_a_thermal_stop_parks_too_and_that_is_deliberate() -> None:
-    """⚠️ Holding keeps current in a hot motor indefinitely and disabling drops the arm.
-    Parking gets it to a supported pose and THEN removes current, which beats both."""
-    assert should_auto_park("hottest motor 66°C — stopping", interrupted=False)
-
-
-def test_a_planned_q_does_NOT_auto_park() -> None:
-    """⛔ Julien uses `q p d` and may want `g` instead, so a planned quit keeps its menu."""
-    assert not should_auto_park("quit requested", interrupted=False)
-
-
-def test_the_script_still_spells_the_rule_the_same_way() -> None:
-    """⛔ This file cannot execute the real branch, so it checks the source instead. If
-    the wording drifts, the duplicated rule above stops describing the real one — which
-    is exactly how ArmSession drifted for a day with green tests (FINDINGS §36.2)."""
-    src = (REPO / "apps" / "teleop_session.py").read_text()
-    assert "planned_quit" in src and "unplanned" in src, "the safe-stop rule is gone"
-    assert "interrupted or unplanned" in src, "the auto-park condition changed shape"
-
-
-def test_a_dead_chain_cannot_be_parked_and_the_docs_say_so() -> None:
-    """⛔⭐ THE LIMIT OF THE FEATURE, and it is the case that prompted it. All seven
-    motors latched `0xD loss of communication`, so the CAN link was gone and no command
-    could reach the arm. Liveness gates the park for exactly that reason.
-
-    ⚠️ Updated 2026-08-18: the N-arm rewrite made the gate per-arm — `live` is the list
-    of arms still answering, and only those are parked. The old pinned string
-    (`chain_alive(robot) and …`) had been gone for days while this test sat red,
-    unnoticed, because no single runner runs these files (ROADMAP §10.5 step 2)."""
-    src = (REPO / "apps" / "teleop_session.py").read_text()
-    assert "live = [one for one in arms if one.alive()]" in src, \
-        "the per-arm liveness list is gone"
-    assert "if live and (interrupted or unplanned)" in src, \
-        "the park is no longer gated on the chain being alive"
+# Controlled stop behavior is exercised through production code in test_controlled_stop.py.
 
 
 def test_a_dead_puck_parks_gracefully_instead_of_raising() -> None:

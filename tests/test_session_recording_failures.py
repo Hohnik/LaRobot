@@ -296,6 +296,68 @@ def test_leaving_replay_on_selected_arm_holds_both_replay_arms():
     assert 'every replay arm is HOLDING now' in text
 
 
+def exercise_stop(*, fault=False, interrupt_park=False, rename_quit=False):
+    events, incidents = [], []
+    original_shutdown = app.shutdown_robot
+    original_request = app.StopRequest
+    def request(cause, message):
+        if rename_quit and cause is app.StopCause.QUIT:
+            message = 'operator finished this session'
+        return original_request(cause, message)
+    def cycle(number, arms, root):
+        if fault and number == 1:
+            # A fault may quote this phrase; it must still use the fault policy.
+            arms[0].thermal.update = lambda *a, **kw: SimpleNamespace(
+                warning=None, stop_reason='sensor reported quit requested')
+    def park(arms, keys, clamp):
+        events.append(('park', [a.name for a in arms]))
+        assert all(a.mode == 'hold' and a.alive() for a in arms)
+        if interrupt_park:
+            raise KeyboardInterrupt
+        return 'arrived'
+    def shutdown(robot):
+        events.append(('shutdown', None))
+        return original_shutdown(robot)
+    def incident(reason, facts):
+        events.append(('incident', None))
+        incidents.append((reason, facts))
+        return None
+    with patch.object(app, 'StopRequest', request), \
+            patch.object(app, 'park_arms', park), \
+            patch.object(app, 'shutdown_robot', shutdown), \
+            patch.object(app, 'write_incident', incident):
+        code, text, _, arms, _ = run_session({2: 'q'}, on_cycle=cycle)
+    return code, text, events, incidents, arms
+
+
+def test_application_fault_message_cannot_turn_into_planned_quit():
+    code, text, events, incidents, arms = exercise_stop(fault=True)
+    assert code == 1, text
+    assert events == [('park', ['B', 'G']), ('shutdown', None),
+                      ('shutdown', None), ('incident', None)]
+    assert incidents[0][1]['stop_cause'] == 'fault'
+    assert isinstance(incidents[0][1]['stop_reason'], str)
+    assert all(not a.alive() for a in arms)
+
+
+def test_second_interrupt_during_application_park_still_disables_both_arms():
+    code, text, events, incidents, arms = exercise_stop(fault=True, interrupt_park=True)
+    assert code == 130, text
+    assert events == [('park', ['B', 'G']), ('shutdown', None),
+                      ('shutdown', None), ('incident', None)]
+    assert incidents[0][1]['stop_cause'] == 'interrupt'
+    assert all(not a.alive() for a in arms)
+
+
+def test_renamed_application_quit_keeps_menu_and_success_status():
+    code, text, events, incidents, arms = exercise_stop(rename_quit=True)
+    assert code == 0 and not incidents, text
+    assert 'stopping: operator finished this session' in text
+    assert 'Every arm is HOLDING its pose' in text
+    assert events == [('shutdown', None), ('shutdown', None)]
+    assert all(not a.alive() for a in arms)
+
+
 def main():
     tests = [v for (k, v) in globals().items() if k.startswith('test_') and callable(v)]
     passed = 0
