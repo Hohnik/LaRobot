@@ -1,6 +1,6 @@
 # Teleop architecture review
 
-Reviewed September 15, 2026 against `c8069cc`. This document proposes the next changes; it does not claim they are implemented. [CLEANUP](CLEANUP.md) records completed work and validation.
+Reviewed September 15, 2026 against `c8069cc`. The findings below describe that reviewed snapshot. The first recording-completion and interface increment is now implemented; [CLEANUP](CLEANUP.md#recording-completion-and-interface-continuation) records its behavior, validation and limits. The remaining structure is proposed.
 
 ## Decision
 
@@ -136,4 +136,4 @@ This review inspected the current application, domain modules, camera code, cont
 
 The probes used fake HID objects, an empty capture set and a disposable directory. They confirmed the contract mismatches and acceptance of an unfinished writer report. They did not operate hardware, start an encoder or measure control-loop timing.
 
-The preceding implementation checkpoint passed 902/902 checks, 71/71 falsifier catches and 32/32 isolated simulation checks. Those validation results belong to the preceding checkpoint. The full suite was not rerun for this review. This review changes documentation only. No physical operation, remote push or team-branch replacement is part of it.
+The preceding suite reported 902/902 checks and 71/71 falsifier catches. The earlier 32/32 simulation result did not validate the final saved source: the next implementation pass found a missing TELEOP import, also present in the earlier structural failure log. CLEANUP corrects that validation claim and records the fix. This architectural review itself changed documentation only; subsequent implementation and current results are recorded there.

@@ -1,10 +1,8 @@
-"""Write recorded camera frames to disk without ever blocking the control loop.
+"""Queue fresh camera frames without waiting for JPEG encoding or disk writes.
 
-⭐⭐ THE DESIGN IS ROADMAP §8.2 ITEM 48, settled 2026-08-19 before any of this was built: while a take is being recorded the session samples `CaptureSet` and hands each FRESH frame to one writer thread per camera, which JPEG-encodes and writes `recordings/frames/<slot>/<camera>/<seq>.jpg` plus an `index.json` of `(seq, host_stamp_ns)`. Frames live on disk beside the recording; the recording JSON never carries a pixel. The recorder stamps the directory and the per-camera counts into its own `meta`, and `yam/episode.py` later joins the frames to the 30 Hz ticks by nearest stamp.
-
-⛔ THE TRAP THIS FILE EXISTS TO NOT FALL INTO (item 48 trap ①): the writer must never block the 90 Hz loop. `offer()` is a lock-free hand-off by reference (OpenCV's `read()` returns a fresh array per frame, so the reference is safe to keep), and a full queue drops the OLDEST queued frame WITH A COUNT. A silent drop would be the FINDINGS §0 pattern — a dataset with blind gaps and a straight face — so `dropped` is carried in the index, in the recording meta, and printed at the stop line.
-
-⚠️ WHY DROP-OLDEST rather than drop-newest: when encoding falls behind, the freshest frame is the one nearest the joint data being recorded right now. Dropping the newest would make every stall stretch the dataset's past instead of trimming it, and the episode join would then pair current joints with stale pixels — a lie with a timestamp on it.
+Stop requests are nonblocking. The writer publishes its index only after the
+queue drains; callers must retain its directory until completion is confirmed.
+A full queue drops the oldest frame and records that loss in the final report.
 """
 
 from __future__ import annotations
@@ -61,12 +59,16 @@ class FrameWriter:
         self.dropped = 0
         self.write_errors = 0
         self._running = True
+        self._report: dict[str, Any] | None = None
+        self._failure: BaseException | None = None
         self._thread = threading.Thread(target=self._run,
                                         name=f"frames-{camera_name}", daemon=True)
         self._thread.start()
 
     def offer(self, frame: Frame) -> None:
         """Hand one fresh frame over. Never blocks: a full queue drops its OLDEST frame, counted."""
+        if not self._running or self.finished:
+            raise RuntimeError("Cannot offer frames to a stopped writer")
         try:
             self._q.put_nowait(frame)
         except queue.Full:
@@ -81,7 +83,16 @@ class FrameWriter:
                 self.dropped += 1
 
     def _run(self) -> None:
-        # The get-with-timeout shape means the thread only exits once the queue is EMPTY and stop() has been called, so stop() is also the flush — item 48's teardown rule (indexes complete before the summary prints) follows from the loop shape rather than from a separate drain step.
+        try:
+            self._drain()
+            report = self._snapshot(flushed=True)
+            (self.out_dir / "index.json").write_text(json.dumps(report))
+            self._report = report
+        except BaseException as exc:
+            # Report through the owner, never the global robot-thread fault hook.
+            self._failure = exc
+
+    def _drain(self) -> None:
         while True:
             try:
                 frame = self._q.get(timeout=0.05)
@@ -93,31 +104,51 @@ class FrameWriter:
                 data = self._encode(frame.rgb)
                 (self.out_dir / f"{frame.sequence:06d}.jpg").write_bytes(data)
                 self._entries.append([int(frame.sequence), int(frame.host_timestamp_ns)])
-            except Exception:  # noqa: BLE001 — a bad frame must cost one image, never the session
+            except Exception:  # A bad frame is counted; the remaining queue still drains.
                 self.write_errors += 1
 
     @property
     def written(self) -> int:
         return len(self._entries)
 
-    def stop(self) -> dict[str, Any]:
-        """Flush the queue, write `index.json`, and return what actually happened.
+    @property
+    def finished(self) -> bool:
+        """No worker can mutate the directory, including after an index failure."""
+        return not self._thread.is_alive()
 
-        ⚠️ The generous join timeout exists for a hung encode: if the thread does not come back, the index is still written with everything recorded so far, and the caller sees `flushed: false` instead of a file that pretends completeness.
-        """
+    def request_stop(self) -> None:
+        """Close input and drain queued frames in the worker. Does not wait."""
         self._running = False
-        self._thread.join(timeout=10.0)
-        index = {
+
+    def _snapshot(self, *, flushed: bool) -> dict[str, Any]:
+        return {
             "camera": self.camera_name,
             "jpeg_quality": JPEG_QUALITY,
             "written": self.written,
             "dropped": self.dropped,
             "write_errors": self.write_errors,
-            "flushed": not self._thread.is_alive(),
-            "entries": self._entries,
+            "flushed": flushed,
+            "entries": list(self._entries),
         }
-        (self.out_dir / "index.json").write_text(json.dumps(index))
-        return index
+
+    def poll_stop(self) -> dict[str, Any] | None:
+        """Return the final index, None while busy, or raise the worker failure."""
+        if not self.finished:
+            return None
+        if self._failure is not None:
+            raise RuntimeError(f"Frame index failed for {self.camera_name}: {self._failure}") from self._failure
+        return self._report
+
+    def stop(self, timeout: float = 10.0) -> dict[str, Any]:
+        """Bounded blocking convenience for teardown and standalone tools.
+
+        An unfinished report is diagnostic only. No index is published until the
+        worker completes. Use request_stop/poll_stop in the operator loop.
+        """
+        self.request_stop()
+        self._thread.join(timeout=timeout)
+        report = self.poll_stop()
+        return report if report is not None else self._snapshot(flushed=False)
 
 
 class FrameSink:
@@ -131,17 +162,30 @@ class FrameSink:
                  queue_frames: int = QUEUE_FRAMES) -> None:
         self.root = Path(root)
         self._writers = {}
+        self._last_seq = {}
+        self._encode = encode
+        self._queue_frames = queue_frames
         try:
-            for name in camera_names:
-                self._writers[name] = FrameWriter(
-                    name, self.root / camera_dir_name(name), encode, queue_frames)
+            self.start(camera_names)
         except BaseException as failure:
             try:
                 self.stop()
             except Exception as cleanup:
                 failure.add_note(f"Frame writer startup cleanup failed: {cleanup!r}")
             raise
-        self._last_seq = {name: 0 for name in camera_names}
+
+    def start(self, camera_names: list[str]) -> None:
+        """Acquire writers into this already-owned sink.
+
+        On failure, the caller still owns every writer acquired so far and must
+        request stop. The constructor provides cleanup for standalone callers.
+        """
+        for name in camera_names:
+            if name in self._writers:
+                raise ValueError(f"Camera writer already exists: {name}")
+            self._writers[name] = FrameWriter(
+                name, self.root / camera_dir_name(name), self._encode, self._queue_frames)
+            self._last_seq[name] = 0
 
     @property
     def names(self) -> list[str]:
@@ -155,6 +199,29 @@ class FrameSink:
             if frame.sequence != self._last_seq[name]:
                 self._last_seq[name] = frame.sequence
                 writer.offer(frame)
+
+    @property
+    def finished(self) -> bool:
+        return all(writer.finished for writer in self._writers.values())
+
+    def request_stop(self) -> None:
+        """Close every input before waiting for any camera."""
+        for writer in self._writers.values():
+            writer.request_stop()
+
+    def poll_stop(self) -> dict[str, dict[str, Any]] | None:
+        """Return all final indexes only when every writer has terminated."""
+        if not self.finished:
+            return None
+        reports, failures = {}, []
+        for name, writer in self._writers.items():
+            try:
+                reports[name] = writer.poll_stop()
+            except Exception as exc:
+                failures.append(exc)
+        if failures:
+            raise ExceptionGroup("Frame writers failed to finish", failures)
+        return reports
 
     def stop(self) -> dict[str, dict[str, Any]]:
         """Stop every writer; the per-camera indexes, keyed by camera name."""

@@ -5,6 +5,8 @@ import io
 from pathlib import Path
 import shutil
 import sys
+import threading
+from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from yam.recording import Trajectory
@@ -14,7 +16,8 @@ app = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = app
 spec.loader.exec_module(app)
 
-def run_session(schedule, *, fail_save=False):
+def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
+                on_cycle=None, saver=None):
     output = io.StringIO()
     saved = []
     sessions = []
@@ -35,6 +38,8 @@ def run_session(schedule, *, fail_save=False):
             self.cycle += 1
             if self.cycle > 40:
                 raise AssertionError('test script failed to reach quit')
+            if on_cycle is not None:
+                on_cycle(self.cycle, sessions, root)
             return list(schedule.get(self.cycle, ''))
 
         def get(self):
@@ -49,7 +54,7 @@ def run_session(schedule, *, fail_save=False):
         saved.append(take)
         if fail_save and len(saved) == 1:
             raise OSError('injected disk failure')
-        return real_save(take, *args, **kwargs)
+        return (saver or real_save)(take, *args, **kwargs)
     with TemporaryDirectory() as d, ExitStack() as stack:
         root = Path(d)
         shutil.copytree(ROOT / 'config', root / 'config')
@@ -59,7 +64,15 @@ def run_session(schedule, *, fail_save=False):
         stack.enter_context(patch.object(app, 'KeyReader', Keys))
         stack.enter_context(patch.object(app, 'ArmSession', record_session))
         stack.enter_context(patch.object(app, 'save_take', save))
-        stack.enter_context(patch.object(sys, 'argv', ['teleop_session.py', '--sim', '--arms', 'B,G', '--start-mode', 'hold', '--yes']))
+        argv = ['teleop_session.py', '--sim', '--arms', 'B,G', '--start-mode', 'hold', '--yes']
+        if capture is not None:
+            # This bypass is confined to the fake-device test: no real discovery.
+            argv += ['--cameras', 'test']
+            stack.enter_context(patch.object(app, 'sim_camera_error', lambda *a: None))
+            stack.enter_context(patch.object(app, 'open_session_cameras', lambda *a: (capture, ['test'])))
+        if sink_factory is not None:
+            stack.enter_context(patch.object(app, 'FrameSink', sink_factory))
+        stack.enter_context(patch.object(sys, 'argv', argv))
         stack.enter_context(redirect_stdout(output))
         code = app.main()
         path = root / 'recordings/sim/5.json'
@@ -80,6 +93,183 @@ def test_refused_guide_does_not_print_success_or_change_mode():
     assert 'NOT weightless' in text
     assert 'MODE: GUIDE on' not in text
     assert all((one.mode == 'hold' for one in sessions))
+
+def test_control_cycles_continue_during_blocked_slot_save():
+    release, entered = threading.Event(), threading.Event()
+    observed = []
+    def saver(*args, **kwargs):
+        entered.set()
+        if not release.wait(2.):
+            raise AssertionError('operator loop blocked on save')
+        return real(*args, **kwargs)
+    def cycle(number, arms, root):
+        if number == 12:
+            assert entered.is_set() and not release.is_set()
+            assert len(arms) == 2 and all(one.mode == 'hold' for one in arms)
+            observed.append(number)
+            release.set()
+    real = app.save_take
+    try:
+        code, text, _, _, take = run_session(
+            {1: 'w', 5: 'w', 7: '5', 20: 'q'}, saver=saver, on_cycle=cycle)
+    finally:
+        release.set()
+    assert observed == [12] and code == 0, text
+    assert take is not None and 'recording 5 saved' in text
+
+
+def test_camera_completion_blocks_early_save_and_discard_but_keeps_loop_running():
+    state = {'finished': False, 'stopped': False}
+    class Sink:
+        def __init__(self, path, names):
+            self.path = path
+            path.mkdir(parents=True)
+            (path / 'owned.txt').write_text('writer owns this')
+        def start(self, names):
+            pass
+        @property
+        def finished(self):
+            return state['finished']
+        def offer(self, samples):
+            assert not state['stopped']
+        def request_stop(self):
+            state['stopped'] = True
+        def poll_stop(self):
+            return {'test': {'written': 1, 'dropped': 0, 'write_errors': 0, 'flushed': True}}
+    def cycle(number, arms, root):
+        if number == 12:
+            assert state['stopped'] and all(one.mode == 'hold' for one in arms)
+            assert list((root / 'recordings/sim/frames').glob('pending_*/owned.txt'))
+            assert not (root / 'recordings/sim/5.json').exists()
+            state['finished'] = True
+    capture = SimpleNamespace(sample=lambda: {}, stop=lambda: None)
+    code, text, saved, _, take = run_session(
+        {1: 'w', 5: 'w', 7: '5', 9: 'x', 14: '5', 25: 'q'}, capture=capture,
+        sink_factory=Sink, on_cycle=cycle)
+    assert code == 0 and len(saved) == 1 and take is not None, text
+    assert 'files are still finishing' in text and 'recording 5 saved' in text
+
+
+def test_camera_sampling_failure_stops_take_and_preserves_arm_modes():
+    state = {'stop': False}
+    class Sink:
+        def __init__(self, path, names):
+            path.mkdir(parents=True)
+        def start(self, names):
+            pass
+        @property
+        def finished(self):
+            return state['stop']
+        def offer(self, samples):
+            raise OSError('injected camera sampling failure')
+        def request_stop(self):
+            state['stop'] = True
+        def poll_stop(self):
+            return {'test': {'written': 0, 'dropped': 0, 'write_errors': 0, 'flushed': True}}
+    code, text, saved, arms, _ = run_session(
+        {1: 'w', 5: '5', 8: 'x', 15: 'q'},
+        capture=SimpleNamespace(sample=lambda: {}, stop=lambda: None), sink_factory=Sink)
+    assert code == 0 and not saved and all(one.mode == 'hold' for one in arms), text
+    assert 'injected camera sampling failure' in text and state['stop']
+    assert 'arm modes are unchanged' in text
+
+
+def test_camera_writer_startup_failure_is_contained_in_recording():
+    def broken(path, names):
+        path.mkdir(parents=True)
+        raise OSError('injected writer startup failure')
+    code, text, saved, arms, _ = run_session(
+        {1: 'w', 5: 'x', 15: 'q'},
+        capture=SimpleNamespace(sample=lambda: {}, stop=lambda: None), sink_factory=broken)
+    assert code == 0 and not saved and all(one.mode == 'hold' for one in arms), text
+    assert 'injected writer startup failure' in text
+
+
+def test_partial_startup_retains_owned_sink_until_its_writer_finishes():
+    state = {'finished': False, 'stopped': False}
+    class Sink:
+        def __init__(self, path, names):
+            assert names == []
+            path.mkdir(parents=True)
+            (path / 'partial.txt').write_text('partial writer owns this')
+        def start(self, names):
+            raise OSError('second writer startup failed')
+        @property
+        def finished(self):
+            return state['finished']
+        def request_stop(self):
+            state['stopped'] = True
+        def poll_stop(self):
+            return {'test': {'written': 0, 'dropped': 0, 'write_errors': 0, 'flushed': True}}
+    def cycle(number, arms, root):
+        if number == 12:
+            assert state['stopped']
+            assert list((root / 'recordings/sim/frames').glob('pending_*/partial.txt'))
+            state['finished'] = True
+    code, text, saved, _, _ = run_session(
+        {1: 'w', 5: 'x', 14: 'x', 22: 'q'},
+        capture=SimpleNamespace(sample=lambda: {}, stop=lambda: None), sink_factory=Sink,
+        on_cycle=cycle)
+    assert code == 0 and not saved, text
+    assert 'second writer startup failed' in text and 'files are still finishing' in text
+
+
+def test_quit_preserves_unfinished_camera_files_after_motor_shutdown():
+    state = {}
+    class Sink:
+        def __init__(self, path, names):
+            path.mkdir(parents=True)
+            state['path'] = path
+        def start(self, names):
+            pass
+        finished = False
+        def offer(self, samples):
+            pass
+        def request_stop(self):
+            pass
+    def reader_stop():
+        assert state['path'].exists()
+    code, text, _, _, _ = run_session(
+        {1: 'w', 5: 'w', 7: 'q'},
+        capture=SimpleNamespace(sample=lambda: {}, stop=reader_stop), sink_factory=Sink)
+    assert code == 1, text
+    assert text.index('motors confirmed disabled') < text.index('Recording cleanup incomplete')
+    assert 'files retained' in text
+
+
+def test_camera_index_failure_is_reported_without_stopping_operator():
+    state = {'stopped': False}
+    class Sink:
+        def __init__(self, path, names):
+            path.mkdir(parents=True)
+        def start(self, names):
+            pass
+        @property
+        def finished(self):
+            return state['stopped']
+        def offer(self, samples):
+            pass
+        def request_stop(self):
+            state['stopped'] = True
+        def poll_stop(self):
+            raise OSError('injected completion failure')
+    code, text, saved, arms, _ = run_session(
+        {1: 'w', 5: 'w', 8: '5', 11: 'x', 20: 'q'},
+        capture=SimpleNamespace(sample=lambda: {}, stop=lambda: None), sink_factory=Sink)
+    assert code == 0 and not saved and all(one.mode == 'hold' for one in arms), text
+    assert 'injected completion failure' in text
+
+
+def test_teleop_entry_runs_workspace_guard_and_keeps_both_arms_live():
+    observed = []
+    def cycle(number, arms, root):
+        if number == 5:
+            assert all(one.mode == 'teleop' and one.alive() for one in arms)
+            observed.append(number)
+    code, text, _, _, _ = run_session({1: 'aat', 9: 'q'}, on_cycle=cycle)
+    assert observed == [5] and code == 0, text
+    assert 'NameError' not in text
+
 
 def main():
     tests = [v for (k, v) in globals().items() if k.startswith('test_') and callable(v)]

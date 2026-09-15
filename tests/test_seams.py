@@ -35,9 +35,9 @@ def methods_of(protocol: type) -> list[str]:
 
 
 def test_the_spacemouse_reader_satisfies_CommandSource() -> None:
-    """⭐ This is the Phase E seam. A trained policy needs this one method and nothing else."""
+    """⭐ This is the Phase E seam. Policy freshness and device wiring are separate application concerns."""
     for name in methods_of(CommandSource):
-        assert hasattr(TwistReader, name), (
+        assert callable(getattr(TwistReader, name, None)), (
             f"TwistReader has no {name}(), so CommandSource no longer describes it")
 
 
@@ -57,13 +57,13 @@ def test_read_returns_six_numbers_and_says_so() -> None:
 
 def test_the_capture_set_satisfies_FrameSource() -> None:
     for name in methods_of(FrameSource):
-        assert hasattr(CaptureSet, name), (
+        assert callable(getattr(CaptureSet, name, None)), (
             f"CaptureSet has no {name}(), so FrameSource no longer describes it")
 
 
 def test_the_frame_sink_satisfies_FrameConsumer() -> None:
     for name in methods_of(FrameConsumer):
-        assert hasattr(FrameSink, name), (
+        assert callable(getattr(FrameSink, name, None)), (
             f"FrameSink has no {name}(), so FrameConsumer no longer describes it")
 
 
@@ -87,6 +87,34 @@ def test_every_protocol_names_the_class_that_satisfies_it() -> None:
                           (FrameConsumer, "FrameSink")):
         doc = proto.__doc__ or ""
         assert expect in doc, f"{proto.__name__} does not name {expect} in its docstring"
+
+
+def test_camera_names_is_a_property_with_stable_instance_values():
+    assert isinstance(FrameSource.names, property)
+    assert isinstance(CaptureSet.names, property)
+    assert isinstance(FrameConsumer.finished, property)
+    capture = CaptureSet({})
+    assert capture.names == [] and capture.sample() == {}
+
+
+def test_reader_retains_axis_state_between_reports_and_propagates_device_errors():
+    class Hid:
+        def __init__(self):
+            self.reports = [[1, 100, 0, 0, 0, 0, 0], [], []]
+        def read(self, size):
+            if self.reports:
+                return self.reports.pop(0)
+            raise OSError('fake unplug')
+    reader = TwistReader(Hid())
+    first = reader.read()
+    assert len(first) == 6 and first[0] != 0 and all(-1 <= x <= 1 for x in first)
+    assert reader.read() == first
+    try:
+        reader.read()
+    except OSError:
+        pass
+    else:
+        raise AssertionError('disconnect error did not reach the caller')
 
 
 def main() -> int:

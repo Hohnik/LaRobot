@@ -2,11 +2,13 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The subsequent [architecture review](RESTRUCTURING.md) records measured file sizes, newly verified contract gaps and the proposed responsibility map. Its restructuring is proposed, not implemented. Start there for the next code increment, and here for completed work and preservation details.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Its first recording-completion increment is now implemented, as described below. Shared camera discovery, playback and terminal extraction still remain.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed checkpoints cover startup/shutdown ownership (`c72686b`), the shared recording lifecycle (`de6bae7`), and the readability/save-failure continuation described below. The latest full suite passes 902/902 checks across 48 files, 71/71 falsifier catches, and 32/32 full simulated interaction checks. All 1,861 documentation links resolve. No physical hardware has been operated and nothing has been pushed. The original teleop/training refs and all original recordings remain preserved.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, and the recording-completion increment below. Current validation passes 919/919 checks across 49 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+
+Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
 Julien supplied Fable's final message, which explicitly named `499d0b7`. The original restore was correct. He then authorized proceeding sensibly with the assessment's cleanup plan and requested detailed durable notes. No user decision is needed for the present software work.
 
@@ -79,7 +81,7 @@ The dedicated root launcher `./teleop` uses Python 3.12 and `.venv-teleop`, leav
 
 Both camera factories now own captures immediately and close partially started readers after failure. FrameSink also stops writers already started if a later writer cannot start. Teardown attempts all readers/writers even when one fails, reporting the collected failures. Device-reader release runs even when joining its thread fails.
 
-The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. Per-take camera ownership, completion validation, replay and terminal coordination remain. The architectural cleanup is still incomplete.
+The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. Replay, shared camera discovery and terminal coordination remain. Per-take camera ownership and completion validation are implemented in the continuation below. The architectural cleanup is still incomplete.
 
 ## Decisions still reserved for the operator
 
@@ -97,14 +99,13 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) refines this sequence with shared camera-library extraction and explicit interface contracts. Its first priority is complete take ownership: an unfinished camera report is currently accepted by the store, so the new rollback boundary alone is insufficient.
+1. Move shared camera discovery, hint resolution and verified opening from `camera_view.py` into the existing camera library. Update the operator and diagnostic callers together. Per-take writer construction still creates directories and threads on the operator thread; removing that startup I/O needs a separate acquisition state.
+2. Extract the replay/composite coordinator. Keep one cursor for all arms, the park-to-start gate, purpose tags and arrival ordering. Characterize transitions at actual application call sites.
+3. Separate terminal prompt state and lifecycle coordination, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
+4. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
+5. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
 
-1. **Camera I/O failure containment.** Trajectory append and slot-save errors are now contained, but writer startup, frame sampling, and stop/flush errors still have paths to the outer exception handler. Characterize each with injected camera failures. Keep motion policy separate from recording error handling, and retain a recoverable take where possible. Also characterize writers that report `flushed: false`; a live encoder must not mutate a frame set while it is published or discarded.
-2. **Finish recording ownership and recovery tooling.** Slot publication now lives in `yam.recording_store`; per-take writer/report ownership remains in the application. Keep long-lived camera readers outside the take owner. The recovery directory currently contains both versions and instructions, and blocks another overwrite of that slot. A future recovery command should inspect the actual files and validate metadata/frame agreement before making changes. Do not silently guess after a crash.
-3. **Replay/composite coordinator.** Keep one cursor for all arms, preserve the park-to-start gate and purpose tags (FINDINGS §72), and test arrival/leg handovers at the real call sites. The existing full simulator is a useful normal-path check, not coverage of every fault/interrupt timing.
-4. **Terminal interaction.** Separate input decoding and prompt state after recording/replay boundaries stabilize. Keep the two-step motion confirmations and occupied-slot re-aim behavior. Avoid changing physical behavior as a side effect of shortening the application.
-5. **Team integration.** Re-read the team's current refs before proposing a bridge; the fetched September refs are a dated snapshot. Choose specific transferable behavior and document gaps. Do not replace the hardware reference with the newer, narrower dual-wield simulator solely because its commit is newer.
-
+The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) gives the remaining boundaries and acceptance criteria.
 The current simulator does not validate USB/CAN timing, gravity compensation, camera delivery, gripper calibration, collision avoidance, or real stopping behavior. Fake-device failure tests establish call ordering and ownership; they cannot establish that a motor physically disabled. Missing disable confirmations remain an operator-visible failure.
 
 ## Reproducing the software evidence without changing saved data
@@ -138,7 +139,7 @@ The previous handler replaced the frame directory before calling Trajectory.save
 
 A `.save-<slot>-<random>/` recovery directory holds candidate JSON, previous JSON/frames when moved, and `recovery.json` instructions. Failed rollback retains the directory and prevents another overwrite of that slot. Failure to delete old data after successful publication reports a cleanup warning instead of telling the operator that a successful save failed.
 
-Limits: this is a single-writer file workflow, not a database transaction. It does not synchronize concurrent readers that cached old JSON, and does not claim power-loss durability (there is no filesystem flush protocol). Process termination can leave a slot temporarily absent and require recovery. Other tools still using the older standalone frame helpers do not automatically gain this behavior. Saving/flush operations can still block the application loop; asynchronous persistence belongs with the remaining camera/recording ownership work.
+Limits: this is a single-writer file workflow, not a database transaction. It does not synchronize concurrent readers that cached old JSON, and does not claim power-loss durability (there is no filesystem flush protocol). Process termination can leave a slot temporarily absent and require recovery. Other tools still using the older standalone frame helpers do not automatically gain this behavior. At that checkpoint, saving and flushing still blocked the application loop. The recording-completion increment below moves those operations into workers.
 
 Nine store tests inject serialization, publication, frame-move, interrupt and rollback failures in temporary directories. An additional test drives actual application keys through a failed save followed by retry into a different slot, checking that the same take survives and the run exits normally.
 
@@ -151,3 +152,27 @@ The run exposed a real contradiction: ArmSession.enter_guide set mode to GUIDE b
 The simulator is a terminal workflow with stationary fake SpaceMice. It does not open a 3D view or simulate hand-guiding/gravity. `?` lists keys; `q`, wait for the quit menu, then `q` parks and exits. The agent can run a private PTY instance, but the computer-control tool refused interaction with both Codex and macOS Terminal, so Julien starts his interactive run by pasting the launcher command. The agent's private instance was closed normally. Its isolated snapshot remains at `.local-backups/simulation-playground-2026-09-15`; it preserves the earlier source and is not a live view of subsequent edits.
 
 Latest local logs use `agents/codex/validation/readability-*.txt`. `readability-preservation.json` again verifies all 3,455 original recording files unchanged, including after Julien's terminal exercise. The broad simulator passed 32/32 in another disposable copy and never wrote the user's recording slots. This continuation ends at a saved checkpoint, with no agent-owned simulator or background job left running.
+
+## Recording completion and interface continuation
+
+`RecordingSession` now owns the frame directory, per-take sink, final report and one pending save/discard operation. It retains the shared joint timeline and freezes it at the stop request. Camera readers remain session resources. The operator handles keys and presentation; background work never commands robots.
+
+The lifecycle is:
+
+1. Start a take and acquire an empty sink under its owner before starting individual writers. Partial startup retains every writer acquired so far.
+2. Sample measured joints and offer fresh camera frames. Sampling or writer-startup failures freeze this take without changing arm modes. Failed takes remain available for explicit discard.
+3. On stop, request draining without joining a thread. A writer creates its final index only after its image queue drains. `poll_stop()` returns a report only after its worker terminates, including the index write.
+4. Permit publication only when every camera report has `flushed: true`. Missing or false completion is rejected before any old-slot mutation. Completion failure retains the files and prevents saving them as a complete take.
+5. Run slot saving or directory deletion in one background job. Polling observes completion without waiting or doing filesystem work. Save failure keeps the same pending trajectory and frame directory for retry. Failed deletion retains ownership for another attempt.
+
+While files finish, premature save/discard keys receive a waiting message. They do not select a future slot or queue deletion implicitly. `q` still reaches the ordinary quit flow. A requested discard, including a too-short take, waits for writer termination before deleting files. The UI confirms completed saves and deletions only after the job finishes.
+
+After motor shutdown, recording cleanup allows a bounded one-second completion window. Unfinished or unsaved camera files are retained and the run returns failure with their path. It never deletes a directory behind a live writer. A save/discard already requested can finish during this window. If its daemon worker is still busy when the process exits, publication may be interrupted; existing store recovery rules still apply.
+
+Limits: threads remove direct waits from the control loop but do not guarantee a hard timing deadline. CPU contention, Python scheduling and slow startup filesystem calls remain. There is no power-loss durability protocol or automatic recovery recording for unsaved joint samples. Retained images alone are not a recoverable full take. Physical camera delivery and robot response remain unverified.
+
+The interface cleanup makes `FrameSource.names` a property, matching `CaptureSet`. Frame consumer contracts now describe nonblocking stop/poll, completion and failure behavior. Input documentation now matches `TwistReader`: axis state persists between HID reports and device errors reach the application. No input decoding or motion policy changed. A policy adapter still needs freshness and device integration rules.
+
+Six new ownership tests use real writer threads with blocked encoders, failed index writes, blocked saves and failed deletions. The actual-application recording test file now has ten cases. It covers save retry, loop progress during blocked I/O, early-key refusal, partial startup, sampling/completion failure, quit retention, GUIDE refusal and TELEOP entry. The store test rejects unfinished or missing completion before touching the old slot. Interface tests check callable methods, the camera property and input behavior.
+
+Current logs are `agents/codex/validation/completion-*.txt`; the simulator-copy file names its disposable checkout. `completion-preservation.json` verifies all 3,455 original recording files unchanged. These local logs are ignored; this section preserves their results and limits for future checkouts.

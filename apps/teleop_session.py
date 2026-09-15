@@ -80,6 +80,7 @@ from yam.teleop import (  # noqa: E402
     REACH_LIMIT,
     CartesianTeleop,
     clamp_to_workspace,
+    effective_limits,
 )
 from yam.recording_store import save_take  # noqa: E402
 from yam.recording_session import RecordingSession  # noqa: E402
@@ -93,7 +94,6 @@ from yam.timing import LoopTimer  # noqa: E402 — the worst pass, PERFORMANCE.m
 from yam.cameras.open import SIZE_LADDER, TARGET_FPS, open_measured  # noqa: E402
 from yam.cameras.writer import (  # noqa: E402
     FrameSink,
-    discard_frames,
     pending_frames_dir,
 )
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
@@ -984,35 +984,7 @@ def main() -> int:  # noqa: PLR0915
     # Park leg duration resets per waypoint; total path duration does not.
     # Recording and replay each use one shared timeline across every arm.
     recording = RecordingSession()
-    # Readers span the session; writers and their pending directory belong to one
-    # take. Frozen camera reports accompany recording.pending until slot selection.
-    # take_mono0 anchors camera timestamps to the recording's elapsed-time axis.
-    frame_sink: FrameSink | None = None       # writing frames right now, or None
-    take_mono0 = 0                            # monotonic_ns at the w keypress
-    pending_frames: Path | None = None        # where the current/frozen take's frames sit
-    take_frames: dict[str, Any] | None = None   # frozen per-camera indexes + mono0, or None
-
-    def stop_take_frames(keep: bool) -> None:
-        """Stop the take's frame writers, flushing their indexes (item 48's teardown rule).
-
-        Keep reports alongside recording.pending for slot selection, or discard
-        frames when the take is aborted. These files must never outlive their take.
-        """
-        nonlocal frame_sink, take_frames, pending_frames
-        if frame_sink is None:
-            return
-        reports = frame_sink.stop()
-        frame_sink = None
-        if not keep:
-            discard_frames(pending_frames)
-            pending_frames = None
-            return
-        take_frames = {"mono0_ns": take_mono0, "per_camera": reports}
-        for cam_name, rep in reports.items():
-            drop = f", {rep['dropped']} dropped" if rep["dropped"] else ""
-            err = f", {rep['write_errors']} write error(s)" if rep["write_errors"] else ""
-            flush = "" if rep["flushed"] else " ⚠️ writer did not flush"
-            print(f"  📷 {cam_name}: {rep['written']} frame(s){drop}{err}{flush}.")
+    saving_summary: tuple[str, float, int] | None = None
     replay: Trajectory | None = None    # being played back right now, or None
     replay_t0 = 0.0
     replay_s = 0.0                      # seconds into the recording, held back on lag
@@ -1810,8 +1782,48 @@ def main() -> int:  # noqa: PLR0915
                 if stop_reason:
                     break
 
+                had_finishing_sink = recording.active is None and recording.sink is not None
+                recording.poll()
+                if had_finishing_sink and recording.sink is None:
+                    if recording.frame_error:
+                        print(f"\n  {recording.frame_error}. Frames retained at {recording.frames}.\n")
+                    elif recording.frame_report is not None:
+                        for camera, report in recording.frame_report["per_camera"].items():
+                            print(f"  📷 {camera}: {report['written']} frame(s), "
+                                  f"{report['dropped']} dropped, {report['write_errors']} write error(s).")
+                        print("  Camera files finished. Choose a save slot or discard.\n")
+                if pending in ("take_saving", "take_discarding") and not recording.busy:
+                    if recording.save_error is not None:
+                        print(f"\n  Recording disk operation failed: {recording.save_error}")
+                        for note in getattr(recording.save_error, "__notes__", []):
+                            print(f"     {note}")
+                        print("     The new take is still pending. Choose a slot to retry, "
+                              "or a non-digit to discard.\n")
+                        pending, replace_slot = "take_save", None
+                    elif pending == "take_saving" and recording.saved is not None:
+                        slot, seconds, count = saving_summary
+                        saved = recording.saved
+                        if saved.warning:
+                            print(f"  {saved.warning}")
+                        print(f"\n  ✓ recording {slot} saved: {seconds:.1f}s, "
+                              f"{count} samples → {saved.path.name}"
+                              + (f" + frames/{slot}/" if saved.has_frames else ""))
+                        print(f"     (l then {slot} plays it back)\n")
+                        pending = None
+                    else:
+                        print("\n  recording discarded.\n")
+                        pending = None
+
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
+                    if recording.busy and pending in ("take_save", "take_replace", "take_saving", "take_discarding"):
+                        if k == "q":
+                            # Quitting still reaches the normal park/disable flow.
+                            pending = None
+                        else:
+                            print("  Recording files are still finishing. Wait, or q to quit; "
+                                  "unfinished files are retained.")
+                            continue
                     # Selection controls mode changes and edits; each arm continues being driven.
                     # A pending wizard keeps its original target until finished or cancelled.
                     aimed = [one for one in arms if one.name in selection.names()]
@@ -1866,43 +1878,29 @@ def main() -> int:  # noqa: PLR0915
                                   "what is there.\n")
                             continue
                         if action[0] == "discard":
-                            recording.discard()
-                            discard_frames(pending_frames)
-                            pending_frames, take_frames = None, None
+                            recording.request_discard()
+                            pending = "take_discarding"
                             if action[1] is not None:
                                 print(f"\n  kept recording {action[1]}; the new one is "
-                                      "discarded.\n")
+                                      "being discarded.\n")
                             else:
-                                print("\n  recording discarded.\n")
+                                print("\n  finishing recording discard.\n")
                             continue
                         if k.isdigit() and recording.pending is not None:
                             try:
-                                saved = save_take(recording.pending, takes_dir, k,
-                                                  pending_frames=pending_frames,
-                                                  frame_report=take_frames)
+                                saving_summary = (k, recording.pending.duration, len(recording.pending))
+                                recording.request_save(takes_dir, k, saver=save_take)
+                                pending = "take_saving"
+                                print(f"\n  Saving recording {k}… control remains active.\n")
                             except Exception as exc:
                                 pending = "take_save"
                                 replace_slot = None
                                 print(f"\n  Recording was not saved: {exc}")
-                                for note in getattr(exc, "__notes__", []):
-                                    print(f"     {note}")
                                 print("     The new take is still pending. Choose a slot to retry, "
                                       "or a non-digit to discard.\n")
-                                continue
-                            path = saved.path
-                            pending_frames, take_frames = None, None
-                            if saved.warning:
-                                print(f"  {saved.warning}")
-                            print(f"\n  ✓ recording {k} saved: {recording.pending.duration:.1f}s, "
-                                  f"{len(recording.pending)} samples → {path.name}"
-                                  + (f" + frames/{k}/" if "cameras" in recording.pending.meta
-                                     else ""))
-                            print(f"     (l then {k} plays it back)\n")
                         else:
-                            discard_frames(pending_frames)
-                            pending_frames, take_frames = None, None
-                            print("\n  recording discarded.\n")
-                        recording.discard()
+                            recording.request_discard()
+                            pending = "take_discarding"
                         continue
 
                     if pending == "settings":
@@ -2614,12 +2612,19 @@ def main() -> int:  # noqa: PLR0915
                                 "frames": {one.name: one.frame for one in arms},
                                 "frame": arms[0].frame,
                             }, modes=[f"{one.name}:{one.mode}" for one in arms])
-                            # Stamp the camera clock at start; choose the slot after stop.
                             if capture is not None:
-                                take_mono0 = time.monotonic_ns()
-                                pending_frames = pending_frames_dir(
-                                    TAKES_DIR, datetime.now().strftime("%Y%m%d_%H%M%S"))
-                                frame_sink = FrameSink(pending_frames, capture_names)
+                                try:
+                                    mono0 = time.monotonic_ns()
+                                    frames_path = pending_frames_dir(
+                                        takes_dir, f"{datetime.now():%Y%m%d_%H%M%S}_{mono0}")
+                                    recording.start_frames(frames_path, capture_names, mono0,
+                                                           factory=FrameSink)
+                                except Exception as exc:
+                                    recording.fail(exc)
+                                    pending = "take_save"
+                                    print(f"\n  {recording.frame_error}. "
+                                          "Press a non-digit to discard this take.\n")
+                                    continue
                             print("\n⏺  RECORDING " + " · ".join(
                                 f"{one.name} {one.mode.upper()}" for one in arms)
                                 + f"  ({sample_layout().n_joints} joints per sample)."
@@ -2629,18 +2634,15 @@ def main() -> int:  # noqa: PLR0915
                         else:
                             # Freeze immediately at stop. Waiting for a slot must not append trailing samples.
                             recording.freeze()
-                            # ⭐ The frame writers stop on the SAME line the sampler does (the §30.1 rule extended to images): frames captured while the save prompt waits would belong to no recording.
-                            stop_take_frames(keep=True)
                             if recording.pending.meta.get("marks"):
                                 print(f"  ✎ labels: {recording.pending.bad_seconds():.1f}s of "
                                       f"{recording.pending.duration:.1f}s marked BAD "
                                       f"({len(recording.pending.meta['marks'])} mark(s)).")
                             n, secs = len(recording.pending), recording.pending.duration
                             if n < 2:
-                                recording.discard()
-                                discard_frames(pending_frames)
-                                pending_frames, take_frames = None, None
-                                print("\n  nothing recorded (too short) — discarded.\n")
+                                recording.request_discard()
+                                pending = "take_discarding"
+                                print("\n  nothing recorded (too short) — finishing discard.\n")
                             else:
                                 pending = "take_save"
                                 print(f"\n⏹  RECORDED {secs:.1f}s, {n} samples, "
@@ -2853,23 +2855,22 @@ def main() -> int:  # noqa: PLR0915
                 # Sample every arm in layout order on one recording clock.
                 # Record measured positions, not the requested targets.
                 if recording.active is not None:
-                    # A trajectory append failure aborts recording without changing arm modes.
-                    # Camera I/O has separate failure paths that still need equivalent containment.
+                    # Joint and camera sampling failures stop only this take.
+                    # Its writers and directory remain owned through completion.
                     try:
                         recording.sample(
                             t, [v for one in arms
                                 for v in np.asarray(one.robot.get_joint_pos(), dtype=float)],
                             [f"{one.name}:{one.mode}" for one in arms])
+                        if recording.sink is not None and capture is not None:
+                            recording.offer_frames(capture.sample())
                     except Exception as exc:  # noqa: BLE001
-                        print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
-                        print("     The arm is unaffected. Press w to start a new one.\n")
-                        recording.discard()
-                        # An aborted recording's frames belong to nothing — discard, never keep.
-                        stop_take_frames(keep=False)
+                        recording.fail(exc)
+                        pending = "take_save"
+                        print(f"\n⚠️  {recording.frame_error}")
+                        print("     Recording stopped; arm modes are unchanged. "
+                              "The take is retained until you discard it.\n")
                     else:
-                        # ⭐ Item 48 ②: frames ride ONLY while a take does. `CaptureSet.sample()` never blocks and the sink forwards only frames whose sequence advanced, so this line costs a few dict lookups per cycle and the JPEG work happens in the writer threads.
-                        if frame_sink is not None and capture is not None:
-                            frame_sink.offer(capture.sample())
                         # ⚠️ A bound, because this grows in memory for as long as it runs and
                         # nothing else would ever stop it. 100 000 samples is ~16 minutes at
                         # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
@@ -2878,7 +2879,6 @@ def main() -> int:  # noqa: PLR0915
                         if len(recording.active) >= MAX_TAKE_SAMPLES:
                             # Freeze it the same way `w` does, or the limit would not be one.
                             recording.freeze()
-                            stop_take_frames(keep=True)
                             pending = "take_save"
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
                                   f"limit ({recording.pending.duration:.0f}s).")
@@ -3725,9 +3725,8 @@ def main() -> int:  # noqa: PLR0915
                     exit_code = 1
                     print(f"\n⚠️ could not close SpaceMouse: {exc}")
         for label, cleanup in (
-            ("frame writers", lambda: frame_sink.stop() if frame_sink is not None else None),
+            ("recording", recording.shutdown),
             ("camera readers", lambda: capture.stop() if capture is not None else None),
-            ("unsaved frames", lambda: discard_frames(pending_frames)),
         ):
             try:
                 cleanup()

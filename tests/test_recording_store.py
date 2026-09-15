@@ -166,6 +166,23 @@ def test_validation_refuses_unpaired_frames_without_creating_recovery_debris():
             raise AssertionError('missing report accepted')
         original_intact(root, pending)
 
+def test_unfinished_or_missing_completion_report_preserves_old_slot():
+    for completion in (False, None):
+        with TemporaryDirectory() as d:
+            root = Path(d)
+            _, _, pending, report = fixture(root)
+            if completion is None:
+                del report['per_camera']['camera']['flushed']
+            else:
+                report['per_camera']['camera']['flushed'] = completion
+            try:
+                save_take(trajectory('new'), root, '4', pending_frames=pending, frame_report=report)
+            except ValueError as exc:
+                assert 'finish' in str(exc)
+            else:
+                raise AssertionError('incomplete frames accepted')
+            original_intact(root, pending)
+
 def main():
     tests = [v for (k, v) in globals().items() if k.startswith('test_') and callable(v)]
     passed = 0

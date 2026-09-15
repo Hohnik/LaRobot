@@ -39,6 +39,10 @@ def save_take(take: Trajectory, recordings_dir: Path, slot: str, *,
         raise ValueError('A recording slot must be one digit from 0 to 9')
     if (pending_frames is None) != (frame_report is None):
         raise ValueError('Pending frames and their report must be supplied together')
+    if frame_report is not None:
+        reports = frame_report.get('per_camera', {})
+        if not reports or any(report.get('flushed') is not True for report in reports.values()):
+            raise ValueError('Every camera writer must finish before saving its frames')
     root = Path(recordings_dir)
     root.mkdir(parents=True, exist_ok=True)
     unresolved = list(root.glob(f'.save-{slot}-*'))
