@@ -236,6 +236,7 @@ def test_guide_records_a_drift_reference_and_measures_against_it() -> None:
     arm = ArmSession(robot, name="B")
     assert arm.enter_guide() is None
     assert robot.gravity_calls == 1
+    assert arm.mode == "guide"
     assert arm.guide_drift() == 0.0
     robot.q = np.array([0.0, 0.09, 0.0, 0.0, 0.0, 0.0, 0.0])
     assert abs(arm.guide_drift() - 0.09) < 1e-9
@@ -250,6 +251,7 @@ def test_a_missing_zero_gravity_api_is_reported_not_assumed() -> None:
     arm = ArmSession(OldSDK(), name="B")
     warning = arm.enter_guide()
     assert warning is not None and "NOT weightless" in warning
+    assert arm.mode == "hold", "a refused transition must not report GUIDE"
     assert arm.guide_ref is not None, "the drift reference is still taken, so the "
     "operator can see the arm is NOT holding itself"
 

@@ -652,11 +652,12 @@ class ArmSession:
         """
         self.resync()
         self.guide_ref = np.asarray(self.robot.get_joint_pos(), dtype=float)
-        self.mode = "guide"
         fn = getattr(self.robot, "enter_gravity_comp_idle", None)
         if callable(fn):
             fn()
+            self.mode = "guide"
             return None
+        self.enter_hold()
         return "enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)"
 
     def guide_drift(self) -> float | None:

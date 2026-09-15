@@ -10,6 +10,8 @@ Use `./teleop` from the repository root. It installs the locked Python 3.12 depe
 ./teleop --sim --arms B,G --start-mode hold --yes  # interactive simulation
 ```
 
+The simulation runs in the terminal. Its fake SpaceMice stay still; keys exercise modes, saved poses, recording and replay. Press `?` for help. To exit, press `q`, wait for the quit menu, then press `q` again. Gravity and hand-guiding are not simulated.
+
 For the physical arms, follow the bring-up checklist below, then run the same command without `--sim`, adding `--yes` only when ready to enable them. Starting both arms in HOLD avoids the unsupported two-arm GUIDE startup.
 
 Current cleanup status, preservation details, validation limits, and remaining work: [docs/CLEANUP.md](docs/CLEANUP.md). Fable's original handoff is preserved at `499d0b7`; the cleanup changes have software and simulation validation only.

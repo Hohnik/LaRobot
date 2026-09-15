@@ -4,7 +4,7 @@ Updated September 15, 2026. This is the current implementation handoff for the c
 
 ## Status
 
-Two cleanup increments are complete on `codex/teleop-cleanup`, based on Fable's final `499d0b7`: startup/shutdown ownership (`c72686b`) and the shared recording lifecycle (the following commit). The final software suite is 891/891 across 46 files; falsifiers are 71/71; the isolated simulated workflow is 32/32. Documentation links and flag/restructure diagnostics pass. Nothing has been pushed or exercised on physical hardware. This session ends at a saved checkpoint; no background work remains running. Broader architectural cleanup remains, prioritized below.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed checkpoints cover startup/shutdown ownership (`c72686b`), the shared recording lifecycle (`de6bae7`), and the readability/save-failure continuation described below. The latest full suite passes 902/902 checks across 48 files, 71/71 falsifier catches, and 32/32 full simulated interaction checks. All 1,861 documentation links resolve. No physical hardware has been operated and nothing has been pushed. The original teleop/training refs and all original recordings remain preserved.
 
 Julien supplied Fable's final message, which explicitly named `499d0b7`. The original restore was correct. He then authorized proceeding sensibly with the assessment's cleanup plan and requested detailed durable notes. No user decision is needed for the present software work.
 
@@ -91,12 +91,12 @@ Manual stop and sample-limit stop now both call `freeze()`. Previously only manu
 
 The application now imports `git_commit` and `dt_now` from `yam.provenance`. The obsolete ArmSession header has been replaced with its current responsibilities. Historical rationale remains in FINDINGS and Git. Current README/HANDOFF entry points distinguish the August hardware evidence from this software-only continuation.
 
-This is a useful first extraction, not the end of the architectural work: the operator `main()` still spans roughly 3,900 lines. Camera state, slot persistence, replay/composite coordination, terminal prompts, and the control loop still meet in that function. Reducing a line count is not the acceptance criterion; removing duplicated decisions and testing the actual application boundary is.
+At the recording-lifecycle checkpoint, the operator `main()` still spanned roughly 3,900 lines. The later readability pass below reduces that further; architectural work remains. Camera state, slot persistence, replay/composite coordination, terminal prompts, and the control loop still meet in that function. Reducing a line count is not the acceptance criterion; removing duplicated decisions and testing the actual application boundary is.
 
 ## Next work, in order
 
-1. **Recording I/O failure containment and save consistency.** Inspect `stop_take_frames`, the `take_save`/`take_replace` handler, and `yam.cameras.writer.attach_frames_to_slot`. Current slot save moves/replaces the frame directory before saving the trajectory JSON. A failed JSON write can leave mismatched old metadata/new frames. Camera writer startup, flush, sampling and save errors are also not all contained by the trajectory-sample exception handler; some can leave the main loop through its outer exception path. These are code-inspection findings, not reproduced hardware failures. Characterize each with injected filesystem/camera failures before changing the operator's stopping policy. Prefer retaining a failed take for recovery over quietly discarding it.
-2. **Finish recording ownership.** Move per-take frame lifecycle and slot persistence behind an explicit session-level owner once the error behavior is specified. Keep long-lived camera readers outside it. Frame/JSON replacement needs a recovery plan because two separate paths cannot be atomically renamed together. Do not hide that problem by merely moving the existing code.
+1. **Camera I/O failure containment.** Trajectory append and slot-save errors are now contained, but writer startup, frame sampling, and stop/flush errors still have paths to the outer exception handler. Characterize each with injected camera failures. Keep motion policy separate from recording error handling, and retain a recoverable take where possible. Also characterize writers that report `flushed: false`; a live encoder must not mutate a frame set while it is published or discarded.
+2. **Finish recording ownership and recovery tooling.** Slot publication now lives in `yam.recording_store`; per-take writer/report ownership remains in the application. Keep long-lived camera readers outside the take owner. The recovery directory currently contains both versions and instructions, and blocks another overwrite of that slot. A future recovery command should inspect the actual files and validate metadata/frame agreement before making changes. Do not silently guess after a crash.
 3. **Replay/composite coordinator.** Keep one cursor for all arms, preserve the park-to-start gate and purpose tags (FINDINGS §72), and test arrival/leg handovers at the real call sites. The existing full simulator is a useful normal-path check, not coverage of every fault/interrupt timing.
 4. **Terminal interaction.** Separate input decoding and prompt state after recording/replay boundaries stabilize. Keep the two-step motion confirmations and occupied-slot re-aim behavior. Avoid changing physical behavior as a side effect of shortening the application.
 5. **Team integration.** Re-read the team's current refs before proposing a bridge; the fetched September refs are a dated snapshot. Choose specific transferable behavior and document gaps. Do not replace the hardware reference with the newer, narrower dual-wield simulator solely because its commit is newer.
@@ -116,3 +116,34 @@ Local evidence paths:
 - `agents/codex/validation/launcher-help.txt` and `launcher-dry-run.txt`: actual launcher output.
 - `agents/codex/validation/final-recording-preservation.json`: all 3,455 original recording files still match the pre-switch SHA-256 manifest after this work.
 - `agents/codex/CLEANUP_ASSESSMENT.md`, `REPORT.md`, and `unreachable-commits.txt`: earlier investigation and recovery details. They are dated snapshots; this document takes precedence for current implementation status.
+
+
+## Readability, slot-save and GUIDE continuation
+
+Julien asked whether the files themselves had been cleaned up and then authorized the next steps. This pass addresses that concern directly:
+
+- `apps/teleop_session.py` shrank from 5,055 to about 3,850 lines. Its `main()` shrank from 3,898 to about 3,100 lines. It remains large; camera startup, replay/composite state, prompts and dispatch still need separate ownership.
+- 87 comment/docstring blocks moved verbatim to [archived source notes](archive/teleop-source-notes.md). Concise explanations of current constraints remain at the call sites. The removed notes are explicitly historical and can contain superseded claims.
+- The prose-only transformation was checked by comparing parsed executable statements after removing docstrings. They were identical. The three moved display functions also had identical parsed function bodies before and after extraction.
+- `yam.ui.session_status` now formats per-arm status, joint labels and tracking tables. The application imports those functions, preserving existing app-level callers. It makes no robot commands.
+- `yam.recording_store.save_take` now owns slot publication and rollback. The application owns slot selection and occupied-slot confirmation.
+
+### Failed recording saves
+
+The previous handler replaced the frame directory before calling Trajectory.save. The new store serializes a candidate recording first, then temporarily removes the previous slot JSON before swapping frame directories. It publishes the new JSON last. In-process exceptions and interrupts restore the old frames before the old JSON. A failed save keeps the same take pending at the application's slot prompt so the operator can retry or choose a different slot.
+
+A `.save-<slot>-<random>/` recovery directory holds candidate JSON, previous JSON/frames when moved, and `recovery.json` instructions. Failed rollback retains the directory and prevents another overwrite of that slot. Failure to delete old data after successful publication reports a cleanup warning instead of telling the operator that a successful save failed.
+
+Limits: this is a single-writer file workflow, not a database transaction. It does not synchronize concurrent readers that cached old JSON, and does not claim power-loss durability (there is no filesystem flush protocol). Process termination can leave a slot temporarily absent and require recovery. Other tools still using the older standalone frame helpers do not automatically gain this behavior. Saving/flush operations can still block the application loop; asynchronous persistence belongs with the remaining camera/recording ownership work.
+
+Nine store tests inject serialization, publication, frame-move, interrupt and rollback failures in temporary directories. An additional test drives actual application keys through a failed save followed by retry into a different slot, checking that the same take survives and the run exits normally.
+
+### What Julien's terminal run showed
+
+The app terminal can be read through the terminal snapshot tool. It showed Julien selecting arms, trying GUIDE, entering TELEOP on both, and quitting via park. Both simulated arms reported seven disabled motors; the loop averaged about 83 Hz with a 105.8 ms worst pass around TELEOP entry. That timing is one observed simulator run, not a hardware benchmark.
+
+The run exposed a real contradiction: ArmSession.enter_guide set mode to GUIDE before checking for the gravity-compensation API. The fake arm lacks that API, so the warning said HOLD while state and banners said GUIDE. The transition now falls back to actual HOLD when the API is missing, and only sets GUIDE after a successful API call. All three application banners name only arms actually in GUIDE. The existing ArmSession test now checks the mode; another actual-application test verifies that a refused GUIDE request prints no success banner.
+
+The simulator is a terminal workflow with stationary fake SpaceMice. It does not open a 3D view or simulate hand-guiding/gravity. `?` lists keys; `q`, wait for the quit menu, then `q` parks and exits. The agent can run a private PTY instance, but the computer-control tool refused interaction with both Codex and macOS Terminal, so Julien starts his interactive run by pasting the launcher command. The agent's private instance was closed normally. Its isolated snapshot remains at `.local-backups/simulation-playground-2026-09-15`; it preserves the earlier source and is not a live view of subsequent edits.
+
+Latest local logs use `agents/codex/validation/readability-*.txt`. `readability-preservation.json` again verifies all 3,455 original recording files unchanged, including after Julien's terminal exercise. The broad simulator passed 32/32 in another disposable copy and never wrote the user's recording slots. This continuation ends at a saved checkpoint, with no agent-owned simulator or background job left running.
