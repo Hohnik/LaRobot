@@ -17,7 +17,7 @@ sys.modules[spec.name] = app
 spec.loader.exec_module(app)
 
 def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
-                on_cycle=None, saver=None):
+                on_cycle=None, saver=None, max_cycles=40):
     output = io.StringIO()
     saved = []
     sessions = []
@@ -36,7 +36,7 @@ def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
 
         def drain(self):
             self.cycle += 1
-            if self.cycle > 40:
+            if self.cycle > max_cycles:
                 raise AssertionError('test script failed to reach quit')
             if on_cycle is not None:
                 on_cycle(self.cycle, sessions, root)
@@ -269,6 +269,31 @@ def test_teleop_entry_runs_workspace_guard_and_keeps_both_arms_live():
     code, text, _, _, _ = run_session({1: 'aat', 9: 'q'}, on_cycle=cycle)
     assert observed == [5] and code == 0, text
     assert 'NameError' not in text
+
+
+def test_leaving_replay_on_selected_arm_holds_both_replay_arms():
+    schedule = {1: 'aal', 2: '5', 3: '\n'}
+    state = {}
+    def cycle(number, arms, root):
+        if number == 1:
+            take = Trajectory(meta={'arms': ['B', 'G'], 'joints_per_arm': 7,
+                                    'simulated': True})
+            start = [v for a in arms for v in a.robot.get_joint_pos()]
+            take.append(0., start)
+            take.append(10., [v + .1 for v in start])
+            folder = root / 'recordings/sim'
+            folder.mkdir(parents=True, exist_ok=True)
+            take.save(folder / '5.json')
+        elif 'cancel' not in state and all(a.mode == 'replay' for a in arms):
+            state['cancel'] = number
+            schedule[number] = 'ah'  # BOTH -> B; only B receives the mode key.
+        elif 'cancel' in state and number == state['cancel'] + 1:
+            assert all(a.mode == 'hold' for a in arms)
+            state['held'] = True
+            schedule[number] = 'q'
+    code, text, _, _, _ = run_session(schedule, on_cycle=cycle, max_cycles=200)
+    assert code == 0 and state.get('held'), text
+    assert 'every replay arm is HOLDING now' in text
 
 
 def main():

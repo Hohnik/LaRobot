@@ -2,11 +2,11 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition and camera rendering are now extracted, as described below. Playback coordination and operator terminal interaction still remain.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. Operator terminal interaction and lifecycle coordination still need work.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, and shared camera/display extraction. Current validation passes 928/928 checks across 50 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state and composite sequencing. Current validation passes 941/941 checks across 52 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -81,7 +81,7 @@ The dedicated root launcher `./teleop` uses Python 3.12 and `.venv-teleop`, leav
 
 Both camera factories now own captures immediately and close partially started readers after failure. FrameSink also stops writers already started if a later writer cannot start. Teardown attempts all readers/writers even when one fails, reporting the collected failures. Device-reader release runs even when joining its thread fails.
 
-The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. Replay, shared camera discovery and terminal coordination remain. Per-take camera ownership and completion validation are implemented in the continuation below. The architectural cleanup is still incomplete.
+The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. The later camera and replay extractions are described below; terminal coordination remains. Per-take camera ownership and completion validation are implemented in the continuation below. The architectural cleanup is still incomplete.
 
 ## Decisions still reserved for the operator
 
@@ -99,8 +99,8 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-1. Extract the replay/composite coordinator. Keep one cursor for all arms, the park-to-start gate, purpose tags and arrival ordering. Characterize transitions at actual application call sites.
-2. Separate terminal prompt state and lifecycle coordination, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
+1. Make shutdown causes explicit, independent of message text. Then extract lifecycle coordination while preserving partial-startup ownership and motor-first cleanup.
+2. Separate terminal prompt state, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
 3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
 4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
 
@@ -194,4 +194,17 @@ Nine additional tests cover configuration failure, diagnostic cleanup, duplicate
 
 Identity limits remain explicit. A configuration-mode response is not proof of frame delivery. Same-model twins require physical identification. The existing macOS behavior warns and proceeds when no model-distinguishing mode exists; that policy was preserved and tested, not strengthened silently. Linux keeps its measured-delivery checks. A monochrome image alone does not establish depth data. No actual camera enumeration, stream, motor operation or terminal-image display was tested here.
 
-Remaining blocking work includes per-take writer construction and some diagnostic/startup I/O. Playback and operator prompt coordination still live in the main loop. The successful extraction does not close those architectural items.
+Remaining blocking work includes per-take writer construction and some diagnostic/startup I/O. At this camera checkpoint playback and operator prompt coordination still lived in the main loop; the next section records the playback extraction. The successful extraction does not close those architectural items.
+
+
+## Replay state and composite sequencing
+
+`yam.playback_session.PlaybackSession` owns pending/active takes, their ordered layout, replay-start arrival credits, one shared cursor, speed/scrub mode and tracking history. `yam.composite.CompositeRun` owns validation of all take legs before starting, the remaining queue, selected pose arms and pose-arrival gates. The operator calls these owners rather than keeping parallel local state.
+
+Arm commands remain in the application. Each cycle still measures in recording order, computes one shared target, commands each arm through the existing constraints, then records tracking. Both grippers are excluded by layout from the arm-lag gate. A fresh measured-pose comparison for every participating arm still occurs immediately before playback starts. The completed path's purpose is captured before advancing a composite: an arrival that starts the next take cannot also count as arrival at that take's start.
+
+Two reset details are explicit: replacing a composite clears its old pose-arrival credits, and preparing a new take clears its old scrub choice. Cancellation discards pending replay arrival credits and queued composite work. Leaving replay on one arm puts every other replay arm into HOLD.
+
+The operator is now 3,460 lines, down from 3,624 at the camera checkpoint and 5,055 before the readability work. The two new owners total about 200 lines. This is still an incomplete architectural cleanup: prompt decoding, physical command dispatch, replay plan/loading, measured start verification and report persistence remain in the operator. The owners do not introduce background robot control or establish hardware stopping performance.
+
+Six composite tests and six playback tests cover validation before motion, arm ordering, all-arm arrival gates, cancellation, replacement, shared-clock lag behavior and tracking order. An additional actual-application test starts a two-arm replay and changes only the selected arm to HOLD, verifying both arms leave replay. The old source-name assertion was updated as supplementary evidence. The full suite passes 941/941 across 52 files, falsifiers 71/71, and the isolated interaction driver 32/32. Logs use `agents/codex/validation/playback-*`; the disposable simulator copy contains its own synthetic recordings.

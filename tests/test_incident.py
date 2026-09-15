@@ -239,11 +239,11 @@ def test_a_mode_key_ends_the_playback_for_EVERY_replay_arm() -> None:
     Julien's session. Any arm leaving replay must end the playback for all of them,
     and the released arms go to HOLD through the class."""
     src = (REPO / "apps" / "teleop_session.py").read_text()
-    assert 'any(one.mode != "replay" for one in replay_arms)' in src, \
+    assert 'any(one.mode != "replay" for one in playback.arms)' in src, \
         "the any-arm-left condition is gone — the zombie replay arm is back"
     assert 'not any(one.mode == "replay" for one in arms)' not in src, \
         "the old wait-for-everyone condition is back (the zombie's cause)"
-    at = src.find('any(one.mode != "replay" for one in replay_arms)')
+    at = src.find('any(one.mode != "replay" for one in playback.arms)')
     tail = src[at:at + 400]
     assert "a2.enter_hold()" in tail, \
         "released replay arms are no longer put into HOLD through the class"

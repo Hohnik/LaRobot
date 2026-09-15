@@ -65,11 +65,8 @@ from yam.recording import (  # noqa: E402
     Layout,
     describe_slot,
     slot_overview,
-    TrackingLog,
     Trajectory,
-    replay_step,
     SCRUB_MAX_RATE,
-    scrub_step,
     safe_time_scale,
 )
 from yam.ui.session_status import flat_joint_names, status_row, tracking_table  # noqa: E402
@@ -84,6 +81,8 @@ from yam.teleop import (  # noqa: E402
 )
 from yam.recording_store import save_take  # noqa: E402
 from yam.recording_session import RecordingSession  # noqa: E402
+from yam.composite import CompositeRun  # noqa: E402
+from yam.playback_session import PlaybackSession  # noqa: E402
 from yam.provenance import dt_now, git_commit  # noqa: E402
 from yam.cameras.session import open_session_cameras  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
@@ -755,22 +754,9 @@ def main() -> int:  # noqa: PLR0915
     # Park leg duration resets per waypoint; total path duration does not.
     # Recording and replay each use one shared timeline across every arm.
     recording = RecordingSession()
+    playback = PlaybackSession()
     saving_summary: tuple[str, float, int] | None = None
-    replay: Trajectory | None = None    # being played back right now, or None
-    replay_t0 = 0.0
-    replay_s = 0.0                      # seconds into the recording, held back on lag
-    replay_speed = 1.0
-    replay_progress_t = 0.0             # last cycle in which the clock actually moved
-    replay_slot = "?"                   # which saved recording is being played
-    # ⭐ SCRUB (item 13, ROADMAP §7.6): the puck is the playback clock — push forward to
-    # play, pull back to rewind, release to freeze. Chosen with `j` at the play prompt,
-    # never the default, because a long unattended playback must not need a held hand.
-    replay_scrub = False
-    # ⭐ The scrub hint reports the EFFECTIVE pace over the last second, measured, because
-    # the dial's number and the achieved pace genuinely differ: the lag hold freezes the
-    # clock whenever the ARM cannot keep up, so "8x" on a fast recording plays at whatever
-    # max_speed allows. He measured that gap by feel on 2026-08-18 ("no way that was
-    # eight times") — the readout makes it a number instead (FINDINGS §68.8).
+    # Display the effective scrub rate over the last reporting window.
     scrub_ref_t = scrub_ref_s = scrub_ref_h = 0.0
     # Initialize overwrite-prompt state before the first save, even if no guard ran yet.
     replace_slot: str | None = None     # the occupied slot the guard is asking about
@@ -779,24 +765,8 @@ def main() -> int:  # noqa: PLR0915
     # layered, so "how this session started" means what the plan printed, not the built-ins.
     settings_at_start = {k: getattr(args, k) for k in LIVE_ORDER if hasattr(args, k)}
     settings_pick: str = LIVE_ORDER[0]  # which setting -/+ moves in the SETTINGS screen
-    replay_held_s = 0.0                 # seconds spent waiting for the arm to catch up
-    replay_worst_lag = 0.0              # furthest behind the arm ever got, radians
-    replay_prev_target: list[float] | None = None
-    tracking: TrackingLog | None = None   # per-joint answer to "how fast can it go?"
-    replay_pending: Trajectory | None = None   # parked to its start, waiting to run
-    # ⛔⭐ WHY EVERY PARK CARRIES ITS PURPOSE (FINDINGS §72.1): an arrival used to be creditable to a playback ARMED IN THE SAME EVENT. A pose-leg's arrival advanced the composite queue, the queue armed the take leg, and the very same arrival then fell through into the ready-check and counted as "this arm is at the recording's start" — so the playback began while the arm still had 1.28 rad of park to go, measured on the bench 2026-08-19. The credit below now requires the ARRIVED path to have been the replay's own park-to-start, nothing else's.
-    park_purpose: dict[str, str] = {}          # arm name → why its CURRENT park runs
-    # ⭐⭐ WHICH ARMS A PLAYBACK DRIVES, in the RECORDING's order, and how its samples map
-    # onto them. Both come from the file's own metadata rather than from the session, so a
-    # recording made with `--arms B,G` cannot be replayed onto `--arms G,B` with each arm
-    # driven by the other's joints.
-    replay_layout: Layout | None = None
-    replay_arms: list[ArmSession] = []
-    #: ⛔ Which of those arms have finished parking to the start pose. The playback may not
-    #: begin until EVERY one has: a two-arm demonstration whose arms start seconds apart is
-    #: not the demonstration that was recorded, and the whole point of one timeline is that
-    #: they stay in step.
-    replay_ready: set[str] = set()
+    # Capture each arrival's purpose before advancing a composite leg (FINDINGS §72.1).
+    park_purpose: dict[str, str] = {}
     # Mirror state belongs to the session: the link relates a leader and follower.
     mirror_link: MirrorLink | None = None
     #: ⚠️ Declared here so the stop report can read it even if it somehow runs before a link
@@ -808,12 +778,6 @@ def main() -> int:  # noqa: PLR0915
     pending: str | None = None
     park_sequence: list[str] = []      # "3" = pose slot, "w3" = recording (take) slot
     park_take_next = False             # w inside the p prompt arms "the next digit is a take"
-    # A composite queue combines pose legs and validated trajectory legs.
-    # Keep one shared cursor and require every participating arm to reach its start.
-    composite_queue: list = []
-    composite_wait: set[str] = set()
-    composite_total = 0
-    composite_aimed: list[ArmSession] = []
     angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
     # The active control and button binding belong to the selected ArmSession.
@@ -1173,15 +1137,15 @@ def main() -> int:  # noqa: PLR0915
             playback comes out longer than the recording. Better said before he presses
             Enter than discovered afterwards.
             """
-            if replay_pending is None:
+            if playback.pending is None:
                 return ""
-            taught = replay_pending.joint_speed(99)
+            taught = playback.pending.joint_speed(99)
             note = ""
             if taught > args.teleop_speed:
                 note = (f" ⚠️ taught {taught:.1f} rad/s exceeds the "
                         f"{args.teleop_speed:.1f} allowed, so 1.00x will lag")
-            return (f"PLAY {replay_slot} · {replay_pending.duration:.1f}s taught at "
-                    f"{taught:.2f} rad/s · speed {replay_speed:.2f}x (-/+){note} · Enter=go "
+            return (f"PLAY {playback.slot} · {playback.pending.duration:.1f}s taught at "
+                    f"{taught:.2f} rad/s · speed {playback.speed:.2f}x (-/+){note} · Enter=go "
                     f"· j=puck scrub")
 
         def begin_path(one: ArmSession, legs: list, what: str,
@@ -1200,10 +1164,8 @@ def main() -> int:  # noqa: PLR0915
             """
             # An unrelated park cancels pending playback. Only replay's own park-to-start
             # may authorize that playback to begin.
-            nonlocal replay_pending, replay_ready
-            if not for_replay and replay_pending is not None:
-                replay_pending = None
-                replay_ready = set()
+            if not for_replay and playback.pending is not None:
+                playback.cancel_pending()
                 print("\n  ⚠️  playback cancelled — a new park replaced the drive to its "
                       "start pose.\n")
             # ⭐ Same rule one level up (ROADMAP §6.6.1a trap ①): a park the COMPOSITE did
@@ -1211,7 +1173,7 @@ def main() -> int:  # noqa: PLR0915
             # and its take legs pass for_replay=True, so only operator-initiated parks
             # land here — which is exactly who may abandon a queued run.
             if not for_replay and not for_composite:
-                abandon_composite("a new park replaced it")
+                composite.abandon("a new park replaced it")
             # ⭐ item 23 group ④: the CLASS builds and runs the park now — the tested
             # `begin_path`/`step_path` pair with its 48 tests is finally the code that
             # moves the arm. The session's live dials are copied on at start, and the
@@ -1273,111 +1235,21 @@ def main() -> int:  # noqa: PLR0915
             park drives there, and the ARRIVAL branch — never an interruption — hands
             over to the playback (FINDINGS §57.1).
             """
-            start = list(replay_pending.start_pose() or ())
-            for one in replay_arms:
+            start = list(playback.pending.start_pose() or ())
+            for one in playback.arms:
                 begin_path(one, [("recording start",
-                                  start[replay_layout.slice_for(one.name)])],
+                                  start[playback.layout.slice_for(one.name)])],
                            f"arm {one.name}'s start pose in recording "
-                           f"{replay_slot}", for_replay=True)
+                           f"{playback.slot}", for_replay=True)
 
         def start_take(slot: str, loaded, layout, take_arms) -> None:  # noqa: ANN001
             """A composite take-leg begins: exactly the `l` Enter flow, minus the prompt."""
-            nonlocal replay_pending, replay_layout, replay_arms, replay_ready, \
-                replay_slot, replay_speed, replay_scrub
-            replay_pending, replay_layout, replay_arms = loaded, layout, take_arms
-            replay_ready, replay_slot, replay_scrub = set(), slot, False
-            replay_speed = min(1.0, safe_time_scale(loaded.joint_speed(99),
-                                                    args.teleop_speed))
+            playback.prepare(loaded, layout, take_arms, slot, args.teleop_speed)
             park_to_take_start()
 
-        def abandon_composite(why: str) -> None:
-            """Drop every queued leg, once, with a count. No-op when nothing is queued.
-
-            ⛔ ONE function called from every exit — mode keys, a blocked park, a blocked
-            or abandoned playback, an operator-started park — because the exit that gets
-            forgotten is the one that matters (the same one-place rule as leaving PARK).
-            """
-            nonlocal composite_queue, composite_wait, composite_total
-            if not (composite_queue or composite_wait or composite_total):
-                return
-            left = len(composite_queue)
-            composite_queue, composite_wait, composite_total = [], set(), 0
-            print(f"\n  ⚠️  composite run abandoned ({why}) — "
-                  f"{left} queued leg(s) dropped.\n")
-
-        def start_next_composite_entry() -> None:
-            """Pop and start the next leg. Pose entries park every composite arm; a take
-            entry re-enters the confirmed `l` flow. Runs in arrival/completion branches
-            only — never in a key branch (the §57.1 rule)."""
-            nonlocal composite_wait
-            while composite_queue:
-                entry = composite_queue.pop(0)
-                left = len(composite_queue)
-                if entry[0] == "poses":
-                    wanted = entry[1]
-                    composite_wait = set()
-                    for one in composite_aimed:
-                        legs, missing = resolve_park_legs(wanted, one.base_pose, one.slots)
-                        if missing:
-                            print(f"\n  ⚠️  arm {one.name}: skipping empty slot(s) "
-                                  f"{', '.join(missing)}.\n")
-                        if legs:
-                            begin_path(one, legs, " → ".join(n for n, _ in legs),
-                                       for_composite=True)
-                            composite_wait.add(one.name)
-                    if composite_wait:
-                        print(f"  ▶ composite: {left} leg(s) still queued after this one.")
-                        return
-                    continue    # every slot empty on every arm — fall through to the next leg
-                slot, loaded, layout, take_arms = entry[1], entry[2], entry[3], entry[4]
-                start_take(slot, loaded, layout, take_arms)
-                print(f"  ▶ composite: {left} leg(s) still queued after this one.")
-                return
-            composite_leg_done()
-
-        def composite_leg_done() -> None:
-            """A leg finished. Start the next, or declare the run complete."""
-            nonlocal composite_total
-            if composite_queue:
-                start_next_composite_entry()
-            elif composite_total:
-                done, composite_total = composite_total, 0
-                hint("")
-                print(f"\n⭐ COMPOSITE RUN complete — all {done} leg(s) done.\n")
-
-        def begin_composite(wanted: list[str]) -> None:
-            """Group the typed entries, validate every take, then start leg one.
-
-            ⛔ Validation happens HERE, before any motion: a composite that discovers a
-            missing take at leg three has already moved the arm twice for nothing, and
-            "refuse loudly at Enter" is this repo's cheapest safety pattern.
-            """
-            nonlocal composite_queue, composite_total, composite_aimed
-            entries: list = []
-            for e in wanted:
-                if e.startswith("w"):
-                    entries.append(("take", e[1:]))
-                elif entries and entries[-1][0] == "poses":
-                    entries[-1][1].append(e)
-                else:
-                    entries.append(["poses", [e]])
-            resolved: list = []
-            for entry in entries:
-                if entry[0] == "take":
-                    got = load_take(entry[1])
-                    if got is None:
-                        print("     the whole composite run is refused — nothing has "
-                              "moved. Fix the take and retype it.\n")
-                        return
-                    resolved.append(("take", entry[1], *got))
-                else:
-                    resolved.append(entry)
-            composite_queue = resolved
-            composite_total = len(resolved)
-            composite_aimed = list(aimed)
-            print(f"\n⭐ COMPOSITE RUN: {composite_total} leg(s) — poses park, takes "
-                  "play, h or t abandons the rest.\n")
-            start_next_composite_entry()
+        composite = CompositeRun(load_take=load_take, begin_path=begin_path,
+                                 start_take=start_take, emit=print,
+                                 clear_hint=lambda: hint(""))
 
         # ⭐ Each arm enters its start mode, per arm. It used to run once, after the single
         # build, reading the one `robot` local.
@@ -1799,16 +1671,7 @@ def main() -> int:  # noqa: PLR0915
                         if got is None:
                             continue
                         loaded, layout, take_arms = got
-                        replay_pending = loaded
-                        replay_layout = layout
-                        replay_arms = take_arms
-                        replay_ready = set()
-                        replay_slot = k
-                        # Playback 1x is the taught speed. The suggested multiplier respects measured
-                        # recording speed and the configured cap; the operator chooses the final value.
-                        trackable = safe_time_scale(replay_pending.joint_speed(99),
-                                                    args.teleop_speed)
-                        replay_speed = min(1.0, trackable)
+                        playback.prepare(loaded, layout, take_arms, k, args.teleop_speed)
                         pending = "take_go"
                         hint(replay_plan_line())
                         continue
@@ -1820,32 +1683,32 @@ def main() -> int:  # noqa: PLR0915
                             # taught speed there would ask for something the arm cannot do
                             # and this rig has no emergency stop.
                             ceiling = max(1.0, safe_time_scale(
-                                replay_pending.joint_speed(99), args.teleop_speed))
-                            replay_speed = min(ceiling, replay_speed * 1.25)
+                                playback.pending.joint_speed(99), args.teleop_speed))
+                            playback.speed = min(ceiling, playback.speed * 1.25)
                             hint(replay_plan_line()); continue
                         if k == "-":
-                            replay_speed = max(0.05, replay_speed / 1.25)
+                            playback.speed = max(0.05, playback.speed / 1.25)
                             hint(replay_plan_line()); continue
                         pending = None
-                        if k == "j" and replay_pending is not None:
+                        if k == "j" and playback.pending is not None:
                             # ⭐ SCRUB (item 13): the same park-to-start safety flow as
                             # Enter, but once the recording begins the PUCK is the clock.
                             # A mode entered on purpose, never the default (ROADMAP §7.6's
                             # design caution: a long unattended playback must not need a
                             # held hand — this one is FOR the hand).
-                            replay_scrub = True
+                            playback.scrub = True
                             park_to_take_start()
                             print("     then the PUCK scrubs it: push forward to play, pull "
                                   "back to rewind,\n     let go to freeze. h or t ends it.\n")
                             continue
-                        if k in ("\r", "\n", " ") and replay_pending is not None:
-                            replay_scrub = False
+                        if k in ("\r", "\n", " ") and playback.pending is not None:
+                            playback.scrub = False
                             # Validate the take, park every participating arm to its first sample, then
                             # require the arrival gate before advancing the shared replay cursor.
                             park_to_take_start()
                             print("     then it plays the recording. Press h or t to stop.\n")
                         else:
-                            replay_pending = None
+                            playback.cancel_pending()
                             hint("")
                             print("\n  play cancelled.\n")
                         continue
@@ -1984,7 +1847,7 @@ def main() -> int:  # noqa: PLR0915
                             wanted = park_sequence[:] or ["0"]
                             park_sequence.clear()
                             if any(e.startswith("w") for e in wanted):
-                                begin_composite(wanted)
+                                composite.begin(wanted, aimed)
                                 continue
                             # ⭐ EACH SELECTED ARM RUNS ITS OWN SEQUENCE, resolved against
                             # its own slots. Two arms driving to their own saved poses at the
@@ -2017,7 +1880,7 @@ def main() -> int:  # noqa: PLR0915
                             wanted = park_sequence[:]
                             park_sequence.clear()
                             if any(e.startswith("w") for e in wanted):
-                                begin_composite(wanted)
+                                composite.begin(wanted, aimed)
                                 continue
                             ran = False
                             for one in aimed:
@@ -2427,7 +2290,7 @@ def main() -> int:  # noqa: PLR0915
                     elif k == "l":
                         # Require Enter after the playback plan to prevent accidental motion from a stray key.
                         # Refuse a second playback prompt while a replay is active.
-                        if replay is not None:
+                        if playback.active is not None:
                             hint("")
                             print("\n  ⚠️ a playback is already running — press h or t to "
                                   "stop it, then l to pick the next one.\n")
@@ -2539,7 +2402,7 @@ def main() -> int:  # noqa: PLR0915
                         # (FINDINGS §68.5): "more than normal speed if I fully press the
                         # control forward". Safe high: a fast cursor is held back by the
                         # lag hold, so only the clock is fast, never the arm.
-                        if replay is not None and replay_scrub:
+                        if playback.active is not None and playback.scrub:
                             args.scrub_max = adjust_setting(
                                 "scrub_max", args.scrub_max, True)
                             hint(f"scrub pace: full push = {args.scrub_max:g}x the "
@@ -2556,7 +2419,7 @@ def main() -> int:  # noqa: PLR0915
                                  + (" (ceiling)"
                                     if args.linear_scale >= MAX_LINEAR_SCALE else ""))
                     elif k == "-":
-                        if replay is not None and replay_scrub:
+                        if playback.active is not None and playback.scrub:
                             args.scrub_max = adjust_setting(
                                 "scrub_max", args.scrub_max, False)
                             hint(f"scrub pace: full push = {args.scrub_max:g}x the "
@@ -2592,33 +2455,32 @@ def main() -> int:  # noqa: PLR0915
                     if unfinished:
                         print(f"\n  ⚠️  arm {one.name}: run abandoned with {left:.2f} rad of "
                               "path left — leaving PARK cancels the rest.\n")
-                        abandon_composite("a park leg was abandoned")
+                        composite.abandon("a park leg was abandoned")
                     # An interrupted park cannot authorize replay. All replay arms must finish
                     # their own park-to-start before the shared cursor may advance.
-                    if unfinished and replay_pending is not None:
-                        replay_pending = None
-                        replay_ready = set()
+                    if unfinished and playback.pending is not None:
+                        playback.cancel_pending()
                         hint("")
                         print("  ⚠️  playback cancelled — it never reached the start pose.\n")
                 # Leaving replay mode cancels it and its remaining composite legs.
-                if replay is not None and any(one.mode != "replay" for one in replay_arms):
-                    for a2 in replay_arms:
+                if playback.active is not None and any(one.mode != "replay" for one in playback.arms):
+                    for a2 in playback.arms:
                         if a2.mode == "replay":
                             a2.enter_hold()
-                    left = replay.duration - replay_s
-                    if replay_scrub:
+                    left = playback.active.duration - playback.cursor
+                    if playback.scrub:
                         # ⭐ Leaving a SCRUB via a mode key is its normal end, not an
                         # abandonment — the scrub has no finish line of its own.
-                        print(f"\n  ⭐ scrub ended at {replay_s:.1f}s of "
-                              f"{replay.duration:.1f}s.\n")
-                        replay_scrub = False
+                        print(f"\n  ⭐ scrub ended at {playback.cursor:.1f}s of "
+                              f"{playback.active.duration:.1f}s.\n")
+                        playback.scrub = False
                     elif left > 0.05:
                         print(f"\n  ⚠️  playback abandoned with {left:.1f}s left"
-                              + ("" if len(replay_arms) < 2 else
+                              + ("" if len(playback.arms) < 2 else
                                  " — every replay arm is HOLDING now")
                               + ".\n")
-                    replay = None
-                    abandon_composite("the playback was abandoned")
+                    playback.finish()
+                    composite.abandon("the playback was abandoned")
                     hint("")
                 if stop_reason:
                     break
@@ -2953,30 +2815,25 @@ def main() -> int:  # noqa: PLR0915
                             # The leg is done when EVERY awaited arm has arrived; only
                             # then does the queue advance — in the ARRIVAL branch, never
                             # a key branch, which is the §57.1 rule.
-                            if one.name in composite_wait:
-                                composite_wait.discard(one.name)
-                                if not composite_wait:
-                                    composite_leg_done()
+                            composite.arrived(one.name)
                             # ⭐ The handover from "drive to the start pose" to "play the
                             # recording" lives HERE, in the arrival branch, so a park that
                             # was blocked or interrupted can never roll into a playback:
                             # only a park that actually arrived does — and only a park that
                             # was FOR the playback (`arrived_purpose`), never a pose leg's.
-                            if (replay_pending is not None and one in replay_arms
+                            if (playback.pending is not None and one in playback.arms
                                     and arrived_purpose == "replay"):
                                 # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each one
                                 # parks a different distance and finishes at a different
                                 # moment; starting on the first arrival would have the
                                 # second arm still parking while the recording ran.
-                                replay_ready.add(one.name)
-                                waiting = [a.name for a in replay_arms
-                                           if a.name not in replay_ready]
+                                waiting = playback.credit_arrival(one.name, arrived_purpose)
                                 off_start = []
                                 if not waiting:
                                     # Independently compare every arm's measured pose with its replay start before playback.
-                                    want_all = list(replay_pending.start_pose() or ())
-                                    for a in replay_arms:
-                                        sl = replay_layout.slice_for(a.name)
+                                    want_all = list(playback.pending.start_pose() or ())
+                                    for a in playback.arms:
+                                        sl = playback.layout.slice_for(a.name)
                                         want = np.asarray(want_all[sl], dtype=float)
                                         have = np.asarray(a.robot.get_joint_pos(),
                                                           dtype=float)
@@ -2996,35 +2853,28 @@ def main() -> int:  # noqa: PLR0915
                                           "(FINDINGS §57.1), and something moved the arm "
                                           "after its park arrived. Nothing plays; press "
                                           "l (or retype the run) to park and retry.\n")
-                                    replay_pending = None
-                                    replay_ready = set()
-                                    abandon_composite("a playback almost began away "
+                                    playback.cancel_pending()
+                                    composite.abandon("a playback almost began away "
                                                       "from its start pose")
                                 else:
-                                    replay = replay_pending
-                                    replay_pending = None
-                                    replay_t0, replay_s = t, 0.0
-                                    replay_progress_t = t
-                                    replay_held_s, replay_worst_lag = 0.0, 0.0
+                                    playback.start(t)
                                     scrub_ref_t, scrub_ref_s, scrub_ref_h = t, 0.0, 0.0
-                                    replay_prev_target = list(replay.start_pose() or ())
-                                    tracking = TrackingLog(replay.n_joints)
-                                    for a in replay_arms:
+                                    for a in playback.arms:
                                         a.mode = "replay"
-                                    if replay_scrub:
-                                        print(f"\n▶  SCRUB: {replay.duration:.1f}s of "
+                                    if playback.scrub:
+                                        print(f"\n▶  SCRUB: {playback.active.duration:.1f}s of "
                                               f"recorded movement on "
-                                              f"{'+'.join(a.name for a in replay_arms)}."
+                                              f"{'+'.join(a.name for a in playback.arms)}."
                                               f" The puck is the clock — push forward "
                                               f"to play, pull back to rewind, let go to "
                                               f"freeze.\n     Full push = "
                                               f"{args.scrub_max:g}x the recording "
                                               f"(-/+ changes it). h or t ends it.\n")
                                     else:
-                                        print(f"\n▶  PLAYING {replay.duration:.1f}s of "
+                                        print(f"\n▶  PLAYING {playback.active.duration:.1f}s of "
                                               f"recorded movement on "
-                                              f"{'+'.join(a.name for a in replay_arms)} "
-                                              f"at {replay_speed:.2f}x. "
+                                              f"{'+'.join(a.name for a in playback.arms)} "
+                                              f"at {playback.speed:.2f}x. "
                                               f"Press h or t to stop.\n")
                         elif ps.verdict == "jaws":
                             # ⭐⭐ THE JAW PAUSE (items 3 + 10): the run split at a
@@ -3069,7 +2919,7 @@ def main() -> int:  # noqa: PLR0915
                             # the remaining path, which the ParkStep carries.
                             one.enter_hold()
                             hint("")
-                            abandon_composite("a park leg was blocked")
+                            composite.abandon("a park leg was blocked")
                             if ps.remaining > 1e-9:
                                 print(f"\n⛔ PARK BLOCKED — the arm stopped following "
                                       f"{ps.lag:.3f} rad behind the path, no progress "
@@ -3093,39 +2943,33 @@ def main() -> int:  # noqa: PLR0915
                 # ⭐ FOLLOW THE RECORDING IN TIME, not along its length. A park traverses a
                 # *shape* at a constant joint speed, which throws away the thing hand-guiding
                 # provides: human timing and hesitation are the signal (ROADMAP §6.6).
-                if replay is not None and replay_layout is not None and all(
-                        a.mode == "replay" for a in replay_arms):
+                if playback.active is not None and playback.layout is not None and all(
+                        a.mode == "replay" for a in playback.arms):
                     # ⛔ MEASURED IN THE RECORDING'S ARM ORDER, never the session's. The
                     # layout came out of the file, so the slices line up with the samples
                     # even if `--arms` was given the other way round.
                     measured = np.concatenate([
-                        np.asarray(a.robot.get_joint_pos(), dtype=float) for a in replay_arms])
+                        np.asarray(a.robot.get_joint_pos(), dtype=float) for a in playback.arms])
                     # ⛔ The grippers are left out of the "is it keeping up" check by INDEX,
                     # because with two arms the first gripper sits in the middle of the
                     # vector. Jaws legitimately sit far from their commanded value while
                     # closing on an object, and counting that as lag would stall every
                     # playback that grips anything.
-                    if replay_scrub:
+                    defl = 0.0
+                    if playback.scrub:
                         # ⭐ SCRUB: the puck is the clock. EITHER puck works — during
                         # playback nobody's hand is driving an arm, so whichever hand is
                         # free is the deadman. The forward/back axis (index 1) is the
                         # natural "push to play" gesture; largest deflection wins.
-                        defl = 0.0
                         for a2 in arms:
                             ax = getattr(a2, "raw_axes", None)
                             if ax and abs(ax[1]) > abs(defl):
                                 defl = float(ax[1])
-                        rs = scrub_step(replay, replay_s, measured, real_dt, defl,
-                                        max_lag=MAX_CURSOR_LAG,
-                                        compare=replay_layout.tracked_indices(N_ARM),
-                                        max_rate=args.scrub_max)
-                    else:
-                        rs = replay_step(replay, replay_s, measured, real_dt,
-                                         speed=replay_speed, max_lag=MAX_CURSOR_LAG,
-                                         compare=replay_layout.tracked_indices(N_ARM))
-                    replay_s = rs.cursor
-                    for a in replay_arms:
-                        piece = np.asarray(rs.target[replay_layout.slice_for(a.name)],
+                    rs = playback.advance(measured, real_dt, n_arm=N_ARM,
+                                          max_lag=MAX_CURSOR_LAG, deflection=defl,
+                                          scrub_max=args.scrub_max)
+                    for a in playback.arms:
+                        piece = np.asarray(rs.target[playback.layout.slice_for(a.name)],
                                            dtype=float)
                         full = np.asarray(a.robot.get_joint_pos(), dtype=float).copy()
                         n_j = min(N_ARM, len(piece))
@@ -3138,17 +2982,9 @@ def main() -> int:  # noqa: PLR0915
                             full[N_ARM] = clamp_gripper(float(piece[N_ARM]))
                         a.robot.command_joint_pos(full)
                         a.prev_q = full[:N_ARM].copy()
-                    replay_worst_lag = max(replay_worst_lag, rs.lag)
-                    # Track target speed and measured lag per joint; preserve every arm's names.
-                    if tracking is not None and replay_prev_target is not None:
-                        tracking.observe(rs.target, replay_prev_target, measured, real_dt)
-                    replay_prev_target = list(rs.target)
-                    if rs.held:
-                        replay_held_s += real_dt
-                    else:
-                        replay_progress_t = t
+                    playback.observe(rs, measured, t, real_dt)
                     if rs.finished:
-                        for a in replay_arms:
+                        for a in playback.arms:
                             a.enter_hold()
                         hint("")
                         # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
@@ -3158,30 +2994,30 @@ def main() -> int:  # noqa: PLR0915
                         # which is a decision this code makes on purpose. A readout has to
                         # show what can go wrong, not only what looks tidy — the same lesson
                         # as showing the jaw temperature separately (FINDINGS §11).
-                        planned = replay.duration / replay_speed
-                        elapsed = t - replay_t0
+                        planned = playback.active.duration / playback.speed
+                        elapsed = t - playback.started_at
                         print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
-                        print(f"     {planned:.1f}s of movement at {replay_speed:.2f}x, "
-                              f"plus {replay_held_s:.1f}s waiting for the arm to catch up.")
+                        print(f"     {planned:.1f}s of movement at {playback.speed:.2f}x, "
+                              f"plus {playback.held_seconds:.1f}s waiting for the arm to catch up.")
                         # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
                         # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
                         # was the loop running below 100 Hz while the cursor advanced in
                         # nominal time. That is fixed, and this check stays so a future
                         # version cannot reintroduce it silently.
-                        unaccounted = elapsed - planned - replay_held_s
+                        unaccounted = elapsed - planned - playback.held_seconds
                         if abs(unaccounted) > 0.15 + 0.05 * elapsed:
                             print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
                                   f"averaged {loop_hz:.0f} Hz against {CONTROL_HZ:.0f}.")
                             # ⭐ The average explains the drift; the worst pass is what a stall looks like, and it is the number PERFORMANCE.md §2 was missing.
                             print(f"     {loop_timer.line()}")
-                        print(f"     worst it fell behind: {replay_worst_lag:.3f} rad "
+                        print(f"     worst it fell behind: {playback.worst_lag:.3f} rad "
                               f"(the loop holds the clock past {MAX_CURSOR_LAG:.2f}).")
-                        if replay_held_s > 0.15 * planned:
-                            print(f"     ⚠️  it spent {100 * replay_held_s / (planned + replay_held_s):.0f}% "
+                        if playback.held_seconds > 0.15 * planned:
+                            print(f"     ⚠️  it spent {100 * playback.held_seconds / (planned + playback.held_seconds):.0f}% "
                                   f"of the run waiting. Try a lower speed for a faithful replay.\n")
                         else:
                             print()
-                        if tracking is not None and tracking.cycles > 20:
+                        if playback.tracking is not None and playback.tracking.cycles > 20:
                             # ⚠️ MEASURED, so read it as such. The playback holds its clock
                             # once the arm falls behind, so the speeds here are not an even
                             # sweep, and load changes with the arm's pose. It is the cheap
@@ -3207,30 +3043,30 @@ def main() -> int:  # noqa: PLR0915
                             # with two, and raises nothing. Building the list once is the
                             # actual fix, because two copies is what let them drift.
                             names = flat_joint_names(
-                                [a.name for a in replay_arms],
-                                replay_layout.per_arm, tracking.n_joints)
+                                [a.name for a in playback.arms],
+                                playback.layout.per_arm, playback.tracking.n_joints)
                             print("     how well each joint kept up "
                                   f"(the loop holds past {MAX_CURSOR_LAG:.2f} rad):")
-                            for line in tracking_table(tracking.rows(), names,
+                            for line in tracking_table(playback.tracking.rows(), names,
                                                        MAX_CURSOR_LAG):
                                 print(line)
                             # Save the tracking measurements with provenance for later comparison.
                             try:
                                 # Share joint names between the printed table and its saved measurements.
-                                rec = tracking.to_dict(names)
+                                rec = playback.tracking.to_dict(names)
                                 rec["meta"] = {
-                                    "arms": [a.name for a in replay_arms],
-                                    "joints_per_arm": replay_layout.per_arm,
-                                    "slot": replay_slot,
+                                    "arms": [a.name for a in playback.arms],
+                                    "joints_per_arm": playback.layout.per_arm,
+                                    "slot": playback.slot,
                                     "played_at": dt_now(),
                                     "commit": git_commit(),
-                                    "speed": round(replay_speed, 3),
-                                    "taught_speed_p99": round(replay.joint_speed(99), 4),
-                                    "recording_duration_s": round(replay.duration, 3),
-                                    "recording_meta": dict(replay.meta),
+                                    "speed": round(playback.speed, 3),
+                                    "taught_speed_p99": round(playback.active.joint_speed(99), 4),
+                                    "recording_duration_s": round(playback.active.duration, 3),
+                                    "recording_meta": dict(playback.active.meta),
                                     "elapsed_s": round(elapsed, 3),
-                                    "held_s": round(replay_held_s, 3),
-                                    "worst_lag_rad": round(replay_worst_lag, 5),
+                                    "held_s": round(playback.held_seconds, 3),
+                                    "worst_lag_rad": round(playback.worst_lag, 5),
                                     "loop_hz": round(loop_hz, 1),
                                     "loop_timing": loop_timer.to_dict(),
                                     "max_cursor_lag": MAX_CURSOR_LAG,
@@ -3239,49 +3075,49 @@ def main() -> int:  # noqa: PLR0915
                                 }
                                 tracking_dir.mkdir(parents=True, exist_ok=True)
                                 stamp = dt_now().replace(":", "-")
-                                out = tracking_dir / f"{replay_slot}_{stamp}.json"
+                                out = tracking_dir / f"{playback.slot}_{stamp}.json"
                                 out.write_text(json.dumps(rec, indent=1) + "\n")
                                 print(f"     ⭐ saved this table → "
                                       f"{out.relative_to(REPO)}")
                             except Exception as exc:  # noqa: BLE001
                                 print(f"     ⚠️  could not save the tracking table: "
                                       f"{type(exc).__name__}: {exc}")
-                        replay = None
-                        composite_leg_done()
-                    elif t - replay_progress_t > PARK_STALL_SECONDS:
+                        playback.finish()
+                        composite.leg_done()
+                    elif t - playback.progress_at > PARK_STALL_SECONDS:
                         # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
                         # and wrong for ever: an arm that cannot catch up is blocked, and a
                         # playback that sits silently holding its clock is the treadmill
                         # bug again (FINDINGS §24). Same patience the park uses.
-                        for a in replay_arms:
+                        for a in playback.arms:
                             a.enter_hold()
                         hint("")
                         print("\n⛔ PLAYBACK BLOCKED — "
-                              f"{'+'.join(a.name for a in replay_arms)} stopped following "
+                              f"{'+'.join(a.name for a in playback.arms)} stopped following "
                               f"{rs.lag:.3f} rad behind the recording, no progress for "
                               f"{PARK_STALL_SECONDS:.0f}s. Now HOLDING.\n")
-                        replay = None
-                        abandon_composite("the playback was blocked")
+                        playback.finish()
+                        composite.abandon("the playback was blocked")
                     elif t >= next_park_report:
                         next_park_report = t + 1.0
                         # ⭐ A scrub is a POSITION, never a countdown — it goes both ways,
                         # and "playing… Xs left" over a scrub read as a stuck playback
                         # (his 2026-08-18 report, FINDINGS §68.4).
-                        if replay_scrub:
+                        if playback.scrub:
                             window = max(1e-6, t - scrub_ref_t)
-                            eff = abs(replay_s - scrub_ref_s) / window
-                            held_in_window = replay_held_s - scrub_ref_h
-                            scrub_ref_t, scrub_ref_s = t, replay_s
-                            scrub_ref_h = replay_held_s
+                            eff = abs(playback.cursor - scrub_ref_s) / window
+                            held_in_window = playback.held_seconds - scrub_ref_h
+                            scrub_ref_t, scrub_ref_s = t, playback.cursor
+                            scrub_ref_h = playback.held_seconds
                             # ⭐ Named ONLY when the hold actually bit this window, so a
                             # released puck never gets blamed on the arm.
                             why = (f" — the ARM binds, raise max_speed (n, 1) to scrub "
                                    f"faster" if held_in_window > 0.3 * window else "")
-                            hint(f"  scrubbing… at {replay_s:.1f}s of "
-                                 f"{replay.duration:.1f}s, effective {eff:.2f}x of the "
+                            hint(f"  scrubbing… at {playback.cursor:.1f}s of "
+                                 f"{playback.active.duration:.1f}s, effective {eff:.2f}x of the "
                                  f"recording{why}")
                         else:
-                            hint(f"  playing… {replay.duration - replay_s:.1f}s left, "
+                            hint(f"  playing… {playback.active.duration - playback.cursor:.1f}s left, "
                                  f"{rs.lag:.3f} rad behind")
 
 
