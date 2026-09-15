@@ -1,6 +1,6 @@
 # Teleop architecture review
 
-Reviewed September 15, 2026 against `c8069cc`. The findings below describe that reviewed snapshot. The first recording-completion and interface increment is now implemented; [CLEANUP](CLEANUP.md#recording-completion-and-interface-continuation) records its behavior, validation and limits. The remaining structure is proposed.
+Reviewed September 15, 2026 against `c8069cc`. The findings below describe that reviewed snapshot. Recording completion, interface corrections, shared camera services and camera rendering are now implemented; [CLEANUP](CLEANUP.md#recording-completion-and-interface-continuation) records its behavior, validation and limits. The remaining structure is proposed.
 
 ## Decision
 

@@ -11,11 +11,8 @@ import cv2
 from yam import platform
 from yam.cameras import identity
 
-REPO = Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location("camera_startup_app", REPO / "apps/teleop_session.py")
-app = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = app
-spec.loader.exec_module(app)
+from yam.cameras import session as app
+from yam.cameras import discovery
 
 
 def exercise(*, linux=True, failure=None, specs="0,1", stop_error=False):
@@ -78,7 +75,9 @@ def exercise(*, linux=True, failure=None, specs="0,1", stop_error=False):
         stack.enter_context(patch.object(cv2, "VideoCapture", Capture))
         stack.enter_context(patch.object(app, "open_measured", measured))
         stack.enter_context(patch.object(app, "FrameGrabber", Reader))
-        stack.enter_context(patch.dict(sys.modules, {"camera_view": fake_mac}))
+        for name in vars(fake_mac):
+            target = app if name == "open_camera" else discovery
+            stack.enter_context(patch.object(target, name, getattr(fake_mac, name)))
         with redirect_stdout(io.StringIO()):
             try:
                 result = app.open_session_cameras(specs)

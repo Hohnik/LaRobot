@@ -31,6 +31,8 @@ sys.path.insert(0, str(REPO / "checks"))  # a test OF one imports it from its di
 sys.path.insert(0, str(REPO / "scripts"))
 
 import camera_view as C  # noqa: E402
+from yam.cameras import discovery as D
+from yam.ui import camera_render as R
 
 
 class FakeTerminal:
@@ -64,7 +66,7 @@ def test_the_picture_keeps_its_aspect_ratio() -> None:
     for term in ((80, 40), (200, 50), (60, 60), (120, 24)):
         for aspect in (16 / 9, 4 / 3, 1.0):
             with FakeTerminal(*term):
-                cols, rows = C.terminal_grid(aspect)
+                cols, rows = R.terminal_grid(aspect)
             got = displayed_aspect(cols, rows)
             assert abs(got - aspect) / aspect < 0.10, (
                 f"terminal {term}, source aspect {aspect:.2f}: grid {cols}x{rows} "
@@ -77,7 +79,7 @@ def test_the_grid_always_fits_inside_the_terminal() -> None:
     for term in ((80, 40), (200, 50), (40, 12), (300, 100)):
         for aspect in (16 / 9, 4 / 3, 0.5):
             with FakeTerminal(*term):
-                cols, rows = C.terminal_grid(aspect)
+                cols, rows = R.terminal_grid(aspect)
             assert cols <= term[0], f"{cols} columns in a {term[0]}-column terminal"
             assert rows <= term[1], f"{rows} rows in a {term[1]}-row terminal"
 
@@ -85,32 +87,32 @@ def test_the_grid_always_fits_inside_the_terminal() -> None:
 def test_scale_shrinks_the_view_but_keeps_its_shape() -> None:
     """Julien asked for "a small view that is just accurate to the aspect ratio"."""
     with FakeTerminal(160, 50):
-        big = C.terminal_grid(16 / 9, scale=1.0)
-        small = C.terminal_grid(16 / 9, scale=0.4)
+        big = R.terminal_grid(16 / 9, scale=1.0)
+        small = R.terminal_grid(16 / 9, scale=0.4)
     assert small[0] < big[0] and small[1] < big[1], (small, big)
     assert abs(displayed_aspect(*small) - 16 / 9) / (16 / 9) < 0.10
 
 
 def test_scale_is_clamped_to_something_usable() -> None:
     with FakeTerminal(80, 40):
-        tiny = C.terminal_grid(16 / 9, scale=0.01)
+        tiny = R.terminal_grid(16 / 9, scale=0.01)
     assert tiny[0] >= 20 and tiny[1] >= 6, f"scale 0.01 produced an unusable {tiny}"
 
 
 def test_render_fills_exactly_the_grid_it_was_given() -> None:
     img = np.zeros((240, 320, 3), np.uint8)
     img[:, :] = (10, 200, 30)
-    out = C.render_ansi(img, 40, 12)
+    out = R.render_ansi(img, 40, 12)
     lines = [ln for ln in out.split("\n") if ln]
     assert len(lines) == 12, f"asked for 12 rows, got {len(lines)}"
-    assert lines[0].count(C.UPPER_HALF) == 40, f"asked for 40 columns, got {lines[0].count(C.UPPER_HALF)}"
+    assert lines[0].count(R.UPPER_HALF) == 40, f"asked for 40 columns, got {lines[0].count(R.UPPER_HALF)}"
 
 
 def test_render_reproduces_the_colours_it_was_given() -> None:
     """A uniform image must render as that colour, not something averaged wrong."""
     img = np.zeros((100, 100, 3), np.uint8)
     img[:, :] = (0, 0, 255)                       # BGR red
-    out = C.render_ansi(img, 10, 5)
+    out = R.render_ansi(img, 10, 5)
     assert "38;2;255;0;0" in out, "pure red did not survive the BGR->RGB conversion"
 
 
@@ -119,7 +121,7 @@ def test_render_emits_a_colour_code_only_when_the_colour_changes() -> None:
     flat = np.zeros((100, 100, 3), np.uint8)
     flat[:, :] = (40, 90, 160)
     noisy = np.random.default_rng(0).integers(0, 255, (100, 100, 3), dtype=np.uint8)
-    assert len(C.render_ansi(flat, 60, 20)) < len(C.render_ansi(noisy, 60, 20)) / 5, (
+    assert len(R.render_ansi(flat, 60, 20)) < len(R.render_ansi(noisy, 60, 20)) / 5, (
         "a flat image should compress to a small fraction of a noisy one"
     )
 
@@ -150,20 +152,20 @@ def test_the_size_list_spans_small_to_large() -> None:
 def test_ONE_slow_frame_does_not_shrink_the_picture() -> None:
     """⛔ THE RATCHET, as a test. Julien: the terminal view *"gets worse over time, which
     is a bit weird."* One hiccup used to knock the width down a step permanently."""
-    w, over = C.tune_image_width(520.0, 30.0, 16.7, over=0, ceiling=720)
+    w, over = R.tune_image_width(520.0, 30.0, 16.7, over=0, ceiling=720)
     assert w == 520.0, "a single slow frame moved the width"
     assert over == 1
 
 
 def test_two_slow_frames_in_a_row_DO_shrink_it() -> None:
-    w, over = C.tune_image_width(520.0, 30.0, 16.7, over=1, ceiling=720)
+    w, over = R.tune_image_width(520.0, 30.0, 16.7, over=1, ceiling=720)
     assert w < 520.0
     assert over == 0, "the counter must reset after acting"
 
 
 def test_a_frame_inside_budget_CLEARS_the_counter() -> None:
     """Otherwise two slow frames an hour apart would still count as consecutive."""
-    _, over = C.tune_image_width(520.0, 12.0, 16.7, over=1, ceiling=720)
+    _, over = R.tune_image_width(520.0, 12.0, 16.7, over=1, ceiling=720)
     assert over == 0
 
 
@@ -171,17 +173,17 @@ def test_the_exact_width_from_his_screenshots_can_now_CLIMB_BACK() -> None:
     """⭐ The measured case. 520 x 0.85 = 442 exactly, one old shrink step, and at 442 the
     draw cost was 10.5 ms — inside the old dead band and above its 10 ms grow threshold, so
     it was stuck for ever. 10.5 ms is below 0.85 x 16.7 = 14.2, so it climbs now."""
-    w, _ = C.tune_image_width(442.0, 10.5, 16.7, over=0, ceiling=720)
+    w, _ = R.tune_image_width(442.0, 10.5, 16.7, over=0, ceiling=720)
     assert w > 442.0, "the width his session was stuck at still cannot recover"
 
 
 def test_it_never_climbs_past_the_ceiling() -> None:
-    w, _ = C.tune_image_width(719.0, 1.0, 16.7, over=0, ceiling=720)
+    w, _ = R.tune_image_width(719.0, 1.0, 16.7, over=0, ceiling=720)
     assert w <= 720.0
 
 
 def test_it_never_shrinks_below_the_floor() -> None:
-    w, _ = C.tune_image_width(240.0, 99.0, 16.7, over=1, ceiling=720)
+    w, _ = R.tune_image_width(240.0, 99.0, 16.7, over=1, ceiling=720)
     assert w == 240.0
 
 
@@ -193,7 +195,7 @@ def test_the_controller_settles_instead_of_oscillating_widely() -> None:
     seen = []
     for _ in range(400):
         draw = 16.7 * (w / 500.0) ** 2          # cost rises with pixel count
-        w, over = C.tune_image_width(w, draw, 16.7, over, ceiling=720)
+        w, over = R.tune_image_width(w, draw, 16.7, over, ceiling=720)
         seen.append(w)
     tail = seen[-50:]
     assert max(tail) - min(tail) < 0.10 * max(tail), f"still swinging: {min(tail):.0f}-{max(tail):.0f}"
@@ -242,29 +244,29 @@ def test_image_capable_terminals_are_detected() -> None:
     for prog, expect in (("iTerm.app", "iterm"), ("WezTerm", "iterm"),
                          ("vscode", "iterm"), ("WarpTerminal", "iterm")):
         with FakeEnv(TERM_PROGRAM=prog):
-            mode, why = C.detect_term_mode()
+            mode, why = R.detect_term_mode()
         assert mode == expect, f"{prog} -> {mode}, expected {expect}"
         assert prog.lower() in why.lower()
 
 
 def test_kitty_and_ghostty_are_detected() -> None:
     with FakeEnv(TERM="xterm-kitty"):
-        assert C.detect_term_mode()[0] == "kitty"
+        assert R.detect_term_mode()[0] == "kitty"
     with FakeEnv(KITTY_WINDOW_ID="3"):
-        assert C.detect_term_mode()[0] == "kitty"
+        assert R.detect_term_mode()[0] == "kitty"
     with FakeEnv(TERM="xterm-ghostty"):
-        assert C.detect_term_mode()[0] == "kitty"
+        assert R.detect_term_mode()[0] == "kitty"
 
 
 def test_a_terminal_without_images_says_so_rather_than_failing_silently() -> None:
     """⛔ The whole reason `b` looked broken: a silent fallback is indistinguishable
     from a broken feature."""
     with FakeEnv(TERM_PROGRAM="Apple_Terminal"):
-        mode, why = C.detect_term_mode()
+        mode, why = R.detect_term_mode()
     assert mode == "blocks"
     assert "no image protocol" in why, why
     with FakeEnv():
-        mode, why = C.detect_term_mode()
+        mode, why = R.detect_term_mode()
     assert mode == "blocks"
     assert "cannot be detected" in why and "--term-mode" in why
 
@@ -285,8 +287,8 @@ def test_the_draw_mode_key_cycles_rather_than_toggles() -> None:
 def test_both_image_renderers_produce_a_payload() -> None:
     img = np.zeros((90, 160, 3), np.uint8)
     img[:, :] = (30, 120, 200)
-    iterm = C.render_iterm(img, 40, 12)
-    kitty = C.render_kitty(img, 40, 12)
+    iterm = R.render_iterm(img, 40, 12)
+    kitty = R.render_kitty(img, 40, 12)
     assert iterm.startswith("\x1b]1337;File=inline=1") and iterm.endswith("\x07")
     assert "width=40" in iterm and "height=12" in iterm
     assert kitty.startswith("\x1b_G") and kitty.endswith("\x1b\\")
@@ -301,7 +303,7 @@ def test_kitty_chunks_are_within_the_protocol_limit() -> None:
     `;payload`, so they are skipped rather than parsed as chunks.
     """
     big = np.random.default_rng(1).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
-    out = C.render_kitty(big, 80, 24)
+    out = R.render_kitty(big, 80, 24)
     parts = [c for c in out.split("\x1b_G") if c]
     data_parts = [c for c in parts if ";" in c]
     assert len(data_parts) > 1, "a 720p frame should need multiple chunks"
@@ -320,7 +322,7 @@ def test_kitty_deletes_the_previous_frame_and_silences_replies() -> None:
     every frame injects escape bytes the key handler sees as junk.
     """
     img = np.zeros((90, 160, 3), np.uint8)
-    out = C.render_kitty(img, 40, 12)
+    out = R.render_kitty(img, 40, 12)
     assert out.startswith("\x1b_Ga=d,d=A,q=2"), "must clear the previous placement first"
     assert "q=2" in out.split(";", 1)[0], "must suppress replies, or they land in stdin"
 
@@ -339,7 +341,7 @@ def test_kitty_sends_genuine_png_because_there_is_no_jpeg_format_code() -> None:
 
     img = np.zeros((180, 320, 3), np.uint8)
     img[:] = (50, 120, 200)
-    out = C.render_kitty(img, 40, 12)
+    out = R.render_kitty(img, 40, 12)
     assert "f=100" in out
     first_data = out.split("\x1b_G")[2]
     payload = first_data.split(";", 1)[1].split("\x1b")[0]
@@ -353,25 +355,25 @@ def test_the_image_is_downscaled_because_payload_is_latency() -> None:
     """720p PNG is ~1 MB and 31 ms to encode: 40 MB/s at 30 fps, which cannot work."""
     big = np.zeros((720, 1280, 3), np.uint8)
     big[:] = (90, 90, 90)
-    assert C._downscale(big, 480).shape[1] == 480
-    assert C._downscale(big, 480).shape[0] == 270, "aspect ratio must survive the downscale"
+    assert R._downscale(big, 480).shape[1] == 480
+    assert R._downscale(big, 480).shape[0] == 270, "aspect ratio must survive the downscale"
     small = np.zeros((180, 320, 3), np.uint8)
-    assert C._downscale(small, 480).shape[:2] == (180, 320), "must not UPscale"
+    assert R._downscale(small, 480).shape[:2] == (180, 320), "must not UPscale"
 
 
 def test_a_bigger_image_width_costs_a_bigger_payload() -> None:
     """The knob Julien tunes against the on-screen draw-ms readout."""
     img = np.zeros((720, 1280, 3), np.uint8)
     img[:] = np.random.default_rng(2).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
-    assert len(C.render_kitty(img, 60, 20, 320)) < len(C.render_kitty(img, 60, 20, 640))
+    assert len(R.render_kitty(img, 60, 20, 320)) < len(R.render_kitty(img, 60, 20, 640))
 
 
 def test_errors_can_be_unsuppressed_for_diagnosis() -> None:
     """⭐ q=2 is right for a 30 fps loop and wrong for finding out why nothing shows.
     --term-test needs the error, so `quiet=False` must actually drop q=2."""
     img = np.zeros((90, 160, 3), np.uint8)
-    assert "q=2" in C.render_kitty(img, 20, 6, quiet=True)
-    assert "q=2" not in C.render_kitty(img, 20, 6, quiet=False)
+    assert "q=2" in R.render_kitty(img, 20, 6, quiet=True)
+    assert "q=2" not in R.render_kitty(img, 20, 6, quiet=False)
 
 
 # -------------------------------------------------------- camera identity ----
@@ -397,15 +399,15 @@ C920_MODES = frozenset({(160, 90), (160, 120), (176, 144), (320, 180), (320, 240
 IPHONE_MODES = frozenset({(640, 480), (1280, 720), (1920, 1080), (1920, 1440)})
 
 FAKE_NAMES = [
-    C.MacCamera("MacBook Air Camera", "MacBook Air Camera",
+    D.MacCamera("MacBook Air Camera", "MacBook Air Camera",
                 "6C707041-05AC-0010-000D-000000000001", MACBOOK_MODES),
-    C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+    D.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
                 "UVC Camera VendorID_32902 ProductID_2907", "0x121000080860b5b",
                 D405_MODES),
-    C.MacCamera("HD Pro Webcam C920",
+    D.MacCamera("HD Pro Webcam C920",
                 "UVC Camera VendorID_1133 ProductID_2277", "0x1120000046d08e5",
                 C920_MODES),
-    C.MacCamera("Julien's iPhone Camera", "iPhone12,3",
+    D.MacCamera("Julien's iPhone Camera", "iPhone12,3",
                 "AB331AB3-1E3B-4DC2-A78D-8B8200000001", IPHONE_MODES),
 ]
 
@@ -461,13 +463,13 @@ class FakeBus:
         self.wiring = wiring
 
     def __enter__(self):
-        self._real = C.cv2.VideoCapture
-        C.cv2.VideoCapture = lambda idx, *a, **k: (
+        self._real = D.cv2.VideoCapture
+        D.cv2.VideoCapture = lambda idx, *a, **k: (
             FakeCapture(self.wiring[idx]) if idx < len(self.wiring) else _Closed())
         return self
 
     def __exit__(self, *exc: object) -> None:
-        C.cv2.VideoCapture = self._real
+        D.cv2.VideoCapture = self._real
 
 
 class _Closed:
@@ -492,7 +494,7 @@ def test_every_camera_has_a_mode_that_is_its_alone() -> None:
     own it must return None rather than something merely likely."""
     for cam in FAKE_NAMES:
         others = [c for c in FAKE_NAMES if c is not cam]
-        mode = C.discriminating_mode(cam, others)
+        mode = D.discriminating_mode(cam, others)
         assert mode is not None, f"{cam.short} has no distinguishing mode"
         assert mode in cam.modes
         assert not any(mode in o.modes for o in others), f"{mode} is not unique"
@@ -503,29 +505,29 @@ def test_two_identical_cameras_cannot_be_told_apart_and_it_says_so() -> None:
     Two of the same model share every mode, so measurement cannot separate them and
     the honest answer is None — not a guess with a 50% chance of driving the wrong
     arm's view."""
-    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+    twin = D.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
                        "UVC Camera VendorID_32902 ProductID_2907", "0xOTHER", D405_MODES)
-    assert C.discriminating_mode(FAKE_NAMES[1], [twin]) is None
+    assert D.discriminating_mode(FAKE_NAMES[1], [twin]) is None
 
 
 def test_a_hinted_twin_can_still_be_checked_for_its_model() -> None:
     """⭐ FINDINGS §71.5: stale hints pointed both D405s at the C920's index. Full identification of a twin stays impossible, and the MODEL is still checkable — a mode both D405s offer and no other model does."""
-    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+    twin = D.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
                        "UVC Camera VendorID_32902 ProductID_2907", "0x122000080860b5b",
                        D405_MODES)
     cams = [*FAKE_NAMES, twin]
     d405 = FAKE_NAMES[1]
-    mode = C.model_discriminating_mode(d405, cams)
+    mode = D.model_discriminating_mode(d405, cams)
     assert mode is not None and mode in D405_MODES
     for foreign in (C920_MODES, MACBOOK_MODES, IPHONE_MODES):
         assert mode not in foreign, f"{mode} is offered by another model, so it proves nothing"
-    assert C.model_discriminating_mode(twin, cams) == mode, \
+    assert D.model_discriminating_mode(twin, cams) == mode, \
         "both twins get the same model question — that is the point"
     # A model whose every mode another model also offers has no checkable question, and the honest answer is None rather than a mode that would wave the wrong camera through.
     clone_modes = frozenset({(640, 480), (1280, 720)})
-    a = C.MacCamera("A cam", "UVC Camera VendorID_1 ProductID_1", "a", clone_modes)
-    b = C.MacCamera("B cam", "UVC Camera VendorID_2 ProductID_2", "b", clone_modes)
-    assert C.model_discriminating_mode(a, [a, b]) is None
+    a = D.MacCamera("A cam", "UVC Camera VendorID_1 ProductID_1", "a", clone_modes)
+    b = D.MacCamera("B cam", "UVC Camera VendorID_2 ProductID_2", "b", clone_modes)
+    assert D.model_discriminating_mode(a, [a, b]) is None
 
 
 def test_indices_are_identified_by_measurement_not_by_list_order() -> None:
@@ -537,7 +539,7 @@ def test_indices_are_identified_by_measurement_not_by_list_order() -> None:
     Identification by mode must get all four right.
     """
     with FakeBus(FAKE_WIRING):
-        found, notes = C.identify_indices(FAKE_NAMES)
+        found, notes = D.identify_indices(FAKE_NAMES)
     got = {cam.name: idx for idx, cam in found if cam}
     assert got == TRUE_INDEX, f"identified {got}, truth is {TRUE_INDEX}\n" + "\n".join(notes)
     assert not any(n.startswith("⛔") for n in notes), notes
@@ -547,7 +549,7 @@ def test_an_index_that_matches_nothing_is_left_unnamed() -> None:
     """A camera macOS never listed must not inherit somebody else's name."""
     stranger = frozenset({(1024, 768), (2048, 1536)})
     with FakeBus([*FAKE_WIRING, stranger]):
-        found, notes = C.identify_indices(FAKE_NAMES, limit=5)
+        found, notes = D.identify_indices(FAKE_NAMES, limit=5)
     assert found[4][1] is None, "an unknown camera was given a name"
     assert any("matched no camera" in n for n in notes), notes
 
@@ -556,7 +558,7 @@ def test_a_camera_macos_lists_but_no_index_answers_for_is_reported() -> None:
     """Continuity drops out when the phone sleeps. That is normal and must be said,
     not silently swallowed."""
     with FakeBus(FAKE_WIRING[:3]):
-        _, notes = C.identify_indices(FAKE_NAMES)
+        _, notes = D.identify_indices(FAKE_NAMES)
     assert any("never found on any index" in n and "iPhone" in n for n in notes), notes
 
 
@@ -566,8 +568,8 @@ def test_a_depth_stream_is_told_apart_from_a_picture() -> None:
     rng = np.random.default_rng(0)
     grey = np.repeat(rng.integers(0, 255, (40, 60, 1), dtype=np.uint8), 3, axis=2)
     colour = rng.integers(0, 255, (40, 60, 3), dtype=np.uint8)
-    assert C.frame_is_mono(grey) is True
-    assert C.frame_is_mono(colour) is False
+    assert D.frame_is_mono(grey) is True
+    assert D.frame_is_mono(colour) is False
 
 
 def test_a_frame_with_no_content_says_it_cannot_tell() -> None:
@@ -575,17 +577,17 @@ def test_a_frame_with_no_content_says_it_cannot_tell() -> None:
     channels, so it was declared `MONO — depth/IR` — about his **iPhone**. It was
     black only because the probe read it before the sensor had exposed. An
     information-free frame must answer "unknown", never a measurement."""
-    assert C.frame_is_mono(np.zeros((40, 60, 3), np.uint8)) is None
-    assert C.frame_is_mono(np.full((40, 60, 3), 255, np.uint8)) is None
+    assert D.frame_is_mono(np.zeros((40, 60, 3), np.uint8)) is None
+    assert D.frame_is_mono(np.full((40, 60, 3), 255, np.uint8)) is None
 
 
 def test_a_camera_can_be_selected_by_name() -> None:
     """The whole point: indices move on replug, names do not."""
     with FakeBus(FAKE_WIRING):
-        identified, _ = C.identify_indices(FAKE_NAMES)
+        identified, _ = D.identify_indices(FAKE_NAMES)
     for spec, want_index in (("d405", 1), ("realsense", 1), ("c920", 0),
                              ("iphone", 3), ("builtin", 2), ("8086:0b5b", 1)):
-        idx, cam, _ = C.resolve_camera(spec, FAKE_NAMES, identified)
+        idx, cam, _ = D.resolve_camera(spec, FAKE_NAMES, identified)
         assert idx == want_index, f"{spec!r} resolved to {idx}, expected {want_index}"
         assert cam is not None
 
@@ -594,17 +596,17 @@ def test_an_unknown_or_ambiguous_name_is_refused_never_guessed() -> None:
     """⛔ FINDINGS §0 #5: an adapter chosen by index silently drove the OTHER robot.
     Falling back to index 0 when a name does not match is the same failure."""
     with FakeBus(FAKE_WIRING):
-        identified, _ = C.identify_indices(FAKE_NAMES)
+        identified, _ = D.identify_indices(FAKE_NAMES)
     for spec in ("d435", "nikon"):
         try:
-            C.resolve_camera(spec, FAKE_NAMES, identified)
-        except C.CameraLookupError as exc:
+            D.resolve_camera(spec, FAKE_NAMES, identified)
+        except D.CameraLookupError as exc:
             assert "no camera matches" in str(exc)
         else:
             raise AssertionError(f"{spec!r} resolved to something instead of refusing")
     try:
-        C.resolve_camera("camera", FAKE_NAMES, identified)   # matches three of them
-    except C.CameraLookupError as exc:
+        D.resolve_camera("camera", FAKE_NAMES, identified)   # matches three of them
+    except D.CameraLookupError as exc:
         assert "more than one" in str(exc)
     else:
         raise AssertionError("an ambiguous name was resolved instead of refused")
@@ -613,10 +615,10 @@ def test_an_unknown_or_ambiguous_name_is_refused_never_guessed() -> None:
 def test_a_listed_camera_that_no_index_answers_for_is_refused() -> None:
     """macOS listing a camera is not the same as OpenCV being able to open it."""
     with FakeBus(FAKE_WIRING[:3]):
-        identified, _ = C.identify_indices(FAKE_NAMES)
+        identified, _ = D.identify_indices(FAKE_NAMES)
     try:
-        C.resolve_camera("iphone", FAKE_NAMES, identified)
-    except C.CameraLookupError as exc:
+        D.resolve_camera("iphone", FAKE_NAMES, identified)
+    except D.CameraLookupError as exc:
         assert "no index answered" in str(exc), exc
     else:
         raise AssertionError("a camera that never answered was resolved anyway")
@@ -634,14 +636,14 @@ class FakeHints:
     def __enter__(self):  # noqa: ANN204
         import tempfile
         self._dir = tempfile.TemporaryDirectory()
-        self._real = C.HINT_FILE
-        C.HINT_FILE = Path(self._dir.name) / "camera_index_hint.json"
+        self._real = D.HINT_FILE
+        D.HINT_FILE = Path(self._dir.name) / "camera_index_hint.json"
         if self.initial:
-            C.HINT_FILE.write_text(json.dumps(self.initial))
+            D.HINT_FILE.write_text(json.dumps(self.initial))
         return self
 
     def __exit__(self, *exc: object) -> None:
-        C.HINT_FILE = self._real
+        D.HINT_FILE = self._real
         self._dir.cleanup()
 
 
@@ -650,13 +652,13 @@ class CountingBus(FakeBus):
 
     def __enter__(self):  # noqa: ANN204
         self.opens: list[int] = []
-        self._real = C.cv2.VideoCapture
+        self._real = D.cv2.VideoCapture
 
         def factory(idx, *a, **k):  # noqa: ANN001, ANN202
             self.opens.append(idx)
             return (FakeCapture(self.wiring[idx]) if idx < len(self.wiring) else _Closed())
 
-        C.cv2.VideoCapture = factory
+        D.cv2.VideoCapture = factory
         return self
 
 
@@ -669,7 +671,7 @@ def test_finding_one_camera_asks_only_about_that_camera() -> None:
     c920 = FAKE_NAMES[2]
     others = [c for c in FAKE_NAMES if c is not c920]
     with FakeHints(), CountingBus(FAKE_WIRING) as bus:
-        idx, notes, cap = C.find_camera_index(c920, others)
+        idx, notes, cap = D.find_camera_index(c920, others)
     assert idx == 0, f"{notes}"
     assert bus.opens == [0], f"opened {bus.opens} — it should have stopped at the first hit"
 
@@ -681,7 +683,7 @@ def test_a_remembered_index_is_tried_first_and_still_verified() -> None:
     macbook = FAKE_NAMES[0]
     others = [c for c in FAKE_NAMES if c is not macbook]
     with FakeHints({macbook.unique_id: 2}), CountingBus(FAKE_WIRING) as bus:
-        idx, _, cap = C.find_camera_index(macbook, others)
+        idx, _, cap = D.find_camera_index(macbook, others)
     assert idx == 2
     assert bus.opens == [2], "a correct hint should mean exactly one open"
 
@@ -693,7 +695,7 @@ def test_a_WRONG_remembered_index_is_caught_not_trusted() -> None:
     c920 = FAKE_NAMES[2]
     others = [c for c in FAKE_NAMES if c is not c920]
     with FakeHints({c920.unique_id: 3}), CountingBus(FAKE_WIRING) as bus:
-        idx, _, cap = C.find_camera_index(c920, others)
+        idx, _, cap = D.find_camera_index(c920, others)
     assert idx == 0, "a stale hint must not win"
     assert bus.opens[0] == 3, "the hint should still have been tried first"
 
@@ -702,8 +704,8 @@ def test_the_hint_is_written_so_the_next_run_is_fast() -> None:
     d405 = FAKE_NAMES[1]
     others = [c for c in FAKE_NAMES if c is not d405]
     with FakeHints() as hints, FakeBus(FAKE_WIRING):
-        C.find_camera_index(d405, others)
-        saved = json.loads(C.HINT_FILE.read_text())
+        D.find_camera_index(d405, others)
+        saved = json.loads(D.HINT_FILE.read_text())
     assert saved[d405.unique_id] == 1, saved
     assert hints is not None
 
@@ -712,10 +714,10 @@ def test_two_identical_cameras_are_refused_before_anything_is_opened() -> None:
     """⚠️ The second D405. Two of a model share every mode, so there is no question
     that separates them — and guessing would be a coin flip on which arm's view you
     are driving."""
-    twin = C.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
+    twin = D.MacCamera("Intel(R) RealSense(TM) Depth Camera 405  Depth",
                        "UVC Camera VendorID_32902 ProductID_2907", "0xTWIN", D405_MODES)
     with FakeHints(), CountingBus(FAKE_WIRING) as bus:
-        idx, notes, cap = C.find_camera_index(FAKE_NAMES[1], [twin])
+        idx, notes, cap = D.find_camera_index(FAKE_NAMES[1], [twin])
     assert idx is None
     assert bus.opens == [], "it must refuse without touching a camera"
     assert any("shares every capture mode" in n for n in notes), notes
@@ -765,7 +767,7 @@ def test_a_slow_capture_mode_is_never_offered_as_the_best() -> None:
     the sharpest mode that still MOVES, and AVFoundation reports the rate per mode so
     this is a measurement rather than a judgement."""
     fast = {m for m in C920_MODES if m != (2560, 1472)}
-    c920 = C.MacCamera("HD Pro Webcam C920", "", "x", frozenset(C920_MODES),
+    c920 = D.MacCamera("HD Pro Webcam C920", "", "x", frozenset(C920_MODES),
                        frozenset({(w, h, 30.0) for w, h in fast} | {(2560, 1472, 2.0)}))
     sizes = C.key_sizes(c920)
     assert (2560, 1472) not in sizes, "a 2 fps stills mode was offered for a live view"
@@ -775,7 +777,7 @@ def test_a_slow_capture_mode_is_never_offered_as_the_best() -> None:
 def test_without_rate_information_every_mode_is_still_offered() -> None:
     """No AVFoundation means no rates. Silently dropping every mode would be worse
     than offering one that turns out slow — and the fps readout shows the truth."""
-    cam = C.MacCamera("x", "", "x", frozenset({(640, 480), (1280, 720)}))
+    cam = D.MacCamera("x", "", "x", frozenset({(640, 480), (1280, 720)}))
     assert C.key_sizes(cam) == [(640, 480), (1280, 720)]
 
 
@@ -784,11 +786,11 @@ def test_the_useful_width_has_no_protocol_budget_in_it() -> None:
     CAPTURE — physical limits. The protocol budget is only a starting guess, because
     on Julien's machine the cost is writing bytes, not encoding them, and no constant
     measured on one afternoon can know that ratio."""
-    cell = C.CellSize(16.0, 34.0, measured=True)
-    assert C.useful_image_width(121, 1920, cell) == 1920, "the pane is 1936 px; capture bounds it"
-    assert C.useful_image_width(40, 1920, cell) == 640, "a small pane bounds it instead"
-    assert C.useful_image_width(121, 320, cell) == 320, "never above what was captured"
-    assert C.useful_image_width(121, 1920, cell) > C.IMAGE_WIDTH_CAP["kitty"], (
+    cell = R.CellSize(16.0, 34.0, measured=True)
+    assert R.useful_image_width(121, 1920, cell) == 1920, "the pane is 1936 px; capture bounds it"
+    assert R.useful_image_width(40, 1920, cell) == 640, "a small pane bounds it instead"
+    assert R.useful_image_width(121, 320, cell) == 320, "never above what was captured"
+    assert R.useful_image_width(121, 1920, cell) > R.IMAGE_WIDTH_CAP["kitty"], (
         "the ceiling must be allowed above the starting cap, or nothing can climb")
 
 
@@ -796,12 +798,12 @@ def test_the_number_keys_fall_back_when_the_modes_are_unknown() -> None:
     """No AVFoundation (a Linux checkout, or the optional dependency missing) means no
     mode list. The C920 defaults are a reasonable guess and must not crash."""
     assert C.key_sizes(None) == C.SIZES
-    assert C.key_sizes(C.MacCamera("x", "", "", frozenset())) == C.SIZES
+    assert C.key_sizes(D.MacCamera("x", "", "", frozenset())) == C.SIZES
 
 
 def test_a_camera_with_few_modes_gets_a_short_key_list() -> None:
     """And the viewer must bounds-check it rather than crash on key 6."""
-    sparse = C.MacCamera("tiny", "", "", frozenset({(320, 240), (640, 480)}))
+    sparse = D.MacCamera("tiny", "", "", frozenset({(320, 240), (640, 480)}))
     assert C.key_sizes(sparse) == [(320, 240), (640, 480)]
 
 
@@ -818,7 +820,7 @@ def test_the_new_image_is_placed_before_the_old_one_is_deleted() -> None:
     """
     img = np.zeros((90, 160, 3), np.uint8)
     img[:] = (30, 120, 200)
-    out = C.render_kitty(img, 40, 12, image_id=991, previous_id=992)
+    out = R.render_kitty(img, 40, 12, image_id=991, previous_id=992)
     assert not out.startswith("\x1b_Ga=d"), "still deleting before drawing — that blinks"
     place, delete = out.find("a=T"), out.find("a=d")
     assert place != -1 and delete != -1, "must both place and delete"
@@ -829,7 +831,7 @@ def test_the_new_image_is_placed_before_the_old_one_is_deleted() -> None:
 
 def test_the_first_frame_has_no_previous_image_to_delete() -> None:
     img = np.zeros((90, 160, 3), np.uint8)
-    out = C.render_kitty(img, 40, 12, image_id=991, previous_id=None)
+    out = R.render_kitty(img, 40, 12, image_id=991, previous_id=None)
     assert "a=d" not in out, "there is nothing to delete yet"
     assert "i=991" in out
 
@@ -847,17 +849,17 @@ def test_a_bigger_capture_now_produces_a_bigger_image() -> None:
     broken — the same shape of defect as `b` toggling between two identical states.
     """
     pane = 160  # columns, i.e. a wide terminal
-    small = C.auto_image_width(pane, 320, "kitty", C.ASSUMED_CELL)
-    large = C.auto_image_width(pane, 1280, "kitty", C.ASSUMED_CELL)
+    small = R.auto_image_width(pane, 320, "kitty", R.ASSUMED_CELL)
+    large = R.auto_image_width(pane, 1280, "kitty", R.ASSUMED_CELL)
     assert large > small, "capturing more must now show more"
 
 
 def test_the_image_sent_never_exceeds_the_pane_or_the_capture() -> None:
     """Both ceilings are pure waste past their limit: pixels beyond the pane are
     scaled straight back out, and pixels beyond the capture were invented."""
-    tiny_pane = C.auto_image_width(40, 1920, "kitty", C.ASSUMED_CELL)
-    assert tiny_pane <= 40 * C.ASSUMED_CELL.width, "sent more than the pane can show"
-    small_capture = C.auto_image_width(200, 320, "kitty", C.ASSUMED_CELL)
+    tiny_pane = R.auto_image_width(40, 1920, "kitty", R.ASSUMED_CELL)
+    assert tiny_pane <= 40 * R.ASSUMED_CELL.width, "sent more than the pane can show"
+    small_capture = R.auto_image_width(200, 320, "kitty", R.ASSUMED_CELL)
     assert small_capture <= 320, "upscaled before transmitting, which invents nothing"
 
 
@@ -866,7 +868,7 @@ def test_kitty_gets_a_tighter_budget_than_iterm_because_png() -> None:
     is no JPEG. MEASURED at 640 px: PNG level 1 is 6.7 ms and 391 KB per frame,
     JPEG q60 is 0.3 ms and 26 KB. Roughly 25x, which is why the two protocols cannot
     carry the same amount of detail at the same frame rate."""
-    assert C.IMAGE_WIDTH_CAP["kitty"] < C.IMAGE_WIDTH_CAP["iterm"]
+    assert R.IMAGE_WIDTH_CAP["kitty"] < R.IMAGE_WIDTH_CAP["iterm"]
 
 
 class FakeIoctl:
@@ -880,8 +882,8 @@ class FakeIoctl:
         self.packed = packed
 
     def __enter__(self):  # noqa: ANN204
-        self._real = C.fcntl.ioctl
-        C.fcntl.ioctl = self._fake
+        self._real = R.fcntl.ioctl
+        R.fcntl.ioctl = self._fake
         return self
 
     def _fake(self, fd, request, buf):  # noqa: ANN001, ANN202, ARG002
@@ -890,7 +892,7 @@ class FakeIoctl:
         return self.packed
 
     def __exit__(self, *exc: object) -> None:
-        C.fcntl.ioctl = self._real
+        R.fcntl.ioctl = self._real
 
 
 def winsize(rows: int, cols: int, xpixel: int, ypixel: int) -> bytes:
@@ -919,7 +921,7 @@ def test_a_run_with_no_terminal_reports_the_ASSUMED_cell_and_says_so() -> None:
     from a bug. So both branches are now forced, and neither depends on the terminal.
     """
     with FakeIoctl(None):
-        cell = C.cell_size()
+        cell = R.cell_size()
     assert cell.measured is False, "no terminal can be measured, so it must say assumed"
     assert abs(cell.aspect - 2.0) < 0.01, "the assumed cell should be the classic 2:1"
 
@@ -927,7 +929,7 @@ def test_a_run_with_no_terminal_reports_the_ASSUMED_cell_and_says_so() -> None:
 def test_a_terminal_that_reports_its_pixels_is_MEASURED_and_says_so() -> None:
     # 80 columns over 640 px is an 8 px cell; 24 rows over 384 px is 16 px. Aspect 2.0.
     with FakeIoctl(winsize(24, 80, 640, 384)):
-        cell = C.cell_size()
+        cell = R.cell_size()
     assert cell.measured is True, "the terminal answered, so this is a measurement"
     assert (cell.width, cell.height) == (8.0, 16.0), cell
 
@@ -936,7 +938,7 @@ def test_a_NON_2to1_measured_cell_is_carried_through_rather_than_rounded_to_the_
     # ⭐ The whole reason this is measured: Retina cells often are not 2:1, and assuming
     # they are stretches a 16:9 picture. 80 cols over 720 px is 9 px; 24 rows over 384 is 16.
     with FakeIoctl(winsize(24, 80, 720, 384)):
-        cell = C.cell_size()
+        cell = R.cell_size()
     assert cell.measured is True
     assert abs(cell.aspect - 16 / 9) < 0.01, f"aspect {cell.aspect:.3f} was flattened"
 
@@ -945,7 +947,7 @@ def test_a_terminal_that_reports_ZEROS_counts_as_unmeasured() -> None:
     """Apple Terminal answers `TIOCGWINSZ` and fills the pixel fields with zeros. That is
     an answer and not a measurement, and dividing by it would raise."""
     with FakeIoctl(winsize(24, 80, 0, 0)):
-        cell = C.cell_size()
+        cell = R.cell_size()
     assert cell.measured is False, "zeros are not a measurement"
     assert abs(cell.aspect - 2.0) < 0.01
 
@@ -956,7 +958,7 @@ def test_a_non_2to1_cell_changes_the_grid_so_the_picture_stays_square() -> None:
     Julien caught in a screenshot, in a second disguise."""
     for k in (1.8, 2.0, 2.4):
         with FakeTerminal(200, 60):
-            cols, rows = C.terminal_grid(16 / 9, cell_aspect=k)
+            cols, rows = R.terminal_grid(16 / 9, cell_aspect=k)
         got = displayed_aspect(cols, rows, k)
         assert abs(got - 16 / 9) / (16 / 9) < 0.10, (
             f"cell aspect {k}: grid {cols}x{rows} displays as {got:.2f}, not 1.78")
@@ -966,7 +968,7 @@ def test_the_grid_leaves_room_for_the_status_lines() -> None:
     """Three lines of status live under the picture. Reserve too few and the picture
     pushes them off the bottom — or scrolls the whole view, every frame."""
     with FakeTerminal(100, 30):
-        _, rows = C.terminal_grid(16 / 9)
+        _, rows = R.terminal_grid(16 / 9)
     assert rows <= 30 - 3, f"{rows} rows leaves no room for the status lines"
 
 

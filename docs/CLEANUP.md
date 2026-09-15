@@ -2,11 +2,11 @@
 
 Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Its first recording-completion increment is now implemented, as described below. Shared camera discovery, playback and terminal extraction still remain.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition and camera rendering are now extracted, as described below. Playback coordination and operator terminal interaction still remain.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, and the recording-completion increment below. Current validation passes 919/919 checks across 49 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, and shared camera/display extraction. Current validation passes 928/928 checks across 50 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -99,11 +99,10 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-1. Move shared camera discovery, hint resolution and verified opening from `camera_view.py` into the existing camera library. Update the operator and diagnostic callers together. Per-take writer construction still creates directories and threads on the operator thread; removing that startup I/O needs a separate acquisition state.
-2. Extract the replay/composite coordinator. Keep one cursor for all arms, the park-to-start gate, purpose tags and arrival ordering. Characterize transitions at actual application call sites.
-3. Separate terminal prompt state and lifecycle coordination, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
-4. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
-5. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
+1. Extract the replay/composite coordinator. Keep one cursor for all arms, the park-to-start gate, purpose tags and arrival ordering. Characterize transitions at actual application call sites.
+2. Separate terminal prompt state and lifecycle coordination, then thin the entry point. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
+3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
+4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
 
 The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) gives the remaining boundaries and acceptance criteria.
 The current simulator does not validate USB/CAN timing, gravity compensation, camera delivery, gripper calibration, collision avoidance, or real stopping behavior. Fake-device failure tests establish call ordering and ownership; they cannot establish that a motor physically disabled. Missing disable confirmations remain an operator-visible failure.
@@ -176,3 +175,23 @@ The interface cleanup makes `FrameSource.names` a property, matching `CaptureSet
 Six new ownership tests use real writer threads with blocked encoders, failed index writes, blocked saves and failed deletions. The actual-application recording test file now has ten cases. It covers save retry, loop progress during blocked I/O, early-key refusal, partial startup, sampling/completion failure, quit retention, GUIDE refusal and TELEOP entry. The store test rejects unfinished or missing completion before touching the old slot. Interface tests check callable methods, the camera property and input behavior.
 
 Current logs are `agents/codex/validation/completion-*.txt`; the simulator-copy file names its disposable checkout. `completion-preservation.json` verifies all 3,455 original recording files unchanged. These local logs are ignored; this section preserves their results and limits for future checkouts.
+
+## Shared camera and display extraction
+
+The operator and capture diagnostic now import acquisition services from `yam.cameras`; neither imports the viewer application. The viewer itself consumes the same library functions. Its public discovery/rendering function imports remain available for existing callers, while tests target the owning modules directly.
+
+- `yam.cameras.discovery` owns device descriptions, name resolution, mode probes and index hints. The hint file still resolves to this repository's `config/camera_index_hint.json`.
+- `yam.cameras.open.open_camera` uses the existing configuration function and releases a newly opened handle if configuration fails.
+- `yam.cameras.session` owns the Linux/macOS recording-camera factories and their partial-startup cleanup.
+- `yam.ui.camera_render` owns terminal geometry, image encoding and adaptive image sizing. It owns no capture devices.
+- `capture_probe` now closes earlier cameras if a later open or reader construction fails. Duplicate requested camera names/indices refuse instead of overwriting an owned handle.
+
+The operator shrank from 3,853 to 3,624 lines; the viewer from 1,891 to 895. The new discovery module is 411 lines, the camera-session module 228, and the rendering module 222. These boundaries separate shared device services from the application and display code. They do not merely divide the viewer into numbered fragments.
+
+Seventeen discovery definitions, twelve rendering definitions and both recording-camera factories retained their executable statements. The comparison excluded docstrings, return annotations and import statements; imports and names were checked separately across the libraries and all three applications. Two existing resolver annotations were corrected to describe their actual three-value returns. Long explanations and measurements are preserved in [historical camera source notes](archive/camera-source-notes.md), with current contracts beside the code.
+
+Nine additional tests cover configuration failure, diagnostic cleanup, duplicate indices, full-serial recording names, stale hints, ambiguous prefixes and dependency direction. The existing 62 camera rendering/discovery checks and ten factory failure checks pass against the extracted modules. Current suite: 928/928 across 50 files; falsifiers: 71/71; isolated simulation: 32/32. Both diagnostic help commands and the structural check pass. Local logs use `agents/codex/validation/camera-*`.
+
+Identity limits remain explicit. A configuration-mode response is not proof of frame delivery. Same-model twins require physical identification. The existing macOS behavior warns and proceeds when no model-distinguishing mode exists; that policy was preserved and tested, not strengthened silently. Linux keeps its measured-delivery checks. A monochrome image alone does not establish depth data. No actual camera enumeration, stream, motor operation or terminal-image display was tested here.
+
+Remaining blocking work includes per-take writer construction and some diagnostic/startup I/O. Playback and operator prompt coordination still live in the main loop. The successful extraction does not close those architectural items.

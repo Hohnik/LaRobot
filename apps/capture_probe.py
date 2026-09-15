@@ -25,7 +25,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-from camera_view import CameraLookupError, open_camera, resolve_camera  # noqa: E402
+from yam.cameras.discovery import CameraLookupError, resolve_camera  # noqa: E402
+from yam.cameras.open import open_camera  # noqa: E402
+from yam.cameras.startup import CameraStartup  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
 from yam.cameras.specs import flatten_tokens, parse_indices  # noqa: E402
@@ -36,31 +38,36 @@ SAVE_DIR = REPO / "recordings" / "cameras"
 
 def open_named(args) -> dict[str, tuple[int, object]]:  # noqa: ANN001
     """name → (index, configured capture), refusing loudly rather than guessing."""
-    out: dict[str, tuple[int, object]] = {}
-    if args.indices:
-        try:
-            indices = parse_indices(args.indices)
-        except ValueError as e:
-            raise SystemExit(f"⛔ {e}") from e
-        for idx in indices:
-            cap = open_camera(idx, args.width, args.height, args.fps)
+    with CameraStartup() as startup:
+        out: dict[str, tuple[int, object]] = {}
+        if args.indices:
+            try:
+                indices = parse_indices(args.indices)
+            except ValueError as e:
+                raise SystemExit(f"⛔ {e}") from e
+            for idx in indices:
+                if f"cam{idx}" in out:
+                    raise SystemExit(f"Camera index {idx} was requested twice")
+                cap = startup.own(open_camera(idx, args.width, args.height, args.fps))
+                if cap is None:
+                    raise SystemExit(f"⛔ index {idx} would not open. `uv run apps/camera_view.py --list` shows what is there.")
+                out[f"cam{idx}"] = (idx, cap)
+            return out
+        for spec in flatten_tokens(args.cameras):
+            if spec in out:
+                raise SystemExit(f"Camera {spec} was requested twice")
+            try:
+                idx, cam, found_cap = resolve_camera(spec)
+            except CameraLookupError as e:
+                raise SystemExit(f"⛔ {e}") from e
+            # ⛔ The resolver may hand the device back ALREADY OPEN (find_camera_index keeps it open to save the caller a multi-second reopen). Discarding that handle without releasing it leaks the device, and the configured reopen below then finds it busy — release first, reopen with the asked-for mode.
+            if found_cap is not None:
+                startup.release(startup.own(found_cap))
+            cap = startup.own(open_camera(idx, args.width, args.height, args.fps))
             if cap is None:
-                raise SystemExit(f"⛔ index {idx} would not open. `uv run apps/camera_view.py --list` shows what is there.")
-            out[f"cam{idx}"] = (idx, cap)
+                raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open.")
+            out[spec] = (idx, cap)
         return out
-    for spec in flatten_tokens(args.cameras):
-        try:
-            idx, cam, found_cap = resolve_camera(spec)
-        except CameraLookupError as e:
-            raise SystemExit(f"⛔ {e}") from e
-        # ⛔ The resolver may hand the device back ALREADY OPEN (find_camera_index keeps it open to save the caller a multi-second reopen). Discarding that handle without releasing it leaks the device, and the configured reopen below then finds it busy — release first, reopen with the asked-for mode.
-        if found_cap is not None:
-            found_cap.release()
-        cap = open_camera(idx, args.width, args.height, args.fps)
-        if cap is None:
-            raise SystemExit(f"⛔ {spec} resolved to index {idx} and would not open.")
-        out[spec] = (idx, cap)
-    return out
 
 
 def main() -> int:
@@ -82,15 +89,19 @@ def main() -> int:
     args = ap.parse_args()
 
     named = open_named(args)
-    grabbers = {name: FrameGrabber(cap) for name, (idx, cap) in named.items()}
-    print(f"sampling {', '.join(named)} at {args.hz:g} Hz for {args.seconds:g}s "
-          f"(asked each for {args.width}x{args.height}@{args.fps}) …")
-
-    capture = CaptureSet(grabbers)
-    last: dict[str, object] = {}
-    period = 1.0 / args.hz
-    t_end = time.perf_counter() + args.seconds
+    with CameraStartup() as startup:
+        for _, cap in named.values():
+            startup.own(cap)
+        grabbers = {name: startup.start_reader(cap, FrameGrabber)
+                    for name, (_, cap) in named.items()}
+        capture = CaptureSet(grabbers)
     try:
+        print(f"sampling {', '.join(named)} at {args.hz:g} Hz for {args.seconds:g}s "
+              f"(asked each for {args.width}x{args.height}@{args.fps}) …")
+
+        last: dict[str, object] = {}
+        period = 1.0 / args.hz
+        t_end = time.perf_counter() + args.seconds
         while time.perf_counter() < t_end:
             t_next = time.perf_counter() + period
             for name, frame in capture.sample().items():

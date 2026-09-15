@@ -28,7 +28,7 @@ import time
 from dataclasses import dataclass
 
 __all__ = ["SIZE_LADDER", "TARGET_FPS", "SLOW_FPS", "FIRST_FRAME_S", "WARMUP_S",
-           "MEASURE_S", "CameraOpen", "await_first_frame", "configure", "open_measured"]
+           "MEASURE_S", "CameraOpen", "await_first_frame", "configure", "open_measured", "open_camera"]
 
 #: Sizes tried in order, largest first, until one actually delivers a frame.
 #:
@@ -180,3 +180,24 @@ def open_measured(cap, sizes: list[tuple[int, int]] | None = None,  # noqa: ANN0
                           stepped_down=i > 0, asked=(w, h),
                           frames=count, window_s=dt)
     return None
+
+
+def open_camera(index: int, width: int, height: int, fps: int):
+    """Open/configure an index, returning an owned handle or None if unavailable.
+
+    Configuration failure releases the handle before propagating the error.
+    """
+    import cv2
+
+    cap = cv2.VideoCapture(index)
+    try:
+        if not cap.isOpened():
+            cap.release()
+            return None
+        return configure(cap, width, height, fps)
+    except BaseException as failure:
+        try:
+            cap.release()
+        except Exception as cleanup:
+            failure.add_note(f"Camera release failed: {cleanup}")
+        raise
