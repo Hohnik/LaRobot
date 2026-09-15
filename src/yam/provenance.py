@@ -14,10 +14,7 @@ to drift. This repo has been bitten by copy-paste three times (``src/yam/inputs/
 exists because a device fix landed in only one of two copies), so the third caller
 gets a module instead of a third copy.
 
-⚠️ ``scripts/teleop_session.py`` still carries its own ``git_commit`` and
-``dt_now``. They are identical to these. They collapse into this module during
-the ``ArmSession`` restructure, which rewrites that file anyway — doing it now
-would edit the script Julien is about to test, for no gain (ROADMAP §6.1 step 1).
+The operator application and measurement tools share these helpers.
 """
 
 from __future__ import annotations

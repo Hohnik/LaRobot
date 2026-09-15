@@ -1,98 +1,18 @@
-"""⭐ ONE ARM'S STATE AND MODE MACHINE, so that N of them can run in one loop.
+"""Per-arm state and mode transitions for the shared operator loop.
 
-    from yam.session import ArmSession, ArmSelector, parse_arms
-    names = parse_arms(args.arm, args.arms, ARM_SERIALS, "B")   # ["B"] or ["B", "G"]
-    arm = ArmSession(robot, name=names[0], frame="world", axis_map=…, slots=…, reader=…)
-    step = arm.step_path(t=1.0, dt=0.01)        # ⚠️ step_PATH. This example said
-                                                # `step_park` until 2026-08-14, and no
-                                                # method by that name has ever existed.
+ArmSession owns one robot's mode, motion path, teleop solver, puck reader, axis
+map, saved poses, and thermal/gripper guards. ArmSelector chooses which sessions
+receive a keypress; every arm continues stepping each control cycle. Methods
+return results for the application to display rather than printing themselves.
 
-⛔ WHY THIS EXISTS — the blocker for bimanual, stated exactly. `teleop_session.py`
-is single-arm all the way through: `robot`, `teleop`, `mode`, `gripper_value`,
-`prev_q`, `home_ee`, `park_target`, `guide_ref`, `park_cmd` and the rest are one
-arm's state held in **one function's locals**. Two arms cannot exist in that shape,
-and ROADMAP step 6 is unambiguous about the alternative: extract, then run N of
-them, so single-arm and bimanual are the same code with N=1 or N=2.
+The application owns device acquisition and shutdown. Recording and replay use
+one shared timeline for every arm and therefore remain session-level concerns.
+ArmSession.step_path executes the same path logic for one or multiple arms.
 
-⛔ **Why an extraction and not a second `teleop_bimanual.py`.** Duplication has bitten
-this repo four times: `src/yam/inputs/spacemouse.py` exists because device logic was
-copy-pasted and a fix landed in only one copy; the simulator's `twist_from_axes()`
-ignored the axis map for the same reason; PARK went around the gripper clamp
-because the clamp lived only in the teleop branch; and the quit path carried a
-second park loop until 2026-08-12. A second control loop would be the fifth — and
-it would be the one driving two arms at once.
-
-⭐⭐ THE DESIGN RULE THAT MAKES THIS TESTABLE: **the class decides, the script
-narrates.** No method here prints. They return verdicts and messages, and the
-caller displays them. That is the same shape as `ThermalGuard` and
-`park_verdict()`, and it is why the agent — which may never touch the hardware —
-can still prove the mode machine behaves.
-
-⚠️ WHAT THIS DELIBERATELY DOES **NOT** OWN, and why:
-
-- **Building the robot.** `build_robot()` energises motors and is the single most
-  dangerous call in the project; it stays visible in the script, and this class
-  takes an already-built handle. That also lets every test below run against a fake.
-- **The SpaceMouse DEVICE layer** — enumerating, the wiggle assignment, opening and
-  closing the handle. ⚠️ **The `TwistReader` itself IS here** since 2026-08-14: with two
-  arms, "which puck" is exactly as per-arm as "which robot", and a session-level reader is
-  how both arms end up following one hand.
-- **Key handling.** Which arm a keypress applies to is a *session* question, not an
-  arm question — ROADMAP step 6 decides it (`a` selects; driving always applies to
-  all arms; mode changes apply to the selected one).
-- **IK stepping.** `CartesianTeleop` already owns that; this holds one and calls it.
-
-✅✅ **STATUS, 2026-08-14 (night): STEP 2 IS COMPLETE AND TWO ARMS RUN FROM ONE LOOP.**
-The 247-reference move landed as five commits ([FINDINGS §50](../docs/FINDINGS.md)); Julien
-drove every mode on it ([§51](../docs/FINDINGS.md)); sixteen further commits made everything
-below this class per arm and added `--arms`, the `a` selector and one status row per arm
-([§52](../docs/FINDINGS.md), [§53](../docs/FINDINGS.md), [§54](../docs/FINDINGS.md)).
-
-⭐ **This class now holds 34 per-arm fields**: the robot and its puck, the mode, the axis map
-and its start-of-session copy, the control frame, the base pose and saved slots, the eleven
-park fields, the CONTROLS memory and button edge, the thermal guard with this cycle's
-temperatures, the last chain read, and this cycle's puck deflection.
-`uv run scripts/check_restructure.py` proves none of it survives as a local in the script,
-and it makes eight checks — **every one of which caught something real** ([§54.6](../docs/FINDINGS.md)).
-
-⬜ **What has NOT happened: two arms have never run on the hardware.** That is ROADMAP §6.1
-step 3 and it is Julien's, because building a robot sends setpoints. The procedure is
-[FINDINGS §54.7](../docs/FINDINGS.md).
-
-⚠️ **Three things refuse with two arms connected, all on purpose:** `--start-mode guide`,
-`w`/`l` (the recorder is single-arm until ABC's two-arm format exists), and `m` while BOTH is
-selected.
-
-⛔ **THIS DOCSTRING SAID *"STILL NOT wired"* UNTIL 2026-08-14, which was true when written
-on 08-13 and wrong the next day.** It is the same staleness pattern as the paragraph below
-and as the six instances in [FINDINGS §33.3](../docs/FINDINGS.md): a written claim about
-live state is a cache with no invalidation. ⭐ The remedy that works here is not writing it
-more carefully — it is that `uv run scripts/check_restructure.py` recomputes the real
-answer, so prefer running it over trusting any sentence in this header.
-
-⛔⭐⭐ **AND A WARNING WORTH MORE THAN THE CLASS ITSELF: THIS FILE WENT STALE IN ONE
-HOUR, WHILE UNWIRED.** It was committed 2026-08-12 at 14:16 with a park built from a queue
-of legs and a per-leg speed ramp. At **15:15 the same day** `teleop_session.py` replaced
-exactly that with a single blended `JointPath`, and the commit message says the earlier
-version *"was the wrong thing"*. This class then sat for a day modelling a design the
-script no longer had, **with all 17 of its tests passing the whole time**, because the
-tests asserted the superseded behaviour. It was found by auditing before the restructure
-rather than by anything failing.
-
-⚠️ **The lesson, kept because it explains the shape of the work: an unwired class is a
-copy of a design, and a copy drifts.** The fix was to finish the wiring, and that is done
-— the script no longer holds a second copy of this state. ⛔ **What it still holds is a
-second copy of the park LOOP**: `step_path()` here and the `mode == "park"` branch there
-implement the same motion, and only the branch runs. Diff them before trusting this one,
-and see [ROADMAP §6.1](../docs/ROADMAP.md) for where they are meant to collapse.
-
-⛔ **What this deliberately does NOT own, decided 2026-08-13: recording and playback.**
-They look like per-arm state and they are not. `amazon-far/abc` wants 14 states and 14
-actions per timestep, **two arms in ONE timeline** (ROADMAP §9.2), so a recorder owned by
-an arm cannot produce the target format at all. One session-level recorder samples every
-arm each cycle, and one playback cursor drives them all — splitting the cursor per arm
-would let the arms drift apart in time, which is the one thing a bimanual demonstration
-must not do. Migration map: ROADMAP §6.1.
+Both arms and the shared recorder were integrated and exercised on hardware in
+the August walkthrough. The history of this extraction, including the earlier
+unwired copy that drifted while its tests passed, is in FINDINGS sections 50-54.
+Keep tests attached to the implementation the application actually calls.
 """
 
 from __future__ import annotations

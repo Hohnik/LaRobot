@@ -10,7 +10,7 @@ Use `./teleop` from the repository root. It installs the locked Python 3.12 depe
 ./teleop --sim --arms B,G --start-mode hold --yes  # interactive simulation
 ```
 
-For the physical arms, follow the bring-up checklist below, then run the same command **without `--sim`**, adding `--yes` only when ready to enable them. Starting both arms in HOLD avoids the unsupported two-arm GUIDE startup.
+For the physical arms, follow the bring-up checklist below, then run the same command without `--sim`, adding `--yes` only when ready to enable them. Starting both arms in HOLD avoids the unsupported two-arm GUIDE startup.
 
 Current cleanup status, preservation details, validation limits, and remaining work: [docs/CLEANUP.md](docs/CLEANUP.md). Fable's original handoff is preserved at `499d0b7`; the cleanup changes have software and simulation validation only.
 
@@ -21,7 +21,7 @@ After the launcher has created the environment, run checks with:
 .venv-teleop/bin/python checks/run_falsifiers.py
 ```
 
-The older `uv run ...` examples below also work after `export UV_PROJECT_ENVIRONMENT="$PWD/.venv-teleop"`. Use that setting before `uv sync` too, to preserve a training environment in `.venv`. The automated simulator driver overwrites simulation slots: run it in a disposable checkout, not against recordings you want to keep.
+The older `uv run ...` examples below also work after `export UV_PROJECT_ENVIRONMENT="$PWD/.venv-teleop"`. Use that setting before `uv sync` too, to preserve a training environment in `.venv`. The automated simulator driver overwrites simulation slots: run it in a disposable checkout to preserve your recordings.
 
 ## Original walkthrough and hardware evidence
 

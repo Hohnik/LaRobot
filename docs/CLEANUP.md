@@ -4,7 +4,7 @@ Updated September 15, 2026. This is the current implementation handoff for the c
 
 ## Status
 
-Work is active on `codex/teleop-cleanup`, based on Fable's final `499d0b7`. The first increment repairs startup ownership and failure cleanup. The startup and shutdown changes pass the full software suite and the isolated simulated workflow. Nothing has been pushed or exercised on physical hardware.
+Two cleanup increments are complete on `codex/teleop-cleanup`, based on Fable's final `499d0b7`: startup/shutdown ownership (`c72686b`) and the shared recording lifecycle (the following commit). The final software suite is 891/891 across 46 files; falsifiers are 71/71; the isolated simulated workflow is 32/32. Documentation links and flag/restructure diagnostics pass. Nothing has been pushed or exercised on physical hardware. This session ends at a saved checkpoint; no background work remains running. Broader architectural cleanup remains, prioritized below.
 
 Julien supplied Fable's final message, which explicitly named `499d0b7`. The original restore was correct. He then authorized proceeding sensibly with the assessment's cleanup plan and requested detailed durable notes. No user decision is needed for the present software work.
 
@@ -14,7 +14,7 @@ Julien supplied Fable's final message, which explicitly named `499d0b7`. The ori
 - `codex/saved-training-2026-09-15` preserves the three training edits in `3887161`; `feature/training-pipeline` stays at `0c94c23`.
 - `.local-backups/2026-09-15_102317/working-files.tar` contains the pre-switch working files, including ignored local data and the nested I2RT checkout. All 4,167 archived regular files were checked by SHA-256. Top-level Git metadata and the original `.venv` were excluded and left in place.
 - The original Python 3.14 training environment remains in `.venv`. The initial teleop validation environment is `.local-backups/2026-09-15_102317/teleop-validation-py312`, built offline with Python 3.12.12 and this branch's lockfile.
-- All 3,455 existing recording files were verified unchanged after the restore and initial validation. Do not run the simulator driver against these local files without isolating its output.
+- All 3,455 existing recording files were verified unchanged after the restore and again after the cleanup. Do not run the simulator driver against these local files without isolating its output.
 - Calibration files and operating limits are not cleanup material. Preserve their values, arm ordering, and the shared recording/playback timeline.
 
 The backup is on the same disk. It protects against checkout mistakes, not disk failure. Local-only analysis and logs are under `agents/codex`; they do not travel with Git. This file records the implementation decisions that must travel.
@@ -63,7 +63,7 @@ The builder now refuses when verification fails, closes its acquired handle, and
 
 ## Evidence and limits
 
-First cleanup checkpoint: 883/883 checks across 45 files, 71/71 falsifier catches, and 1,862/1,862 documentation links pass. Logs are in `agents/codex/validation/lifecycle-*.txt`.
+The first lifecycle runs passed 883/883 checks across 45 files, 71/71 falsifier catches, and 1,860/1,860 documentation links. A later full run caught two README prose regressions introduced while writing launch instructions; these were fixed without raising a ceiling. The final 891/891 run includes all completed code and documentation changes. Logs are in `agents/codex/validation/lifecycle-*.txt`.
 
 Baseline earlier today: 843/843 checks across 41 test files; 71/71 catches across five deliberately broken-input scripts. These were run with the isolated Python 3.12 environment. All existing documentation links resolved. No physical hardware claim follows from these checks.
 
@@ -77,8 +77,42 @@ The dedicated root launcher `./teleop` uses Python 3.12 and `.venv-teleop`, leav
 
 Both camera factories now own captures immediately and close partially started readers after failure. FrameSink also stops writers already started if a later writer cannot start. Teardown attempts all readers/writers even when one fails, reporting the collected failures. Device-reader release runs even when joining its thread fails.
 
-Next structural step: move the session-level recording lifecycle into a coordinator with direct tests. Preserve one timeline for all arms, existing file formats and slot interaction. Replay and terminal coordination remain later work. Do not call the entire architectural cleanup complete after the ownership correction.
+The shared trajectory lifecycle is now extracted, as detailed below. Per-take camera ownership, safe slot persistence, replay, and terminal coordination remain. Do not call the entire architectural cleanup complete after these two increments.
 
 ## Decisions still reserved for the operator
 
-No changes to motion limits, calibration, camera exposure policy, or the physical stopping policy are bundled into cleanup. No motor setpoints or real camera sessions are run by this agent. Hardware validation belongs to Julien. Pushing to the team remote requires his explicit instruction. The Linux station has not been contacted during this work.
+No changes to motion limits, calibration, camera exposure policy, or the physical stopping policy are bundled into cleanup. No physical motor setpoints or real camera sessions are run by this agent. Hardware validation belongs to Julien. Pushing to the team remote requires his explicit instruction. The Linux station has not been contacted during this work.
+
+## Recording lifecycle checkpoint
+
+`yam.recording_session.RecordingSession` now owns active/frozen trajectory state, the shared start time, labels, and ordered mode history. The application actually calls its start/sample/freeze/discard operations. It still reads measured joint positions in arm layout order, controls the slot prompt, and owns camera I/O. Eight direct tests cover the common timeline, frozen save prompt, mode provenance, simulation marker, labels, overwrite refusal, reset, and layout errors.
+
+Manual stop and sample-limit stop now both call `freeze()`. Previously only manual stop finalized the mode history; a take stopped by the 100,000-sample limit could describe only the modes it started in. The new path records every mode seen while preserving the separate `simulated` marker. Existing recording schemas, file locations, key bindings, and overwrite confirmation remain unchanged.
+
+The application now imports `git_commit` and `dt_now` from `yam.provenance`. The obsolete ArmSession header has been replaced with its current responsibilities. Historical rationale remains in FINDINGS and Git. Current README/HANDOFF entry points distinguish the August hardware evidence from this software-only continuation.
+
+This is a useful first extraction, not the end of the architectural work: the operator `main()` still spans roughly 3,900 lines. Camera state, slot persistence, replay/composite coordination, terminal prompts, and the control loop still meet in that function. Reducing a line count is not the acceptance criterion; removing duplicated decisions and testing the actual application boundary is.
+
+## Next work, in order
+
+1. **Recording I/O failure containment and save consistency.** Inspect `stop_take_frames`, the `take_save`/`take_replace` handler, and `yam.cameras.writer.attach_frames_to_slot`. Current slot save moves/replaces the frame directory before saving the trajectory JSON. A failed JSON write can leave mismatched old metadata/new frames. Camera writer startup, flush, sampling and save errors are also not all contained by the trajectory-sample exception handler; some can leave the main loop through its outer exception path. These are code-inspection findings, not reproduced hardware failures. Characterize each with injected filesystem/camera failures before changing the operator's stopping policy. Prefer retaining a failed take for recovery over quietly discarding it.
+2. **Finish recording ownership.** Move per-take frame lifecycle and slot persistence behind an explicit session-level owner once the error behavior is specified. Keep long-lived camera readers outside it. Frame/JSON replacement needs a recovery plan because two separate paths cannot be atomically renamed together. Do not hide that problem by merely moving the existing code.
+3. **Replay/composite coordinator.** Keep one cursor for all arms, preserve the park-to-start gate and purpose tags (FINDINGS §72), and test arrival/leg handovers at the real call sites. The existing full simulator is a useful normal-path check, not coverage of every fault/interrupt timing.
+4. **Terminal interaction.** Separate input decoding and prompt state after recording/replay boundaries stabilize. Keep the two-step motion confirmations and occupied-slot re-aim behavior. Avoid changing physical behavior as a side effect of shortening the application.
+5. **Team integration.** Re-read the team's current refs before proposing a bridge; the fetched September refs are a dated snapshot. Choose specific transferable behavior and document gaps. Do not replace the hardware reference with the newer, narrower dual-wield simulator solely because its commit is newer.
+
+The current simulator does not validate USB/CAN timing, gravity compensation, camera delivery, gripper calibration, collision avoidance, or real stopping behavior. Fake-device failure tests establish call ordering and ownership; they cannot establish that a motor physically disabled. Missing disable confirmations remain an operator-visible failure.
+
+## Reproducing the software evidence without changing saved data
+
+From the repository root, create the environment with `./teleop --help`. Then run `.venv-teleop/bin/python checks/run_tests.py`, `checks/run_falsifiers.py`, `checks/check_links.py`, `checks/check_flags.py`, and `checks/check_restructure.py` with the same interpreter. Do not change the existing prose ceilings to make a failing documentation check green.
+
+For the full interaction driver, copy `apps`, `checks`, `src`, `config`, and `pyproject.toml` into a new temporary directory. Symlink that directory's `third_party` to this checkout's vendored tree. Run the copied `checks/drive_sim_session.py` with the absolute path of this checkout's `.venv-teleop/bin/python`, set `PYTHONPATH` to the copy's `src`, and use the copy as the working directory. This puts its synthetic recordings, slots 0/8, tracking logs and temporary settings under the copy. The driver requires a pseudo-terminal and uses timed input, so inspect its child log if an interaction check fails.
+
+Local evidence paths:
+
+- `agents/codex/validation/lifecycle-*.txt`: first lifecycle runs.
+- `agents/codex/validation/recording-*.txt`: final coordinator suite, falsifiers, links, flags and simulation. `recording-simulator-copy.txt` names the disposable copy and its child log under `recordings/sim/last_drive.log`.
+- `agents/codex/validation/launcher-help.txt` and `launcher-dry-run.txt`: actual launcher output.
+- `agents/codex/validation/final-recording-preservation.json`: all 3,455 original recording files still match the pre-switch SHA-256 manifest after this work.
+- `agents/codex/CLEANUP_ASSESSMENT.md`, `REPORT.md`, and `unreachable-commits.txt`: earlier investigation and recovery details. They are dated snapshots; this document takes precedence for current implementation status.

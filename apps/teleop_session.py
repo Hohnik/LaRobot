@@ -77,7 +77,6 @@ from __future__ import annotations
 import argparse
 import json
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -145,6 +144,8 @@ from yam.teleop import (  # noqa: E402
     effective_limits,
     workspace_room,
 )
+from yam.recording_session import RecordingSession  # noqa: E402
+from yam.provenance import dt_now, git_commit  # noqa: E402
 from yam.cameras.startup import CameraStartup  # noqa: E402
 from yam.cameras.capture import CaptureSet  # noqa: E402
 from yam.cameras.grabber import FrameGrabber  # noqa: E402
@@ -494,27 +495,6 @@ def _safe_fact(fn) -> Any:  # noqa: ANN001
         return fn()
     except Exception as exc:  # noqa: BLE001
         return f"<unavailable: {type(exc).__name__}: {exc}>"
-
-
-def git_commit() -> str:
-    """Short hash of the code that is running, or `"unknown"`.
-
-    ⭐ Written into every recording. Julien's requirement, 2026-08-12: *"being able to
-    reproduce everything and connect it to other research papers."* Which version of the
-    code produced a demonstration is free to record now and unrecoverable later.
-    ⚠️ Never raises: a missing git is not a reason to lose a recording.
-    """
-    try:
-        out = subprocess.run(["git", "-C", str(REPO), "rev-parse", "--short", "HEAD"],
-                             capture_output=True, text=True, timeout=5, check=False)
-        return out.stdout.strip() or "unknown"
-    except Exception:  # noqa: BLE001
-        return "unknown"
-
-
-def dt_now() -> str:
-    """Wall-clock time as text, for the record. Local time, because a human reads it."""
-    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
 def chain_alive(robot) -> bool:  # noqa: ANN001
@@ -1473,28 +1453,12 @@ def main() -> int:  # noqa: PLR0915
     # **"PARK reached in 0.0s"** on a park that had just taken 4.4 seconds: the last leg's
     # mark is passed at the end of the path, so the reset happened moments before arrival.
     # See [FINDINGS §34.3](../docs/FINDINGS.md).
-    # ⭐⭐ HAND-TAUGHT MOVEMENTS. Julien, 2026-08-12: *"arm good idea is definitely
-    # recording everything in the guide mode and then replaying it. That's a smart idea,
-    # definitely."* `w` records, `l` plays arm back. The reasoning for why this may beat
-    # saved waypoints is docs/ROADMAP.md §6.6; the movement itself lives in
-    # src/yam/recording.py so every decision about it is testable without an arm.
-    #
-    # ⛔⭐ THIS BLOCK DOES **NOT** MOVE INTO `ArmSession`, and an earlier note here said it
-    # did. Corrected 2026-08-13 after checking it against the target data format.
-    # `amazon-far/abc` wants `states_actions.bin` with **14 states and 14 actions per
-    # timestep — two arms in ONE timeline** ([ROADMAP.md](../docs/ROADMAP.md) §9.2). A
-    # recorder owned by an arm produces arm file per arm and **cannot** produce that.
-    # ⭐ So recording and playback are **session-level and span every arm**: arm recorder
-    # samples all arms each cycle, and arm playback cursor drives them all. Splitting the
-    # cursor per arm would let the two arms drift apart in time, which is the arm thing a
-    # bimanual demonstration must not do. Migration map: [ROADMAP.md](../docs/ROADMAP.md)
-    # §6.1.
-    take: Trajectory | None = None      # being recorded right now, or None
-    take_to_save: Trajectory | None = None   # frozen, waiting for its slot digit
-    take_t0 = 0.0
-    take_modes: list[str] = []          # every mode the current recording passed through
-    take_label = "good"                 # the label in force while recording — k toggles it
-    # ⭐ Item 48's per-take camera state. `frame_sink` exists exactly while `take` does; the frozen tuple travels with `take_to_save` the same way the trajectory itself does, so the save digit can attach frames whose recording already stopped. `take_mono0` is `time.monotonic_ns()` at the `w` keypress — the SAME instant as `take_t0`, which is what puts frame stamps and sample times on one axis (both clocks are mach_absolute_time on this Mac; yam/episode.py::nearest_frame_per_tick is the consumer).
+    # Recording and replay share one timeline across every arm (FINDINGS §35.4,
+    # ROADMAP §9.2). ArmSession cannot own either clock independently.
+    recording = RecordingSession()
+    # Readers span the session; writers and their pending directory belong to one
+    # take. Frozen camera reports accompany recording.pending until slot selection.
+    # take_mono0 anchors camera timestamps to the recording's elapsed-time axis.
     frame_sink: FrameSink | None = None       # writing frames right now, or None
     take_mono0 = 0                            # monotonic_ns at the w keypress
     pending_frames: Path | None = None        # where the current/frozen take's frames sit
@@ -1503,7 +1467,8 @@ def main() -> int:  # noqa: PLR0915
     def stop_take_frames(keep: bool) -> None:
         """Stop the take's frame writers, flushing their indexes (item 48's teardown rule).
 
-        `keep=True` freezes the per-camera results beside `take_to_save`, so the save digit can attach them; `keep=False` discards the frames of a recording that was aborted — images belonging to a take that no longer exists are exactly the stale-but-plausible debris this repo keeps finding.
+        Keep reports alongside recording.pending for slot selection, or discard
+        frames when the take is aborted. These files must never outlive their take.
         """
         nonlocal frame_sink, take_frames, pending_frames
         if frame_sink is None:
@@ -1814,8 +1779,8 @@ def main() -> int:  # noqa: PLR0915
             handle.set_nonblocking(True)
             pucks[name]["reader"] = TwistReader(handle)
 
-        # ⚠️ `robot = None` was declared here. Every robot handle now lives on its own
-        # `ArmSession`, and the teardown iterates `arms`, which is empty when nothing was built.
+        # Fully initialized sessions drive the loop; `robots` owns every acquired handle
+        # for cleanup, including handles whose ArmSession could not initialize.
         # ⛔⭐ DECLARED HERE, BEFORE THE `try`, AND IT IS None ON PURPOSE. FINDINGS §48.3.
         #
         # The closing summary at the bottom of this function reads a field off `arm`, and it
@@ -2665,10 +2630,9 @@ def main() -> int:  # noqa: PLR0915
                         #   anything that is not a digit      → discards
                         was_replacing = pending == "take_replace"
                         pending = None
-                        take = None          # belt and braces: never resume by accident
                         occupied = (describe_slot(takes_dir / f"{k}.json")
                                     if k.isdigit() else None)
-                        action = save_slot_action(k, take_to_save is not None,
+                        action = save_slot_action(k, recording.pending is not None,
                                                   was_replacing, replace_slot, occupied)
                         if action[0] == "ask":
                             replace_slot = action[1]
@@ -2683,7 +2647,7 @@ def main() -> int:  # noqa: PLR0915
                                   "what is there.\n")
                             continue
                         if action[0] == "discard":
-                            take_to_save = None
+                            recording.discard()
                             discard_frames(pending_frames)
                             pending_frames, take_frames = None, None
                             if action[1] is not None:
@@ -2692,13 +2656,13 @@ def main() -> int:  # noqa: PLR0915
                             else:
                                 print("\n  recording discarded.\n")
                             continue
-                        if k.isdigit() and take_to_save is not None:
+                        if k.isdigit() and recording.pending is not None:
                             takes_dir.mkdir(parents=True, exist_ok=True)
                             path = takes_dir / f"{k}.json"
                             # ⭐ Item 48 ③: the frames move under their slot and the recording's own meta names them, with the counts — so the file carries everything the episode export and `check_recordings` need, and a moved frames directory is detectable. The stale-frames clear on the frameless path matters just as much: a slot's OLD images beside a NEW recording would be attributed to it.
                             if take_frames is not None and pending_frames is not None:
                                 attach_frames_to_slot(TAKES_DIR, pending_frames, k)
-                                take_to_save.meta["cameras"] = {
+                                recording.pending.meta["cameras"] = {
                                     "dir": f"frames/{k}",
                                     "mono0_ns": take_frames["mono0_ns"],
                                     "per_camera": {
@@ -2717,19 +2681,19 @@ def main() -> int:  # noqa: PLR0915
                             # the code produced a recording is cheap to write now and
                             # impossible to reconstruct later. Same argument as the whole
                             # metadata block in ROADMAP §6.6.
-                            take_to_save.meta["commit"] = git_commit()
-                            take_to_save.meta["recorded_at"] = dt_now()
-                            take_to_save.save(path)
-                            print(f"\n  ✓ recording {k} saved: {take_to_save.duration:.1f}s, "
-                                  f"{len(take_to_save)} samples → {path.name}"
-                                  + (f" + frames/{k}/" if "cameras" in take_to_save.meta
+                            recording.pending.meta["commit"] = git_commit()
+                            recording.pending.meta["recorded_at"] = dt_now()
+                            recording.pending.save(path)
+                            print(f"\n  ✓ recording {k} saved: {recording.pending.duration:.1f}s, "
+                                  f"{len(recording.pending)} samples → {path.name}"
+                                  + (f" + frames/{k}/" if "cameras" in recording.pending.meta
                                      else ""))
                             print(f"     (l then {k} plays it back)\n")
                         else:
                             discard_frames(pending_frames)
                             pending_frames, take_frames = None, None
                             print("\n  recording discarded.\n")
-                        take_to_save = None
+                        recording.discard()
                         continue
 
                     if pending == "settings":
@@ -3512,16 +3476,15 @@ def main() -> int:  # noqa: PLR0915
                         # implicitly good, so the first press always means BAD-from-here.
                         # ⚠️ Labels are DATA for the dataset export, never control: a bad
                         # stretch still plays back, and nothing about the motion changes.
-                        if take is None:
+                        if recording.active is None:
                             print("\n  k labels a stretch while RECORDING — press w first.\n")
                         else:
-                            take_label = "bad" if take_label == "good" else "good"
-                            take.mark(t - take_t0, take_label)
-                            if take_label == "bad":
-                                print(f"\n  ✎ BAD from {t - take_t0:.1f}s — press k again "
+                            recording.toggle_label(t)
+                            if recording.label == "bad":
+                                print(f"\n  ✎ BAD from {t - recording.started_at:.1f}s — press k again "
                                       "when it is good again.\n")
                             else:
-                                print(f"\n  ✎ good again at {t - take_t0:.1f}s.\n")
+                                print(f"\n  ✎ good again at {t - recording.started_at:.1f}s.\n")
                     elif k == "w":
                         # ⭐ START OR STOP RECORDING. Deliberately allowed in EVERY mode,
                         # not only GUIDE. Hand-guiding is the intended use and the reason
@@ -3531,42 +3494,17 @@ def main() -> int:  # noqa: PLR0915
                         #
                         # ⚠️ Recording moves nothing, so a mis-press is harmless. That is
                         # why `w` needs no confirmation while `l` does.
-                        if take is None:
-                            take = Trajectory(meta={
-                                # ⚠️ ONE arm's name today. ABC's format is two arms in one
-                                # timeline (ROADMAP §9.2), so when the recorder spans N arms
-                                # this becomes the list of names in the same order as the
-                                # samples. Changing it now would write a shape nothing reads.
-                                # ⭐ `arm` is kept as well as `arms` so that anything already
-                                # reading the old field still finds one, and `arms` is what
-                                # playback uses. `Layout.from_meta` reads either.
+                        if recording.active is None:
+                            recording.start(t, meta={
+                                # Keep the legacy first-arm fields and the full layout.
                                 "arm": arms[0].name,
                                 **sample_layout().to_meta(),
-                                # ⛔⭐⭐ "sim:" NOT "live:" WHEN SIMULATED, AND THIS IS A
-                                # DATA-INTEGRITY GUARD RATHER THAN A LABEL. The first
-                                # `--sim` run I drove wrote `recordings/9.json` with
-                                # `"method": "live:B:teleop+G:teleop"` — a recording of a
-                                # FAKE arm, in the same folder as Julien's six real
-                                # demonstrations, claiming to be live. ⚠️ These files are
-                                # destined to become training data (ROADMAP §9.2), so a
-                                # simulated take that reads as real is the worst possible
-                                # thing to leave lying about. Stamped in TWO independent
-                                # ways, because a file can be moved out of its folder but
-                                # not out of its own metadata.
-                                "method": ("sim:" if args.sim else "live:") + "+".join(
-                                    f"{one.name}:{one.mode}" for one in arms),
                                 "simulated": bool(args.sim),
                                 "nominal_hz": CONTROL_HZ,
-                                # ⚠️ Per arm, because `v` aims at one arm: two arms can be
-                                # driven in different frames, and a single value would record
-                                # one of them as though it were both.
                                 "frames": {one.name: one.frame for one in arms},
                                 "frame": arms[0].frame,
-                            })
-                            take_t0 = t
-                            take_label = "good"   # every recording starts good; k marks bad
-                            take_modes = [f"{one.name}:{one.mode}" for one in arms]
-                            # ⭐ Item 48: frame writers live per take. `take_mono0` is stamped at the SAME instant as `take_t0` so frames and samples share one time axis; the pending directory gets the slot's name only at the save digit, because the slot is not known yet.
+                            }, modes=[f"{one.name}:{one.mode}" for one in arms])
+                            # Stamp the camera clock at start; choose the slot after stop.
                             if capture is not None:
                                 take_mono0 = time.monotonic_ns()
                                 pending_frames = pending_frames_dir(
@@ -3592,39 +3530,16 @@ def main() -> int:  # noqa: PLR0915
                             #
                             # Moving it to a second name is the whole fix: the sampler stops
                             # on this line, and the prompt then saves something frozen.
-                            take_to_save, take = take, None
+                            recording.freeze()
                             # ⭐ The frame writers stop on the SAME line the sampler does (the §30.1 rule extended to images): frames captured while the save prompt waits would belong to no recording.
                             stop_take_frames(keep=True)
-                            # ⭐ Stamp what the recording actually WAS, now that it is over.
-                            # `method` was written at the keypress and can only name the mode
-                            # it started in; a hand-guided movement begun from HOLD came out
-                            # labelled `live:hold`. Both fields are kept: `method` stays for
-                            # anything already reading it, and `modes` is the truth.
-                            take_to_save.meta["modes"] = list(take_modes)
-                            if take_to_save.meta.get("marks"):
-                                print(f"  ✎ labels: {take_to_save.bad_seconds():.1f}s of "
-                                      f"{take_to_save.duration:.1f}s marked BAD "
-                                      f"({len(take_to_save.meta['marks'])} mark(s)).")
-                            if len(take_modes) > 1:
-                                # ⛔⭐⭐ THE PREFIX IS COMPUTED IN TWO PLACES AND THIS ONE
-                                # HARDCODED "live:", WHICH SILENTLY UNDID THE `sim:` STAMP.
-                                # `method` is written once at the record keypress and
-                                # REWRITTEN here at the stop keypress, so patching only the
-                                # first left a simulated take reading
-                                # `live:B:teleop+G:teleop` — exactly the mislabelling the
-                                # stamp was added to prevent, in the fix for it.
-                                #
-                                # ⚠️ Third time this session that two copies of one
-                                # expression drifted (the tracking-table names, the flag
-                                # checker's choices, this). `simulated` is a separate field
-                                # for the same reason: two independent marks, so one being
-                                # overwritten cannot make a fake take look real.
-                                take_to_save.meta["method"] = (
-                                    ("sim:" if args.sim else "live:")
-                                    + "+".join(take_modes))
-                            n, secs = len(take_to_save), take_to_save.duration
+                            if recording.pending.meta.get("marks"):
+                                print(f"  ✎ labels: {recording.pending.bad_seconds():.1f}s of "
+                                      f"{recording.pending.duration:.1f}s marked BAD "
+                                      f"({len(recording.pending.meta['marks'])} mark(s)).")
+                            n, secs = len(recording.pending), recording.pending.duration
                             if n < 2:
-                                take_to_save = None
+                                recording.discard()
                                 discard_frames(pending_frames)
                                 pending_frames, take_frames = None, None
                                 print("\n  nothing recorded (too short) — discarded.\n")
@@ -3632,8 +3547,8 @@ def main() -> int:  # noqa: PLR0915
                                 pending = "take_save"
                                 print(f"\n⏹  RECORDED {secs:.1f}s, {n} samples, "
                                       f"typical joint speed "
-                                      f"{take_to_save.joint_speed(99):.2f} rad/s "
-                                      f"(peak {take_to_save.max_joint_speed():.2f}).")
+                                      f"{recording.pending.joint_speed(99):.2f} rad/s "
+                                      f"(peak {recording.pending.max_joint_speed():.2f}).")
                                 # ⭐ The whole shelf, once, before the first digit (FINDINGS §71.6): on 2026-08-19 every slot was occupied and the one-warning-per-digit flow cost eleven keypresses. The replace confirmation below still guards each overwrite.
                                 for line in slot_overview(takes_dir):
                                     print(line)
@@ -3926,7 +3841,7 @@ def main() -> int:  # noqa: PLR0915
                 # same cycle. Reading the arms in separate statements would put a control
                 # cycle between them, and a demonstration whose two halves are 10 ms apart is
                 # a demonstration with a lie in it.
-                if take is not None:
+                if recording.active is not None:
                     # ⛔⭐ A RECORDING PROBLEM MUST NEVER TAKE DOWN THE SESSION, and this
                     # wrapper is the whole reason the block exists. `append` raises on a
                     # non-monotonic timestamp or a changed joint count. Unwrapped, that
@@ -3937,29 +3852,14 @@ def main() -> int:  # noqa: PLR0915
                     # recording is a convenience feature: it has no business being able to
                     # release the arm.
                     try:
-                        take.append(t - take_t0,
-                                    [v for one in arms
-                                     for v in np.asarray(one.robot.get_joint_pos(),
-                                                         dtype=float)])
-                        # ⛔⭐ RECORD EVERY MODE THE RECORDING PASSED THROUGH, not only the
-                        # one it started in. Julien's recording of 2026-08-13 17:21 was
-                        # stamped `method: live:hold` because he pressed `w` while in HOLD
-                        # and then switched to GUIDE to hand-guide it. **The stamp described
-                        # the keypress rather than the demonstration**, and provenance is the
-                        # thing ROADMAP §6.6 says matters most about a recording. A dataset
-                        # that mislabels how a demonstration was produced is worse than one
-                        # that omits it. FINDINGS §35.4.
-                        # ⭐ Every arm's mode, so a two-arm demonstration records that arm B
-                        # was hand-guided while arm G was mirroring it. `method` is the one
-                        # thing ROADMAP §6.6 says matters most about a recording.
-                        for one in arms:
-                            stamp = f"{one.name}:{one.mode}"
-                            if stamp not in take_modes:
-                                take_modes.append(stamp)
+                        recording.sample(
+                            t, [v for one in arms
+                                for v in np.asarray(one.robot.get_joint_pos(), dtype=float)],
+                            [f"{one.name}:{one.mode}" for one in arms])
                     except Exception as exc:  # noqa: BLE001
                         print(f"\n⚠️  recording stopped: {type(exc).__name__}: {exc}")
                         print("     The arm is unaffected. Press w to start a new one.\n")
-                        take = None
+                        recording.discard()
                         # An aborted recording's frames belong to nothing — discard, never keep.
                         stop_take_frames(keep=False)
                     else:
@@ -3971,13 +3871,13 @@ def main() -> int:  # noqa: PLR0915
                         # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
                         # wants (ROADMAP §9.3). Stopping and saying so beats running out of
                         # memory in a process that is driving an arm.
-                        if len(take) >= MAX_TAKE_SAMPLES:
+                        if len(recording.active) >= MAX_TAKE_SAMPLES:
                             # Freeze it the same way `w` does, or the limit would not be one.
-                            take_to_save, take = take, None
+                            recording.freeze()
                             stop_take_frames(keep=True)
                             pending = "take_save"
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
-                                  f"limit ({take_to_save.duration:.0f}s).")
+                                  f"limit ({recording.pending.duration:.0f}s).")
                             for line in slot_overview(takes_dir):
                                 print(line)
                             print("\n     SAVE to which slot? 0-9, any other key discards.\n")
@@ -4758,8 +4658,8 @@ def main() -> int:  # noqa: PLR0915
                     # message that started it. A session where recording is silently still
                     # running produces a demonstration full of whatever happened next, and
                     # the operator finds out at training time.
-                    if take is not None:
-                        lead += f"  ⏺ REC {t - take_t0:5.1f}s"
+                    if recording.active is not None:
+                        lead += f"  ⏺ REC {t - recording.started_at:5.1f}s"
                     # ⭐ THE LOOP RATE, because it was 87 Hz for a whole session and nothing
                     # said so. It only became visible when a playback summary failed to add
                     # up. Shown only when it drops, so a healthy loop costs no width.
