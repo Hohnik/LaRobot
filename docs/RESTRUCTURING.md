@@ -118,7 +118,7 @@ Apply this to touched modules rather than another indiscriminate archival pass. 
 
 `robot.py` may later benefit from moving pure pose helpers into existing motion code and separating calibration or thermal policy. Its roughly 400 code lines give little reason for an urgent multi-file split by themselves. The same caution applies to `recording.py` and `session.py`.
 
-One smaller dependency cleanup is shared recording-slot resolution: `export_dataset.py` imports it from `export_episode.py`. Move shared resolution into the library when touching those tools. Preserve caller-specific precedence between real and simulated recordings.
+The reviewed snapshot had an export application-to-application dependency for recording-slot resolution. This is now resolved by `yam.recording_slots.find_export_slot`; both exports share real-first precedence, while operator simulation playback retains its separate simulation-first policy. See [the current work queue](WORK_QUEUE.md) for completion evidence and the review disposition.
 
 Keep narrower demos and diagnostics when they serve a distinct purpose. Label their purpose in the entry documentation. A newer demo is not a replacement for the full operator until its required behavior is covered.
 

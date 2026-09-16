@@ -39,6 +39,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from yam.files import write_json_atomic
+
 #: The settings that may be saved, keyed by their argparse `dest`.
 #:
 #: ⛔ DELIBERATELY NOT EVERYTHING. `--yes` is absent because energising the motors must be a
@@ -162,13 +164,13 @@ def save_defaults(path: Path, values: dict[str, Any]) -> None:
     """Write the settings, sorted, with a note for whoever opens the file by hand."""
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {
-        "_comment": ("Session defaults for scripts/teleop_session.py. A command-line flag "
+        "_comment": ("Session defaults for apps/teleop_session.py. A command-line flag "
                      "still overrides anything here. Written by --save-defaults; safe to "
                      "edit by hand. Delete a key to go back to the built-in constant, or "
                      "delete the file for all of them."),
         **{k: values[k] for k in sorted(values)},
     }
-    path.write_text(json.dumps(body, indent=2) + "\n")
+    write_json_atomic(path, body)
 
 
 def describe(saved: dict[str, Any], rejected: list[str], loose: list[str],

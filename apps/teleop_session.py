@@ -85,6 +85,7 @@ from yam.teleop_cli import build_parser  # noqa: E402
 from yam.session_health import SessionHealth  # noqa: E402
 from yam.session_input import SessionInput  # noqa: E402
 from yam.session_resources import SessionResources  # noqa: E402
+from yam.files import write_json_atomic  # noqa: E402
 from yam.recording_session import RecordingSession  # noqa: E402
 from yam.lifecycle import StopCause, StopRequest, controlled_stop  # noqa: E402
 from yam.composite import CompositeRun  # noqa: E402
@@ -305,8 +306,7 @@ def load_json(path: Path, default):  # noqa: ANN001, ANN201
 
 
 def save_json(path: Path, data) -> None:  # noqa: ANN001
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n")
+    write_json_atomic(path, data)
 
 
 def ease_note(profile: str, ramp: float) -> str:
@@ -1087,9 +1087,22 @@ def main() -> int:  # noqa: PLR0915
                             # Update all selected arms in one pose-file write; slot 0 changes their bases.
                             name = BASE_SLOT if k == "0" else k
                             data = load_json(PARK_FILE, {})
+                            poses = []
                             for one in aimed:
                                 q = np.asarray(one.robot.get_joint_pos(), dtype=float)
                                 data = with_park_slot(data, one.name, name, q.tolist())
+                                poses.append((one, q))
+                            try:
+                                save_json(PARK_FILE, data)
+                            except OSError as exc:
+                                pending = "save"
+                                print(f"\n  ⚠️ POSE NOT SAVED: {exc}\n"
+                                      "     Saved slots and base poses are unchanged. "
+                                      "Press 0-9 to retry, any other key to cancel.\n")
+                                continue
+                            # Only published poses become live release destinations.
+                            for one, q in poses:
+                                one.slots = park_slots(data, one.name)
                                 if k == "0":
                                     one.base_pose = q.tolist()
                                     print(f"\n  ⭐ arm {one.name} BASE pose (0) saved — this is "
@@ -1099,9 +1112,6 @@ def main() -> int:  # noqa: PLR0915
                                     print(f"\n  ✓ arm {one.name} waypoint {k} saved: "
                                           f"{np.round(q[:N_ARM], 3)}"
                                           f"     (p {k} drives back to it; Ctrl-C ignores it)\n")
-                            save_json(PARK_FILE, data)
-                            for one in aimed:
-                                one.slots = park_slots(data, one.name)
                         else:
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
                         continue

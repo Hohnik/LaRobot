@@ -22,26 +22,7 @@ REPO = Path(__file__).resolve().parent.parent
 from yam.can import ARM_SERIALS  # noqa: E402 — the real arm names, so a rename cannot go stale here
 from yam.episode import export_episode  # noqa: E402
 from yam.recording import Trajectory  # noqa: E402
-
-
-def find_slot(slot: str) -> Path:
-    """The saved recording for `slot`, preferring a real one over a simulated one.
-
-    ⛔ Simulated recordings live apart and are stamped `simulated: true` for exactly this
-    moment (FINDINGS §60.2): a sim take must never become training data by accident. If
-    only the sim copy exists it is used, and the episode metadata carries the stamp.
-    """
-    real = REPO / "recordings" / f"{slot}.json"
-    sim = REPO / "recordings" / "sim" / f"{slot}.json"
-    if real.is_file():
-        if sim.is_file():
-            print(f"  ⚠️ slot {slot} exists both real and simulated — exporting the REAL one.")
-        return real
-    if sim.is_file():
-        print(f"  ⚠️ slot {slot} is a SIMULATED recording — fine for pipeline tests, "
-              "never for training.")
-        return sim
-    raise SystemExit(f"⛔ nothing saved in slot {slot} (checked recordings/ and recordings/sim/).")
+from yam.recording_slots import find_export_slot  # noqa: E402
 
 
 def main() -> int:
@@ -66,7 +47,10 @@ def main() -> int:
                (("top", args.top), ("left-wrist", args.left_wrist),
                 ("right-wrist", args.right_wrist)) if value}
 
-    path = find_slot(args.slot)
+    try:
+        path = find_export_slot(REPO / "recordings", args.slot)
+    except FileNotFoundError as exc:
+        raise SystemExit(str(exc)) from exc
     traj = Trajectory.load(path)
     out = Path(args.out) if args.out else REPO / "recordings" / "episodes" / f"{args.slot}.mcap"
     try:

@@ -64,12 +64,11 @@ def test_failed_save_never_announces_success():
     def fail():
         raise OSError('disk unavailable')
     p._save = fail
-    try:
-        p.handle('s')
-    except OSError:
-        assert not any('SAVED' in line for line in output)
-        return
-    raise AssertionError('a failed save must reach the caller')
+    assert p.handle('s') is SettingsAction.STAY
+    assert not any('SAVED to' in line for line in output)
+    assert any('NOT SAVED' in line and 'disk unavailable' in line for line in output)
+    p._save = lambda: None
+    assert p.handle('s') is SettingsAction.CLOSE
 
 
 def test_quit_is_a_separate_intent_without_implicit_save():

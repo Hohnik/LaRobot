@@ -63,7 +63,13 @@ class SettingsPanel:
             self._emit("\n  ⭐ back to the values this session started with.\n")
             self.show()
         elif key == "s":
-            self._save()  # Failure must propagate; never announce a save that failed.
+            try:
+                self._save()
+            except OSError as exc:
+                self._emit(f"\n  ⚠️ SETTINGS NOT SAVED: {exc}\n"
+                           "     Live values remain active. Press s to retry, n to close, "
+                           "or q to quit.\n")
+                return SettingsAction.STAY
             self._emit(f"\n  ⭐ SAVED to {self._settings_file.parent.name}/"
                        f"{self._settings_file.name}. Every later session starts with these.\n")
             return SettingsAction.CLOSE

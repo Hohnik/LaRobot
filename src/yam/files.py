@@ -18,9 +18,42 @@ macOS stores a file's extended attributes in a **sidecar file named `._<original
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import stat
+import tempfile
 
-__all__ = ["is_os_litter", "is_mac_sidecar", "listing", "sidecars"]
+__all__ = ["is_os_litter", "is_mac_sidecar", "listing", "sidecars", "write_json_atomic"]
+
+
+def write_json_atomic(path: Path, value) -> None:
+    """Publish JSON only after serialization and a complete same-directory write.
+
+    A failed write/replace leaves the old file intact. Resolve an existing symlink
+    to preserve its target semantics. This is a single-writer operation without
+    fsync: atomic replacement is not a power-loss durability guarantee.
+    """
+    text = json.dumps(value, indent=2) + "\n"
+    path = Path(path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp",
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            if mode is not None:
+                temporary.chmod(mode)
+            stream.write(text)
+        temporary.replace(path)
+    except BaseException as failure:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError as cleanup:
+                failure.add_note(f"Could not remove temporary settings file {temporary}: {cleanup}")
+        raise
 
 
 def is_mac_sidecar(path: Path | str) -> bool:

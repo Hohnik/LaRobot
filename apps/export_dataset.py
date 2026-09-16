@@ -23,8 +23,7 @@ from yam.can import ARM_SERIALS  # noqa: E402
 from yam.dataset import VIEW_SIZE, export_dataset  # noqa: E402
 from yam.recording import Trajectory  # noqa: E402
 
-sys.path.insert(0, str(REPO / "apps"))
-from export_episode import find_slot  # noqa: E402 — one slot-finder, both exports
+from yam.recording_slots import find_export_slot  # noqa: E402
 
 
 def main() -> int:
@@ -74,13 +73,13 @@ def main() -> int:
     if args.all:
         slots, skipped = [], []
         for digit in "0123456789":
-            for folder in (REPO / "recordings", REPO / "recordings" / "sim"):
-                candidate = folder / f"{digit}.json"
-                if candidate.is_file():
-                    meta = Trajectory.load(candidate).meta
-                    (slots if (meta.get("cameras") or {}).get("per_camera")
-                     else skipped).append(digit)
-                    break
+            try:
+                candidate = find_export_slot(REPO / "recordings", digit, emit=lambda _: None)
+            except FileNotFoundError:
+                continue
+            meta = Trajectory.load(candidate).meta
+            (slots if (meta.get("cameras") or {}).get("per_camera")
+             else skipped).append(digit)
         if skipped:
             print(f"⚠️ skipping {len(skipped)} recording(s) with no camera frames: "
                   f"{', '.join(skipped)} — a C4 episode is a video plus a table.")
@@ -94,7 +93,10 @@ def main() -> int:
 
     written = []
     for slot in slots:
-        path = find_slot(slot)
+        try:
+            path = find_export_slot(REPO / "recordings", slot)
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from exc
         traj = Trajectory.load(path)
         episode_id = (args.episode_id or None) if len(slots) == 1 else f"slot{slot}"
         try:
