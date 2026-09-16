@@ -8,63 +8,47 @@ checks, Julien wants the exact commands and explanation first, then runs them in
 the station terminal himself.** Do not start a motor controller remotely in place
 of that agreed handoff. Software checks and preparation continue independently.
 
-Software checks and simulation on the Linux station have passed. Julien has now
-run B from his Mac through SSH. He reports that control worked as expected. The
-terminal and saved log confirm HOLD, TELEOP, parking and all seven motors disabled,
-with exit code 0. Two late target-lead warnings remain to be explained below.
-G and the combined station workflow have not been physically verified.
+Software checks and simulation on Linux have passed. Julien has run B and G and
+reports that both arms felt normal. Their three single-arm logs end with exit 0
+and all seven selected-arm motors confirmed disabled. G's large GUIDE pose change
+was deliberate hand movement. Target-lead warnings remain documented below.
 
-The next bounded check is G by itself. Use the existing remote shell, after the
-teammate has yielded G and its workspace is clear:
+The combined-arm run has also completed with exit 0, both arms parked and all
+14 motors confirmed disabled. Julien reports that both work and asks to use his
+selection/park workflow for subsequent checks. A camera-only D405 probe has passed.
+The next check is a short integrated recording, whose result remains pending.
 
-```sh
-cd /tmp/yam-validation-025fab1-LWvBIc
-./hold G
-```
+Use [STATION_COMMANDS](STATION_COMMANDS.md) for the current operator sequence.
+It provides one short command that works from either the Mac or the station.
+The previous split SSH/`cd` instructions caused a real error when the temporary
+station path was pasted at the Mac prompt. Do not repeat that workflow without
+clearly identifying the host.
 
-This runs candidate `025fab1` with `--arm G --start-mode hold --yes`, using the
-station's existing Python environment and a copy of its current configuration.
-It enables G and starts HOLD. Follow any SpaceMouse assignment prompt, then leave
-the puck centred. Observe for about 20 seconds: G should hold its pose, display
-temperatures and joint positions, and report no fault or BLIND reading. This
-command opens only G's motor chain.
+The run-specific `check` helper accepts B, G, both or record, with optional `--plan`.
+It verifies candidate `025fab1`, unchanged application files and copied config
+fingerprints, then logs an interactive HOLD-start session. The record profile
+adds the D405 by serial and refuses if validation slot 9 already contains data.
+The B/G/both plans, recording plan and invalid-input refusals were exercised
+without motors. Current helper SHA-256 is
+`c80f869dc5bdf0233f463220943d65cf881cc26eb90a1c6b5b2e78a482500408`.
+The source is saved under the local evidence directory and copied to the remote
+validation directory as `check`. The earlier `hold` helper remains available.
+These temporary helpers are validation tools; they do not replace `./teleop` as
+the repository launcher. `/tmp/yam-station-check` is installed on both machines;
+it chooses local execution on RoVita or SSH on the Mac. Both entry paths passed
+the actual record plan. Its source SHA-256 is
+`4ee491e2f37efc545aeeb29f602254732dc7c326a12b7c9e3aa44d3216eda86c`.
+Arguments are whitelisted before SSH; absent/invalid arguments refuse before
+connection. Source copies are in the local evidence directory. The Mac entry
+is a file; the station entry is a symlink into the validation directory.
 
-If B met an obstacle or stopped following the intended motion, report that before
-continuing to commanded motion. If B felt normal and G holds normally, press `t`
-and try small, slow movements within clear space. Release the puck between them,
-then press `h` and check that G holds the current pose. A persistent STUCK warning,
-unexpected motion, resistance or a fault ends this check for review. Do not push
-through resistance or change speed, calibration or limits to make a warning vanish.
-GUIDE, mirror, saved waypoints and recording are separate later checks.
-
-**Normal exit for this test:** press `q`, wait for the menu, support the arm so it
-cannot fall when torque is removed, then press `d`. Confirm that the terminal
-reports motors 1–7 disabled. A second `q` requests a park; Ctrl-C can also request
-parking. Fault handling may attempt the configured park before disable, so keep
-that path clear and the physical power cut available. Software HOLD/quit keys are
-not a hardware emergency stop. These are existing controller behaviors, not new
-shutdown guarantees introduced by this test.
-
-The helper captures a terminal log under this run's `logs/hold-G-*.log`; Codex can
-read it over SSH. Julien must still report what the physical arm did: a log cannot
-prove absence of unexpected motion, contact, sound or heat. If startup refuses or
-a fault appears, stop the sequence and inspect that evidence before trying again.
-Further commanded motion needs another explained, operator-run step.
-
-`./hold B --plan` exercises the same helper without `--yes` and opens no devices.
-That wrapper dry run and both arm plans passed during preparation. Do not copy
-these /tmp paths as permanent installation instructions; verify their existence
-and candidate before resuming.
-
-To reconnect from the Mac, without starting a controller:
-
-```sh
-ssh -t -o ControlPath=none yam-pc 'cd /tmp/yam-validation-025fab1-LWvBIc && exec bash --noprofile --norc -i'
-```
-
-Codex can read this task's terminal snapshot and the saved station log. Its private
-tool SSH session was closed; it is separate from Julien's interactive shell.
-There is no background log monitor or automatic continuation.
+Julien's verified normal exit is `q`, wait for the menu, then `q` to park both
+arms and disable them. Keep the configured park paths clear. The alternative
+`d` disables directly and requires support for every enabled arm. Ctrl-C or
+fault handling can also initiate parking. These software keys do not replace a
+physical power cut.
+Codex can read the task terminal and saved station logs. There is no background
+log monitor or automatic continuation.
 
 ## First attended run: B
 
@@ -108,11 +92,11 @@ IK objectives or requested rotation could explain the solver gap; this log canno
 select a cause. Do not claim the arm was physically blocked or that the warning
 is harmless solely from this output.
 
-An asynchronous question asks Julien whether he noticed contact, resistance or
-failure to follow near the end. His general success report is already recorded;
-the more specific answer is pending. Source review found no demonstrated new
-cleanup regression from this run. Motion code and operating limits stay unchanged
-while validating this candidate.
+Julien subsequently confirmed: "I moved it by hand; both arms felt normal."
+This resolves the question about intended GUIDE movement and records his physical
+assessment. It does not identify the numerical cause of the solver lead.
+Source review found no demonstrated new cleanup regression from this run. Motion
+code and operating limits stay unchanged while validating this candidate.
 
 The 10,974-byte raw log is `logs/hold-B-20260916T140740Z.log` under the remote
 validation directory and the local evidence directory below. Both copies have
@@ -121,6 +105,108 @@ Local `after-B.json` records the read-only preservation check at 14:12:24 UTC.
 Its operator application status is empty; its configuration and reference-checkout
 comparisons are true. The operator's pre-existing copied park-pose difference
 and vendor symlink remain expected differences from the committed tree.
+
+## Attended G runs
+
+Julien reported "Also works" and confirmed that the GUIDE pose change was his
+deliberate hand movement. The app terminal and complete raw logs were reviewed.
+
+| Observation | TELEOP run, 16:24:56–16:27:03 CEST | GUIDE run, 16:27:29–16:27:59 CEST |
+| --- | --- | --- |
+| Startup | G HOLD; normalized jaw 0.922 | G HOLD; normalized jaw 0.922 |
+| Motion | TELEOP after about 9 s; displayed until t=109 s | GUIDE after about 3 s; displayed until t=13 s |
+| Loop | 10,917 passes; 10.1 ms mean, 99 Hz | 1,308 passes; 10.1 ms mean, 99 Hz |
+| Worst pass | 53.6 ms at t=8.9 s; one pass over 15, 20, 33 and 50 ms | 10.8 ms at t=9.7 s |
+| Temperatures | Peak motor 36°C, gripper 30°C | Peak motor 35°C, gripper 31°C |
+| Display diagnostics | 20 STUCK rows and two SLOWED rows | GUIDE change reached 1.702 rad, 97.5° |
+| Exit | Quit menu, GUIDE, then all seven motors disabled | Automatic park, 0.020 rad reported error, all seven motors disabled |
+| Result | Exit 0 | Exit 0 |
+
+Both startups reported a +6.283 rad jaw-frame adjustment. This is the existing
+runtime verification against saved jaw limits. No calibration or configuration
+file was written. The GUIDE change includes Julien's hand movement and must not
+be described as spontaneous sag. The first log's 154-column terminal clipped
+parts of the warning values before logging, so full G target-lead values cannot
+be recovered from this transcript. The warning mechanism is described above.
+Neither run proves a prolonged stationary HOLD test or all possible GUIDE loads.
+
+At 14:33:40 UTC, `after-G.json` again matched the reference checkout's HEAD,
+status and config to the original snapshot. Operator config matched its copied
+baseline, and application status was empty. Both local raw logs match the station:
+
+- `hold-G-20260916T142456Z.log`: 21,854 bytes; SHA-256
+  `a4c81571707df965c7239a737aa659af49802e75a9c4ef778a032a83c7761f33`.
+- `hold-G-20260916T142729Z.log`: 7,702 bytes; SHA-256
+  `abc0e00ecd3b7feae57dc990f7bcc45a719d5827e8082c54c73edf9fadd1002c`.
+
+## Combined-arm run and Julien's workflow
+
+The run at 16:41:26–16:42:25 CEST used `--arms B,G --start-mode hold --yes`.
+The application found one puck, announced shared input and started both arms in
+HOLD. Julien then exercised B GUIDE and TELEOP, switched B/G/BOTH selection, and
+drove both arms while BOTH was selected. His follow-up was "both work" and asked
+that the next steps fit this workflow. This was broader than the proposed
+one-arm-at-a-time sequence; the record describes the actual run.
+
+The loop reported 4,994 passes, a 10.2 ms mean (98 Hz), and a 54.4 ms worst pass at
+t=3.8 s. Sixteen passes exceeded 15 ms, two exceeded 20 and 33 ms, and one exceeded
+50 ms. Peak temperatures were B 35°C/jaw 31°C and G 34°C/jaw 30°C. Target-lead
+warnings appeared, with some values clipped by the terminal width.
+
+The quit menu's park-and-disable path parked G with 0.020 rad reported error and
+B with 0.019 rad error. Both arms confirmed motors 1–7 disabled, and the command
+exited 0. Axis maps reported unchanged. The 28,582-byte raw log is
+`check-both-20260916T144126Z-553331.log`, SHA-256
+`2ea6c875480d58896a1820efbd063a0136fd67d91129da48728c4789fe32f0c5`.
+
+The repeated "already in TELEOP" messages are expected: selection changes do not
+reset an arm's mode. With a shared puck, unselected arms receive centred input;
+an explicit HOLD still uses `h`. The application's earlier generic TELEOP banner
+claimed each arm followed its own puck, and its help described selection as
+affecting only mode keys and edits. The local handoff version corrects those two
+messages. The complete local suite remains 1,077/1,077 after this wording-only
+change. The physical station continues to run the unchanged candidate application
+at `025fab1`; the corrected messages have not been deployed there.
+
+The read-only snapshot at 15:03:25 UTC, saved locally as `after-combined.json`,
+matches the reference checkout's HEAD, status and configuration to the original
+snapshot. The operator configuration still matches its copied baseline and its
+application status is empty. Slot 9 and its frame directory are still absent.
+The teammate's checkout has independently advanced to `087a4fc` and currently
+shows a change to `scripts/physical.py`; its earlier inventory below is historical.
+This validation did not modify or commit that checkout.
+
+## Camera-only check and refreshed inventory
+
+Current enumeration shows one SpaceMouse Compact, at HID path `5-1.4:1.0`, and
+one D405, serial `260323072846`. Linux USB and V4L inventory do not list the
+Logitech camera. The Logitech USB item that is present identifies as a mouse.
+This supersedes the preparation count of two SpaceMice; no cause for the changed
+count is established here.
+
+Julien says the Logitech overhead camera is set up behind the arms and the G
+camera is plugged in beside G, unmounted. Left/right arm roles remain unspecified.
+The D405 must not be described as a calibrated wrist view or used to justify the
+modelled camera control frame. The current tests retain world-frame control.
+
+A bounded five-second `capture_probe.py --indices 6 --seconds 5 --hz 100 --save`
+run used the freshly identified D405 colour node. It exited 0, acquiring no motor
+handle. It wrote one frame and a report only in the disposable operator checkout.
+The report records 1280×720 YUYV, 26.75 fps, 134 fresh frames in 496 samples,
+307 duplicate samples, 55 empty samples, 33.32 ms mean and 33.55 ms worst frame gap.
+Sampling faster than the camera produces duplicates; that count alone is not
+a dropped-frame count. This short test does not establish sustained two-camera
+delivery or performance while controlling and recording arms.
+
+The saved frame was inspected. It points upward at the arm and window; it is not
+a useful workspace view yet. Position and secure cameras before meaningful
+demonstrations. The image proves colour delivery in this probe; no depth stream
+was tested. The exact recording-camera startup path still needs its integrated
+test, including frame writers, take completion, slot publication and validation.
+
+Local evidence is under `camera-probe/` in the evidence directory. The remote
+frame/report names begin `recordings/cameras/2026-09-16_163638_`; the log is
+`logs/camera-probe-d405.txt`. No exposure-control command was issued.
 
 ## What was verified remotely
 
@@ -170,7 +256,7 @@ into the disposable check checkout. The operator clone still runs the unchanged
 025fab1 motor-control code. Do not imply the first falsifier attempt passed or that
 the entire station suite was rerun after adding the two regression cases.
 
-### Current inventory differs from the August notes
+### Preparation inventory differed from the August notes
 
 USB serial resolution currently maps B (2081337C594E5018) to can0 and G
 (20593383594E5018) to can1. Both interfaces are up at 1,000,000 bit/s. This is the
@@ -227,13 +313,14 @@ or access fails. Do not send teammate messages on his behalf without instruction
 Local copied logs and the bundle are under
 `agents/codex/station-validation-2026-09-16/` (ignored). Remote logs, results.json,
 station-before.json, station-after-preparation.json and operator-config.json are
-under `/tmp/yam-validation-025fab1-LWvBIc/`. Only the bundle and small text logs were
-transferred; no recordings, dependencies or models were downloaded.
+under `/tmp/yam-validation-025fab1-LWvBIc/`. Transfers consist of the incremental
+source bundle, small logs/reports/helpers and one camera-probe image. No complete
+recorded take, dependency environment or model collection was downloaded.
 
-Resume with the pending observation about B's late warning and the explained G
-check above. The next dependency is Julien running that check and describing its
-physical behavior. After reviewing G, choose the smallest relevant combined-arm
-or recording check; camera roles must be supplied before naming views in a take.
-Those workflows remain unverified. Publication or replacing a working station
-checkout needs a separate decision. The completed local cleanup is separate from
-this still-open physical phase.
+The combined-arm result is reviewed. The next dependency is Julien running
+`/tmp/yam-station-check record`, saving slot 9 and reporting its physical behavior.
+Then inspect the take's joint samples, frame metadata and publication result.
+The Logitech connection and meaningful camera framing need physical attention.
+Use device serials and B/G labels until physical left/right roles are established.
+Publication or replacing a working station checkout needs a separate decision.
+The completed local cleanup is separate from this still-open physical phase.

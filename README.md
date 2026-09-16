@@ -4,6 +4,17 @@
 
 Use `./teleop` from the repository root. It installs the locked Python 3.12 dependencies into `.venv-teleop` on first use and preserves the training environment in `.venv`.
 
+A new checkout also needs the I2RT source and model files. If `third_party/i2rt`
+is absent, obtain the pinned version:
+
+```bash
+git clone --depth 1 --branch v1.3.1 https://github.com/i2rt-robotics/i2rt.git third_party/i2rt
+git -C third_party/i2rt rev-parse HEAD
+```
+
+The expected revision is `1276f63d640eb45c226efd3dc08430b810372e94`.
+Keep an existing vendor checkout and check its revision before changing it.
+
 ```bash
 ./teleop --help
 ./teleop --arms B,G --start-mode hold             # print the plan; no devices opened
@@ -14,7 +25,10 @@ The simulation runs in the terminal. Its fake SpaceMice stay still; keys exercis
 
 For the physical arms, follow the bring-up checklist below, then run the same command without `--sim`, adding `--yes` only when ready to enable them. Starting both arms in HOLD avoids the unsupported two-arm GUIDE startup.
 
-Current cleanup status, preservation details, validation limits, and remaining work: [docs/CLEANUP.md](docs/CLEANUP.md). Fable's original handoff is preserved at `499d0b7`; the cleanup changes have software and simulation validation only.
+Current cleanup status and preservation details: [docs/CLEANUP.md](docs/CLEANUP.md).
+[Station validation](docs/STATION_VALIDATION.md) records the attended B/G tests and remaining integration checks.
+[Colleague handoff](docs/COLLEAGUE_HANDOFF.md) summarizes readiness and review steps.
+Fable's original handoff is preserved at `499d0b7`.
 
 After the launcher has created the environment, run checks with:
 

@@ -1,0 +1,101 @@
+# Teleop cleanup: handoff for review
+
+## Readiness
+
+The cleaned reference teleop is ready for colleague review and supervised use of
+the verified arm-control paths. Julien tested B and G and reports normal behavior.
+The local cleanup is complete. Further structural refactoring is not a prerequisite
+for this handoff.
+
+Combined-arm operation with the current shared puck has also been exercised.
+Camera-backed recording still needs attended validation.
+The active test and exact commands are in [STATION_COMMANDS](STATION_COMMANDS.md).
+Publication, installation into a working station checkout and integration with
+the team's application remain separate decisions.
+
+## What this code is
+
+The branch is `codex/teleop-cleanup`, based on Fable's final `499d0b7`.
+The entry point is `apps/teleop_session.py`, using the `src/yam` library.
+The motor-control application tested on Linux is `025fab1`; subsequent changes
+repair a dataset falsifier, clarify shared-puck help text and document verification.
+They do not change the tested motion code. The latest complete local suite also
+passes after the help-text clarification.
+
+The team's `src/robot` implementation in LaRobot has its own development history.
+This handoff provides a reference implementation with explicit lifecycle,
+recording and UI boundaries. It does not claim that those components are already
+integrated into the team application or training loader.
+
+The cleanup added reliable ownership of acquired devices, motor-first shutdown,
+nonblocking recording completion, rollback on failed take publication, and
+shared camera, input, status and mode-control services. Startup order and ordered
+motion coordination remain explicit in the operator. Motion limits, calibration
+values and stop policy were preserved. The operator is 1,973 lines.
+
+## Verified evidence
+
+| Check | Result and limit |
+| --- | --- |
+| Mac software | 1,077/1,077 checks in 71 files; 71/71 deliberate falsifier catches |
+| Linux software | 1,075/1,075 candidate checks, then two focused new regressions; 71/71 falsifier catches |
+| Isolated simulator | 32/32 interactions; fake devices |
+| B | HOLD, TELEOP, automatic park and seven disabled motors; exit 0 |
+| G | Two runs covering HOLD, TELEOP, hand-guiding, direct disable from the quit menu and automatic park; both exit 0 |
+| B and G together | Shared-puck selection B/G/BOTH, GUIDE/TELEOP changes and both arms parking; 14 motors disabled, exit 0; Julien reports that both work |
+| Human observation | Julien says both arms felt normal and confirms the large GUIDE pose change was deliberate hand movement |
+| Hardware timing | Single-arm means about 99 Hz; combined mean 98 Hz, worst observed pass 54.4 ms; no hard real-time guarantee |
+| Camera only | D405 colour image received at 1280×720; five-second probe reported 26.75 fps and 33.32 ms mean inter-frame gap |
+
+The TELEOP runs contain target-lead warnings. These describe the gap between
+the requested tool pose and the solver's model pose. They do not directly measure
+contact or motor error. G's narrow terminal clipped some warning details.
+No new blocking cleanup defect was demonstrated by these runs. These observations
+do not establish every mode, pose, payload or two-arm interaction as validated.
+
+## How to review and run
+
+Start with [README](../README.md) for the launcher and dependency setup, then
+[RESTRUCTURING](RESTRUCTURING.md) for the implemented boundaries and retention
+decisions. [CLEANUP](CLEANUP.md) contains the detailed implementation evidence.
+[STATION_VALIDATION](STATION_VALIDATION.md) separates measured hardware results
+from operator reports and remaining checks. [STATION_COMMANDS](STATION_COMMANDS.md)
+also explains the retained modes when selection changes and the normal park exit.
+
+In a prepared checkout, the simulated operator starts with:
+
+```sh
+./teleop --sim --arms B,G --start-mode hold --yes
+```
+
+The simulator uses stationary fake pucks. The full automated simulator driver
+must use a disposable checkout because it writes recordings and configuration.
+The source package excludes recorded data, Python environments and the vendored
+I2RT checkout. Follow README to obtain the pinned dependencies. The original
+training environment and saved training branch remain preserved separately.
+
+## Station integration boundary
+
+The existing `/home/lavita/yam-robotics` checkout remains at `499d0b7` with the
+teammate's park-pose edits. `/home/lavita/LaRobot` has unfinished work on
+`feature/physical`; it advanced independently to `087a4fc` during validation and
+still has an edited `scripts/physical.py`. Neither was replaced or merged by this
+validation.
+The candidate is isolated under `/tmp/yam-validation-025fab1-LWvBIc/operator`.
+That temporary location must be rechecked before reuse.
+
+Physical validation used a copy of the station's current configuration, including
+its uncommitted park-pose edits. The source archive contains the repository's
+committed configuration. Preserve and compare the station configuration during
+installation; do not overwrite its newer waypoints from the archive.
+
+The current rig exposes one SpaceMouse and one D405. The Logitech camera described
+by Julien is not enumerated by Linux. The D405 is beside G and unmounted; its view
+must be arranged for demonstrations. Left/right arm roles are not yet confirmed.
+Use the serial identities and world control frame until physical roles and mounts
+are established. Existing calibration belongs to this rig and must not be applied
+to another pair of arms without checking it.
+
+No source or message has been sent to a colleague, and no remote branch has been
+pushed by this continuation. A source archive can be reviewed independently; an
+incremental Git bundle requires the original `499d0b7` history to import it.

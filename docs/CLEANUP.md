@@ -6,10 +6,12 @@ Updated September 16, 2026. This is the current implementation handoff for the c
 
 **Next phase is now active:** Julien selected physical-station verification.
 [STATION_VALIDATION](STATION_VALIDATION.md) records the passed Linux software checks,
-preserved station work and the first attended B run. Julien reports successful
-control; the log confirms HOLD, TELEOP, parking and all seven motors disabled.
-Two late target-lead warnings are documented with their diagnostic limits.
-G and the combined station workflow remain unverified; the next G check is prepared.
+preserved station work and attended B, G and combined-arm runs. Julien reports
+normal operation; all four logs confirm successful exits and disabled motors.
+Target-lead warnings are documented with their diagnostic limits. A D405-only
+probe delivered colour images. The integrated recording check remains pending.
+[STATION_COMMANDS](STATION_COMMANDS.md) gives the short command and recording steps.
+[COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md) summarizes review readiness.
 
 The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
 `499d0b7`. No user answer or technical unblock is needed for this completed pass.
@@ -20,11 +22,11 @@ its older counts and "incomplete" statements are dated evidence, not current sta
 
 | Area | Current result |
 | --- | --- |
-| Operator structure | 1,974 lines, down from 2,261 before this pass. Shared speed/rotation policy now has one owner; startup and ordered motion coordination remain explicit. |
+| Operator structure | 1,973 lines, down from 2,261 before the broader pass. Shared speed/rotation policy has one owner; startup and ordered motion coordination remain explicit. Two shared-puck help messages were subsequently clarified. |
 | Core source explanations | robot.py 1,078 → 673 lines; recording.py 803 → 615. Executable AST unchanged in these prose passes. Historical explanations archived verbatim; current contracts corrected. |
 | Status display | Both settings and heartbeat acquire detached snapshots; rendering has no robot handle. Mirror status reuses displayed poses. |
-| Local verification | 1,075/1,075 checks in 70 files; 71/71 falsifier catches; 32/32 isolated simulator interactions. CLI, structural, flag and documentation checks pass. |
-| Preservation / remaining decisions | All 3,455 original recording files unchanged. No hardware operation, station connection or remote publication in this pass. Those actions require a separate operating/publication decision. |
+| Local verification | Latest suite: 1,077/1,077 checks in 71 files after the portable fixture and shared-puck wording changes. Falsifiers: 71/71 at the fixture checkpoint. Isolated simulator: 32/32 at the completed broader review. |
+| Preservation / remaining decisions | All 3,455 original recording files unchanged at the broader local close-out. The separately authorized station checks are recorded in STATION_VALIDATION. No remote publication or replacement of a working station checkout. |
 
 The normal simulated operator starts from the repository root with:
 

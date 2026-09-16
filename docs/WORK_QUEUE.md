@@ -24,23 +24,34 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    Complete: separate operator copy, B/G plans and logged helper dry run verified.
 4. Perform attended real-device checks when the teammate yields the selected arm.
    Both arms are available, but Julien explicitly wants to run the first commands
-   himself after explanation. B baseline complete: Julien reports successful
-   control; the log shows HOLD, TELEOP, park and seven disabled motors, exit 0.
-   Two late target-lead warnings need his specific observation; their display
-   condition has been traced to the solver's target gap. Next: explained G-only
-   HOLD, small TELEOP movements if behavior is normal, HOLD and supported disable.
-   Combined-arm and recording workflows remain unverified; choose their bounded
-   tests after reviewing G. The agent has sent no motor command.
-5. Record results, limits and preserved state. B's raw log is saved locally with a
-   matching station hash; reference checkout and operator config remain unchanged.
-   STATION_VALIDATION records the result, timing/warning limits and remaining
-   observation. Update it after G. Publication and promotion into an existing
-   working checkout remain separate decisions.
+   himself after explanation. B, two G runs and the combined-arm run are complete.
+   All four logs end with exit 0 and disabled motors. Julien reports that both
+   arms felt normal and the GUIDE movement was deliberate. Combined B/G/BOTH
+   shared-puck selection and parking were exercised. Target-lead warnings are
+   explained with their measurement limits. The agent has sent no motor command.
+5. Record results, limits and preserved state. All four raw logs are saved locally.
+   The post-combined snapshot at 15:03:25 UTC confirms the reference checkout and
+   operator config remain unchanged. The teammate's separate checkout has advanced
+   independently. STATION_VALIDATION records outcomes and limits; refresh
+   preservation after the remaining capture check.
+6. Verify one camera-backed take. The camera-only D405 probe passed; the Logitech
+   is not enumerated. Julien explained the current camera placement. The recording
+   profile is prepared and dry-run tested from both computers, using empty slot 9
+   in the disposable checkout. Pending: operator-run take, then validate joints,
+   image files, frame metadata and publication. The D405 needs useful framing.
+7. Improve command handoff and prepare colleague review. The same short command
+   now works on the Mac and station. Two misleading shared-puck help messages are
+   corrected locally; the full suite passes 1,077/1,077. README now includes the
+   missing pinned I2RT checkout step. The concise colleague handoff is written.
+   Review artifacts and their exact revision, sizes, checksums and validation are
+   recorded under agents/codex/station-validation-2026-09-16/handoff/MANIFEST.json.
+   Publication and promotion into an existing working checkout remain separate
+   decisions; no colleague message or push is authorized by a readiness question.
 
 Evidence and commands: [STATION_VALIDATION](STATION_VALIDATION.md). A passing local
-suite does not complete item 4. Software preparation and B evidence review are
-complete. The next dependency is the operator-run G check and physical observation;
-do not start another robot controller remotely while waiting.
+suite does not complete physical checks. The next dependency is the operator-run
+recording; advance package preparation while waiting. Do not start another robot
+controller remotely in place of that handoff.
 
 ## Broader review — completed locally
 

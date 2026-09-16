@@ -10,11 +10,12 @@ and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any ol
 
 Physical-station verification is now active. Read
 [STATION_VALIDATION](STATION_VALIDATION.md) for the current Linux evidence and the
-user-run B test and prepared G check. Julien reports successful B control; the log
-confirms parking and motor disable. Two late target-lead warnings need a specific
-physical observation. G and combined
-workflows remain unverified. August network/device/interface details below may
-be stale.
+attended B, G and combined-arm tests. Julien reports normal operation; all four
+logs confirm disabled motors and exit 0. Target-lead warnings retain their
+diagnostic limits. A short camera-backed take is the next check; use
+[STATION_COMMANDS](STATION_COMMANDS.md) for the command that works on either machine.
+[COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md) summarizes readiness for review.
+August network/device/interface details below may be stale.
 
 ## Archived August handoff
 

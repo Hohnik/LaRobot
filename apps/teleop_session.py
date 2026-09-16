@@ -226,8 +226,8 @@ HELP = """
   GRIPPER   o open   c close          b  assign the PUCK BUTTONS (hold to move jaws)
   FRAME     v  world / tool / camera — what "forward" means (tool = follows the wrist)
   SETTINGS  n  the speed and safety limits, LIVE — then s saves them for every session
-  ARMS      a  which arm the MODE keys aim at (B → G → BOTH). Driving always drives
-               every arm; only mode changes and edits are aimed
+  ARMS      a  select B → G → BOTH for modes and edits. Separate pucks keep driving
+               their own arms; one shared puck follows the selection
   MIRROR    i  the SELECTED arm leads, the other follows it joint for joint. Shows the
                plan and waits for Enter; i again turns it off. Hand-guide the leader
                in GUIDE and hold it still until the row says FOLLOWING
@@ -1227,8 +1227,7 @@ def main() -> int:  # noqa: PLR0915
                         for one in aimed:
                             if one.mode != "teleop":
                                 one.enter_teleop(make_teleop)
-                        print(f"\n⭐ MODE: TELEOP on {aimed_label} — each arm follows its "
-                              "own SpaceMouse\n")
+                        print(f"\n⭐ MODE: TELEOP on {aimed_label}\n")
                     elif k == "h" and any(one.mode != "hold" for one in aimed):
                         hint("")
                         for one in aimed:
