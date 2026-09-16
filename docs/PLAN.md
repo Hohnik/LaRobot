@@ -1,5 +1,10 @@
 # The rebuild plan — what to build, what we proved, what will bite you
 
+This plan preserves the August walkthrough and its evidence. For the team's
+September implementation, read [the current branch comparison](BRIDGE.md) and
+[the colleague handoff](COLLEAGUE_HANDOFF.md). Several interfaces described as
+empty below now have implementations on the team's branches.
+
 > **Who this is for:** the team rebuilding the bimanual YAM station from scratch. Julien's ruling ([FINDINGS §67.0](FINDINGS.md)): this repo is the finished walkthrough, you build the real one. "The walkthrough" means exactly that — every feature was built once here, proven on the real arms, and written up, so that your build starts from answers instead of from the same surprises.
 >
 > **How to use it:** read this file once, top to bottom. It takes about twenty minutes. It follows the phases A to E from your own setup guide, [Setup-Anleitung.md](Setup-Anleitung.md). For each phase it says three things: what the walkthrough proved, where reality disagreed with the guide, and the mistake you are most likely to make first. Work packages you can assign are in §3. Every claim links to its evidence in [FINDINGS.md](FINDINGS.md) instead of copying it, so this file stays short and the evidence stays in one place. One level below this plan is [ARCHITECTURE.md](ARCHITECTURE.md): how the walkthrough's code is shaped, the five rules behind the shapes, and where every module and its tests live.

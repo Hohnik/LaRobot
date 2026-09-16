@@ -1,213 +1,175 @@
-# Bridge — this repo, your repo, and what has to happen for the two to meet
-
-> Who this is for: Julien and the team, on both sides of the two repositories.
->
-> Reading all of it takes about ten minutes. It assumes nothing.
->
-> Why it exists.
->
-> There are two repositories. This one is a finished walkthrough of a working bimanual YAM station. `Hohnik/LaRobot` is the station you are actually building. Until now nothing said which part of one corresponds to which part of the other, so both sides could believe the other had already done something. That happened at least once, and section 5 is the case.
->
-> ⚠️ Everything below was read from the repositories on 2026-08-20, the branch positions and section 4 item 5 in the evening of that day, after your camera commit landed.
->
-> Branch positions move. Re-read them with the commands in section 1 rather than trusting this page.
-
-## 1. The two repositories, and how to check their state yourself
-
-| | this repo | your repo |
-|---|---|---|
-| what it is | a finished walkthrough: every feature built once, proven on the arms, written up | the station you are building |
-| where | `~/Developer/Projects/yam-robotics` on Julien's Mac, `~/yam-robotics` on the station | `Hohnik/LaRobot`, cloned at `~/LaRobot` on the station |
-| Python | about 20 modules under `src/yam/`. `uv run checks/run_tests.py` prints the live check count | 143 lines under `src/robot/` on `main`, plus work on two branches |
-| what it is for | answering questions, so your build starts from answers | the real thing |
-
-To check any of this yourself, on the station:
-
-```bash
-cd ~/LaRobot && git fetch && git branch -a --sort=-committerdate && wc -l src/robot/**/*.py
-cd ~/yam-robotics && git log --oneline -1 && uv run checks/run_tests.py | tail -3
-```
-
-## 2. Where your repo actually stands
-
-⭐ `main` is a skeleton, and knowing that is what makes [PLAN.md](PLAN.md) readable.
-
-The work packages in that plan are not "fit this into a half-built system". They are "build this, and here is the answer to every question it raises".
-
-Measured on `main` at `17ebfbe`. Only the README changed since `065a08e`, so every line count below is unchanged:
-
-| file | lines | what that means |
-|---|---|---|
-| `src/robot/environment/simulation.py` | 106 | the only substantial code |
-| `src/robot/inputs/keyboard.py` | 9 | a start |
-| `src/robot/inputs/input.py` | 7 | one abstract method, `is_available()` |
-| `src/robot/inputs/spacemouse.py` | 0 | empty file |
-| `src/robot/inputs/mouse.py` | 0 | empty file |
-| `src/robot/inputs/policy.py` | 0 | empty file |
-| `src/robot/inputs/mcap_recording.py` | 0 | empty file |
-| `src/robot/inverse_kinematics/__init__.py` | 0 | empty file |
-
-**The two branches with work on them:**
-
-| branch | position | what is on it |
-|---|---|---|
-| `feature/camera-framework` | **4 ahead of `main`, 1 behind. Your active branch** | `src/robot/cameras/` with `camera.py`, `frame.py`, `config.py`, `SimCamera.py`, plus `record.py` and `scripts/start_sim.py`. Tip `3576ce1`, and section 4 item 5 was read from it |
-| `feature/spacemouse` | 1 ahead, 5 behind | one `SpaceMouseReader` class, tip `519b02c` |
-| `julien/yam-teleop-wip` | 275 ahead, 9 behind | ✅ this walkthrough, current with it at `cb5c446` since the evening of 2026-08-20. See section 6 |
-
-## 3. Which part of this repo answers which part of yours
-
-The left column is your directory. The middle is where the answer already exists here. Work packages are [PLAN.md](PLAN.md) section 3.
-
-| your file or directory | the answer in this repo | package | state |
-|---|---|---|---|
-| `src/robot/cameras/` | `src/yam/cameras/` — reading, identifying, writing, and opening a camera honestly | 6 | ⭐ **your active branch. Section 4 is written for it** |
-| `src/robot/inputs/spacemouse.py` | `src/yam/inputs/spacemouse.py` — `TwistReader.read()` returns six numbers | 3 | working here, empty there |
-| `src/robot/inputs/policy.py` | `src/yam/seams.py::CommandSource` — the interface a policy implements | 9 | ⭐ section 5 |
-| `src/robot/inputs/mcap_recording.py` | `src/yam/recording.py` — recording, replay, labels, scrubbing | 5 | working here, empty there |
-| `src/robot/inputs/keyboard.py` | `src/yam/inputs/keyboard.py` | 3 | both started |
-| `src/robot/inverse_kinematics/` | `src/yam/teleop.py` — mink and MuJoCo, two arms in 0.1 ms | (C1) | working here, empty there |
-| `src/robot/environment/simulation.py` | `src/yam/fake/arm.py` — an arm that lags the way the real one measurably does | 8 | both exist, different purposes |
-| `src/robot/record.py` | `src/yam/cameras/writer.py` plus the recording half of `apps/teleop_session.py` | 5, 6 | on your camera branch |
-| nothing yet | `src/yam/robot.py`, `src/yam/can.py` — CAN, motor faults, and `SafeRobot`'s two limits | 1, 2 | ⛔ **the safety layer has no counterpart on your side yet** |
-| nothing yet | `src/yam/session.py` — modes, parks, the grab pause, the temperature guard | 4 | ⛔ the largest single piece |
-| nothing yet | `src/yam/episode.py`, `src/yam/dataset.py` — the C3 log and the C4 training directory | 7 | ⛔ and section 7 is the one thing neither repo can settle |
-
-## 4. Your camera framework, and four measurements that land on it this week
-
-You are writing `src/robot/cameras/` now. On 2026-08-19 this repo found four camera problems on the same hardware you are building against. All four are in [FINDINGS.md](FINDINGS.md) section 76 with the measurements. Here they are against your code. Item 5 was added later the same week, after your commit `3576ce1`.
-
-**Your `Camera` interface, as it stands:**
-
-```python
-class Camera(ABC):
-    name: str
-    @classmethod
-    def is_available(cls) -> bool: ...
-    def connect(self) -> None: ...
-    def read(self) -> Frame: ...
-    def close(self) -> None: ...
-```
-
-⭐ That shape is good, and until 2026-08-20 this repo had nothing like it. That is the honest state of things: you declared the interfaces and left the bodies empty, and this repo wrote the bodies and declared no interfaces at all. Two things are worth saying about your version before you finish it.
-
-**1. Something has to sit between `read()` and your control loop.**
-
-`read()` is a pull, so whoever calls it waits for the next picture. Called once per pass of a control loop, the loop then runs at the camera's frame rate, and with several cameras at the slowest one. [FINDINGS §21](FINDINGS.md) is the measurement from this repo getting it wrong: 6 pictures a second where 30 were expected, because a display loop waited on the camera.
-
-⭐ The fix here is one reader thread per camera, keeping only the newest picture. The control loop then takes whatever is currently there and never waits. See `src/yam/cameras/grabber.py`, then `capture.py`. ⚠️ Your device interface is fine as it is. It is the layer above it that must not block.
-
-**2. Your `Frame` has no timestamp, and the export needs one.**
-
-```python
-@dataclass(frozen=True, slots=True)
-class Frame:
-    camera_name: str
-    rgb: NDArray[np.uint8]
-    depth: NDArray[np.uint16] | None = None
-```
-
-Its docstring says *"a single camera frame that combined with a timestamp"*, so the intent is there. ⛔ The episode export joins pictures to control ticks by nearest timestamp ([FINDINGS §71.2](FINDINGS.md)). A picture with no timestamp cannot be joined to a robot state, and that is the whole point of an episode.
-
-⭐ This repo's `Frame` has two more fields. `host_timestamp_ns` is set under the same lock as the picture it belongs to. `sequence` lets a consumer tell a repeated picture from a new one. Both are small, and everything downstream depends on them.
-
-**3. Ask for MJPG before you ask for a size.**
-
-A C920 at 1280x720 in uncompressed YUYV is limited to 10 pictures a second by the camera. In MJPG the same camera gives 29.92. YUYV is the format it advertises first, so it is chosen by default. macOS ignores the request and picks a good format by itself, and that is exactly why this went unnoticed until Linux ([FINDINGS §76.1](FINDINGS.md)).
-
-**4. Read a real picture before you believe a size, and expect the room to change the rate.**
-
-- A camera can accept a size and then deliver nothing at it. `cap.get` after `cap.set` returns what you asked for, never what arrives ([FINDINGS §76.0](FINDINGS.md), [§76.2](FINDINGS.md)).
-- A C920 with V4L2's `exposure_dynamic_framerate` on gives 29.92 pictures a second in daylight and 14.98 in a dim room, while the driver reports 30 throughout ([FINDINGS §76.16](FINDINGS.md)). Two demonstrations of one task recorded morning and evening then contain twice as many pictures as each other, with nothing in the file to say why.
-
-**5. Your newest commit, read on the evening of 2026-08-20.**
-
-`feature/camera-framework` moved to `3576ce1` a few hours after the rest of this page was written. It adds `SimCamera` and a `Recorder` class. Four things about it, each one checkable in a few seconds.
-
-- ⛔ `src/robot/cameras/SimCamera.py` does not compile. Line 15 reads `self._id = int | None = None`. Python treats that as one value assigned to two targets, and the second target is the expression `int | None`, so importing the file raises `SyntaxError: cannot assign to operator`. An annotation takes a colon: `self._id: int | None = None`.
-- `SimCamera.available()` is spelled without the `is_`, so it does not implement the abstract `Camera.is_available()`. Instantiating the class raises `TypeError` even once line 15 is fixed.
-- `connect()` calls `self.world.camera_id(self.name)` and nothing ever assigns `self.world`. The constructor sets `self.sim`.
-- `tests/test_cameras/test_camera.py` is one comment line, so nothing imports `SimCamera` yet. That is why the three faults above are still in it.
-
-⭐ To check the first one yourself, on any machine with Python:
-
-```bash
-python3 -m py_compile src/robot/cameras/SimCamera.py && echo "compiles"
-```
-
-⚠️ Points 1 and 2 of this section still apply word for word at `3576ce1`. Your `Frame` still has no timestamp field, and `read()` is still a pull.
-
-## 5. The seam both sides thought the other had
-
-⛔ [PLAN.md](PLAN.md) used to say of the command-source interface: "your `docs/ARCHITECTURE.mmd` already declares exactly this ... so this seam is agreed on both sides." That was wrong on both sides.
-
-- Your `Input` ABC declares `is_available()` and says nothing about how a command is read.
-- This repo had no declared interface at all until 2026-08-20, only a working `TwistReader.read()`.
-
-So the agreement was real as a *design* and absent as an *interface*, and the plan told each side the other had finished it.
-
-⭐ What the two halves are, and they fit together:
-
-| half | who has it | what it is |
-|---|---|---|
-| discovery | you | `is_available() -> bool`, so a session can find what is plugged in |
-| reading | this repo | `read() -> list[float]`, six numbers between -1 and 1: three for movement, three for rotation |
-
-⭐⭐ And your directory layout already made the design decision that matters.
-
-`inputs/policy.py` and `inputs/mcap_recording.py` sitting beside `inputs/spacemouse.py` says that a trained policy and a replayed recording are both just command sources. That is the right call, it is what makes Phase E small, and it is exactly what `src/yam/seams.py::CommandSource` describes. Everything below that interface, meaning every speed limit and every guard, then applies to a policy without being written twice.
-
-⬜ The open decision, and it is yours to make together:
-
-whether the read method is `read() -> list[float]` as here, or something else. Once it is agreed, a policy driving the arms is a small piece of work rather than a design question.
-
-## 6. What has to move, and when
-
-✅ `julien/yam-teleop-wip` is current with this repo again.
-
-Julien gave the word on the evening of 2026-08-20 and the branch was fast-forwarded from `834c876` to `cb5c446`, 29 commits. It contains every camera measurement in section 4, the interfaces in section 5, and [PERFORMANCE.md](PERFORMANCE.md). No commit on the branch was rewritten, so an existing clone needs `git pull` and nothing else.
-
-⬜ Pushing this repo to that branch needs Julien's word every time
-
-([HANDOFF §4](HANDOFF.md) rule 9). It is his call, never an agent's, so the branch goes stale again between pushes. One command says how stale it is:
-
-```bash
-git fetch && git log --oneline -1 larobot/julien/yam-teleop-wip
-```
-
-How code reaches the station, for reference: a git bundle, never a push. The three commands are in [LINUX.md](LINUX.md) section 2.
-
-## 7. Where this is going, and the one thing neither repo can settle
-
-**What "done" means**
-
-[PLAN.md](PLAN.md) section 1 defines it: both arms driven from one process, demonstrations collected as episodes your loader accepts unchanged, and a policy deployed through the same interface the teleop uses. Every safety property this walkthrough established still holding.
-
-**What is missing, and where each gap is written down:**
-
-| gap | where it is written | has an interface? |
-|---|---|---|
-| a policy driving the arms | [PLAN.md](PLAN.md) package 9 | ✅ `seams.py::CommandSource` |
-| depth pictures | [FINDINGS §76.10](FINDINGS.md) | ✅ `seams.py::FrameSource`, and `Frame.depth` is the empty slot |
-| pictures written by something other than the session | [PERFORMANCE.md](PERFORMANCE.md) section 5 | ✅ `seams.py::FrameConsumer` |
-| collision distance against the real shapes | [ROADMAP §8.2](ROADMAP.md) item 35 | ⚠️ no interface. Keep `closest_approach(...) -> Closest` |
-| per-joint speed ceilings | [FINDINGS §76.14](FINDINGS.md) | ⚠️ no interface needed. `TrackingLog` already measures it and mirror mode does not call it |
-| how much to vary a replayed waypoint | [ROADMAP §8.2](ROADMAP.md) item 9 | ⛔ no code. It waits on a safety decision that is Julien's |
-| ⭐ **an episode your loader accepts** | [PLAN.md](PLAN.md) package 7 | ⛔ **no interface can exist, and this is the real one** |
-
-⛔ That last row is the one thing this bench cannot answer.
-
-Both halves of the format are written here and both check their own output: the C3 log and the C4 training directory. What nobody here can test is whether your loader accepts them, because only your loader can answer that. Every episode this repo writes records `verified_against_abc_loader: false` so that nothing downstream can mistake "matches the published shape" for "loads".
-
-⭐ So the shortest path to a trained policy runs through that one check, and it is a small piece of work for whoever owns the loader. Point it at `recordings/datasets/train/episode_slot5` and say what it says.
-
----
-
-**Where to go next**
-
-- [PLAN.md](PLAN.md) if you are building the station
-- [ARCHITECTURE.md](ARCHITECTURE.md) if you want to understand this repo first
-- [FINDINGS.md](FINDINGS.md) section 76 for the camera measurements behind section 4
-- [PERFORMANCE.md](PERFORMANCE.md) for what is worth making faster
-
-*Written 2026-08-20 from both repositories as they stood that day, and updated the same evening after commit `3576ce1` and the push in section 6. Branch positions move, so re-run the commands in section 1 rather than trusting the tables.*
+# Bridge to the current LaRobot implementation
+
+Reviewed September 16, 2026. Start with [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md)
+for a short reading route and runnable examples.
+
+This reference and LaRobot serve different roles. LaRobot is the team's own
+implementation. This branch provides working feature implementations, tests and
+station observations that the team can study and adapt.
+
+## 1. Revisions actually reviewed
+
+The station snapshot at 15:47 UTC showed a clean `/home/lavita/LaRobot` checkout
+on `feature/physical`, commit `fd2c64b`. A subsequent remote query confirmed the
+same pushed tip. All six current remote branch heads were fetched and inspected:
+
+| Branch | Commit | Work present at that revision |
+| --- | --- | --- |
+| `main` | `f08f96f` | Simulation, SpaceMouse input, Cartesian target/IK and camera interfaces |
+| `feature/dual-wield` | `2041c3d` | Two-device simulation scripts and a unified per-arm state example |
+| `feature/physical` | `fd2c64b` | Path-based SpaceMouse selection and a single-arm I2RT control script; includes the dual-wield commits |
+| `feature/recording-pipeline` | `62671fd` | Timestamped simulation samples and synchronous MCAP recording |
+| `feature/training-pipeline` | `0c94c23` | MCAP-to-LeRobot conversion for a particular topic/encoding layout |
+| `feature/abc-integration` | `211129a` | ABC dependency declarations and a policy-visualization launcher |
+
+The ABC branch adds two files' worth of changes to `main`; it does not integrate
+the newer physical or recording work. Recording and training also have separate
+histories. A feature missing from the physical checkout may exist on another branch.
+
+The [August comparison](archive/bridge-2026-08-20.md) is retained as history.
+Its empty-interface descriptions and `SimCamera` syntax failure are superseded.
+Every Python file in the six captured source trees compiled under Python 3.12.
+That establishes syntax only; it does not establish device or dependency compatibility.
+
+## 2. Useful boundaries on both sides
+
+LaRobot already separates input, Cartesian target integration, inverse kinematics
+and simulation. Its typed `Input` ABC and per-arm state in `start_sim_unified.py`
+provide a useful shape for team-owned code.
+
+This reference separates device cleanup, recording, playback, camera acquisition,
+input routing, health checks and terminal interaction. The operator coordinates
+those owners and the common timeline across arms.
+
+| Feature | Reference to read | LaRobot counterpart or integration point |
+| --- | --- | --- |
+| Input and axis mapping | [inputs](../src/yam/inputs/), [SessionInput](../src/yam/session_input.py) | `inputs/input.py`, `inputs/spacemouse.py`; agree units before adapting |
+| Cartesian commands | [CartesianTeleop](../src/yam/teleop.py) | `kinematics/cartesian.py`; preserve the team's separate target and IK objects |
+| Commands and cleanup | [SafeRobot](../src/yam/robot.py), [SessionResources](../src/yam/session_resources.py) | `scripts/physical.py`; extract acquisition, command guards and cleanup before adding modes |
+| Modes, jaws and parks | [ArmSession](../src/yam/session.py), [motion](../src/yam/motion.py) | Build around a per-arm state object and explicit transitions |
+| Cameras | [camera session](../src/yam/cameras/session.py), [capture](../src/yam/cameras/capture.py) | `cameras/`; distinguish real-device readers from simulation rendering |
+| Recording | [RecordingSession](../src/yam/recording_session.py), [store](../src/yam/recording_store.py) | Recording branch's `Recorder` and `Sample`; transfer lifecycle ideas while retaining a chosen file format |
+| Replay and scrubbing | [PlaybackSession](../src/yam/playback_session.py), [recording](../src/yam/recording.py) | One cursor for the combined state, with measured arrival and lag gates |
+| Export and learning | [episode](../src/yam/episode.py), [dataset](../src/yam/dataset.py) | Training converter and ABC branch; run a real reader against a real writer fixture |
+| Simulation checks | [FakeArm](../src/yam/fake/arm.py) and application tests | Keep LaRobot's MuJoCo physics; use fakes for failure and sequence tests |
+
+The reference fake has lag and blocking behavior for application tests. It has no
+gravity or coupled dynamics. It cannot replace LaRobot's physics simulation.
+
+## 3. Confirmed issues to resolve before integration
+
+### Physical startup and cleanup
+
+At `fd2c64b`, `scripts/physical.py` opens hardware at module level. If robot
+construction fails, its `finally` block references an unassigned `robot` and replaces
+the original failure. If gravity-compensation cleanup raises, `robot.close()` is
+never attempted.
+
+Both cases were reproduced by executing the script's actual `try` statement with
+injected fake dependencies. No hardware imports or motor commands ran. Put startup
+inside `main()`, register each acquired handle immediately, and attempt all cleanup
+steps while retaining the original exception. Gravity compensation is an active
+control mode; it is not equivalent to disabling motors.
+
+The physical script has a Cartesian position-lead bound. It has no application
+counterpart for the reference's all-mode measured-joint lag limit, thermal owner
+or coordinated fault cleanup. The SDK may provide other behavior; this review
+has not audited its newer pinned implementation.
+
+### SpaceMouse callers after the constructor change
+
+The physical and dual simulation scripts pass `device_path` and `side` correctly.
+Four entry points still pass `device_index`: `start_sim.py`, `start_sim_unified.py`,
+`visualize_spacemouse.py` and the SpaceMouse module's own demo.
+Their arguments fail binding against the current constructor signature.
+This was checked without opening HID devices. Update those callers together with
+the API change and cover their startup paths.
+
+### Recorder and training converter disagree
+
+The recording branch writes `/robot/state_action` as JSON and `/cameras/<name>`
+as NPZ arrays. The training branch's `src/training/dataset.py` reader expects
+`/top-camera` compressed-image bytes and eight separate arm/end-effector topics
+with binary array payloads.
+
+An isolated probe used the actual recorder to write two synthetic samples and
+four MCAP messages. The actual `read_mcap_episode` function returned zero frames.
+The mismatch includes topics and payload encoding, so renaming topics alone is
+insufficient. The default locations also differ: `recordings/last_session/episode.mcap`
+versus a glob for `recordings/episodes/*.mcap`.
+
+Agree one schema, write a tiny fixture and make the reader assert its expected
+nonzero sample count, joint order, units and image content. Then test the resulting
+LeRobot dataset and the ABC loader. Installing dependencies or starting policy
+visualization alone cannot establish that path.
+
+## 4. Data and scheduling decisions
+
+The recording branch already records measured simulation state together with the
+action about to be applied. Keep that distinction. The reference's live trajectory
+contains measured joint positions; its exports infer next-state actions. Those
+signals answer different training questions.
+
+The team's MCAP recorder currently encodes and writes synchronously within the
+simulation loop. Measure that cost before putting it in a hardware loop. The
+reference's writer uses a bounded queue, reports dropped frames, and finishes
+before publishing the take. Its JSON store is one implementation of that lifecycle.
+The same lifecycle can support MCAP without adopting the reference directory format.
+
+For real cameras, a reader can cache the newest frame independently of control.
+For simulation, render against the appropriate simulation state on the thread
+that owns the renderer. The team's `cameras/wip.md` proposes a simulation-owned
+schedule. Background encoding must receive an owned image copy and its timestamp;
+moving MuJoCo rendering to an arbitrary worker is not an equivalent change.
+
+## 5. Interfaces that need explicit adapters
+
+| Boundary | Reference contract | Team contract / required decision |
+| --- | --- | --- |
+| Puck output | Six normalized axes; buttons exposed as a bitmask | `Input.read()` returns physical velocities plus a button list; avoid scaling velocities twice |
+| IK state | Seed from encoders at mode entry, then evolve an internal model | Team IK seeds each solve from current measured joints; target-lead diagnostics differ |
+| Joint layout | B then G; six radians plus normalized jaw position per arm | Simulation is left then right; jaw position is metres. Confirm physical B/G roles and convert jaws explicitly |
+| Images | Legacy `rgb` field contains OpenCV BGR pixels | MuJoCo rendering supplies RGB; convert channel order at a named boundary |
+| Time | Monotonic host nanoseconds at camera-store time | Recording branch has simulation seconds; declare clock origin, units and capture meaning |
+| Frame identity | Producer sequence plus host/device timestamp fields | Physical branch has no timestamp; recording branch adds `timestamp_s`. They are different interfaces |
+| Robot SDK | Vendored I2RT `1276f63` | Physical branch declares `5b72c47`; verify shutdown, gripper and command APIs before copying adapters |
+
+The reference's `CommandSource` protocol is a normalized twist input. A policy
+that emits joint targets or action chunks needs its own explicit adapter and
+scheduling rules. Merely implementing a method named `read` is insufficient.
+
+## 6. A sensible implementation order
+
+1. Repair physical startup/cleanup and obsolete input callers. Exercise success,
+   partial construction and cleanup failure with fake handles.
+2. Agree joint units, arm identity, timestamps and state/action meanings. Add one
+   recorder-to-loader fixture before building more recording features.
+3. Add a command boundary shared by every motion mode. Keep input scaling,
+   IK behavior and measured command limits independently understandable.
+4. Add HOLD, TELEOP and GUIDE transitions with measured-state resynchronization.
+   Test that selecting another arm leaves existing modes explicit.
+5. Add parks and jaw handling, then one recording owner and one replay cursor.
+   Preserve measured arrival gates before replay starts or a grasp proceeds.
+6. Add scrubbing, labels, composites, mirror and policy execution as separate
+   reviewed features. Reuse the same guards and ownership rules.
+
+The team's README prioritizes understanding each building block and small reviewed
+commits. Follow that approach. Copy a component only after its units, owner,
+failure behavior and tests make sense in the team's architecture.
+
+## 7. Handoff and remaining boundaries
+
+The source is ready to review locally. The cleaned application was exercised on
+both arms, including combined control, camera-backed recording and replay.
+[STATION_VALIDATION](STATION_VALIDATION.md) records the exact scope and limitations.
+
+Deployment, calibration changes and team-branch integration are separate actions.
+The test operator remains isolated from the team's checkout. Useful demonstrations
+still require camera framing/mounting and a working overhead connection.
+End-to-end compatibility with the team's current loader remains unverified beyond
+the specific failing recorder/reader probe above.
+
+Evidence is retained locally under `agents/codex/team-review-2026-09-16/`:
+station `snapshot.json`, `compatibility-review.json`, `branch-review.json`,
+byte-verified source copies and the reproducible `review_branches.py` probe.
+No team source file was modified, no message was sent, and no branch was pushed.

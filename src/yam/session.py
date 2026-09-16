@@ -17,12 +17,8 @@ Keep tests attached to the implementation the application actually calls.
 
 from __future__ import annotations
 
-#: ⛔⭐⭐ HOW FAR THE JAWS MUST OPEN BEFORE A LATCHED BLOCK IS RELEASED, in normalised jaw
-#: units where 0 is closed and 1 is fully open. **3% of full travel.**
-#:
-#: ⚠️ Chosen to sit far above sensor jitter and far below any deliberate movement. His
-#: gripper-step default is 0.02 per keypress and the puck-button rate moves faster than that,
-#: so one intentional open press already clears it while a wandering measurement never will.
+# Opening must exceed the latched position by 3% of normalized jaw stroke.
+# A single 0.02 key increment is not guaranteed to clear this 0.03 margin.
 JAW_CLEAR_MARGIN = 0.03
 
 from collections.abc import Iterable
@@ -57,21 +53,15 @@ PARK_STALL_SECONDS = 4.0
 PARK_PROGRESS_EPS = 0.003   # rad of improvement that still counts as progress
 MAX_CURSOR_LAG = 0.15       # rad — past this the cursor waits for the arm
 
-#: ⛔ Pushing hard while not moving is the definition of a stall, and stall is the worst
-#: thermal case there is: full current, no motion, no cooling. Motor 7 was cooked three
-#: times before this guard existed. Values copied from `teleop_session.py`.
+# Raw motor torque/velocity thresholds for sustained jaw stall detection.
+# These units differ from the normalized jaw-position pause thresholds below.
 GRIPPER_STALL_TORQUE = 1.0    # Nm
 GRIPPER_STALL_VEL = 0.05      # rad/s
 GRIPPER_STALL_SECONDS = 0.4
 
-#: ⭐⭐ THE JAW PAUSE (ROADMAP §6.6.2, items 3 + 10). A run splits wherever only the jaws
-#: move, the arm holds at the split, and the run resumes when the jaws are DONE — which is
-#: measured, never timed, because "how long the jaws take" is not a preference. A jaw that
-#: stalls on an object counts as done: stopped-on-the-object IS the grab succeeding.
-#:
-#: ⚠️ All four are in NORMALISED jaw units (0 closed, 1 open) and seconds, because the pause
-#: watches `get_joint_pos()[6]`, which is normalised. The raw-rad stall constants above watch
-#: a different instrument (torque + raw velocity from the chain read) and stay separate.
+# A jaws-only waypoint holds the arm while measured jaw stillness gates the
+# next segment. Positions are normalized stroke; durations are seconds.
+# A closing jaw stopped by an object can complete the grasp; timeout is reported.
 JAW_STILL_RATE = 0.3        #: below this, in stroke/s, a cycle counts as "the jaws are still"
 JAW_SETTLE_SECONDS = 0.35   #: the jaws must be still this long before the run resumes
 JAW_MIN_WAIT = 0.25         #: never resume before this — pre-command stillness must not count
@@ -197,16 +187,14 @@ class ParkStep:
 
 
 class ArmSession:
-    """Own one arm's measurements, mode state, map, jaw latch and park execution.
+    """Own one arm's mode state, axis map, jaw latch, guards and park execution.
 
-    Controls-mode state lives here; key dispatch and selection live in the
-    operator and UI handlers. SessionInput fills puck state. SessionHealth
-    uses the thermal/stall methods and reports their decisions. Recording,
-    playback and mirror coordination span arms and have session owners.
-
-    The operator still applies per-mode commands and teleop clamps. SafeRobot
-    applies its command limits beneath those modes; CartesianTeleop owns the
-    workspace constraint. Device lifetimes belong to SessionResources.
+    SessionInput fills puck state; SessionHealth evaluates and reports guards.
+    The operator dispatches keys and applies teleop/workspace constraints and
+    per-mode commands. SafeRobot limits commands beneath those modes.
+    Recording, replay and mirror coordination each span arms and have shared owners.
+    Device lifetimes belong to SessionResources. Historical rationale is preserved
+    in docs/archive/session-source-notes.md and ik-and-mode-source-notes.md.
     """
 
     def __init__(self, robot: Any, name: str, frame: str = "world",
@@ -278,18 +266,13 @@ class ArmSession:
         self.park_jaw_t = 0.0                   # when the pause began
         self.park_jaw_still_t = 0.0             # since when the jaws have not moved
         self.park_jaw_prev: float | None = None # last cycle's measured jaw, for stillness
-        # ⭐ The settle-gate before a jaw pause: the cursor finishing is not the arm
-        # arriving, and jaws that close while the arm creeps its last millimetres close
-        # in the wrong place (his 2026-08-18 grab missed exactly this way). `None` means
-        # no gate is open; a value is the best arm lag seen since the gate opened.
+        # Before moving jaws, wait for arm arrival or stalled improvement.
+        # None means inactive; otherwise store the smallest observed arm lag.
         self.park_gate_best: float | None = None
         self.park_gate_t = 0.0                  # when that best last improved
         self.park_best_err = float("inf")
         self.park_progress_t = 0.0
-        # ⛔ TWO CLOCKS. `park_leg_t` resets at every waypoint so each leg reports its own
-        # duration; `park_start_t` never resets so the arrival line can report the whole
-        # park. Sharing one variable printed "PARK reached in 0.0s" after a 4.4 s park,
-        # because the last waypoint is passed at the very end. FINDINGS §34.3.
+        # Keep separate clocks for this leg and the whole run; waypoint passage resets only the leg.
         self.park_leg_t = 0.0
         self.park_start_t = 0.0
 
@@ -313,11 +296,7 @@ class ArmSession:
         # Latch the measured blocked position across cycles. Only opening beyond the
         # clearance margin releases it, so mirror/teleop cannot immediately push again.
         self.jaw_block: float | None = None
-        #: ⭐ Set to the block value when the latch CLEARS, so the loop can say so once. A
-        #: latch that silently comes and goes is impossible to tell apart from a latch that
-        #: never worked, which is precisely the ambiguity his 2026-08-17 log left behind:
-        #: three stalls at 0.117, 0.098 and 0.104, and no way to know whether they were three
-        #: deliberate squeezes or one latch being cleared twice by noise.
+        # Store the released block position for a one-time operator report.
         self.jaw_unblocked_from: float | None = None
 
     # ------------------------------------------------------------- jaws ----
@@ -346,15 +325,10 @@ class ArmSession:
     # ---------------------------------------------------------- liveness ----
 
     def alive(self) -> bool:
-        """Is this arm still actually being commanded?
+        """Return whether the SDK motor-chain thread reports running.
 
-        ⛔ The single most important check. I2RT's control thread raises and exits on
-        a motor fault and tells nobody; without this the loop commands a corpse while
-        printing healthy numbers, which it did for 64 seconds on 2026-08-10.
-
-        ⚠️ With N arms this becomes per-arm, and ROADMAP step 6 already ruled on what
-        it means: **a fault on one arm stops BOTH.** A chain death on B must not leave
-        G uncommanded and sagging.
+        A missing or stopped chain fails this check. SessionHealth turns a fault on
+        one arm into a session stop. This flag alone does not prove motor health.
         """
         chain = getattr(self.robot, "motor_chain", None)
         return bool(chain is not None and getattr(chain, "running", False))
@@ -420,12 +394,7 @@ class ArmSession:
         return float(np.clip(value, self.gripper_min, self.gripper_max))
 
     def resync(self) -> None:
-        """⛔ Re-anchor every cached variable to the measured pose.
-
-        A mode change must re-read reality. Never carry cached state across one —
-        `prev_q` surviving a hand-guide is what made the arm snap back to a pose from
-        minutes earlier the first time GUIDE → TELEOP was tried.
-        """
+        """Re-anchor previous joints and SafeRobot history to measured state on mode entry."""
         self.prev_q = np.asarray(self.robot.get_joint_pos(), dtype=float)[:N_ARM]
         if hasattr(self.robot, "resync"):
             self.robot.resync()
@@ -436,11 +405,10 @@ class ArmSession:
         self.mode = "hold"
 
     def enter_teleop(self, teleop_factory=None) -> None:  # noqa: ANN001
-        """Leave zero-gravity and take the jaws exactly where they are.
+        """Hold the measured pose, seed IK if supplied, then enter TELEOP.
 
-        ⛔ Do NOT clamp the gripper here. Clamping on entry is a *command to move*,
-        and nobody asked for that — an earlier version did, and if the jaws happened
-        to sit outside the band the session drove them the moment teleop began.
+        Preserve the measured jaw value on entry: clamping it here would request an
+        unasked-for movement if it starts outside the configured band.
         """
         self.resync()
         q = np.asarray(self.robot.get_joint_pos(), dtype=float)
@@ -453,13 +421,10 @@ class ArmSession:
         self.mode = "teleop"
 
     def enter_guide(self) -> str | None:
-        """Go weightless. Returns a warning string if the API is missing.
+        """Enter gravity compensation, or stay in HOLD and return an API warning.
 
-        ⛔⭐ UNDERSTAND WHAT THIS RESTS ON. Zero-gravity sets **kp = 0**, so the
-        computed gravity compensation is the ONLY thing holding 4.3 kg up — there is
-        no position term to absorb an error. Any shortfall in the model is an
-        unopposed torque, which is how the arm fell on 2026-08-10. `guide_ref` is
-        recorded here precisely so drift is measurable while it happens.
+        The SDK mode removes position stiffness. Holding the arm then depends on the
+        gravity model. Store an entry pose so guide_drift can report later displacement.
         """
         self.resync()
         self.guide_ref = np.asarray(self.robot.get_joint_pos(), dtype=float)
@@ -472,7 +437,7 @@ class ArmSession:
         return "enter_gravity_comp_idle() missing — staying in HOLD (NOT weightless)"
 
     def guide_drift(self) -> float | None:
-        """How far the arm has sunk since it went weightless, in radians."""
+        """Return worst arm-joint displacement from GUIDE entry, including hand movement."""
         if self.guide_ref is None:
             return None
         q = np.asarray(self.robot.get_joint_pos(), dtype=float)
@@ -535,24 +500,18 @@ class ArmSession:
 
     @staticmethod
     def _arm_err(a: np.ndarray, b: np.ndarray) -> float:
-        """Worst ARM joint distance — the jaw is deliberately excluded.
+        """Return worst arm-joint distance, excluding the normalized jaw.
 
-        ⛔ The jaw legitimately sits far from its command whenever it holds an object
-        (that is what a successful grab IS), so counting it would stall the cursor and
-        fail the arrival verdict on every run that grips anything. Jaw completion has
-        its own measured judgement in the jaw phase. Same rule, same reason, as the
-        playback's by-index gripper exclusion in `teleop_session.py`.
+        A jaw gripping an object can remain far from its target. Its completion is
+        evaluated separately during the jaw phase, so it must not stall arm arrival.
         """
         return float(np.max(np.abs(a[:N_ARM] - b[:N_ARM])))
 
     def _command_park(self, cmd: np.ndarray) -> None:
-        """Send a park command with the jaw routed through the block latch.
+        """Route the park's jaw target through the block latch, then command joints.
 
-        ⛔⭐ THIS CLOSES A REAL HOLE: the park used to command the saved jaw value raw,
-        every cycle, so a park whose pose closes the jaws onto an object would push into
-        it at 90 Hz for the rest of the run — the stall guard latched a block and the
-        park ignored it, the exact §58.2 shape one layer down. `hold_jaw` honours the
-        latch (keep the grip, stop the push) and clears it on a deliberate open.
+        Every repeated park command must respect a stall block; intentional opening
+        can clear it through hold_jaw.
         """
         if len(cmd) > N_ARM:
             held = self.hold_jaw(float(cmd[N_ARM]))
@@ -573,12 +532,7 @@ class ArmSession:
         return len(self.park_queue)
 
     def count_gripper_stops(self, legs: list[ParkLeg]) -> int:
-        """How many times a run through these legs would pause for the jaws.
-
-        ⭐ For the plan line, BEFORE Enter: a grab should be visible while the sequence
-        is still being typed (ROADMAP §6.6.2 item 4). Same clamping and reconciliation
-        as `begin_path`, so the count cannot disagree with the run.
-        """
+        """Count jaw pauses for the preview using the same target checks as begin_path."""
         q = self.robot.get_joint_pos()
         poses = [np.asarray(q, dtype=float)]
         for leg in legs:
@@ -693,16 +647,9 @@ class ArmSession:
 
         # ---- the cursor has finished this segment ----
         if self.park_queue:
-            # ⭐⭐ LET THE ARM SETTLE BEFORE THE JAWS MOVE. The cursor finishing is not
-            # the arm arriving — the arm still trails by its friction floor, and jaws
-            # that close while it creeps close in the wrong place. His 2026-08-18 bench
-            # pass measured exactly this: the grab missed by millimetres while the run
-            # read clean. So the split pose keeps being commanded until the arm is
-            # within `tolerance` or has stopped improving for `settle_seconds` — the
-            # same two exits the final settle has — and only then do the jaws move.
-            # Costs at most about half a second per stop; `jaw_arm_off` reports the
-            # offset the arm actually settled at, which is the number that tells a
-            # friction-floor miss from a badly taught pose.
+            # Hold the split pose until the measured arm is within tolerance or has stopped
+            # improving for settle_seconds. Cursor completion alone does not establish arrival.
+            # Report the remaining offset so a missed grasp can be investigated.
             self._command_park(self.park_cmd)
             if self.park_gate_best is None:
                 self.park_gate_best, self.park_gate_t = lag, t
@@ -722,28 +669,18 @@ class ArmSession:
                                tolerance, settled,
                                stopped_briefly=t - self.park_progress_t > settle_seconds)
         if verdict not in ("arrived", "settled", "blocked"):
-            # ⭐ THE SETTLE PHASE STILL COMMANDS AND STILL CREDITS PROGRESS — merged from
-            # the script on 2026-08-18 (item 23 group ④), which had learned both after
-            # this class was written. Re-sending the final point keeps the velocity
-            # feedforward decaying to zero instead of freezing at its last value, and
-            # crediting an err improvement keeps a slowly-settling arm from being
-            # declared blocked at the stall timeout while it is still visibly closing.
+            # Keep commanding during settling so velocity feedforward decays, and credit
+            # measured improvement so a slowly converging arm is not reported as blocked.
             self._command_park(self.park_cmd)
             if err < self.park_best_err - progress_eps:
                 self.park_best_err, self.park_progress_t = err, t
         return result(verdict)
 
     def abandon_path(self) -> float:
-        """⛔ Leaving PARK abandons the rest of the run, and returns the rad dropped.
+        """Drop the remaining path, queued segments and jaw pause; return radians left.
 
-        An arm that resumes a queued trajectory after the operator pressed HOLD is doing
-        something nobody asked for. Returning the distance rather than a waypoint count
-        is deliberate: with one blended path there are no separate legs left to count,
-        and "1.8 rad of path abandoned" is what an operator can actually picture.
-
-        ⭐ Queued segments and a pause in progress are part of the run, so they are
-        dropped — and counted — here too. A latched jaw block survives on purpose: it
-        describes the object still between the jaws, not the abandoned motion.
+        Preserve a latched jaw block: it describes the object still held after motion
+        cancellation. A later mode must not resume any abandoned path.
         """
         left = 0.0 if self.park_path is None else max(0.0, self.park_path.length - self.park_s)
         left += sum(path.length for _, _, path, _ in self.park_queue)

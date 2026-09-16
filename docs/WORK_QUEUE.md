@@ -12,20 +12,23 @@ understandable and useful as inspiration for their own arm/features implementati
 This extends the completed cleanup and validation; do not stop at the earlier
 package checkpoint while these newly requested items remain actionable.
 
-1. Capture a read-only source snapshot of the station's current LaRobot checkout,
-   including its in-progress physical script, and record revision/hash provenance.
-   Preserve the teammate's files and distinguish committed from working changes.
-2. Compare entry points, device ownership, control/mode flow, recording/cameras,
-   replay and integration contracts. Reuse/update BRIDGE where it is still useful;
-   dated module mappings are not evidence of the current team implementation.
-3. Review the reference's readability using that comparison. Identify concrete
-   navigation, naming or responsibility problems. Make bounded useful improvements
-   with behavior checks at changed boundaries; do not move a large loop merely to
-   claim fewer lines or change verified motion/calibration/stop semantics.
-4. Produce a concise colleague reading/feature map, with a sensible implementation
-   order and clear distinctions between reusable code, reference-only policy and
-   team-specific integration. Keep detailed evidence in the existing handoff.
-5. Verify, commit locally and regenerate the review package. Sending/pushing to a
+1. Capture source and revision provenance. Complete: clean station physical source
+   at fd2c64b, matching the pushed tip. Six current remote branch tips fetched and
+   their source captured with hashes. The teammate's checkout was not modified.
+2. Compare current implementations. Complete: BRIDGE now distinguishes physical,
+   recording, training and ABC work. Actual physical cleanup failures reproduced
+   with fake dependencies; obsolete input calls fail signature binding. Two samples
+   from the actual team recorder produce zero frames in its current training reader.
+   The August comparison is preserved as explicitly historical material.
+3. Improve concrete readability problems. Complete: IK 529 to 308 lines, ArmSession
+   755 to 692. Historical explanations archived; model/measurement, GUIDE displacement
+   and Frame contracts corrected. Existing executable statements are unchanged.
+   The operator keeps its tested ordering; no additional large-loop move is justified.
+4. Prepare a feature reading map and examples. Complete: COLLEAGUE_HANDOFF pairs
+   features with owners/tests and explains reuse versus rig policy. Two hardware-free
+   examples execute actual command limiting, cleanup, recording writers and publication.
+   Both initial runs pass; final validation follows below.
+5. Verify, commit locally and regenerate the review package. In progress. Sending/pushing to a
    colleague or changing their live checkout still requires a concrete destination
    and instruction; a readiness question alone does not authorize publication.
 

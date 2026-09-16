@@ -17,10 +17,14 @@ run on that station. They use its USB/CAN devices and write to its filesystem.
 | --- | --- | --- |
 | Mac: `/Users/julien/Developer/Projects/yam-robotics` | Cleanup development and review package | `codex/teleop-cleanup`; latest revision is in Git and the package manifest |
 | Station: `/tmp/yam-validation-025fab1-LWvBIc/operator` | Tested application and disposable recordings | Fixed commit `025fab1`, detached HEAD; a pinned revision without an active branch |
-| Station: `/home/lavita/LaRobot` | Teammate's working project | `feature/physical` at `087a4fc`, with edited `scripts/physical.py` |
+| Station: `/home/lavita/LaRobot` | Teammate's working project | Clean `feature/physical` at `fd2c64b` in the September 16, 15:47 UTC snapshot; the pushed tip matched afterward |
 | Station: `/home/lavita/yam-robotics` | Original Fable/reference checkout | `main` at `499d0b7`, with the station's park-pose edits |
 
 These are separate source folders and Git working trees on the same station.
+The earlier recording snapshot showed `087a4fc` with an edited physical script;
+the teammate committed that work independently before the later source review.
+Branch positions and working changes can advance again. [BRIDGE](BRIDGE.md)
+records the revisions compared across the team's branches.
 The test has its own copied configuration and recording directory. It reuses the
 reference checkout's Python environment and I2RT vendor directory without changing
 them. Both projects access the same physical arms, so controller ownership still

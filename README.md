@@ -27,7 +27,8 @@ For the physical arms, follow the bring-up checklist below, then run the same co
 
 Current cleanup status and preservation details: [docs/CLEANUP.md](docs/CLEANUP.md).
 [Station validation](docs/STATION_VALIDATION.md) records the attended B/G tests and remaining integration checks.
-[Colleague handoff](docs/COLLEAGUE_HANDOFF.md) summarizes readiness and review steps.
+[Colleague handoff](docs/COLLEAGUE_HANDOFF.md) provides two runnable examples and a feature reading map.
+[Team comparison](docs/BRIDGE.md) covers the six current LaRobot branches and integration gaps.
 Fable's original handoff is preserved at `499d0b7`.
 
 After the launcher has created the environment, run checks with:

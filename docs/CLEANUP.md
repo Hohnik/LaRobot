@@ -16,9 +16,11 @@ checker now reports a stationary ending without claiming it proves a defect.
 [STATION_COMMANDS](STATION_COMMANDS.md) explains SSH, separate folders and workflow.
 [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md) summarizes review readiness.
 
-Julien has now requested a colleague-focused readability comparison against the
-current LaRobot implementation. That new local phase is active in WORK_QUEUE;
-the completed validation is not a reason to stop its useful independent work.
+The colleague-focused readability review is also complete. [BRIDGE](BRIDGE.md)
+now compares all six current remote branches, including physical `fd2c64b` and
+ABC `211129a`. It replaces the outdated August interface assessment. The
+handoff supplies a feature reading map and two verified hardware-free examples.
+The final review package is generated from the saved commit and verified separately.
 
 The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
 `499d0b7`. No user answer or technical unblock is needed for this completed pass.
@@ -30,9 +32,9 @@ its older counts and "incomplete" statements are dated evidence, not current sta
 | Area | Current result |
 | --- | --- |
 | Operator structure | 1,973 lines, down from 2,261 before the broader pass. Shared speed/rotation policy has one owner; startup and ordered motion coordination remain explicit. Two shared-puck help messages were subsequently clarified. |
-| Core source explanations | robot.py 1,078 → 673 lines; recording.py 803 → 615. Executable AST unchanged in these prose passes. Historical explanations archived verbatim; current contracts corrected. |
+| Core source explanations | robot.py 1,078 → 673 lines; recording.py 803 → 615; teleop.py 529 → 308; session.py 755 → 692 in the latest pass. Executable AST unchanged in these prose passes. Historical explanations archived verbatim; current contracts corrected. |
 | Status display | Both settings and heartbeat acquire detached snapshots; rendering has no robot handle. Mirror status reuses displayed poses. |
-| Local verification | Latest full suite: 1,077/1,077 in 71 files after fixture/shared-puck changes; 76 recording and nine recovery tests plus the actual station checker pass after the final diagnostic correction. Falsifiers: 71/71 at the fixture checkpoint; isolated simulator: 32/32 at the broader review. |
+| Local verification | Latest full suite: 1,077/1,077 in 71 files after the colleague-readability pass. Both examples run, with additional partial-startup and failed-cleanup probes; six saved JPEGs decode correctly. Documentation checks pass. Falsifiers: 71/71 at the fixture checkpoint; isolated simulator: 32/32 at the broader review. |
 | Preservation / remaining decisions | All 3,455 original recording files unchanged at the broader local close-out. The separately authorized station checks are recorded in STATION_VALIDATION. No remote publication or replacement of a working station checkout. |
 
 The normal simulated operator starts from the repository root with:
@@ -559,3 +561,123 @@ resumption after an app interruption or usage limit. The remaining station timin
 real-device behavior and team publication require their own decisions and resources;
 none is a blocker used to defer local code cleanup. No request to operate hardware
 or push remotely is inferred from permission to clean up locally.
+
+## Colleague readability and latest team branches — September 16, 2026
+
+### What was inspected
+
+Julien requested readable reference code for his colleague's own implementation,
+then specifically asked whether the latest pushes had been seen. A source snapshot
+of `/home/lavita/LaRobot` at 15:47:35 UTC showed clean `feature/physical` at
+`fd2c64b006b7892e8103d73e1dc4c3c88a804865`. The remote query matched that commit.
+The original reference checkout and isolated test operator were not changed.
+
+Six currently advertised branch tips were fetched: main `f08f96f`, dual-wield
+`2041c3d`, physical `fd2c64b`, recording-pipeline `62671fd`, training-pipeline
+`0c94c23`, and abc-integration `211129a`. Historical cached remote-tracking refs
+were not treated as currently advertised branches. Source, tests and relevant
+text configuration were captured with SHA-256 hashes; assets and environments
+were not copied. Python files in all six captured trees compile under Python 3.12.
+This is syntax evidence, not a successful installation or complete application run.
+
+The physical branch includes the dual-arm development but the other feature
+branches are separate. The recording branch already has timestamped samples and
+an MCAP writer; the training branch has a converter. The ABC branch adds dependency
+settings and a visualization launcher to main. None of those facts proves that
+all features coexist in the physical checkout or that the data formats agree.
+
+### Findings reproduced without hardware
+
+The physical script acquires hardware at module import and its cleanup assumes
+acquisition succeeded. Executing the actual try/finally AST with injected fake
+dependencies reproduced two cases: factory failure is followed by an unbound robot
+reference, and gravity-compensation cleanup failure prevents close from running.
+No hardware imports or motor commands were involved in these probes.
+
+Four old SpaceMouse calls fail argument binding against the current constructor:
+start_sim.py, start_sim_unified.py, visualize_spacemouse.py and the module demo.
+Physical.py and start_sim_dual.py use the new path/side arguments correctly.
+This is a constructor-compatibility check, not a complete interactive startup run.
+
+The actual recording-branch Recorder wrote two synthetic samples into a temporary
+MCAP file. Its four messages used `/robot/state_action` JSON and
+`/cameras/top_camera` NPZ. The actual training-branch `read_mcap_episode` function
+returned zero frames, because it expects separate arm/action topics and a different
+camera binary encoding. Default source/output paths also disagree. The probe
+executes the reader function in isolation without installing Torch, LeRobot or
+ABC; it does not test their full loaders. The first probe selected the empty
+`dataloader.py`; the corrected probe used `dataset.py`, where the reader is defined.
+Only the corrected completed run establishes the reported mismatch.
+
+BRIDGE now records these findings, current module mappings, differing units and
+clock/image conventions, SDK revision differences, and an implementation order.
+The old SimCamera syntax claim is explicitly historical. The entire previous
+BRIDGE text is preserved in `docs/archive/bridge-2026-08-20.md`, with relative
+links adjusted for its new location.
+
+### Readability changes and retained design
+
+Forty-two docstring/comment passages from teleop.py, session.py and cameras/frame.py,
+plus the old Frame field comments, are preserved verbatim in
+[the source-note archive](archive/ik-and-mode-source-notes.md). Current source now
+states the actual contracts. Parsed executable statements match `f346a8d` after
+docstrings are removed; calibration, limits, tuning and runtime behavior were not
+changed. Solver source is 308 lines, ArmSession 692 and Frame 31.
+
+Corrections include: IK receives no fresh encoders during step; target lead is
+relative to the internal model. Input scaling affects the next cycle and does not
+hard-cap the current returned target. The caller applies workspace constraints.
+GUIDE displacement includes deliberate hand movement. A 0.02 normalized jaw
+increment need not clear a 0.03 latch margin. Frame is not a drop-in equivalent of
+the team's current Frame, its legacy rgb field contains BGR, and consumers may
+observe sequence gaps. Historical rationale and measurements remain recoverable.
+
+The 1,973-line operator still has substantial ordered coordination. The team's
+separate input/target/IK design is useful and should be preserved when adapting
+features. No additional large-loop extraction was justified in this pass: it
+would require a new cycle contract covering measurements, commands, timing and
+failure ordering. Moving the existing state into one more object would not make
+those dependencies simpler. This is a specific design boundary, not an unfinished
+mechanical edit deferred until another continue prompt.
+
+Two new examples show actual library components without physical devices.
+`examples/command_limits.py` demonstrates the rate/lag limits and immediate handle
+registration with cleanup. `examples/record_take.py` demonstrates active/frozen
+sampling, real JPEG writers, completion polling, asynchronous publication and
+reload. It uses a unique retained temporary directory and an explicit synthetic
+clock. Console waiting is distinguished from the live loop's nonblocking polling.
+The examples preserve the original error if cleanup also fails.
+
+COLLEAGUE_HANDOFF is now a reading route with feature-to-module/test mapping,
+example commands, reuse boundaries, integration order and verified limitations.
+Rig calibration and operating policy require deliberate review; the reference's
+terminal UI and historical notes need not be copied into the team's application.
+
+### Verification, evidence and completion boundary
+
+The final full suite passes 1,077/1,077 checks in 71 files. Both actual example
+entry points run. Additional probes exercise wrapper failure after fake robot
+acquisition and recording startup plus cleanup failure. Every acquired fake motor
+receives its motor-off call; the recording's original exception retains its
+cleanup error as a note. All six generated JPEGs decode at 64×48, and the expected
+BGR color survives encoding. Frozen and reloaded trajectories both remain six
+samples over 0.5 seconds. Executable AST comparisons and documentation checks pass.
+
+Full simulator and physical tests were not repeated for source-prose changes.
+The existing simulation and station evidence retain their recorded revisions and
+scope. No claim of additional tested physical features is inferred from this pass.
+The team code was inspected and exercised only in isolated software probes; its
+live checkout was never changed, and no full dependency environment was installed.
+
+Ignored local evidence is under `agents/codex/team-review-2026-09-16/`:
+`snapshot.json`, `compatibility-review.json`, `branch-review.json`, extracted source,
+`prose-equivalence.json`, `readability-verification.json`, example output logs and
+`tests-final.txt`. `review_branches.py` and `verify_readability.py` reproduce the
+completed probes. Branch tips may advance; these are dated evidence snapshots.
+
+The review package is regenerated after committing. Its source archive is checked
+against every tracked file and executable mode; its Git bundle requires `499d0b7`.
+The package manifest records its exact commit, hashes and completed extracted-source
+checks. This is local preparation. Sending it, pushing a review branch or installing
+it into a working station checkout requires a concrete instruction and destination.
+No further motor test or user answer is needed to finish this local handoff.
