@@ -4,13 +4,32 @@ Updated September 16, 2026. This queue implements Julien's instruction to contin
 through useful local work without stopping at each commit. The initial state below
 is based on verified checkout `190070e`; subsequent evidence is recorded per item.
 
-## Current objective
+## Broader review — completed locally
 
-Finish the remaining concrete, behavior-preserving cleanup items in the architecture
-review, preserve the original work/data, and leave a usable current handoff.
-No physical operation or remote publication is included.
+Julien explicitly confirmed continuation after the `216fda0` queue proved too narrow.
+All four agreed review items have now been resolved through changes or specific
+code-based retention reasons; the detailed evidence is in
+[CLEANUP](CLEANUP.md#broader-review-close-out--september-16-2026).
 
-## Work items
+| Item | Disposition and evidence |
+| --- | --- |
+| robot.py / recording.py explanations | Complete: 40 passages archived verbatim, stale export/platform/validation claims corrected, executable AST unchanged. Files now 673 and 615 lines. |
+| Status acquisition/rendering | Complete: immutable value snapshots used by both app callers; one pose read per arm, mirror reuses it. Five new tests plus existing content tests; read failures retain fault cleanup. |
+| Operator startup / cross-mode dispatch | Complete review: duplicated speed/rotation policy extracted into DriveControls and tested through real callers and nonzero simulated input. Startup keeps acquisition order; loop keeps multi-arm arrival/key/command order. Specific rationale in CLEANUP. Operator now 1,974 lines. |
+| Current status / detailed handoff / preservation / save | Complete: current summary rewritten, nuanced evidence retained; 1,075/1,075 checks, 71/71 catches, 32/32 isolated interactions, CLI/checkers pass, all 3,455 original recording hashes unchanged. This local close-out commit contains code/tests/docs together. |
+
+No item in this broader pass remains waiting for another "continue". No answer is
+needed from Julien. Hardware/station validation and publication are reserved below,
+not unexplained software blockers. No background work or automatic resumption is
+running. Do not invent more cleanup to avoid a legitimate completion; reopen this
+queue for a concrete defect, requested change or new evidence.
+
+## Previous checkpoint objective
+
+The `216fda0` checkpoint completed its concrete implementation queue. Its narrower
+completion assessment did not cover the broader review now listed above.
+
+## Previous checkpoint work items
 
 1. **Persistent continuation rule:** add repository instructions and this queue;
    use the next item after a commit instead of ending merely because checks pass.
@@ -44,9 +63,10 @@ no requirement to reach a particular line count, and moving an entire remaining
 loop into a new class does not itself resolve coupling.
 
 
-## Architecture review disposition
+## Previous checkpoint architecture disposition
 
-This is an assessment against the current callers and failure paths, not just file lengths.
+The table records the assessment at `216fda0`; the broader review above supersedes
+its source/status/dispatch conclusions.
 
 | Planned work | Current result | Evidence / retained boundary |
 | --- | --- | --- |
@@ -73,12 +93,11 @@ acceptance criteria. No demonstrated defect is being deferred to one of those
 projects in this queue. A newly discovered defect or useful independent owner
 should reopen a concrete item, not an indefinite "clean up more" loop.
 
-All concrete local items in this queue are complete. No item is waiting for a
-user answer, no software blocker is claimed, and no background work is running.
-The next physical validation or team publication is separately reserved; no
-continuation prompt is required to reauthorize this already-completed local work.
+The previous checkpoint finished the items listed in that checkpoint. The broader
+review above subsequently resolved its additional source/status/dispatch questions.
+Neither checkpoint authorizes physical operation or team publication.
 
-## Final verification
+## Previous checkpoint verification (`216fda0`)
 
 - 1,064/1,064 checks across 68 files, including actual application failure/retry paths.
 - 71/71 deliberately broken cases caught by five falsifiers.

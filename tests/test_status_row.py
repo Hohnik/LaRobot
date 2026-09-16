@@ -31,7 +31,12 @@ sys.path.insert(0, str(REPO / "apps"))  # ⛔ the app script is not a package; a
 sys.path.insert(0, str(REPO / "scripts"))
 
 from yam.session import ArmSession  # noqa: E402
-from teleop_session import status_row  # noqa: E402
+from yam.session_snapshot import capture_arm_status
+from yam.ui.session_status import status_row as format_status_row  # noqa: E402
+
+
+def status_row(arm, lead, reach, floor):
+    return format_status_row(capture_arm_status(arm, reach, floor), lead)
 
 
 class FakeRobot:

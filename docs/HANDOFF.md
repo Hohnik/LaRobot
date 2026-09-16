@@ -4,6 +4,10 @@
 
 Start with [CLEANUP.md](CLEANUP.md) for the current branch, preserved training work and recordings, implementation decisions, checks, and next steps. [README.md](../README.md) has the dedicated launcher commands. Fable's final commit was `499d0b7`, exactly the version Julien recalled; the cleanup continues from it on `codex/teleop-cleanup`. The Linux station has not been rechecked in this continuation.
 
+The broader local source/structure review is complete; read the current status
+and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any older
+"next step" below as still pending. No automatic background continuation is running.
+
 ## Archived August handoff
 
 The dated state and counts below describe the original close-out. They remain useful for its reasoning and hardware evidence; current status lives in CLEANUP.

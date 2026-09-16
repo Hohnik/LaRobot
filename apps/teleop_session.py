@@ -22,10 +22,6 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-# ⚠️ `Any` was used in this file's annotations since long before this import existed, and
-# it worked only because `from __future__ import annotations` never evaluates them. A real
-# import is needed the moment it appears on a variable inside `main()`, because
-# `checks/check_restructure.py` check 4 resolves every name used there.
 from typing import Any
 
 import numpy as np
@@ -70,6 +66,7 @@ from yam.recording import (  # noqa: E402
     SCRUB_MAX_RATE,
     safe_time_scale,
 )
+from yam.session_snapshot import capture_status  # noqa: E402
 from yam.ui.session_status import flat_joint_names, status_row, tracking_table  # noqa: E402
 from yam.ui.screen import StatusLine, display_width  # noqa: E402
 from yam.teleop import (  # noqa: E402
@@ -103,6 +100,7 @@ from yam.cameras.writer import (  # noqa: E402
 )
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
 from yam.ui.recording_prompt import RecordingPrompt, save_slot_action  # noqa: E402
+from yam.ui.drive_controls import DriveControls  # noqa: E402
 from yam.ui.controls_editor import edit_controls  # noqa: E402
 from yam.ui.playback_prompt import PlaybackChoice, PlaybackPrompt  # noqa: E402
 from yam.ui.park_prompt import ParkAction, ParkPrompt  # noqa: E402
@@ -110,7 +108,6 @@ from yam.ui.session_plan import session_plan_lines  # noqa: E402
 from yam.ui.settings_panel import SettingsAction, SettingsPanel  # noqa: E402
 from yam.settings import (  # noqa: E402
     LIVE_ORDER,
-    adjust as adjust_setting,
     defaults_path,
     describe as describe_defaults,
     effective as effective_settings,
@@ -139,18 +136,11 @@ from yam.robot import (  # noqa: E402
 CONTROL_HZ = 100.0
 N_ARM = 6
 
-# Faster than the first run, which Julien found "very slow". Still well short of
-# what the hardware can do — this is a human-in-the-loop speed, not a limit.
-# ⭐ Defined in src/yam/inputs/axis_map.py so `apps/map_axes.py` reports the exact speeds
-# this session commands. Dialling a mapping against speeds the arm does not use
-# would teach the wrong feel.
+# Input scales are shared with map_axes so calibration and operation use the same rates.
 LINEAR_SCALE = DEFAULT_LINEAR_SCALE     # m/s at full deflection  (was 0.04)
 ANGULAR_SCALE = DEFAULT_ANGULAR_SCALE   # rad/s at full deflection (was 0.25)
 
-# ⚠️ `WORKSPACE_BOX = 0.30` used to live here. The workspace limit is now
-# `REACH_LIMIT` and `FLOOR_LIMIT` in `src/yam/teleop.py`, next to the code that applies
-# them, because the old constant sat in the script while the clamp it fed was an
-# untested inline block. FINDINGS §43.
+# Workspace geometry and effective limits live with their clamp in yam.teleop.
 MAX_JOINT_STEP = 0.015     # rad/cycle ≈ 1.5 rad/s at 100 Hz
 JOINT_LIMIT_MARGIN = 0.08
 TEMP_WARN = 55.0
@@ -159,28 +149,11 @@ PARK_SPEED = 0.40          # rad/s per joint when driving to the park pose
 # ⭐ Slot "0" in the UI. The one pose Ctrl-C returns to before releasing the motors,
 # and the only one `s 0` may overwrite — see where it is loaded for why that matters.
 BASE_SLOT = "default"
-# ⭐ Ease in and out over this much joint travel. A constant-rate park starts and
-# stops with a jerk; with sequences that jerk lands at every waypoint. 0.20 rad is
-# ~half a second of ramp at the default 0.4 rad/s, and a move shorter than twice it
-# simply never reaches full speed. `--no-smooth` sets it to 0.
+# Ease over this much joint travel; short moves may never reach full speed. --no-smooth uses 0.
 PARK_RAMP = 0.20
-# ⭐ How much the path may cut a corner, in radians of the fastest joint. `sharp`
-# reproduces the old stop-at-every-waypoint behaviour exactly. Julien's words for what
-# the others are for: *"instead of moving and then jittering ninety degrees to the next
-# side, in a smooth curve it would go to the next point."*
+# Corner-cut allowance in fastest-joint radians; sharp stops at every waypoint.
 BLEND_MODES = [("sharp", 0.0), ("smooth", 0.15), ("flowing", 0.35)]
 # German-keyboard aliases are decoded by KeyReader as UTF-8.
-# Live speed bounds prevent runaway key repeat; joint-rate and lag limits still apply.
-# The 15 m/s input ceiling preserves the operator's configured range (FINDINGS §62.2).
-MAX_LINEAR_SCALE = 15.0
-MIN_LINEAR_SCALE = 0.005
-
-#: ⭐ The same backstop for rotation. Default is 0.6 rad/s, so 12 rad/s is 20x it and about
-#: 690°/s — well past useful and nowhere near reachable, which is what a backstop should be.
-#: ⚠️ His 2026-08-17 readout showed `rot 954°/s`, so this direction was being pushed too.
-MAX_ANGULAR_SCALE = 12.0
-MIN_ANGULAR_SCALE = 0.02
-
 KEY_STEP_DOWN = ("[", "ö")          # shorter ease ramp
 KEY_STEP_UP = ("]", "ä")            # longer ease ramp
 # ⚠️ `m` is absent on purpose: CONTROLS owns the keyboard while it is active, so `m`
@@ -214,16 +187,10 @@ CONTROLS_SCALE = 0.5
 GRIPPER_MIN = 0.02
 GRIPPER_MAX = 0.98
 GRIPPER_STEP = 0.02        # per keypress
-# Hold-to-move rate for the puck buttons. A gripper wants squeeze-and-hold, not a
-# staircase of keypresses. 0.6/s crosses the whole normalised stroke in ~1.6 s,
-# which is deliberate and slow: the jaws close on real objects, and the stall guard
-# should be a backstop rather than the thing that routinely stops you.
+# Hold-to-move jaw rate, in normalized stroke per second; the stall guard remains a backstop.
 GRIPPER_BUTTON_RATE = 0.6  # normalised units per second while a button is held
 
-# Gripper stall guard. Catches the CAUSE (jaws pushing against something they
-# cannot move) rather than the symptom (temperature). Torque high while velocity
-# is ~0 is the definition of a stall, and stall is the worst thermal case there
-# is: full current, no motion, no cooling.
+# Gripper stall guard: sustained high torque with near-zero velocity.
 GRIPPER_STALL_TORQUE = 1.0   # Nm
 GRIPPER_STALL_VEL = 0.05     # rad/s
 GRIPPER_STALL_SECONDS = 0.4
@@ -239,10 +206,7 @@ MAX_PLANNED_JOINT_SPEED = MAX_JOINT_STEP * CONTROL_HZ
 
 # ⛔⭐ How far (rad, worst ARM joint, jaws excluded) a replay arm may sit from the recording's start pose at the moment playback would begin. A park arrives within ~0.05 rad and settles within ~0.05 more, so 0.25 — the default max-lag, the point past which the first command is a real yank — separates "settled short" from "never parked here at all". FINDINGS §72.1: a playback once began 1.28 rad off because the READY BOOKKEEPING lied; this check measures the arm instead of trusting the bookkeeping, so that whole failure class refuses instead of dragging.
 REPLAY_START_TOLERANCE = 0.25
-# ⚠️ How long one recording may run before it stops itself. ~16 minutes at 100 Hz, which
-# is well past the ~4.5 minutes of context a long-horizon policy wants (ROADMAP §9.3).
-# It exists because nothing else would ever stop a recording, and an unbounded list in a
-# process that is driving an arm is a memory problem waiting for the worst moment.
+# Bound in-memory recording length to 100,000 samples (about 16 minutes at 100 Hz).
 MAX_TAKE_SAMPLES = 100_000
 
 HELP = """
@@ -310,27 +274,13 @@ def save_json(path: Path, data) -> None:  # noqa: ANN001
 
 
 def ease_note(profile: str, ramp: float) -> str:
-    """The one-line answer to *"what does easing even do here?"*
-
-    ⭐ It names where the effect lives, because that is the question Julien actually asked
-    on the arm: *"the easing outside of parking, I don't really know what that means. Does
-    it work for recording, or does it work for teleoperating?"* Neither. Easing shapes how
-    a **planned** move starts and stops, which means `p` runs and the Ctrl-C park, and
-    nothing else. Driving by hand has no plan to shape, and a playback follows the timing
-    it was taught rather than an eased ramp.
-    """
+    """Describe easing as a planned-park setting, separate from teleop and replay."""
     tail = "off" if ramp <= 0 else f"over {ramp:.2f} rad"
     return f"ease {profile} {tail} · affects p runs and Ctrl-C only · ö/ä = how long"
 
 
 def chain_alive(robot) -> bool:  # noqa: ANN001
-    """Is the robot still actually being commanded?
-
-    ⛔ The single most important check in this file. I2RT's control thread raises
-    and exits on a motor fault; nothing tells the caller. Without this, the loop
-    keeps issuing commands into a corpse and reporting healthy-looking numbers,
-    which is what happened for 64 s on 2026-08-10.
-    """
+    """Read the motor-chain running flag; absent chains are not commandable."""
     chain = getattr(robot, "motor_chain", None)
     if chain is None:
         return False
@@ -341,30 +291,9 @@ _SHUTTING_DOWN = {"yes": False}
 
 
 def _quiet_expected_server_exit(args) -> None:  # noqa: ANN001
-    """Silence ONE known, expected traceback — and only while we are shutting down.
+    """Suppress only the known robot_server RuntimeError during our own shutdown.
 
-    ⛔ The noise this removes. Every clean exit printed:
-
-        Exception in thread robot_server:
-        RuntimeError: … motor_chain_robot's motor chain is not running, exiting the
-        robot server
-
-    …immediately before `motors confirmed disabled: [1, 2, 3, 4, 5, 6, 7]`. It is the
-    I2RT SDK's background server thread noticing the chain has stopped — **because we
-    stopped it**. Nothing is wrong, and the shutdown it appears to indict has in fact
-    succeeded.
-
-    ⚠️ Why bother, when it is harmless? Because a scary traceback printed on every
-    successful exit is a training exercise in ignoring tracebacks, and this project
-    depends on people reading the ones that matter. FINDINGS §0 is a catalogue of
-    failures that looked calm; the inverse — a success that looks like a failure — has
-    the same cost, paid in attention.
-
-    ⛔ Deliberately narrow, because blanket exception-swallowing is the other half of
-    that catalogue: it fires only during our own shutdown, only for that thread, only
-    for `RuntimeError`, and only for that message. Anything else goes to the real hook
-    and prints in full.
-    """
+    All other thread failures go to Python's default exception hook."""
     if (_SHUTTING_DOWN["yes"]
             and getattr(args, "thread", None) is not None
             and args.thread.name == "robot_server"
@@ -416,10 +345,7 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
     if not runs:
         return "dead"
 
-    # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean a
-    # key pressed *at* the moving arm, not one left over from teleop or from the menu that
-    # led here. Julien saw a park announce itself and stop in the same breath — the stale
-    # keystroke that cancelled it had been typed seconds earlier.
+    # Discard stale input before starting: only a key pressed during this move may cancel it.
     keys.drain()
     for run in runs:
         print(f"\n⭐ PARKING arm {run['arm'].name} to "
@@ -519,11 +445,7 @@ def main() -> int:  # noqa: PLR0915
     if cam_error:
         ap.error(cam_error)
 
-    # ⭐⭐ THE LIST OF ARMS THIS SESSION DRIVES. ROADMAP §6.1 step 2.
-    #
-    # ⚠️ `arm_names[0]` appears below wherever a line still assumes one arm, on purpose:
-    # each one marks a site step 2's remaining work has to turn into a loop, and it is
-    # greppable. Sites that run after the object exists use `arm.name` instead.
+    # Parse the requested arm order; it also defines recording layout order.
     try:
         arm_names = parse_arms(args.arm, args.arms, ARM_SERIALS, DEFAULT_ARM)
     except ValueError as exc:
@@ -542,13 +464,7 @@ def main() -> int:  # noqa: PLR0915
     screen = StatusLine()
 
     def hint(text: str = "") -> None:
-        """A value the operator just changed, on its own live row above the status.
-
-        ⭐ `linear speed → 0.188 m/s` printed as a MESSAGE six times is six rows of
-        scrollback saying the same word. As a hint it is one row whose number changes
-        — and, crucially, it no longer loses a race with the once-a-second status,
-        which is what made a knob change flash up and vanish.
-        """
+        """Update the persistent hint row without adding repeated scrollback messages."""
         screen.hint(text)
 
     def print(*args, sep=" ", end="\n", flush=False):  # noqa: A001, ARG001
@@ -562,7 +478,8 @@ def main() -> int:  # noqa: PLR0915
     # number rather than a constant and a flag that can disagree. `MAX_JOINT_STEP` remains as
     # the documented default and is what the flag's own default comes from.
     joint_step = args.teleop_speed / CONTROL_HZ
-    rotation = not args.no_rotation
+    drive = DriveControls(rotation=not args.no_rotation, angular_scale=ANGULAR_SCALE,
+                          hint=hint, emit=print)
     start_frame = args.frame
     # ⛔ The store decides WHICH map this arm uses — its own override if it has one,
     # otherwise the shared one. Editing a shared map changes both arms, so the scope
@@ -598,7 +515,6 @@ def main() -> int:  # noqa: PLR0915
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_prompt = ParkPrompt()
-    angular_scale = ANGULAR_SCALE
     gripper_step = args.gripper_step
     # The active control and button binding belong to the selected ArmSession.
 
@@ -607,10 +523,7 @@ def main() -> int:  # noqa: PLR0915
             base_slot=BASE_SLOT, planned_speed_default=MAX_PLANNED_JOINT_SPEED,
             temp_warn=TEMP_WARN, temp_stop=TEMP_STOP):
         print(line)
-    # ⭐⭐ SAY WHICH SETTINGS CAME FROM THE FILE, AND FLAG A PERMANENT LOOSENING. A flag
-    # typed on the command line is visible in the shell history and on screen; a saved
-    # default is not. ⛔ Without these lines a session could run at three times the built-in
-    # speed limit with nothing on screen explaining why.
+    # Show saved settings and loosened limits so their source is visible before acquisition.
     for line in describe_defaults(saved_defaults, ignored_defaults,
                                   looser_than_builtin(saved_defaults, builtin_defaults),
                                   settings_file, builtin_defaults):
@@ -707,11 +620,7 @@ def main() -> int:  # noqa: PLR0915
         # ArmSession initializes its solver and thermal state. Local summary state must
         # remain available on failures that happen before the control loop.
         next_park_report = 0.0
-        # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
-        # `ArmSession` fields, and the class's own constructor sets exactly the same values
-        # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
-        # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
-        # ordering check in checks/check_restructure.py.
+        # Per-arm gripper and stall state is initialized by ArmSession.
 
         # ⭐⭐ SIMULATED RECORDINGS GO SOMEWHERE ELSE. Defence in depth alongside the
         # metadata stamp: `recordings/sim/` never contains a real demonstration, so a glob
@@ -721,15 +630,7 @@ def main() -> int:  # noqa: PLR0915
         tracking_dir = takes_dir / "tracking"
 
         def slot_for_reading(digit: str) -> Path:
-            """Where to LOOK for a recording. Writes always go to `takes_dir`.
-
-            ⭐⭐ A --sim SESSION CAN STILL PLAY A REAL RECORDING, and that is deliberate. When
-            the folder split was first written it applied to reads as well, which quietly
-            removed one of the best uses of a simulator: **replaying a real take against
-            simulated arms to check the playback before committing it to 4.3 kg of hardware.**
-            Sim recordings win when both exist, so a sim session never silently reaches past
-            its own work.
-            """
+            """Read simulation slots first in --sim, with real-slot fallback. Writes stay isolated."""
             mine = takes_dir / f"{digit}.json"
             if mine.is_file() or takes_dir == TAKES_DIR:
                 return mine
@@ -745,10 +646,7 @@ def main() -> int:  # noqa: PLR0915
             print(f"building arm {name} — enables {n_motors} motors, "
                   "starts the control loop …")
             if args.sim:
-                # ⭐⭐ THE WHOLE POINT OF --sim, AND IT IS ONE BRANCH ON PURPOSE. Everything
-                # below this line is the same code in both modes, so a simulated session
-                # exercises the real loop rather than a parallel one. `build_fake_robot`
-                # returns the same `(robot, note)` tuple for exactly that reason.
+                # Only construction differs: simulated arms exercise the same control loop.
                 robot, note = build_fake_robot(
                     name, n_joints=n_motors,
                     max_speed=args.max_speed, max_lag=args.max_lag)
@@ -782,10 +680,7 @@ def main() -> int:  # noqa: PLR0915
                 print("                (press s to set a different arm; q then p then d "
                       "parks and quits)")
 
-        # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg weightless
-        # in arm keypress, and GUIDE is where a dynamics-model error becomes a falling arm
-        # rather than a droop (FINDINGS §11.1). Each arm always follows its own puck.
-        # `src/yam/session.py::ArmSelector` holds the cycle and its tests.
+        # Selection aims mode changes; SessionInput routes per-arm or shared puck input.
         selection = ArmSelector(arm_names)
 
         # build_robot verifies the frame-corrected jaw range before returning.
@@ -804,16 +699,9 @@ def main() -> int:  # noqa: PLR0915
             the ARM's own, so two arms can be driven in different frames at once."""
             return CartesianTeleop(frame=frame)
 
-        # ⭐ enter_hold lives on ArmSession now (item 23 group ①, 2026-08-18): the class
-        # method resyncs, commands the measured pose AND sets mode="hold" — so the two
-        # sites that want a DIFFERENT mode afterwards (the park seed, the mirror engage)
-        # write their mode AFTER the call. The script's own copy is gone.
+        # enter_hold sets mode too; park and mirror must assign their new mode afterward.
 
-        # ⭐ enter_guide lives on ArmSession now (item 23 group ②, 2026-08-18). The class
-        # method records guide_ref, sets mode="guide" and RETURNS the "NOT weightless"
-        # warning instead of printing it — every caller prints the return, so the
-        # warning that once explained a falling arm (FINDINGS §11) cannot be dropped.
-        # The kp=0 physics and the API-name history live in the class docstring.
+        # enter_guide returns a warning on refusal; callers must print it and check the resulting mode.
 
         def sample_layout() -> Layout:
             """How a recording's flat sample maps onto this session's arms, right now.
@@ -846,11 +734,7 @@ def main() -> int:  # noqa: PLR0915
             """
             seq = park_prompt.shown if park_prompt.entries else "0"
             name, radius = BLEND_MODES[blend_idx]
-            # ⭐ A grab is visible BEFORE Enter (ROADMAP §6.6.2 item 4): a leg where only
-            # the jaws move splits the run and pauses it, and the count says so here,
-            # while the sequence is still being typed.
-            # ⚠️ Take legs (`w<digit>`, ROADMAP §6.6.1a) are counted separately: their
-            # jaw motion is whatever the hand taught, so no stop-counting applies.
+            # Preview jaw pauses for pose legs; recorded take legs retain their taught jaw timing.
             poses = [e for e in (park_prompt.entries or ["0"]) if not e.startswith("w")]
             takes = [e[1:] for e in park_prompt.entries if e.startswith("w")]
             if poses:
@@ -887,16 +771,10 @@ def main() -> int:  # noqa: PLR0915
                 playback.cancel_pending()
                 print("\n  ⚠️  playback cancelled — a new park replaced the drive to its "
                       "start pose.\n")
-            # ⭐ Same rule one level up (ROADMAP §6.6.1a trap ①): a park the COMPOSITE did
-            # not start replaces the composite. Its own pose legs pass for_composite=True
-            # and its take legs pass for_replay=True, so only operator-initiated parks
-            # land here — which is exactly who may abandon a queued run.
+            # Operator-initiated parks replace the composite; its own pose/take legs keep the queue.
             if not for_replay and not for_composite:
                 composite.abandon("a new park replaced it")
-            # ⭐ item 23 group ④: the CLASS builds and runs the park now — the tested
-            # `begin_path`/`step_path` pair with its 48 tests is finally the code that
-            # moves the arm. The session's live dials are copied on at start, and the
-            # `e` key keeps `easing` current mid-park.
+            # Copy live dials before ArmSession begins the path; the e key also updates easing mid-park.
             one.blend = BLEND_MODES[blend_idx][1]
             one.easing = EASINGS[ease_idx]
             park_purpose[one.name] = ("replay" if for_replay
@@ -990,14 +868,8 @@ def main() -> int:  # noqa: PLR0915
                 mirror.link.catchup = value
 
         def show_settings_status() -> None:
-            for one_arm in arms:
-                print("     " + status_row(
-                    one_arm, "", args.reach, args.floor,
-                    note=(mirror.link.status(
-                        mirror.leader.robot.get_joint_pos(),
-                        one_arm.robot.get_joint_pos())
-                        if mirror.link is not None
-                        and one_arm.mode == "mirror" else "")))
+            for snapshot in capture_status(arms, args.reach, args.floor, mirror):
+                print("     " + status_row(snapshot, ""))
 
         settings_panel = SettingsPanel(
             values=lambda: {name: getattr(args, name) for name in LIVE_ORDER},
@@ -1013,10 +885,7 @@ def main() -> int:  # noqa: PLR0915
             elif one.mode == "hold":
                 one.enter_hold()
             elif one.mode == "guide":
-                # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
-                # by enter_guide() — so the drift reference has to be taken here too, or the
-                # readout silently shows nothing for the whole first GUIDE period. That gap
-                # is exactly the 33 seconds in which the arm sank unremarked on 2026-08-10.
+                # Startup GUIDE is established by build_robot, so initialize its drift reference here.
                 one.guide_ref = np.asarray(one.robot.get_joint_pos(), dtype=float)
 
         dt = 1.0 / CONTROL_HZ
@@ -1146,11 +1015,7 @@ def main() -> int:  # noqa: PLR0915
                         continue
 
                     if pending == "park":
-                        # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
-                        # moving. Julien: *"I can change the park speeds whilst it's
-                        # parking, but not whilst I'm putting in the numbers, which is
-                        # a bit annoying."* Deciding how a move should feel belongs to
-                        # the moment you are choosing the move.
+                        # Allow speed and corner changes while choosing the path, before motion starts.
                         if k in "+=":
                             for one in aimed:
                                 one.park_speed = min(args.teleop_speed,
@@ -1264,11 +1129,7 @@ def main() -> int:  # noqa: PLR0915
                         continue
 
                     if k == "v":
-                        # ⭐ Cycle which frame the puck's directions mean. Safe to do
-                        # live: the twist is a VELOCITY, so a frame change alters the
-                        # interpretation from the next cycle onward and leaves no
-                        # stale cached state behind — unlike a mode change, which is
-                        # why this does not need resync().
+                        # Change the velocity-control frame from the next cycle; this does not re-enter the mode.
                         order = ["world", "tool", "camera"]
                         # Save the current frame's map before switching, then load the destination frame's map.
                         map_store.set(edit_arm.name, edit_arm.axis_map, edit_arm.frame)
@@ -1321,47 +1182,17 @@ def main() -> int:  # noqa: PLR0915
                             print(map_reference(wizard.frame))
                             print(MAP_HELP)
                             print(wizard.axis_map.describe(wizard.frame) + "\n")
-                        # Allow both linear and angular speed adjustments in CONTROLS; display both scales.
-                        elif k in "+=":
-                            args.linear_scale = adjust_setting(
-                                "linear_scale", args.linear_scale, True)
-                            hint(f"linear speed {args.linear_scale:.3f} m/s"
-                                 + (" (ceiling)"
-                                    if args.linear_scale >= MAX_LINEAR_SCALE else ""))
-                        elif k == "-":
-                            args.linear_scale = adjust_setting(
-                                "linear_scale", args.linear_scale, False)
-                            hint(f"linear speed {args.linear_scale:.3f} m/s")
-                        elif k == ".":
-                            angular_scale = min(MAX_ANGULAR_SCALE,
-                                                angular_scale * 1.25)
-                            print(f"\n  rotation speed → {angular_scale:.2f} rad/s "
-                                  f"({np.degrees(angular_scale):.0f}°/s)\n")
-                        elif k == ",":
-                            angular_scale = max(MIN_ANGULAR_SCALE,
-                                                angular_scale / 1.25)
-                            print(f"\n  rotation speed → {angular_scale:.2f} rad/s "
-                                  f"({np.degrees(angular_scale):.0f}°/s)\n")
-                        elif k == "r":
-                            rotation = not rotation
-                            print(f"\n  wrist rotation {'ON' if rotation else 'OFF'}"
-                                  f"{'' if rotation else ' — ROLL/PITCH/YAW will not move'}\n")
+                        elif drive.handle(k, values=args, aimed=aimed, mapping=True):
+                            pass
                         elif k.isprintable() and k.strip():
                             print(f"\n  (key {k!r} does nothing in CONTROLS mode — press ? for the list)\n")
                         continue
 
-                    # ⛔ Unrecognised keys are IGNORED. They used to fall through to a
-                    # catch-all that cancelled PARK, so pressing Enter out of habit
-                    # right after `p` killed the move in the same keyboard batch --
-                    # which looked exactly like "park just went to hold". A control
-                    # character must never be an action.
+                    # Unknown/control keys must not cancel PARK or trigger another mode transition.
                     if k == "q":
                         stop = StopRequest(StopCause.QUIT, "quit requested")
                     elif k == "m" and len(aimed) > 1:
-                        # ⛔ CONTROLS EDITS ONE MAP FROM ONE WIGGLE, so it cannot be aimed at
-                        # two arms. Refused rather than silently applied to the first: the
-                        # operator who selected BOTH and pressed `m` asked for something this
-                        # wizard has no meaning for.
+                        # CONTROLS maps one observed puck axis to one arm; reject a BOTH selection.
                         hint(f"CONTROLS is one arm at a time — press a to pick one "
                              f"(selected: {aimed_label})")
                     elif k == "m" and edit_arm.mode != "map":
@@ -1377,13 +1208,9 @@ def main() -> int:  # noqa: PLR0915
                         print(edit_arm.axis_map.explain(edit_arm.frame))
                         print("\n  Push the puck one way at a time and watch the arm. If a direction is")
                         print("  wrong, press f. If a control should do something else, press 1-6.\n")
-                        if not rotation:
+                        if not drive.rotation:
                             print("  ⚠️  wrist rotation is OFF (r toggles) — ROLL/PITCH/YAW will not move.\n")
-                    # ⭐⭐ MODE KEYS APPLY TO EVERY SELECTED ARM, which is what `a` is for.
-                    # ⛔ `g` on two arms is 8.6 kg going weightless in one keypress, and GUIDE
-                    # is the mode where an error in the dynamics model becomes a FALLING arm
-                    # rather than a droop (FINDINGS §11.1). That is why the selector exists at
-                    # all, and why it starts on one arm rather than on BOTH.
+                    # Mode changes apply to all selected arms. The selector starts on one arm, including for GUIDE.
                     elif k == "g" and any(one.mode != "guide" for one in aimed):
                         hint("")
                         for one in aimed:
@@ -1411,11 +1238,7 @@ def main() -> int:  # noqa: PLR0915
                     elif k in MODE_KEYS:
                         # A repeated mode key reports the current mode without re-entering it or resetting state.
                         hint(f"already in {MODE_KEYS[k]}")
-                    # ⚠️ `w` and `l` REFUSED with two arms until 2026-08-14 night, because
-                    # `Trajectory` held one arm's joints and a two-arm demonstration would have
-                    # been saved as half of itself. The recorder now samples every arm into one
-                    # timeline, which is ABC's own shape (ROADMAP §9.2), so the refusal is gone
-                    # along with the test that pinned it.
+                    # Recording samples every arm into one shared timeline.
                     elif k == "k":
                         # Labels mark good/bad intervals for export; they never alter the motion.
                         if recording.active is None:
@@ -1551,17 +1374,9 @@ def main() -> int:  # noqa: PLR0915
                         for one in arms:
                             one.easing = EASINGS[ease_idx]
                         hint(ease_note(EASINGS[ease_idx].name, edit_arm.park_ramp))
-                    elif k == "r":
-                        rotation = not rotation
-                        hint(f"wrist rotation {'ON' if rotation else 'OFF'}")
-                    elif k == ".":
-                        angular_scale = min(MAX_ANGULAR_SCALE,
-                                            angular_scale * 1.25)
-                        hint(f"rotation speed {angular_scale:.2f} rad/s")
-                    elif k == ",":
-                        angular_scale = max(MIN_ANGULAR_SCALE,
-                                            angular_scale / 1.25)
-                        hint(f"rotation speed {angular_scale:.2f} rad/s")
+                    elif drive.handle(k, values=args, aimed=aimed,
+                                      scrub=playback.active is not None and playback.scrub):
+                        pass
                     elif k in "xyz":
                         # Flip the requested robot motion, independent of the current puck-axis permutation.
                         idx = "xyz".index(k)
@@ -1578,39 +1393,6 @@ def main() -> int:  # noqa: PLR0915
                         print(f"\n  arm {edit_arm.name}: "
                               f"{motions_for(edit_arm.frame)[idx]['short']} flipped → "
                               f"{edit_arm.axis_map.row(idx, edit_arm.frame).strip()}\n")
-                    elif k == "+" or k == "=":
-                        # Speed keys adjust park speed in PARK and cursor pace during scrub.
-                        # Scrub remains subject to replay lag gating and robot command limits.
-                        if playback.active is not None and playback.scrub:
-                            args.scrub_max = adjust_setting(
-                                "scrub_max", args.scrub_max, True)
-                            hint(f"scrub pace: full push = {args.scrub_max:g}x the "
-                                 f"recording's own speed")
-                        elif any(one.mode == "park" for one in aimed):
-                            for one in aimed:
-                                one.park_speed = min(args.teleop_speed,
-                                                     one.park_speed * 1.25)
-                            hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
-                        else:
-                            args.linear_scale = adjust_setting(
-                                "linear_scale", args.linear_scale, True)
-                            hint(f"linear speed {args.linear_scale:.3f} m/s"
-                                 + (" (ceiling)"
-                                    if args.linear_scale >= MAX_LINEAR_SCALE else ""))
-                    elif k == "-":
-                        if playback.active is not None and playback.scrub:
-                            args.scrub_max = adjust_setting(
-                                "scrub_max", args.scrub_max, False)
-                            hint(f"scrub pace: full push = {args.scrub_max:g}x the "
-                                 f"recording's own speed")
-                        elif any(one.mode == "park" for one in aimed):
-                            for one in aimed:
-                                one.park_speed = max(0.05, one.park_speed / 1.25)
-                            hint(f"park speed {edit_arm.park_speed:.2f} rad/s")
-                        else:
-                            args.linear_scale = adjust_setting(
-                                "linear_scale", args.linear_scale, False)
-                            hint(f"linear speed {args.linear_scale:.3f} m/s")
                     elif k == "?":
                         print(HELP)
                     elif k.isprintable() and k.strip():
@@ -1681,11 +1463,7 @@ def main() -> int:  # noqa: PLR0915
                         print("     Recording stopped; arm modes are unchanged. "
                               "The take is retained until you discard it.\n")
                     else:
-                        # ⚠️ A bound, because this grows in memory for as long as it runs and
-                        # nothing else would ever stop it. 100 000 samples is ~16 minutes at
-                        # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
-                        # wants (ROADMAP §9.3). Stopping and saying so beats running out of
-                        # memory in a process that is driving an arm.
+                        # Bound the in-memory take and report when sampling stops at the limit.
                         if len(recording.active) >= MAX_TAKE_SAMPLES:
                             # Freeze it the same way `w` does, or the limit would not be one.
                             recording.freeze()
@@ -1713,17 +1491,17 @@ def main() -> int:  # noqa: PLR0915
                                 one.last_input_kind = "axis"
                             drive_axes = isolated_axes(one.raw_axes, keep)
                             scale_l = args.linear_scale * CONTROLS_SCALE
-                            scale_a = angular_scale * CONTROLS_SCALE
+                            scale_a = drive.angular_scale * CONTROLS_SCALE
                         else:
                             drive_axes = one.raw_axes
-                            scale_l, scale_a = args.linear_scale, angular_scale
+                            scale_l, scale_a = args.linear_scale, drive.angular_scale
 
                         axes = one.axis_map.apply(drive_axes)
                         twist = np.array([
                             axes[0] * scale_l, axes[1] * scale_l, axes[2] * scale_l,
-                            axes[3] * scale_a if rotation else 0.0,
-                            axes[4] * scale_a if rotation else 0.0,
-                            axes[5] * scale_a if rotation else 0.0,
+                            axes[3] * scale_a if drive.rotation else 0.0,
+                            axes[4] * scale_a if drive.rotation else 0.0,
+                            axes[5] * scale_a if drive.rotation else 0.0,
                         ])
                         q_target = one.teleop.step(twist, dt)
 
@@ -1757,11 +1535,7 @@ def main() -> int:  # noqa: PLR0915
                         one.prev_q = q_target.copy()
 
                     elif one.mode == "mirror" and mirror.link is not None:
-                        # ⭐⭐ ONE ARM FOLLOWS THE OTHER. Every decision is `MirrorLink`'s
-                        # (18 tests, no robot handle); this branch reads the two poses,
-                        # carries the command out, and narrates. Same split as `replay_step`
-                        # and `ArmSession` — the code that commands an arm is the code that
-                        # cannot be tested without one, so it is kept as thin as possible.
+                        # MirrorLink calculates targets; this branch applies jaw constraints and commands the follower.
                         lead_q = np.asarray(mirror.leader.robot.get_joint_pos(), dtype=float)
                         follow_q = np.asarray(one.robot.get_joint_pos(), dtype=float)
                         cmd = mirror.link.step(lead_q, follow_q, real_dt)
@@ -1772,15 +1546,9 @@ def main() -> int:  # noqa: PLR0915
                             mirror.clear()
                         else:
                             full = np.asarray(cmd, dtype=float).copy()
-                            # ⛔ The jaws go through the clamp, never straight from the leader.
-                            # A leader whose jaws rest on a stop would otherwise drive the
-                            # follower's onto its own stop and HOLD there, which is stall
-                            # torque and is how motor 7 was cooked three times (FINDINGS §4).
+                            # Clamp copied jaws away from hard stops before commanding the follower.
                             if one.robot.num_dofs() > N_ARM and len(full) > N_ARM:
-                                # ⛔⭐ THROUGH THE LATCH, so a stalled follower stops being
-                                # pushed further closed by the leader every cycle. Opening
-                                # clears it, so letting go of the leader's jaws frees the
-                                # follower's immediately.
+                                # Use the stall latch too: further closing stays blocked until an opening command clears it.
                                 full[N_ARM] = clamp_gripper(
                                     one.hold_jaw(float(full[N_ARM])))
                             one.robot.command_joint_pos(full)
@@ -1809,11 +1577,7 @@ def main() -> int:  # noqa: PLR0915
                                      " — as close as the arm holds itself under load")
                             one.enter_hold()
                             hint("")    # the progress readout has nothing left to say
-                            # ⭐ Total and settling answer different questions: the total
-                            # is what speed/corner/ease tuning changes, and the settling
-                            # is how long the arm closed the last gap after the commanded
-                            # path ran out. The class stamps both from the right clocks —
-                            # park_start_t, NOT park_leg_t, for the total (FINDINGS §34.3).
+                            # Report total path time separately from settling after the command path ends.
                             tail = (f", {ps.settling_seconds:.1f}s of that settling"
                                     if 0.05 < ps.settling_seconds < ps.total_seconds - 0.05
                                     else "")
@@ -1824,22 +1588,12 @@ def main() -> int:  # noqa: PLR0915
                             # Capture the completed park's purpose before advancing the composite queue.
                             # A previous leg's arrival cannot satisfy the next leg's park-to-start gate.
                             arrived_purpose = park_purpose.pop(one.name, "operator")
-                            # ⭐ Composite (ROADMAP §6.6.1a): a pose-leg's park arrived.
-                            # The leg is done when EVERY awaited arm has arrived; only
-                            # then does the queue advance — in the ARRIVAL branch, never
-                            # a key branch, which is the §57.1 rule.
+                            # Advance composite pose legs only after every awaited arm has arrived.
                             composite.arrived(one.name)
-                            # ⭐ The handover from "drive to the start pose" to "play the
-                            # recording" lives HERE, in the arrival branch, so a park that
-                            # was blocked or interrupted can never roll into a playback:
-                            # only a park that actually arrived does — and only a park that
-                            # was FOR the playback (`arrived_purpose`), never a pose leg's.
+                            # Only a completed park for replay may hand over to playback; blocked/interrupted parks cannot.
                             if (playback.pending is not None and one in playback.arms
                                     and arrived_purpose == "replay"):
-                                # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each one
-                                # parks a different distance and finishes at a different
-                                # moment; starting on the first arrival would have the
-                                # second arm still parking while the recording ran.
+                                # Wait for every playback arm to reach its start before advancing the shared cursor.
                                 waiting = playback.credit_arrival(one.name, arrived_purpose)
                                 off_start = []
                                 if not waiting:
@@ -1890,17 +1644,10 @@ def main() -> int:  # noqa: PLR0915
                                               f"at {playback.speed:.2f}x. "
                                               f"Press h or t to stop.\n")
                         elif ps.verdict == "jaws":
-                            # ⭐⭐ THE JAW PAUSE (items 3 + 10): the run split at a
-                            # waypoint where only the jaws move. The class holds the arm,
-                            # drives the jaws and measures when they are done; this
-                            # branch only says what is happening, so a pause never reads
-                            # as a stall.
+                            # ArmSession handles the jaw pause; show its progress so the pause does not look like a stall.
                             if ps.jaw_started:
                                 hint("")
-                                # ⭐ The settled offset is the miss-diagnosis number: at
-                                # the friction floor (~0.02-0.04 rad) a missed grab means
-                                # the POSE was taught off; well above it, the arm never
-                                # got there (FINDINGS §70.5).
+                                # Report settled joint offset; interpretation also needs pose and physical-condition evidence.
                                 print(f"\n  ⏸ {ps.jaw_name}: only the jaws move (arm "
                                       f"settled {ps.jaw_arm_off:.3f} rad off) — going "
                                       f"to {ps.jaw_target:.2f} and waiting for them to "
@@ -1910,10 +1657,7 @@ def main() -> int:  # noqa: PLR0915
                                         if ps.jaw_timed_out else "")
                                 print(f"  ⭐ jaws done in {ps.jaw_seconds:.1f}s{note}"
                                       + (f" → next {ps.next_leg}" if ps.next_leg else ""))
-                                # ⭐ item 10: `check_grasp` grades a CLOSING leg from
-                                # where the jaws stopped. It stays silent when it cannot
-                                # know (an opening leg, a timeout) — `confident` is the
-                                # gate, and printing a guess would be the §0 pattern.
+                                # Report grasp grading only when the evaluator is confident; opening/timeouts cannot establish it.
                                 if ps.grasp is not None and ps.grasp.confident:
                                     if ps.grasp.holding:
                                         print("     ✋ holding something — the jaws "
@@ -1926,10 +1670,7 @@ def main() -> int:  # noqa: PLR0915
                                 next_park_report = t + 1.0
                                 hint(f"  ⏸ waiting for the jaws… {ps.jaw_seconds:.1f}s")
                         else:
-                            # ⛔ BLOCKED. Never spin silently: say so and hold. The wording
-                            # keeps the old two shapes — mid-path (the arm stopped
-                            # following) and at the end (it stopped closing) — decided by
-                            # the remaining path, which the ParkStep carries.
+                            # On blocked motion, hold and report whether it failed during the path or while closing the final gap.
                             one.enter_hold()
                             hint("")
                             composite.abandon("a park leg was blocked")
@@ -1955,17 +1696,10 @@ def main() -> int:  # noqa: PLR0915
                     # even if `--arms` was given the other way round.
                     measured = np.concatenate([
                         np.asarray(a.robot.get_joint_pos(), dtype=float) for a in playback.arms])
-                    # ⛔ The grippers are left out of the "is it keeping up" check by INDEX,
-                    # because with two arms the first gripper sits in the middle of the
-                    # vector. Jaws legitimately sit far from their commanded value while
-                    # closing on an object, and counting that as lag would stall every
-                    # playback that grips anything.
+                    # Exclude each gripper by layout index from lag gating: gripping an object legitimately creates jaw error.
                     defl = 0.0
                     if playback.scrub:
-                        # ⭐ SCRUB: the puck is the clock. EITHER puck works — during
-                        # playback nobody's hand is driving an arm, so whichever hand is
-                        # free is the deadman. The forward/back axis (index 1) is the
-                        # natural "push to play" gesture; largest deflection wins.
+                        # Either puck may scrub the shared clock; strongest forward/back deflection wins.
                         for a2 in arms:
                             ax = getattr(a2, "raw_axes", None)
                             if ax and abs(ax[1]) > abs(defl):
@@ -1980,10 +1714,7 @@ def main() -> int:  # noqa: PLR0915
                         n_j = min(N_ARM, len(piece))
                         full[:n_j] = piece[:n_j]
                         if a.robot.num_dofs() > N_ARM and len(piece) > N_ARM:
-                            # ⛔ Through the clamp, never straight from the file. A recording
-                            # made while the jaws rested on a stop would otherwise drive them
-                            # back onto it and HOLD there. That is stall torque, and it is how
-                            # motor 7 was cooked three times (FINDINGS §4).
+                            # Clamp recorded jaws away from hard stops before commanding them.
                             full[N_ARM] = clamp_gripper(float(piece[N_ARM]))
                         a.robot.command_joint_pos(full)
                         a.prev_q = full[:N_ARM].copy()
@@ -1998,11 +1729,7 @@ def main() -> int:  # noqa: PLR0915
                         print(f"⭐ PLAYBACK finished in {elapsed:.1f}s → HOLD")
                         print(f"     {planned:.1f}s of movement at {playback.speed:.2f}x, "
                               f"plus {playback.held_seconds:.1f}s waiting for the arm to catch up.")
-                        # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
-                        # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
-                        # was the loop running below 100 Hz while the cursor advanced in
-                        # nominal time. That is fixed, and this check stays so a future
-                        # version cannot reintroduce it silently.
+                        # Reconcile elapsed replay time with cursor progression and held time to expose clock drift.
                         unaccounted = elapsed - planned - playback.held_seconds
                         if abs(unaccounted) > 0.15 + 0.05 * elapsed:
                             print(f"     ⚠️  {unaccounted:+.1f}s is unaccounted for. The loop "
@@ -2062,10 +1789,7 @@ def main() -> int:  # noqa: PLR0915
                         playback.finish()
                         composite.leg_done()
                     elif t - playback.progress_at > PARK_STALL_SECONDS:
-                        # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
-                        # and wrong for ever: an arm that cannot catch up is blocked, and a
-                        # playback that sits silently holding its clock is the treadmill
-                        # bug again (FINDINGS §24). Same patience the park uses.
+                        # Bound no-progress time: hold blocked playback and abandon its composite queue.
                         for a in playback.arms:
                             a.enter_hold()
                         hint("")
@@ -2104,8 +1828,8 @@ def main() -> int:  # noqa: PLR0915
                 if wizard is not None:
                     # Keep the wizard reference separate from acquisition state. Display both speed scales.
                     speeds = (f"lin {args.linear_scale * CONTROLS_SCALE:.3f} m/s  "
-                              f"rot {np.degrees(angular_scale * CONTROLS_SCALE):.0f}°/s"
-                              f"{'' if rotation else ' (OFF)'}")
+                              f"rot {np.degrees(drive.angular_scale * CONTROLS_SCALE):.0f}°/s"
+                              f"{'' if drive.rotation else ' (OFF)'}")
                     if wizard.last_active_axis is None:
                         print(f"\r[CONTROLS] push the puck …  {axes_readout(wizard.raw_axes)}  {speeds}   ",
                               end="", flush=True)
@@ -2116,7 +1840,7 @@ def main() -> int:  # noqa: PLR0915
                         else:
                             v = wizard.axis_map.apply(isolated_axes(wizard.raw_axes, wizard.last_active_axis))[drv]
                             unit = (f"{v * args.linear_scale * CONTROLS_SCALE:+.3f} m/s" if drv < 3
-                                    else f"{np.degrees(v * angular_scale * CONTROLS_SCALE):+.1f}°/s")
+                                    else f"{np.degrees(v * drive.angular_scale * CONTROLS_SCALE):+.1f}°/s")
                             doing = f"→ {motions_for(wizard.frame)[drv]['short']} {unit}"
                         print(f"\r[CONTROLS] puck {PUCK_AXES[wizard.last_active_axis]:<5} "
                               f"{wizard.last_active_value:+.2f}  {doing:<28} {speeds}"
@@ -2125,10 +1849,7 @@ def main() -> int:  # noqa: PLR0915
                     next_report += 1.0
                     # Render every arm; only the first row carries the shared clock and recording state.
                     lead = f" t={t:6.1f}s"
-                    # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT, not only in the
-                    # message that started it. A session where recording is silently still
-                    # running produces a demonstration full of whatever happened next, and
-                    # the operator finds out at training time.
+                    # Show active recording and its elapsed time on every heartbeat.
                     if recording.active is not None:
                         lead += f"  ⏺ REC {t - recording.started_at:5.1f}s"
                     # ⭐ THE LOOP RATE, because it was 87 Hz for a whole session and nothing
@@ -2137,14 +1858,10 @@ def main() -> int:  # noqa: PLR0915
                     if loop_hz < 0.92 * CONTROL_HZ:
                         lead += f"  ⚠️{loop_hz:3.0f}Hz"
                     pad = " " * display_width(lead)
+                    snapshots = capture_status(arms, args.reach, args.floor, mirror)
                     screen.set_rows([
-                        status_row(one, lead if i == 0 else pad, args.reach, args.floor,
-                                   note=(mirror.link.status(
-                                       mirror.leader.robot.get_joint_pos(),
-                                       one.robot.get_joint_pos())
-                                       if mirror.link is not None and one.mode == "mirror"
-                                       else ""))
-                        for i, one in enumerate(arms)])
+                        status_row(snapshot, lead if i == 0 else pad)
+                        for i, snapshot in enumerate(snapshots)])
 
                 time.sleep(max(0.0, dt - (time.perf_counter() - loop_start)))
 
@@ -2234,11 +1951,7 @@ def main() -> int:  # noqa: PLR0915
     # the thermal lines above, expressed as a loop that does not run rather than as an
     # `if`. That is why `arms` is declared before the `try` (FINDINGS §48.3).
     for one in arms:
-        # ⛔ BOTH lines print in the SAME frame, and the frame is NAMED. This summary once
-        # printed the current map in the frame the arm ENDED in (camera) against a `was:`
-        # line in world labels — different motion names for the same store — and it read
-        # as a scrambled, saved map. Verifying that nothing was actually written cost real
-        # bench time, twice (FINDINGS §66.2, ROADMAP §8.2 item 45).
+        # Compare initial and final maps in the same named frame so labels cannot imply a false change.
         print(f"axis map {one.name} ({one.frame} frame): {one.axis_map.one_line(one.frame)}")
         if one.axis_map != one.axis_map_at_start:
             print(f"     was: {one.axis_map_at_start.one_line(one.frame)}")

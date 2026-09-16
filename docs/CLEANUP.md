@@ -2,11 +2,33 @@
 
 Updated September 16, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings, park, recording-save and playback prompts now own their key transitions. Startup plan formatting, acquired-device cleanup, incident-field assembly and command-line definitions are separate. Controls mapping edits, mirror confirmation, input polling and health checks also have owners. The application retains cross-mode key dispatch, startup assembly and the ordered motion-command cycle. Read-only recovery inspection is available; current source contracts replace another set of historical ArmSession notes.
+## Current status
 
-## Status
+The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
+`499d0b7`. No user answer or technical unblock is needed for this completed pass.
+The [work queue](WORK_QUEUE.md) records each resolved item; the
+[architecture review](RESTRUCTURING.md) explains both extracted and retained code.
+The implementation history below preserves earlier checkpoints and their limits;
+its older counts and "incomplete" statements are dated evidence, not current status.
 
-The reviewed local cleanup is saved on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park/recording/playback prompt ownership, startup plan formatting, acquired-device cleanup, incident assembly, CLI definitions, controls mapping edits, mirror coordination, input polling, health checks and recovery inspection. Current validation passes 1064/1064 checks across 68 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+| Area | Current result |
+| --- | --- |
+| Operator structure | 1,974 lines, down from 2,261 before this pass. Shared speed/rotation policy now has one owner; startup and ordered motion coordination remain explicit. |
+| Core source explanations | robot.py 1,078 → 673 lines; recording.py 803 → 615. Executable AST unchanged in these prose passes. Historical explanations archived verbatim; current contracts corrected. |
+| Status display | Both settings and heartbeat acquire detached snapshots; rendering has no robot handle. Mirror status reuses displayed poses. |
+| Local verification | 1,075/1,075 checks in 70 files; 71/71 falsifier catches; 32/32 isolated simulator interactions. CLI, structural, flag and documentation checks pass. |
+| Preservation / remaining decisions | All 3,455 original recording files unchanged. No hardware operation, station connection or remote publication in this pass. Those actions require a separate operating/publication decision. |
+
+The normal simulated operator starts from the repository root with:
+
+```sh
+./teleop --sim --arms B,G --start-mode hold --yes
+```
+
+This uses still simulated pucks: keys exercise modes, poses, recording and replay;
+it is not a graphical simulator or a substitute for measured physical validation.
+`?` shows keys and `q` opens the stop menu. The full automated interaction driver
+must run in a disposable copy, because it writes test slots and configuration.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -81,7 +103,7 @@ The dedicated root launcher `./teleop` uses Python 3.12 and `.venv-teleop`, leav
 
 Both camera factories now own captures immediately and close partially started readers after failure. FrameSink also stops writers already started if a later writer cannot start. Teardown attempts all readers/writers even when one fails, reporting the collected failures. Device-reader release runs even when joining its thread fails.
 
-The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. The later camera and replay extractions are described below; terminal coordination remains. Per-take camera ownership and completion validation are implemented in the continuation below. The architectural cleanup is still incomplete.
+The shared trajectory lifecycle and slot persistence are now extracted, as detailed below. The later camera and replay extractions are described below; terminal coordination remains. Per-take camera ownership and completion validation are implemented in the continuation below. At that earlier checkpoint, the architectural cleanup was still incomplete; subsequent sections record the resolved boundaries.
 
 ## Decisions still reserved for the operator
 
@@ -389,4 +411,135 @@ SettingsPanel now catches only filesystem errors from its save callback, reports
 
 Two actual-application tests inject settings/pose save failures and verify subsequent live cycles, retry, no false success, and unchanged prior base poses/files. The initial settings test fixture incorrectly assumed a defaults file existed; it was corrected to create a temporary one, and the old SettingsPanel from `190070e` then reproduced the real failure with the injected error confirmed. The pose test reproduced the existing failure directly. Six file-publication tests cover serialization, partial writes, replacement failure, interruption, permissions and symlink semantics. The old settings-panel unit test expected propagation; it now checks containment and a successful retry.
 
-Current validation: 1,064/1,064 checks across 68 files. The isolated simulator passes 32/32, falsifiers catch 71/71, structural/flag/link/prose checks pass, 12 CLI outputs and exit codes match the earlier baseline, and all 3,455 original recording hashes remain unchanged. The completed queue records the scope and design disposition. Local evidence uses `agents/codex/validation/continuation-*`, `config-failure-before.txt` and `config-settings-before-corrected.txt`. The first settings fixture failure is not evidence of a production defect; the corrected reproduction is.
+At checkpoint `216fda0`: 1,064/1,064 checks across 68 files. The isolated simulator passes 32/32, falsifiers catch 71/71, structural/flag/link/prose checks pass, 12 CLI outputs and exit codes match the earlier baseline, and all 3,455 original recording hashes remain unchanged. The completed queue records the scope and design disposition. Local evidence uses `agents/codex/validation/continuation-*`, `config-failure-before.txt` and `config-settings-before-corrected.txt`. The first settings fixture failure is not evidence of a production defect; the corrected reproduction is.
+
+
+## Broader review close-out — September 16, 2026
+
+### Source contracts now follow the implementation
+
+The full executable bodies of robot.py and recording.py were reviewed before
+rewriting their long explanations. Removed material is verbatim in
+[robot notes](archive/robot-source-notes.md) and
+[recording notes](archive/recording-source-notes.md), marked as historical.
+Twenty-five robot passages and fifteen recording passages were replaced by current
+contracts. Executable AST comparison, excluding docstrings, found no change.
+Fifty further operator comment/docstring passages were similarly archived in
+[operator notes](archive/teleop-source-notes.md), with a separate AST equivalence
+check after the behavioral extractions. This proof applies to the prose passes;
+it does not claim the status/drive extractions changed no code.
+
+Concrete corrections include: robot construction uses a platform CAN backend;
+with_gripper defaults to true; ambiguous gripper-frame fits are refused; shutdown
+requests the chain to stop and waits briefly, rather than proving a joined thread
+or physical de-energization. Recording export is implemented in yam.dataset and
+yam.episode, not deferred. Live samples are measured poses, while the container
+itself accepts caller-supplied tuples and export actions are inferred next states.
+Trajectory load/from_dict does not run append validation. Replay cursor completion
+is not proof of measured arrival. These are clarified contracts, not newly added
+validation or changes to hardware policy.
+
+Robot construction/command constraints/thermal and park helpers remain in robot.py:
+its executable body is about 400 lines, and no duplicated caller policy or ownership
+failure demonstrated a need to split it further. Recording's data model, layout,
+interpolation, cursor decisions and tracking calculations likewise remain together;
+acquisition/writers, publication and replay-session coordination already have
+separate owners. The smaller source now exposes that existing separation. This is
+a reason to retain these boundaries, not a claim they can never evolve.
+
+### Display acquisition and pure rendering
+
+[session_snapshot.py](../src/yam/session_snapshot.py) captures measured joints once
+per arm, cached temperatures, copied GUIDE reference and solver diagnostics. It
+reads solver end-effector position and lead once each. Frozen records contain only
+values; array-backed inputs are copied to tuples. The end-effector location remains
+the solver's estimate, not an additional physical sensor measurement. Mirror
+status is calculated from those same captured leader/follower joint tuples.
+
+[session_status.py](../src/yam/ui/session_status.py) now only formats those records.
+Both actual application callers, settings updates and periodic heartbeat, acquire
+before formatting. This is a sequential display snapshot, not a cycle-wide atomic
+measurement. Fresh health/control reads remain in place. Read failures still
+propagate to the existing application fault cleanup; the former prose claiming a
+local display exception handler was false and has been corrected. The old renderer
+and its incident rationale are in [status notes](archive/status-source-notes.md).
+Requested replay speeds remain distinct from encoder-derived lag measurements.
+
+Five new tests verify detached values, frozen records, copied GUIDE reference,
+exact read counts including mirror reuse, both actual application callers, and
+fault status plus both shutdown calls after a display acquisition error. Existing
+fourteen content tests and tracking-table tests remain. A fixture initially patched
+the wrong module for shutdown; it now patches the callback supplied by the app.
+
+### One speed/rotation policy, explicit cross-mode precedence
+
+[DriveControls](../src/yam/ui/drive_controls.py) owns rotation enablement and angular
+scale, and handles r/comma/period/minus/plus/equals. It changes requested rates;
+it never commands joints or changes robot safety limits. Linear/scrub values remain
+in the existing live settings namespace, so panel edits cannot leave a stale copy.
+The linear ceiling comes from the settings bounds; an unused older 0.005 constant
+was removed, without changing the actual 0.03 lower bound used by adjust().
+
+Normal operation preserves this priority: scrub cursor pace, then park speed if any
+selected arm is parking, otherwise linear speed. Park-speed changes still affect
+all selected arms, including mixed modes. CONTROLS always adjusts linear speed.
+Angular limits and messages are unchanged. Pending prompts and mapping edits keep
+their earlier key priority. The application uses this same owner's rotation and
+angular values when constructing twists for the solver. Prior branches and their
+notes are in [drive-control notes](archive/drive-control-source-notes.md).
+
+Six tests exercise priority, bounds, shared state, unhandled keys, both real caller
+paths and nonzero simulated puck input reaching the real solver: rotation off
+zeros angular twist, and re-enabling after an increase scales it by 1.25. No
+physical input is opened. The first suite exposed a test's obsolete app-level
+adjust_setting import and a new test's incorrect assumption that ladder adjustments
+are reversible from a value between rungs; both fixtures were corrected. The
+production ladder policy was preserved, not changed to satisfy the tests.
+
+### Why the operator still has substantial code
+
+The application still contains the plan/startup sequence, shutdown parking routine,
+prompt precedence and mode dispatch, per-arm command execution, shared replay
+arrival gates, reporting and final cleanup. Startup must register a returned handle
+before configuring or reading it, distinguish acquired handles from completed
+ArmSessions, and preserve camera/input/robot acquisition order. SessionResources
+already owns cleanup; another startup manager would duplicate that ownership or
+hide partial-acquisition ordering without removing a demonstrated responsibility.
+
+The loop coordinates independent arms against one recording/replay timeline.
+Selection affects edits; all active modes continue stepping. Pending prompts must
+consume keys before ordinary dispatch. Composite arrival must retain its completed
+purpose before advancing the next leg; all replay arms must arrive before starting
+the common cursor. These ordering constraints are tested through the real app.
+Keeping this coordination visible is deliberate. The 1,974-line file is still
+large, with main spanning roughly 1,500 lines; this pass does not call it an ideal
+minimal entry point. A future runtime split should first specify a command-cycle
+interface and failure/measurement semantics, rather than move the same loop into a
+class carrying all its mutable state. There is no identified missing owner in this
+review being concealed by calling it future work: the concrete duplicated knobs
+and display reads were extracted now.
+
+### Final evidence and continuation boundary
+
+Final suite: 1,075/1,075 checks across 70 files (previous checkpoint 1,064/68).
+Falsifiers: 71/71 across five scripts. Disposable simulation: 32/32 interactions.
+Twelve CLI stdout/stderr/exit comparisons match the saved baseline. Structural,
+flag, link and prose checks pass with unchanged prose ceilings. All 3,455 original
+recording files match the saved sizes and SHA-256 hashes; no calibration/config
+file changed. Original Fable/training refs and environments remain preserved.
+
+Ignored local evidence is under agents/codex/validation/broader-*: tests,
+falsifiers, simulator and disposable-copy path, CLI comparison, checker outputs,
+prose equivalence and preservation JSON. The simulator completed before the final
+removal of unused bound imports/constants; that cleanup was covered by the final
+suite. The command policy and runtime values exercised by simulation are unchanged.
+Logs are local evidence, not committed project documentation.
+
+All four items of the broader review are resolved in WORK_QUEUE. This turn ends
+after verification and a local commit, not at the first green intermediate test.
+No background task, automatic wakeup or new task was created. Persistent AGENTS
+instructions require continuing unfinished authorized work, but do not guarantee
+resumption after an app interruption or usage limit. The remaining station timing,
+real-device behavior and team publication require their own decisions and resources;
+none is a blocker used to defer local code cleanup. No request to operate hardware
+or push remotely is inferred from permission to clean up locally.

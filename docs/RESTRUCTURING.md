@@ -6,7 +6,26 @@ Implemented since the review: recording completion, corrected interfaces, shared
 
 Explicit controls mapping edits, mirror confirmation, input polling and health checking are also extracted. Read-only recording recovery inspection is implemented. Cross-mode dispatch, startup assembly and ordered motion commands remain in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
 
-## Decision
+## September 16 broader review disposition
+
+The original review below is historical. Its concrete ownership/failure-path
+items are implemented, including shared export-slot resolution and contained live
+configuration-save failures. The broader continuation also separated display
+acquisition from pure rendering, extracted shared speed/rotation controls and
+rewrote robot/recording/operator contracts against the actual code.
+
+The remaining operator has 1,974 lines. It keeps ordered acquisition, key precedence,
+per-arm command execution and common replay arrival gates visible. Moving those
+into one state-heavy runtime class would relocate the coupling; a further split
+needs an explicit cycle/command contract. This is not a claim that the entry point
+is already small or that no future refactor could help. The current pass has no
+unresolved concrete boundary or demonstrated failure deferred for another prompt.
+See [the close-out](CLEANUP.md#broader-review-close-out--september-16-2026) for specific
+retention reasons, test evidence and limitations, and [WORK_QUEUE](WORK_QUEUE.md)
+for all four completed review items. Physical validation and publication remain
+separate decisions.
+
+## Original September 15 decision
 
 Continue with a staged restructuring across the operator, recording and camera code. The operator still holds too many independent responsibilities. Moving its remaining comments alone would leave a large, tightly coupled program.
 

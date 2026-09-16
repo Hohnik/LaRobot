@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from yam.recording import Trajectory
+from yam.settings import adjust
 import yam.incident as incident_module
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('recording_failure_app', ROOT / 'apps/teleop_session.py')
@@ -389,7 +390,7 @@ def test_settings_changes_and_revert_reach_both_live_robots():
         if number == 1:
             initial['speed'] = arms[0].robot.max_speed
         elif number == 2:
-            expected = app.adjust_setting('max_speed', initial['speed'], True)
+            expected = adjust('max_speed', initial['speed'], True)
             assert all(a.robot.max_speed == expected for a in arms)
             observed.append('changed')
         elif number == 4:

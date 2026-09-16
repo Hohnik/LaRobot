@@ -2055,3 +2055,513 @@ Historical explanations moved during the resource/reporting continuation after `
                     # doing nothing here because only the active axis's resulting speed
                     # was displayed — a missing key looked identical to a key that worked.
 ```
+
+
+## Broader September review: remaining operator notes
+
+Verbatim excerpts before this prose pass, after the status/drive-control extractions.
+Line numbers are historical. Several claims were obsolete; read current source contracts.
+
+### Former operator line 25
+
+```text
+# ⚠️ `Any` was used in this file's annotations since long before this import existed, and
+# it worked only because `from __future__ import annotations` never evaluates them. A real
+# import is needed the moment it appears on a variable inside `main()`, because
+# `checks/check_restructure.py` check 4 resolves every name used there.
+```
+
+### Former operator line 144
+
+```text
+# Faster than the first run, which Julien found "very slow". Still well short of
+# what the hardware can do — this is a human-in-the-loop speed, not a limit.
+# ⭐ Defined in src/yam/inputs/axis_map.py so `apps/map_axes.py` reports the exact speeds
+# this session commands. Dialling a mapping against speeds the arm does not use
+# would teach the wrong feel.
+```
+
+### Former operator line 152
+
+```text
+# ⚠️ `WORKSPACE_BOX = 0.30` used to live here. The workspace limit is now
+# `REACH_LIMIT` and `FLOOR_LIMIT` in `src/yam/teleop.py`, next to the code that applies
+# them, because the old constant sat in the script while the clamp it fed was an
+# untested inline block. FINDINGS §43.
+```
+
+### Former operator line 164
+
+```text
+# ⭐ Ease in and out over this much joint travel. A constant-rate park starts and
+# stops with a jerk; with sequences that jerk lands at every waypoint. 0.20 rad is
+# ~half a second of ramp at the default 0.4 rad/s, and a move shorter than twice it
+# simply never reaches full speed. `--no-smooth` sets it to 0.
+```
+
+### Former operator line 169
+
+```text
+# ⭐ How much the path may cut a corner, in radians of the fastest joint. `sharp`
+# reproduces the old stop-at-every-waypoint behaviour exactly. Julien's words for what
+# the others are for: *"instead of moving and then jittering ninety degrees to the next
+# side, in a smooth curve it would go to the next point."*
+```
+
+### Former operator line 211
+
+```text
+# Hold-to-move rate for the puck buttons. A gripper wants squeeze-and-hold, not a
+# staircase of keypresses. 0.6/s crosses the whole normalised stroke in ~1.6 s,
+# which is deliberate and slow: the jaws close on real objects, and the stall guard
+# should be a backstop rather than the thing that routinely stops you.
+```
+
+### Former operator line 217
+
+```text
+# Gripper stall guard. Catches the CAUSE (jaws pushing against something they
+# cannot move) rather than the symptom (temperature). Torque high while velocity
+# is ~0 is the definition of a stall, and stall is the worst thermal case there
+# is: full current, no motion, no cooling.
+```
+
+### Former operator line 236
+
+```text
+# ⚠️ How long one recording may run before it stops itself. ~16 minutes at 100 Hz, which
+# is well past the ~4.5 minutes of context a long-horizon policy wants (ROADMAP §9.3).
+# It exists because nothing else would ever stop a recording, and an unbounded list in a
+# process that is driving an arm is a memory problem waiting for the worst moment.
+```
+
+### Former operator line 413
+
+```text
+    # ⛔ DISCARD ANYTHING TYPED BEFORE THIS MOVE EXISTED. "Any key stops it" must mean a
+    # key pressed *at* the moving arm, not one left over from teleop or from the menu that
+    # led here. Julien saw a park announce itself and stop in the same breath — the stale
+    # keystroke that cancelled it had been typed seconds earlier.
+```
+
+### Former operator line 516
+
+```text
+    # ⭐⭐ THE LIST OF ARMS THIS SESSION DRIVES. ROADMAP §6.1 step 2.
+    #
+    # ⚠️ `arm_names[0]` appears below wherever a line still assumes one arm, on purpose:
+    # each one marks a site step 2's remaining work has to turn into a loop, and it is
+    # greppable. Sites that run after the object exists use `arm.name` instead.
+```
+
+### Former operator line 604
+
+```text
+    # ⭐⭐ SAY WHICH SETTINGS CAME FROM THE FILE, AND FLAG A PERMANENT LOOSENING. A flag
+    # typed on the command line is visible in the shell history and on screen; a saved
+    # default is not. ⛔ Without these lines a session could run at three times the built-in
+    # speed limit with nothing on screen explaining why.
+```
+
+### Former operator line 704
+
+```text
+        # ⚠️ `gripper_value` and `stall_since` used to be initialised here. They are now
+        # `ArmSession` fields, and the class's own constructor sets exactly the same values
+        # (0.0 and None). ⛔ Leaving the assignments here as `arm.gripper_value = 0.0` would
+        # run BEFORE `arm` exists, which is nine lines below inside the `try`. See the
+        # ordering check in checks/check_restructure.py.
+```
+
+### Former operator line 742
+
+```text
+                # ⭐⭐ THE WHOLE POINT OF --sim, AND IT IS ONE BRANCH ON PURPOSE. Everything
+                # below this line is the same code in both modes, so a simulated session
+                # exercises the real loop rather than a parallel one. `build_fake_robot`
+                # returns the same `(robot, note)` tuple for exactly that reason.
+```
+
+### Former operator line 779
+
+```text
+        # ⛔ Mode keys are AIMED; driving never is. A global `g` would put 8.6 kg weightless
+        # in arm keypress, and GUIDE is where a dynamics-model error becomes a falling arm
+        # rather than a droop (FINDINGS §11.1). Each arm always follows its own puck.
+        # `src/yam/session.py::ArmSelector` holds the cycle and its tests.
+```
+
+### Former operator line 801
+
+```text
+        # ⭐ enter_hold lives on ArmSession now (item 23 group ①, 2026-08-18): the class
+        # method resyncs, commands the measured pose AND sets mode="hold" — so the two
+        # sites that want a DIFFERENT mode afterwards (the park seed, the mirror engage)
+        # write their mode AFTER the call. The script's own copy is gone.
+```
+
+### Former operator line 806
+
+```text
+        # ⭐ enter_guide lives on ArmSession now (item 23 group ②, 2026-08-18). The class
+        # method records guide_ref, sets mode="guide" and RETURNS the "NOT weightless"
+        # warning instead of printing it — every caller prints the return, so the
+        # warning that once explained a falling arm (FINDINGS §11) cannot be dropped.
+        # The kp=0 physics and the API-name history live in the class docstring.
+```
+
+### Former operator line 843
+
+```text
+            # ⭐ A grab is visible BEFORE Enter (ROADMAP §6.6.2 item 4): a leg where only
+            # the jaws move splits the run and pauses it, and the count says so here,
+            # while the sequence is still being typed.
+            # ⚠️ Take legs (`w<digit>`, ROADMAP §6.6.1a) are counted separately: their
+            # jaw motion is whatever the hand taught, so no stop-counting applies.
+```
+
+### Former operator line 884
+
+```text
+            # ⭐ Same rule one level up (ROADMAP §6.6.1a trap ①): a park the COMPOSITE did
+            # not start replaces the composite. Its own pose legs pass for_composite=True
+            # and its take legs pass for_replay=True, so only operator-initiated parks
+            # land here — which is exactly who may abandon a queued run.
+```
+
+### Former operator line 890
+
+```text
+            # ⭐ item 23 group ④: the CLASS builds and runs the park now — the tested
+            # `begin_path`/`step_path` pair with its 48 tests is finally the code that
+            # moves the arm. The session's live dials are copied on at start, and the
+            # `e` key keeps `easing` current mid-park.
+```
+
+### Former operator line 1004
+
+```text
+                # ⚠️ GUIDE at startup is established by build_robot(zero_gravity=True), not
+                # by enter_guide() — so the drift reference has to be taken here too, or the
+                # readout silently shows nothing for the whole first GUIDE period. That gap
+                # is exactly the 33 seconds in which the arm sank unremarked on 2026-08-10.
+```
+
+### Former operator line 1137
+
+```text
+                        # ⭐ SPEED AND CORNERS ADJUSTABLE WHILE TYPING, not only while
+                        # moving. Julien: *"I can change the park speeds whilst it's
+                        # parking, but not whilst I'm putting in the numbers, which is
+                        # a bit annoying."* Deciding how a move should feel belongs to
+                        # the moment you are choosing the move.
+```
+
+### Former operator line 1255
+
+```text
+                        # ⭐ Cycle which frame the puck's directions mean. Safe to do
+                        # live: the twist is a VELOCITY, so a frame change alters the
+                        # interpretation from the next cycle onward and leaves no
+                        # stale cached state behind — unlike a mode change, which is
+                        # why this does not need resync().
+```
+
+### Former operator line 1318
+
+```text
+                    # ⛔ Unrecognised keys are IGNORED. They used to fall through to a
+                    # catch-all that cancelled PARK, so pressing Enter out of habit
+                    # right after `p` killed the move in the same keyboard batch --
+                    # which looked exactly like "park just went to hold". A control
+                    # character must never be an action.
+```
+
+### Former operator line 1326
+
+```text
+                        # ⛔ CONTROLS EDITS ONE MAP FROM ONE WIGGLE, so it cannot be aimed at
+                        # two arms. Refused rather than silently applied to the first: the
+                        # operator who selected BOTH and pressed `m` asked for something this
+                        # wizard has no meaning for.
+```
+
+### Former operator line 1347
+
+```text
+                    # ⭐⭐ MODE KEYS APPLY TO EVERY SELECTED ARM, which is what `a` is for.
+                    # ⛔ `g` on two arms is 8.6 kg going weightless in one keypress, and GUIDE
+                    # is the mode where an error in the dynamics model becomes a FALLING arm
+                    # rather than a droop (FINDINGS §11.1). That is why the selector exists at
+                    # all, and why it starts on one arm rather than on BOTH.
+```
+
+### Former operator line 1379
+
+```text
+                    # ⚠️ `w` and `l` REFUSED with two arms until 2026-08-14 night, because
+                    # `Trajectory` held one arm's joints and a two-arm demonstration would have
+                    # been saved as half of itself. The recorder now samples every arm into one
+                    # timeline, which is ABC's own shape (ROADMAP §9.2), so the refusal is gone
+                    # along with the test that pinned it.
+```
+
+### Former operator line 1608
+
+```text
+                        # ⚠️ A bound, because this grows in memory for as long as it runs and
+                        # nothing else would ever stop it. 100 000 samples is ~16 minutes at
+                        # 100 Hz, comfortably past the ~4.5 minutes a long-context policy
+                        # wants (ROADMAP §9.3). Stopping and saying so beats running out of
+                        # memory in a process that is driving an arm.
+```
+
+### Former operator line 1684
+
+```text
+                        # ⭐⭐ ONE ARM FOLLOWS THE OTHER. Every decision is `MirrorLink`'s
+                        # (18 tests, no robot handle); this branch reads the two poses,
+                        # carries the command out, and narrates. Same split as `replay_step`
+                        # and `ArmSession` — the code that commands an arm is the code that
+                        # cannot be tested without one, so it is kept as thin as possible.
+```
+
+### Former operator line 1699
+
+```text
+                            # ⛔ The jaws go through the clamp, never straight from the leader.
+                            # A leader whose jaws rest on a stop would otherwise drive the
+                            # follower's onto its own stop and HOLD there, which is stall
+                            # torque and is how motor 7 was cooked three times (FINDINGS §4).
+```
+
+### Former operator line 1704
+
+```text
+                                # ⛔⭐ THROUGH THE LATCH, so a stalled follower stops being
+                                # pushed further closed by the leader every cycle. Opening
+                                # clears it, so letting go of the leader's jaws frees the
+                                # follower's immediately.
+```
+
+### Former operator line 1736
+
+```text
+                            # ⭐ Total and settling answer different questions: the total
+                            # is what speed/corner/ease tuning changes, and the settling
+                            # is how long the arm closed the last gap after the commanded
+                            # path ran out. The class stamps both from the right clocks —
+                            # park_start_t, NOT park_leg_t, for the total (FINDINGS §34.3).
+```
+
+### Former operator line 1751
+
+```text
+                            # ⭐ Composite (ROADMAP §6.6.1a): a pose-leg's park arrived.
+                            # The leg is done when EVERY awaited arm has arrived; only
+                            # then does the queue advance — in the ARRIVAL branch, never
+                            # a key branch, which is the §57.1 rule.
+```
+
+### Former operator line 1756
+
+```text
+                            # ⭐ The handover from "drive to the start pose" to "play the
+                            # recording" lives HERE, in the arrival branch, so a park that
+                            # was blocked or interrupted can never roll into a playback:
+                            # only a park that actually arrived does — and only a park that
+                            # was FOR the playback (`arrived_purpose`), never a pose leg's.
+```
+
+### Former operator line 1763
+
+```text
+                                # ⛔⭐ EVERY ARM MUST ARRIVE BEFORE ANY ARM PLAYS. Each one
+                                # parks a different distance and finishes at a different
+                                # moment; starting on the first arrival would have the
+                                # second arm still parking while the recording ran.
+```
+
+### Former operator line 1817
+
+```text
+                            # ⭐⭐ THE JAW PAUSE (items 3 + 10): the run split at a
+                            # waypoint where only the jaws move. The class holds the arm,
+                            # drives the jaws and measures when they are done; this
+                            # branch only says what is happening, so a pause never reads
+                            # as a stall.
+```
+
+### Former operator line 1824
+
+```text
+                                # ⭐ The settled offset is the miss-diagnosis number: at
+                                # the friction floor (~0.02-0.04 rad) a missed grab means
+                                # the POSE was taught off; well above it, the arm never
+                                # got there (FINDINGS §70.5).
+```
+
+### Former operator line 1837
+
+```text
+                                # ⭐ item 10: `check_grasp` grades a CLOSING leg from
+                                # where the jaws stopped. It stays silent when it cannot
+                                # know (an opening leg, a timeout) — `confident` is the
+                                # gate, and printing a guess would be the §0 pattern.
+```
+
+### Former operator line 1853
+
+```text
+                            # ⛔ BLOCKED. Never spin silently: say so and hold. The wording
+                            # keeps the old two shapes — mid-path (the arm stopped
+                            # following) and at the end (it stopped closing) — decided by
+                            # the remaining path, which the ParkStep carries.
+```
+
+### Former operator line 1882
+
+```text
+                    # ⛔ The grippers are left out of the "is it keeping up" check by INDEX,
+                    # because with two arms the first gripper sits in the middle of the
+                    # vector. Jaws legitimately sit far from their commanded value while
+                    # closing on an object, and counting that as lag would stall every
+                    # playback that grips anything.
+```
+
+### Former operator line 1889
+
+```text
+                        # ⭐ SCRUB: the puck is the clock. EITHER puck works — during
+                        # playback nobody's hand is driving an arm, so whichever hand is
+                        # free is the deadman. The forward/back axis (index 1) is the
+                        # natural "push to play" gesture; largest deflection wins.
+```
+
+### Former operator line 1907
+
+```text
+                            # ⛔ Through the clamp, never straight from the file. A recording
+                            # made while the jaws rested on a stop would otherwise drive them
+                            # back onto it and HOLD there. That is stall torque, and it is how
+                            # motor 7 was cooked three times (FINDINGS §4).
+```
+
+### Former operator line 1925
+
+```text
+                        # ⛔ THE TWO NUMBERS MUST RECONCILE, and on 2026-08-13 they did not:
+                        # a 3.6 s recording reported 3.6 + 0.4 and finished in 4.6. The gap
+                        # was the loop running below 100 Hz while the cursor advanced in
+                        # nominal time. That is fixed, and this check stays so a future
+                        # version cannot reintroduce it silently.
+```
+
+### Former operator line 1989
+
+```text
+                        # ⛔ NEVER WAIT FOR EVER. Holding the clock is right for a moment
+                        # and wrong for ever: an arm that cannot catch up is blocked, and a
+                        # playback that sits silently holding its clock is the treadmill
+                        # bug again (FINDINGS §24). Same patience the park uses.
+```
+
+### Former operator line 2052
+
+```text
+                    # ⭐ RECORDING HAS TO BE VISIBLE ON THE HEARTBEAT, not only in the
+                    # message that started it. A session where recording is silently still
+                    # running produces a demonstration full of whatever happened next, and
+                    # the operator finds out at training time.
+```
+
+### Former operator line 2157
+
+```text
+        # ⛔ BOTH lines print in the SAME frame, and the frame is NAMED. This summary once
+        # printed the current map in the frame the arm ENDED in (camera) against a `was:`
+        # line in world labels — different motion names for the same store — and it read
+        # as a scrambled, saved map. Verifying that nothing was actually written cost real
+        # bench time, twice (FINDINGS §66.2, ROADMAP §8.2 item 45).
+```
+
+### Former operator line 307
+
+```text
+    """The one-line answer to *"what does easing even do here?"*
+
+    ⭐ It names where the effect lives, because that is the question Julien actually asked
+    on the arm: *"the easing outside of parking, I don't really know what that means. Does
+    it work for recording, or does it work for teleoperating?"* Neither. Easing shapes how
+    a **planned** move starts and stops, which means `p` runs and the Ctrl-C park, and
+    nothing else. Driving by hand has no plan to shape, and a playback follows the timing
+    it was taught rather than an eased ramp.
+    """
+```
+
+### Former operator line 321
+
+```text
+    """Is the robot still actually being commanded?
+
+    ⛔ The single most important check in this file. I2RT's control thread raises
+    and exits on a motor fault; nothing tells the caller. Without this, the loop
+    keeps issuing commands into a corpse and reporting healthy-looking numbers,
+    which is what happened for 64 s on 2026-08-10.
+    """
+```
+
+### Former operator line 338
+
+```text
+    """Silence ONE known, expected traceback — and only while we are shutting down.
+
+    ⛔ The noise this removes. Every clean exit printed:
+
+        Exception in thread robot_server:
+        RuntimeError: … motor_chain_robot's motor chain is not running, exiting the
+        robot server
+
+    …immediately before `motors confirmed disabled: [1, 2, 3, 4, 5, 6, 7]`. It is the
+    I2RT SDK's background server thread noticing the chain has stopped — **because we
+    stopped it**. Nothing is wrong, and the shutdown it appears to indict has in fact
+    succeeded.
+
+    ⚠️ Why bother, when it is harmless? Because a scary traceback printed on every
+    successful exit is a training exercise in ignoring tracebacks, and this project
+    depends on people reading the ones that matter. FINDINGS §0 is a catalogue of
+    failures that looked calm; the inverse — a success that looks like a failure — has
+    the same cost, paid in attention.
+
+    ⛔ Deliberately narrow, because blanket exception-swallowing is the other half of
+    that catalogue: it fires only during our own shutdown, only for that thread, only
+    for `RuntimeError`, and only for that message. Anything else goes to the real hook
+    and prints in full.
+    """
+```
+
+### Former operator line 539
+
+```text
+        """A value the operator just changed, on its own live row above the status.
+
+        ⭐ `linear speed → 0.188 m/s` printed as a MESSAGE six times is six rows of
+        scrollback saying the same word. As a hint it is one row whose number changes
+        — and, crucially, it no longer loses a race with the once-a-second status,
+        which is what made a knob change flash up and vanish.
+        """
+```
+
+### Former operator line 718
+
+```text
+            """Where to LOOK for a recording. Writes always go to `takes_dir`.
+
+            ⭐⭐ A --sim SESSION CAN STILL PLAY A REAL RECORDING, and that is deliberate. When
+            the folder split was first written it applied to reads as well, which quietly
+            removed one of the best uses of a simulator: **replaying a real take against
+            simulated arms to check the playback before committing it to 4.3 kg of hardware.**
+            Sim recordings win when both exist, so a sim session never silently reaches past
+            its own work.
+            """
+```
