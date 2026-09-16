@@ -43,7 +43,7 @@ values and stop policy were preserved. The operator is 1,973 lines.
 | B | HOLD, TELEOP, automatic park and seven disabled motors; exit 0 |
 | G | Two runs covering HOLD, TELEOP, hand-guiding, direct disable from the quit menu and automatic park; both exit 0 |
 | B and G together | Shared-puck selection B/G/BOTH, GUIDE/TELEOP changes and both arms parking; 14 motors disabled, exit 0; Julien reports that both work |
-| Human observation | Julien says both arms felt normal and confirms the large GUIDE pose change was deliberate hand movement |
+| Human observation | Julien says both arms felt normal, confirms the large GUIDE pose change was deliberate, and confirms combined selection moved exactly the intended arms without unexpected movement or resistance |
 | Hardware timing | Single-arm means about 99 Hz; combined mean 98 Hz, worst observed pass 54.4 ms; no hard real-time guarantee |
 | Camera only | D405 colour image received at 1280×720; five-second probe reported 26.75 fps and 33.32 ms mean inter-frame gap |
 

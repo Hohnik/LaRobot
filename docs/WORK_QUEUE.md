@@ -27,7 +27,9 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    himself after explanation. B, two G runs and the combined-arm run are complete.
    All four logs end with exit 0 and disabled motors. Julien reports that both
    arms felt normal and the GUIDE movement was deliberate. Combined B/G/BOTH
-   shared-puck selection and parking were exercised. Target-lead warnings are
+   shared-puck selection and parking were exercised. Julien explicitly confirms
+   selection moved the intended arms without unexpected movement or resistance.
+   Target-lead warnings are
    explained with their measurement limits. The agent has sent no motor command.
 5. Record results, limits and preserved state. All four raw logs are saved locally.
    The post-combined snapshot at 15:03:25 UTC confirms the reference checkout and
@@ -39,18 +41,20 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    profile is prepared and dry-run tested from both computers, using empty slot 9
    in the disposable checkout. Pending: operator-run take, then validate joints,
    image files, frame metadata and publication. The D405 needs useful framing.
-7. Improve command handoff and prepare colleague review. The same short command
+7. Improve command handoff and prepare colleague review. Complete: the same short command
    now works on the Mac and station. Two misleading shared-puck help messages are
    corrected locally; the full suite passes 1,077/1,077. README now includes the
    missing pinned I2RT checkout step. The concise colleague handoff is written.
-   Review artifacts and their exact revision, sizes, checksums and validation are
+   The source archive matches every tracked file's path, content and executable
+   mode, and its extracted help and simulation plan succeed. The incremental Git
+   bundle verifies with prerequisite 499d0b7. Their exact revision, sizes and hashes are
    recorded under agents/codex/station-validation-2026-09-16/handoff/MANIFEST.json.
    Publication and promotion into an existing working checkout remain separate
    decisions; no colleague message or push is authorized by a readiness question.
 
 Evidence and commands: [STATION_VALIDATION](STATION_VALIDATION.md). A passing local
-suite does not complete physical checks. The next dependency is the operator-run
-recording; advance package preparation while waiting. Do not start another robot
+suite does not complete physical checks. Review packaging is complete. The next
+dependency is the operator-run recording. Do not start another robot
 controller remotely in place of that handoff.
 
 ## Broader review — completed locally

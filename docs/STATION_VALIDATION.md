@@ -14,7 +14,8 @@ and all seven selected-arm motors confirmed disabled. G's large GUIDE pose chang
 was deliberate hand movement. Target-lead warnings remain documented below.
 
 The combined-arm run has also completed with exit 0, both arms parked and all
-14 motors confirmed disabled. Julien reports that both work and asks to use his
+14 motors confirmed disabled. Julien confirms that selection and movement worked
+as intended, without unexpected movement or resistance, and asks to use his
 selection/park workflow for subsequent checks. A camera-only D405 probe has passed.
 The next check is a short integrated recording, whose result remains pending.
 
@@ -147,6 +148,9 @@ HOLD. Julien then exercised B GUIDE and TELEOP, switched B/G/BOTH selection, and
 drove both arms while BOTH was selected. His follow-up was "both work" and asked
 that the next steps fit this workflow. This was broader than the proposed
 one-arm-at-a-time sequence; the record describes the actual run.
+Asked explicitly whether B/G/BOTH selection moved exactly the intended arms
+without unexpected movement or resistance, Julien answered: "Yes, selection and
+movement worked as intended."
 
 The loop reported 4,994 passes, a 10.2 ms mean (98 Hz), and a 54.4 ms worst pass at
 t=3.8 s. Sixteen passes exceeded 15 ms, two exceeded 20 and 33 ms, and one exceeded
