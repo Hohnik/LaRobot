@@ -65,7 +65,6 @@ from yam.mirror import (  # noqa: E402
 from yam.motion import EASINGS, easing_factor  # noqa: E402
 from yam.recording import (  # noqa: E402
     Layout,
-    describe_slot,
     slot_overview,
     Trajectory,
     SCRUB_MAX_RATE,
@@ -97,6 +96,7 @@ from yam.cameras.writer import (  # noqa: E402
     pending_frames_dir,
 )
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
+from yam.ui.recording_prompt import RecordingPrompt, save_slot_action  # noqa: E402
 from yam.ui.park_prompt import ParkAction, ParkPrompt  # noqa: E402
 from yam.ui.session_plan import session_plan_lines  # noqa: E402
 from yam.ui.settings_panel import SettingsAction, SettingsPanel  # noqa: E402
@@ -502,28 +502,6 @@ def park_arms(arms: list, keys, clamp_gripper, easing=EASINGS[2],  # noqa: ANN00
     return next(o for o in order if o in outcomes)
 
 
-def save_slot_action(key: str, has_take: bool, was_replacing: bool,
-                     replace_slot: str | None, occupied: str | None) -> tuple:
-    """Choose save, ask or discard for the recording slot prompt.
-
-    An occupied slot needs the same digit twice. A different digit re-aims.
-    A non-digit discards the new take and keeps the occupied slot. Returns
-    (save, slot), (ask, slot, reaimed), or (discard, previous_slot_or_None).
-    """
-    if not (key.isdigit() and has_take):
-        return ("discard", replace_slot if was_replacing else None)
-    confirmed = was_replacing and key == replace_slot
-    if occupied is not None and not confirmed:
-        return ("ask", key, bool(was_replacing and key != replace_slot))
-    return ("save", key)
-
-
-
-
-
-
-
-
 def main() -> int:  # noqa: PLR0915
     ap = argparse.ArgumentParser(description="Interactive YAM session: guide, teleop, park.")
     ap.add_argument("--yes", action="store_true", help="actually energise the arm")
@@ -759,11 +737,8 @@ def main() -> int:  # noqa: PLR0915
     # Recording and replay each use one shared timeline across every arm.
     recording = RecordingSession()
     playback = PlaybackSession()
-    saving_summary: tuple[str, float, int] | None = None
     # Display the effective scrub rate over the last reporting window.
     scrub_ref_t = scrub_ref_s = scrub_ref_h = 0.0
-    # Initialize overwrite-prompt state before the first save, even if no guard ran yet.
-    replace_slot: str | None = None     # the occupied slot the guard is asking about
     # Capture each arrival's purpose before advancing a composite leg (FINDINGS §72.1).
     park_purpose: dict[str, str] = {}
     # Mirror state belongs to the session: the link relates a leader and follower.
@@ -895,6 +870,7 @@ def main() -> int:  # noqa: PLR0915
         # metadata stamp: `recordings/sim/` never contains a real demonstration, so a glob
         # over `recordings/*.json` cannot pick one up by accident.
         takes_dir = (TAKES_DIR / "sim") if args.sim else TAKES_DIR
+        recording_prompt = RecordingPrompt(recording, takes_dir, saver=save_take, emit=print)
         tracking_dir = takes_dir / "tracking"
 
         def slot_for_reading(digit: str) -> Path:
@@ -1375,48 +1351,12 @@ def main() -> int:  # noqa: PLR0915
                 if stop:
                     break
 
-                had_finishing_sink = recording.active is None and recording.sink is not None
-                recording.poll()
-                if had_finishing_sink and recording.sink is None:
-                    if recording.frame_error:
-                        print(f"\n  {recording.frame_error}. Frames retained at {recording.frames}.\n")
-                    elif recording.frame_report is not None:
-                        for camera, report in recording.frame_report["per_camera"].items():
-                            print(f"  📷 {camera}: {report['written']} frame(s), "
-                                  f"{report['dropped']} dropped, {report['write_errors']} write error(s).")
-                        print("  Camera files finished. Choose a save slot or discard.\n")
-                if pending in ("take_saving", "take_discarding") and not recording.busy:
-                    if recording.save_error is not None:
-                        print(f"\n  Recording disk operation failed: {recording.save_error}")
-                        for note in getattr(recording.save_error, "__notes__", []):
-                            print(f"     {note}")
-                        print("     The new take is still pending. Choose a slot to retry, "
-                              "or a non-digit to discard.\n")
-                        pending, replace_slot = "take_save", None
-                    elif pending == "take_saving" and recording.saved is not None:
-                        slot, seconds, count = saving_summary
-                        saved = recording.saved
-                        if saved.warning:
-                            print(f"  {saved.warning}")
-                        print(f"\n  ✓ recording {slot} saved: {seconds:.1f}s, "
-                              f"{count} samples → {saved.path.name}"
-                              + (f" + frames/{slot}/" if saved.has_frames else ""))
-                        print(f"     (l then {slot} plays it back)\n")
-                        pending = None
-                    else:
-                        print("\n  recording discarded.\n")
-                        pending = None
+                recording_prompt.poll()
 
                 # ---- 3. keys ----------------------------------------------
                 for k in keys.drain():
-                    if recording.busy and pending in ("take_save", "take_replace", "take_saving", "take_discarding"):
-                        if k == "q":
-                            # Quitting still reaches the normal park/disable flow.
-                            pending = None
-                        else:
-                            print("  Recording files are still finishing. Wait, or q to quit; "
-                                  "unfinished files are retained.")
-                            continue
+                    if recording_prompt.handle(k):
+                        continue
                     # Selection controls mode changes and edits; each arm continues being driven.
                     # A pending wizard keeps its original target until finished or cancelled.
                     aimed = [one for one in arms if one.name in selection.names()]
@@ -1447,53 +1387,6 @@ def main() -> int:  # noqa: PLR0915
                                 one.slots = park_slots(data, one.name)
                         else:
                             print("\n  save cancelled — s then 0-9 (0 = the base pose).\n")
-                        continue
-
-                    if pending in ("take_save", "take_replace"):
-                        # An occupied slot requires the same digit twice. A different digit re-aims;
-                        # a non-digit deliberately discards the new take. Keep the old slot until save commits.
-                        was_replacing = pending == "take_replace"
-                        pending = None
-                        occupied = (describe_slot(takes_dir / f"{k}.json")
-                                    if k.isdigit() else None)
-                        action = save_slot_action(k, recording.pending is not None,
-                                                  was_replacing, replace_slot, occupied)
-                        if action[0] == "ask":
-                            replace_slot = action[1]
-                            pending = "take_replace"
-                            if action[2]:
-                                print(f"\n  ⭐ aiming at recording {replace_slot} instead.")
-                            print(f"\n  ⚠️  recording {replace_slot} already holds "
-                                  f"{occupied}.")
-                            print(f"     Press {replace_slot} again to REPLACE it, or "
-                                  f"another digit to aim somewhere else.")
-                            print("     Any NON-digit discards the new recording and keeps "
-                                  "what is there.\n")
-                            continue
-                        if action[0] == "discard":
-                            recording.request_discard()
-                            pending = "take_discarding"
-                            if action[1] is not None:
-                                print(f"\n  kept recording {action[1]}; the new one is "
-                                      "being discarded.\n")
-                            else:
-                                print("\n  finishing recording discard.\n")
-                            continue
-                        if k.isdigit() and recording.pending is not None:
-                            try:
-                                saving_summary = (k, recording.pending.duration, len(recording.pending))
-                                recording.request_save(takes_dir, k, saver=save_take)
-                                pending = "take_saving"
-                                print(f"\n  Saving recording {k}… control remains active.\n")
-                            except Exception as exc:
-                                pending = "take_save"
-                                replace_slot = None
-                                print(f"\n  Recording was not saved: {exc}")
-                                print("     The new take is still pending. Choose a slot to retry, "
-                                      "or a non-digit to discard.\n")
-                        else:
-                            recording.request_discard()
-                            pending = "take_discarding"
                         continue
 
                     if pending == "settings":
@@ -2037,7 +1930,8 @@ def main() -> int:  # noqa: PLR0915
                                                            factory=FrameSink)
                                 except Exception as exc:
                                     recording.fail(exc)
-                                    pending = "take_save"
+                                    pending = None
+                                    recording_prompt.open()
                                     print(f"\n  {recording.frame_error}. "
                                           "Press a non-digit to discard this take.\n")
                                     continue
@@ -2056,11 +1950,12 @@ def main() -> int:  # noqa: PLR0915
                                       f"({len(recording.pending.meta['marks'])} mark(s)).")
                             n, secs = len(recording.pending), recording.pending.duration
                             if n < 2:
-                                recording.request_discard()
-                                pending = "take_discarding"
+                                recording_prompt.discard()
+                                pending = None
                                 print("\n  nothing recorded (too short) — finishing discard.\n")
                             else:
-                                pending = "take_save"
+                                pending = None
+                                recording_prompt.open()
                                 print(f"\n⏹  RECORDED {secs:.1f}s, {n} samples, "
                                       f"typical joint speed "
                                       f"{recording.pending.joint_speed(99):.2f} rad/s "
@@ -2281,7 +2176,8 @@ def main() -> int:  # noqa: PLR0915
                             recording.offer_frames(capture.sample())
                     except Exception as exc:  # noqa: BLE001
                         recording.fail(exc)
-                        pending = "take_save"
+                        pending = None
+                        recording_prompt.open()
                         print(f"\n⚠️  {recording.frame_error}")
                         print("     Recording stopped; arm modes are unchanged. "
                               "The take is retained until you discard it.\n")
@@ -2294,7 +2190,8 @@ def main() -> int:  # noqa: PLR0915
                         if len(recording.active) >= MAX_TAKE_SAMPLES:
                             # Freeze it the same way `w` does, or the limit would not be one.
                             recording.freeze()
-                            pending = "take_save"
+                            pending = None
+                            recording_prompt.open()
                             print(f"\n⏹  RECORDING STOPPED at the {MAX_TAKE_SAMPLES} sample "
                                   f"limit ({recording.pending.duration:.0f}s).")
                             for line in slot_overview(takes_dir):
@@ -2361,7 +2258,7 @@ def main() -> int:  # noqa: PLR0915
                     pressed = buttons & ~one.buttons_prev              # rising edge only
                     one.buttons_prev = buttons
 
-                    if one.learn_button is not None and pending is not None:
+                    if one.learn_button is not None and (pending is not None or recording_prompt.active):
                         # Only one prompt may own input; opening a new one cancels the previous prompt.
                         one.learn_button = None
                         print(f"\n  ⚠️ the gripper-button learning on arm {one.name} is "

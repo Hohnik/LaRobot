@@ -457,6 +457,63 @@ def test_multiple_pose_prompt_waits_for_second_confirmation():
     assert code == 0 and observed == ['waiting', 'confirmed'], text
 
 
+
+def test_recording_reaim_preserves_both_slots_until_matching_confirmation():
+    schedule, before, checked = {1: 'w', 5: 'w', 7: '4', 8: '5', 9: '5'}, {}, []
+    owners = []
+    original_recording = app.RecordingSession
+    def recording():
+        owner = original_recording()
+        owners.append(owner)
+        return owner
+    def cycle(number, arms, root):
+        shelf = root / 'recordings/sim'
+        if number == 1:
+            shelf.mkdir(parents=True, exist_ok=True)
+            for slot in ('4', '5'):
+                old = Trajectory(meta={'arms': ['B', 'G'], 'marker': 'old-' + slot})
+                old.append(0, [0] * 14)
+                old.append(1, [0] * 14)
+                old.save(shelf / f'{slot}.json')
+                before[slot] = (shelf / f'{slot}.json').read_bytes()
+        elif number == 9:
+            # Both initial digit choices have run; the matching second 5 has not.
+            assert all((shelf / f'{slot}.json').read_bytes() == data
+                       for slot, data in before.items())
+            checked.append('unchanged before confirmation')
+        elif number > 9 and owners[0].saved is not None:
+            assert (shelf / '5.json').read_bytes() != before['5']
+            assert (shelf / '4.json').read_bytes() == before['4']
+            schedule[number] = 'q'
+            checked.append('only confirmed slot changed')
+    messages = []
+    original_say = app.StatusLine.say
+    def say(screen, message):
+        messages.append(message)
+        return original_say(screen, message)
+    with patch.object(app.StatusLine, 'say', say), patch.object(app, 'RecordingSession', recording):
+        code, text, saved, _, take = run_session(schedule, on_cycle=cycle, max_cycles=200)
+    assert code == 0, text
+    assert any('aiming at recording 5 instead' in message for message in messages)
+    assert checked == ['unchanged before confirmation', 'only confirmed slot changed']
+    assert len(saved) == 1 and take is not None and 'marker' not in take.meta
+    assert 'aiming at recording 5 instead' in text
+
+
+def test_recording_prompt_cancels_gripper_button_learning():
+    observed = []
+    def cycle(number, arms, root):
+        if number == 5:
+            arms[0].learn_button = 'open'
+        elif number == 6:
+            assert arms[0].learn_button is None
+            observed.append('cancelled')
+    code, text, _, _, _ = run_session(
+        {1: 'w', 5: 'w', 7: 'x', 20: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['cancelled'], text
+    assert 'gripper-button learning on arm B is CANCELLED' in text
+
+
 def main():
     tests = [v for (k, v) in globals().items() if k.startswith('test_') and callable(v)]
     passed = 0

@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "apps"))  # ⛔ the app script is not a package; a test OF it imports it as a file
 sys.path.insert(0, str(REPO / "scripts"))
 
-from teleop_session import save_slot_action  # noqa: E402
+from yam.ui.recording_prompt import save_slot_action  # noqa: E402
 
 BUSY = "5.2s on B,G, live:B:teleop+G:teleop, recorded 2026-08-17T12:11"
 

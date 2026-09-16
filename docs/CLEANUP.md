@@ -1,12 +1,12 @@
 # Teleop cleanup: current work and handoff
 
-Updated September 15, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
+Updated September 16, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings and park prompts now own their key transitions, and startup plan formatting is separate. Other prompts, argument assembly and acquired-device cleanup still need work.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings, park and recording-save prompts now own their key transitions, and startup plan formatting is separate. Other prompts, argument assembly and acquired-device cleanup still need work.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park prompt ownership and startup plan formatting. Current validation passes 980/980 checks across 56 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park/recording prompt ownership and startup plan formatting. Current validation passes 992/992 checks across 57 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -99,7 +99,7 @@ At the recording-lifecycle checkpoint, the operator `main()` still spanned rough
 
 ## Next work, in order
 
-1. Extract acquired-device cleanup and the remaining prompt owners (recording slots, playback confirmation, mirror confirmation and controls editing). Settings and park-sequence prompts are complete. Preserve partial-startup ownership, motor-first cleanup and key-consumption order.
+1. Extract acquired-device cleanup and the remaining prompt owners (playback confirmation, mirror confirmation and controls editing). Settings, park-sequence and recording-save prompts are extracted. Preserve partial-startup ownership, motor-first cleanup and key-consumption order.
 2. Separate argument assembly and thin the entry point after the remaining owners are explicit. Plan formatting is complete; parser extraction also requires teaching the flag checker to follow its new owner. Preserve confirmations, selection, physical stopping behavior and the existing motion limits.
 3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
 4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
@@ -248,3 +248,29 @@ Final software evidence: 980/980 checks across 56 files, 71/71 falsifier catches
 The operator is 3,149 lines, down from 3,372 at `5e0fa0b`; the settings, park-prompt and plan modules are 86, 67 and 88 lines. This is a reduction in shared state and duplicated prompt branches, not completion of the entire restructure. Historical explanations removed from these blocks remain in `5e0fa0b` and their cited FINDINGS sections. The remaining single key-dispatch loop still coordinates other modal prompts, per-arm actions and shared modes.
 
 `checks/check_flags.py::read_parser` currently reads `add_argument` calls from each application's source; it does not follow an imported parser builder. Moving argument definitions without adapting that check would break its evidence. Preserve the existing deliberately-invalid-command checks when making that later extraction. No additional user decision is needed for these software steps.
+
+
+## Recording-save prompt ownership
+
+[RecordingPrompt](../src/yam/ui/recording_prompt.py) now owns slot choice, overwrite confirmation, the saved take's display summary and progress messages for asynchronous save/discard. It uses explicit choosing/replacing/saving/discarding/closed states. `RecordingSession` continues to own joint samples, camera writers, frame directories and disk jobs. The prompt observes completion once per control cycle; it never commands an arm or performs publication itself. Slot description still reads the selected JSON synchronously, as before; this is not a claim that every filesystem operation has left the control loop.
+
+The application opens the prompt after manual recording stop, the sample limit, writer startup failure or sampling failure. It asks the same controller to discard too-short takes. Opening a recording prompt still cancels gripper-button learning, and messages still pass through the application's status-line renderer. These cross-cutting call sites matter: extracting key handling alone would have missed both interactions. The original `save_slot_action` remains imported by the application for compatibility; its existing tests now import the owning module directly.
+
+Preserved interaction rules:
+
+- A free slot saves immediately. An occupied slot requires the same digit again. A different digit selects a different slot; an occupied new target needs its own confirmation.
+- A non-digit at the slot-choice prompt, including `q`, discards the **new** take and retains the old slot. This is the established interaction, not a newly unified meaning for `q`.
+- While files are busy, digit and discard keys are consumed without queuing an action. `q` closes the prompt and reaches the existing quit flow. Closing that prompt does not cancel the disk job or release its resources; recording shutdown still owns completion/retention.
+- Failure to start saving or an asynchronous save/discard failure returns to slot choice. The same take remains owned, and any subsequent overwrite requires fresh confirmation. No success is printed before completion; the saved duration/sample count is captured before the recording owner releases the take.
+
+Ten new controller tests cover those transitions using controlled completion states. Two additional actual-application tests verify that changing from occupied slot 4 to occupied slot 5 leaves both byte-for-byte unchanged until a second 5, and that opening the recording prompt cancels button learning. The overwrite test also checks that feedback uses the status-line renderer. The existing application tests continue to cover loop progress during blocked disk work, early-key refusal, same-take retry, camera failure and quit retention. Both the earlier save-retry test and the new overwrite test follow observed completion rather than assuming the worker finishes within a fixed cycle count.
+
+The operator is now 3,046 lines, down from 3,149 at `b516dc7`; the new controller is 148 lines. Total code need not shrink when explicit interfaces replace shared local state. This increment gives recording-save interaction one owner and executable boundaries. It does not complete application assembly, physical command coordination, playback/mirror confirmation, controls editing or acquired-device cleanup.
+
+Validation: 992/992 checks across 57 files, 71/71 falsifier catches and 32/32 isolated simulator interactions. All 3,455 original recording hashes match. Structural, flag, link and prose checks pass. The results are recorded in the local `agents/codex/validation/recording-prompt-*` logs. The simulator-copy file identifies its disposable data directory; these logs are ignored, so this section carries the durable conclusions. No real hardware was opened and no changes were pushed.
+
+### Assessment of what still deserves work
+
+The remaining work is substantive, but file length alone is no longer a useful finish line. Acquired-device cleanup still combines raw handles, fully initialized arm sessions and final reporting in the application. Its next extraction must retain motor-first ordering and cover partially initialized devices. Playback/mirror prompts and controls editing still own several transitions inside the key loop. Argument assembly can move once the source-based flag checker follows its new owner; merely hiding `main()` inside a large class would leave the same coupling.
+
+Recovery inspection is a separate functional gap: retained camera directories are not complete recovered takes when joint samples died with the process. Inspection should report what actually exists and the slot store's recovery metadata before offering any repair. Physical station validation and transfer to the team's code remain separate, operator-led work. No user decision is needed for the remaining local software cleanup; there is no reason to rewrite the established motion or kinematics algorithms just to make their files shorter.
