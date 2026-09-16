@@ -4,6 +4,11 @@ Updated September 16, 2026. This is the current implementation handoff for the c
 
 ## Current status
 
+**Next phase is now active:** Julien selected physical-station verification.
+[STATION_VALIDATION](STATION_VALIDATION.md) records the passed Linux software checks,
+preserved station work and the exact operator-run HOLD test. No physical test has
+run yet; that phase remains pending independently of the completed cleanup below.
+
 The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
 `499d0b7`. No user answer or technical unblock is needed for this completed pass.
 The [work queue](WORK_QUEUE.md) records each resolved item; the

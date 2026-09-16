@@ -4,6 +4,36 @@ Updated September 16, 2026. This queue implements Julien's instruction to contin
 through useful local work without stopping at each commit. The initial state below
 is based on verified checkout `190070e`; subsequent evidence is recorded per item.
 
+## Active phase: verify the physical station
+
+Julien selected physical-station verification on September 16 and is there with a
+teammate who is currently working on it. This is new work after the completed local
+cleanup. The station is reachable as yam-pc; no login details are needed from him.
+
+1. Inspect station checkout/runtime without modifying existing work. Complete:
+   reference checkout remains at 499d0b7 with changed park poses; team checkout is
+   on feature/physical with uncommitted work. Python/lockfile/vendor revision match
+   the requirements. Current CAN interfaces are up; that alone proves no motor health.
+2. Import candidate 025fab1 into a disposable station checkout and run its software
+   checks, simulator and read-only inventory. Complete: 1,075/1,075 candidate tests,
+   32/32 simulator interactions and read-only inventory pass. A missing dataset
+   fixture was repaired; 71/71 falsifier catches and two new regressions pass.
+   Neither existing checkout is switched or merged.
+3. Prepare a separate operator checkout with the station's current configuration,
+   review its dry-run plan and write exact single-arm HOLD/exit instructions.
+   Complete: separate operator copy, B/G plans and logged helper dry run verified.
+4. Perform attended real-device checks when the teammate yields the selected arm.
+   Both arms are available, but Julien explicitly wants to run the first commands
+   himself after explanation. Pending: his B HOLD run and observed behavior.
+   No motor command has been sent by this continuation.
+5. Record results, limits and preserved state. Software/preparation evidence is
+   recorded in STATION_VALIDATION; physical results remain pending. Publication
+   and promotion into an existing working checkout remain separate decisions.
+
+Evidence and commands: [STATION_VALIDATION](STATION_VALIDATION.md). A passing local
+suite does not complete item 4. Advance independent preparation while waiting for
+the physical availability answer; do not start another robot controller meanwhile.
+
 ## Broader review — completed locally
 
 Julien explicitly confirmed continuation after the `216fda0` queue proved too narrow.

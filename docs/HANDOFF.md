@@ -8,6 +8,11 @@ The broader local source/structure review is complete; read the current status
 and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any older
 "next step" below as still pending. No automatic background continuation is running.
 
+Physical-station verification is now active. Read
+[STATION_VALIDATION](STATION_VALIDATION.md) for the current Linux evidence and the
+user-run first live test; the August network/device/interface details below may
+be stale.
+
 ## Archived August handoff
 
 The dated state and counts below describe the original close-out. They remain useful for its reasoning and hardware evidence; current status lives in CLEANUP.

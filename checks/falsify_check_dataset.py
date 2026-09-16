@@ -2,6 +2,11 @@
 """Feed `check_dataset.py` deliberately broken episodes and count what it catches.
 
     uv run checks/falsify_check_dataset.py
+    uv run checks/falsify_check_dataset.py --source <episode_dir>
+
+By default, encode a temporary synthetic episode and destroy only its disposable
+copies. A fresh clone needs ffmpeg/ffprobe, but no user recordings or export.
+An explicit source is checked first and is never mutated.
 
 ⭐⭐ WHY EVERY CHECKER IN THIS REPO HAS ONE OF THESE ([FINDINGS §70.8](../docs/FINDINGS.md)): a green checker and a *blind* checker look identical from the outside, and this repo has caught three checkers that had silently stopped validating anything. A green run plus a stable catch-count is evidence. A green run alone is not.
 
@@ -10,6 +15,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -21,8 +27,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "checks"))
 
 from check_dataset import check_episode  # noqa: E402
-from yam.dataset import META_FILE, STATES_FILE, VIDEO_FILE  # noqa: E402
-from yam.files import is_os_litter  # noqa: E402 — the OS-litter filter, FINDINGS §76
+from yam.dataset import META_FILE, STATES_FILE, VIDEO_FILE, ffmpeg_command  # noqa: E402
+from yam.episode import ROW_COLUMNS  # noqa: E402
 
 
 def reencode_badly(src: Path, dst: Path, extra: list[str]) -> None:
@@ -31,29 +37,53 @@ def reencode_badly(src: Path, dst: Path, extra: list[str]) -> None:
                     *extra, str(dst)], check=True)
 
 
+def synthetic_episode(root: Path) -> Path:
+    """A nonconstant table and real encoded video, wholly owned by a temporary run.
+
+    Use three GOPs so timing/keyframe mutations are observable. These are synthetic
+    checker inputs, not a demonstration or evidence that a training loader accepts it.
+    """
+    import numpy as np
+
+    source = root / "episode_synthetic"
+    source.mkdir()
+    steps, width, height = 90, 32, 32
+    state = np.arange(steps * 14, dtype=np.float64).reshape(steps, 14) / 1000
+    actions = np.vstack([state[1:], state[-1:]])
+    (source / STATES_FILE).write_bytes(np.hstack([state, actions]).tobytes())
+    frames = np.empty((steps, height, width, 3), dtype=np.uint8)
+    for tick in range(steps):
+        frames[tick] = (tick * 2, 80, 160)
+        frames[tick, :, tick % width, :] = 255
+    subprocess.run(ffmpeg_command(source / VIDEO_FILE, width, height),
+                   input=frames.tobytes(), check=True)
+    meta = {"fps": 30, "num_steps": steps, "simulated": True,
+            "verified_against_abc_loader": False,
+            "states_actions": {"shape": [steps, 28], "columns": list(ROW_COLUMNS)},
+            "video": {"frame_width": width, "frame_height": height}}
+    (source / META_FILE).write_text(json.dumps(meta))
+    return source
+
+
 def main() -> int:
-    # ⛔ RECURSIVE, and it was not. `export_dataset` writes into a SPLIT directory
-    # (`datasets/train/episode_slot5`) since the batch pipeline landed, and this line still
-    # globbed one level up. So the falsifier has been unable to find its own input ever
-    # since: it exits 1 with "no exported episode to break", which is loud, and nothing
-    # runs it automatically, so nobody heard it. `checks/check_dataset.py` uses `rglob` for
-    # the same reason; this now matches it. Found 2026-08-19 (FINDINGS §76).
-    root = REPO / "recordings" / "datasets"
-    good = [p for p in sorted(root.rglob("episode_*"))
-            if p.is_dir() and not is_os_litter(p)]
-    good = [p for p in good if (p / VIDEO_FILE).is_file()]
-    if not good:
-        print("⛔ no exported episode to break. Export one first:")
-        print("   uv run apps/export_dataset.py --slot 5 --left G --right B --top c920 \\")
-        print("     --left-wrist d405-260323072846 --right-wrist d405-255323071773")
-        return 1
-    source = good[0]
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--source", type=Path,
+                        help="falsify copies of this exported episode (default: temporary synthetic input)")
+    args = parser.parse_args()
+    if args.source is not None:
+        return falsify(args.source)
+    with tempfile.TemporaryDirectory(prefix="yam-dataset-falsifier-") as tmp:
+        return falsify(synthetic_episode(Path(tmp)))
+
+
+def falsify(source: Path) -> int:
     ok, bad = check_episode(source)
     if bad:
         print(f"⛔ the SOURCE episode {source.name} already fails {len(bad)} check(s); "
               "falsification needs a known-good starting point.")
         for line in bad:
             print(f"    ⛔ {line}")
+        print("CATCHES: 0/5")
         return 1
     print(f"source: {source.name} — {len(ok)} checks pass on it\n")
 
