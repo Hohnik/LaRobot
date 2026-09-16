@@ -4,13 +4,13 @@ Updated September 16, 2026. This queue implements Julien's instruction to contin
 through useful local work without stopping at each commit. The initial state below
 is based on verified checkout `190070e`; subsequent evidence is recorded per item.
 
-## Active phase: make the colleague handoff easy to use
+## Colleague handoff and source readability — completed locally
 
 After the attended checks passed, Julien explicitly asked for a fresh readability
 review against the teammate's current implementation. The reference should be
 understandable and useful as inspiration for their own arm/features implementation.
-This extends the completed cleanup and validation; do not stop at the earlier
-package checkpoint while these newly requested items remain actionable.
+This extended the completed cleanup and validation. Every item in this additional
+phase is now resolved, with the evidence below.
 
 1. Capture source and revision provenance. Complete: clean station physical source
    at fd2c64b, matching the pushed tip. Six current remote branch tips fetched and
@@ -27,12 +27,20 @@ package checkpoint while these newly requested items remain actionable.
 4. Prepare a feature reading map and examples. Complete: COLLEAGUE_HANDOFF pairs
    features with owners/tests and explains reuse versus rig policy. Two hardware-free
    examples execute actual command limiting, cleanup, recording writers and publication.
-   Both initial runs pass; final validation follows below.
-5. Verify, commit locally and regenerate the review package. In progress. Sending/pushing to a
-   colleague or changing their live checkout still requires a concrete destination
-   and instruction; a readiness question alone does not authorize publication.
+   Both run successfully. Six saved JPEGs decode with the expected image content;
+   startup/cleanup failure probes also pass.
+5. Verify, commit locally and regenerate the review package. Complete: source saved
+   in cdfe2d4; full suite 1,077/1,077 across 71 files, source AST equivalence and
+   documentation checks pass. The archive matches all 216 tracked files and modes;
+   extracted help, simulation plan and both examples pass. The bundle verifies
+   against prerequisite 499d0b7. The final package manifest identifies the exact
+   commit including these completion notes. Sending/pushing to a colleague or
+   changing their live checkout still needs a concrete destination and instruction.
 
-No answer from Julien is needed for these read-only comparisons and local changes.
+No local review or cleanup item remains open. No background task is running.
+The team-side defects and integration steps are documented in BRIDGE; this scope
+reviewed their implementation without taking over their branch. Camera setup,
+deployment and publication remain explicit next actions with separate ownership.
 
 ## Attended physical-station validation — completed
 
@@ -139,12 +147,13 @@ owners, typed stopping, input/health/mirror services and recovery inspection.
 Detailed evidence and limitations are in [CLEANUP](CLEANUP.md). Do not repeat these
 changes or their entire test matrix without a new reason.
 
-## Reserved decisions
+## Earlier cleanup boundary and remaining decisions
 
-Physical validation, changes to limits/calibration and remote publication remain
-outside this cleanup. They do not block independent local software work. There is
-no requirement to reach a particular line count, and moving an entire remaining
-loop into a new class does not itself resolve coupling.
+The original cleanup excluded physical operation. Julien subsequently authorized
+the attended validation now completed above. Changes to limits/calibration, remote
+publication and installation into a working checkout still need an explicit
+instruction. There is no line-count target; moving the remaining loop into a new
+class does not itself resolve coupling.
 
 
 ## Previous checkpoint architecture disposition
