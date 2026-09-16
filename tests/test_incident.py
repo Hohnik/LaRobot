@@ -157,19 +157,13 @@ def test_incidents_land_under_recordings_which_is_gitignored() -> None:
 
 
 def test_a_dead_puck_parks_gracefully_instead_of_raising() -> None:
-    """⛔⭐ FINDINGS §68.2: pulling a SpaceMouse mid-session raised `OSError: read error`,
-    the exception skipped the auto-park entirely, and the finally disabled every motor
-    with the arms wherever they stood. The per-cycle read is now guarded: a dead puck
-    reads as centred and the stop routes through the SAFE STOP (park, then disable).
-    This file cannot unplug hardware, so it pins the guard in the source."""
-    src = (REPO / "apps" / "teleop_session.py").read_text()
-    read_at = src.find("one.raw_axes = one.reader.read()")
-    assert read_at != -1, "the per-cycle puck read moved; update this test with care"
-    guarded = src.rfind("try:", 0, read_at)
-    assert guarded != -1 and read_at - guarded < 120, \
-        "the per-cycle puck read is no longer inside a try — an unplug drops the arms again"
-    assert "SpaceMouse stopped answering" in src, \
-        "the graceful stop_reason for a dead puck is gone"
+    """Execute input failure through the app, preserving the fault until controlled stop."""
+    from test_session_recording_failures import exercise_puck_failure
+
+    code, text, events = exercise_puck_failure()
+    assert code == 1 and 'SpaceMouse stopped answering' in text
+    assert 'test script failed to reach quit' not in text
+    assert events == ['park', 'shutdown', 'shutdown'], events
 
 
 def test_a_mode_key_ends_the_playback_for_EVERY_replay_arm() -> None:

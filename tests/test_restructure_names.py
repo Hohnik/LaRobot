@@ -11,6 +11,7 @@ spec.loader.exec_module(checker)
 
 def test_lambda_arguments_and_closures_are_bound():
     assert checker.undefined_globals('''
+
 def main():
     offset = 2
     return lambda live: [value + offset for value in live]
@@ -72,6 +73,17 @@ def main():
 
 def test_actual_application_has_no_missing_global_reads():
     assert checker.undefined_globals((ROOT / 'apps/teleop_session.py').read_text()) == []
+
+
+def test_delegated_field_requires_owner_access_and_application_call():
+    import ast
+    fn = checker.main_function(ast.parse("def main():\n    inputs.poll(arms)"))
+    owner = "def poll(self, arms):\n    return [one.reader for one in arms]"
+    assert checker.delegated_fields(fn, owner, 'inputs', 'poll', 'one', {'reader'}) == {'reader'}
+    assert checker.delegated_fields(fn, owner.replace('one.reader', 'None'),
+                                   'inputs', 'poll', 'one', {'reader'}) == set()
+    empty = checker.main_function(ast.parse("def main():\n    pass"))
+    assert checker.delegated_fields(empty, owner, 'inputs', 'poll', 'one', {'reader'}) == set()
 
 
 def main():

@@ -80,33 +80,10 @@ JAW_TIMEOUT_SECONDS = 3.0   #: a jaw still moving after this stops gating the ru
 
 def parse_arms(single: str | None, spec: str | None,
                known: Iterable[str], default: str) -> list[str]:
-    """Turn `--arm` and `--arms` into the ordered list of arms a session drives.
+    """Return ordered arm names from --arm/--arms, or the default when absent.
 
-        parse_arms(None, None,  ARM_SERIALS, "B")   -> ["B"]
-        parse_arms(None, "B,G", ARM_SERIALS, "B")   -> ["B", "G"]
-        parse_arms("G",  None,  ARM_SERIALS, "B")   -> ["G"]
-
-    ⭐ WHY BOTH FLAGS EXIST. `--arm` is the spelling every other script here uses
-    (`ping_motors.py`, `identify_arm.py`, `check_arms_match.py`), it is in every
-    document, and it is what Julien types. `--arms` is the N-arm spelling ROADMAP §6.1
-    step 2 asks for. **They are two spellings of one idea, not two ideas** — the same
-    relationship `ö`/`ä` have to `[`/`]`, and the reason is the same: a working command
-    must not stop working because the code grew a more general form.
-
-    ⛔ THEY MUST AGREE. `--arm B --arms G` is refused rather than resolved by a
-    precedence rule nobody would remember. This repo has already paid for the other
-    approach: `--arm arm1` was deleted rather than aliased, because a flag that keeps
-    working while its meaning has moved underneath is worse than one that fails loudly
-    (`src/yam/can.py`, and the same call again for `--box`).
-
-    ⛔ AND NO ARM MAY APPEAR TWICE. `--arms B,B` would build two `ArmSession` objects
-    over one CAN bus, each with its own cached `prev_q`, both commanding the same seven
-    motors every cycle. The last write of each cycle would win and nothing would raise,
-    so the arm would follow a blend of two controllers. That is the FINDINGS §0 defect
-    class exactly: a confident, plausible, wrong answer with no exception.
-
-    Raises `ValueError` with a message written for the person at the keyboard. The
-    caller turns it into `argparse`'s own error, so it prints like any other bad flag.
+    Conflicting flags, unknown names, empty entries and duplicate arms raise
+    ValueError. Duplicates would create competing controllers on one CAN bus.
     """
     valid = list(known)
     if single is not None and single not in valid:
@@ -137,28 +114,11 @@ def parse_arms(single: str | None, spec: str | None,
 
 
 class ArmSelector:
-    """Which arm a MODE key applies to. `a` cycles it: B → G → BOTH → B.
+    """Select the arm(s) targeted by mode keys and edits.
 
-        sel = ArmSelector(["B", "G"])
-        sel.label            # "B"
-        sel.cycle()          # "G"
-        sel.cycle()          # "BOTH"
-        sel.names()          # ["B", "G"]
-
-    ⛔⭐ WHY MODE KEYS NEED A SELECTOR AT ALL, and it is a safety argument rather than a
-    convenience one. ROADMAP §6 decided it: a global `g` would put **8.6 kg** weightless
-    in one keypress, and GUIDE is the mode where an error in the dynamics model becomes a
-    *falling* arm rather than a droop ([FINDINGS §11.1](../docs/FINDINGS.md)). So a mode
-    change is aimed at one arm unless the operator has deliberately selected BOTH.
-
-    ⭐ **Driving is NOT selected.** Each arm follows its own puck, continuously, always —
-    that is the whole point of two arms. Only mode changes and edits are aimed. Julien's
-    own words for the goal are in ROADMAP §6, and the split is in its decision table.
-
-    ⚠️ **With one arm there is nothing to cycle**, and `cycle()` says so by returning the
-    same label rather than inventing a BOTH that means the same as B. A key that appears
-    to do something while doing nothing is the `b` defect again
-    ([FINDINGS §17.1](../docs/FINDINGS.md)).
+    For two arms, cycle B → G → BOTH; one arm keeps its only label. Each arm
+    normally follows its own puck. SessionInput also uses this selection to
+    route a single shared puck; selecting BOTH deliberately drives both.
     """
 
     BOTH = "BOTH"
@@ -237,32 +197,16 @@ class ParkStep:
 
 
 class ArmSession:
-    """Everything that is true of **one** arm during a session.
+    """Own one arm's measurements, mode state, map, jaw latch and park execution.
 
-    Modes keep the script's own names — `guide`, `teleop`, `hold`, `park` — because they
-    are Julien's mental model and renaming them would make every note in FINDINGS harder
-    to follow.
+    Controls-mode state lives here; key dispatch and selection live in the
+    operator and UI handlers. SessionInput fills puck state. SessionHealth
+    uses the thermal/stall methods and reports their decisions. Recording,
+    playback and mirror coordination span arms and have session owners.
 
-    ⚠️ **`map` is deliberately absent, and this docstring used to claim it was here.**
-    CONTROLS (`m`) is an interactive wizard: it asks the operator to move one axis at a
-    time and waits for answers. That is a *session* activity, like key handling, so it
-    stays in the script along with `last_active_axis`. **The old wording said "the same
-    five modes" and the class only ever had four**, which is the kind of small untruth
-    that makes a reader trust the rest of the file less. Found by the diff in
-    [FINDINGS §36.5](../docs/FINDINGS.md).
-
-    ⛔ **Still NOT here, and each is a decision rather than an oversight** — see
-    [ROADMAP §6.1](../docs/ROADMAP.md):
-
-    - **The teleop per-cycle clamp and the joint-limit clamp.** They belong here and are
-      not here yet, and the argument is working-contract rule 7: *what path reaches the
-      hazard without passing through the guard?* Today they live only in the teleop
-      branch, and PARK already went around the gripper clamp once for exactly that reason
-      (FINDINGS §9). Moving them into this class's single command path would close that
-      whole class of defect. **Not done here**, because it changes what gets commanded
-      and that deserves its own reviewable step.
-    - **The workspace box.** A cartesian idea, so it stays with `CartesianTeleop`.
-    - **Recording and playback.** They span both arms; see the module docstring.
+    The operator still applies per-mode commands and teleop clamps. SafeRobot
+    applies its command limits beneath those modes; CartesianTeleop owns the
+    workspace constraint. Device lifetimes belong to SessionResources.
     """
 
     def __init__(self, robot: Any, name: str, frame: str = "world",
@@ -277,59 +221,18 @@ class ArmSession:
         self.frame = frame
         self.mode = "hold"
 
-        # ⭐⭐ WHICH PUCK DIRECTION DRIVES WHICH MOTION, for THIS arm in THIS frame.
-        #
-        # ⚠️ Passed to the constructor rather than assigned afterwards, and that is a
-        # deliberate contrast with `mode`. `mode` cannot be a constructor argument, because
-        # `build_robot()` reads it to decide zero-gravity and runs before the robot exists —
-        # so the script has to hand it over on the next line, and a forgotten handover would
-        # have been silent ([FINDINGS §50.2](../docs/FINDINGS.md)). The map has no such
-        # constraint: `AxisMapStore` can be read before anything is built. **So it is
-        # impossible to forget rather than merely tested for.**
-        #
-        # ⭐ `axis_map_at_start` is copied HERE rather than by the caller, because the two
-        # must be taken at the same instant. `0` in CONTROLS reverts to it, and the closing
-        # summary reports "was:" from it, so a copy taken a few lines later would quietly be
-        # a copy of a different map.
+        # Copy the startup map at construction; controls revert and the closing report use it.
         self.axis_map = axis_map
         self.axis_map_at_start = axis_map.copy() if axis_map is not None else None
 
-        # ⭐⭐ THIS ARM'S SAVED POSES, AND THE ONE Ctrl-C GOES TO.
-        #
-        # ⛔ THE BASE POSE AND THE WAYPOINTS ARE DIFFERENT THINGS, and it is a safety
-        # requirement rather than a preference. Julien, 2026-08-12: *"the control-c park to
-        # disable needs to always go back to the stable parking save. If I save a new
-        # parking option it shouldn't go back to that and then disable."* Ctrl-C parks and
-        # then RELEASES the motors, so the pose it chooses must be one that is safe to let
-        # go in. A waypoint saved mid-task, with the arm extended over the desk holding
-        # something, is exactly what that must never be.
-        #
-        # ⭐ Called `base_pose` and not `park`, deliberately: this file already has eleven
-        # `park_*` fields describing the motion in progress, and a `park` beside them would
-        # read as one of them. The old session local was named `park`, which is why
-        # `check_restructure.py` carries it in RETIRED_LOCALS.
-        #
-        # ⚠️ `None` is a real state, not a missing value: it means no pose has ever been
-        # saved for this arm. The script then defaults it to wherever the arm was when the
-        # session started, which it can only do after the robot exists.
+        # The base pose is the release destination; ordinary task waypoints must not replace it.
+        # None means no saved base; the operator then seeds it from the startup pose.
         self.slots: dict[str, list] = dict(slots or {})
         self.base_slot = base_slot
         self.base_pose: list | None = self.slots.get(base_slot)
 
-        # ⭐⭐ THE PUCK THAT DRIVES THIS ARM. One `TwistReader`, already opened and bound to
-        # one physical SpaceMouse by the wiggle assignment.
-        #
-        # ⚠️ THE MODULE DOCSTRING ABOVE USED TO SAY THIS CLASS DELIBERATELY DOES NOT OWN
-        # "reading the SpaceMouse", and that is still half true. The *device layer* stays
-        # shared and outside: enumerating, the wiggle assignment, `open_device`, and closing
-        # the handle on the way out. **What belongs to the arm is the one reader it is
-        # driven by**, because with two arms "which puck" is exactly as per-arm as "which
-        # robot" — and a session-level reader is how both arms end up following one hand.
-        #
-        # ⛔ The HANDLE is deliberately NOT here. It has to be closed even when
-        # `build_robot()` failed and no `ArmSession` was ever created, so the script keeps
-        # its own dict of handles for teardown. Two references to one object, not two
-        # copies of state.
+        # Keep the assigned reader, not handle ownership. SessionResources closes every
+        # acquired handle, including when arm construction fails.
         self.reader = reader
         # ⭐ THIS CYCLE'S PUCK DEFLECTION, six axes in [-1, 1], read once per cycle and used
         # by the mode action and by the CONTROLS readout. Per arm because the reader is: two
@@ -337,23 +240,8 @@ class ArmSession:
         # whichever puck happened to be read last.
         self.raw_axes: list[float] = [0.0] * 6
 
-        # ⭐⭐ WHAT THE CONTROLS WIZARD REMEMBERS ABOUT *THIS* PUCK, and it is per arm for
-        # the same reason the reader is: two pucks have two "controls you just used".
-        #
-        # ⛔ `last_active_axis` has NO TIMEOUT on purpose. In CONTROLS, `f` and `1`-`6` act
-        # on "the control you just used", and that has to still be remembered after the puck
-        # has sprung back to centre and the operator's hand has left it.
-        #
-        # ⭐ `last_input_kind` exists so that ONE key means one thing: `f` reverses whichever
-        # control was last used, an axis by flipping its sign or a button by swapping
-        # open/close.
-        #
-        # ⚠️ `buttons_prev` is what makes a press an EDGE rather than a state. Without it a
-        # held button would re-fire its action every cycle at 100 Hz.
-        #
-        # ⚠️ The module docstring says key HANDLING stays in the script, and it still does:
-        # which arm a keypress is aimed at is a session question, answered by `ArmSelector`.
-        # What lives here is the state a key acts ON.
+        # Remember the last axis without a timeout so edits work after the puck centers.
+        # last_input_kind disambiguates axis/button edits; buttons_prev detects rising edges.
         self.last_active_axis: int | None = None
         self.last_active_value = 0.0
         self.last_input_kind: str | None = None     # None | "axis" | "button"
@@ -363,17 +251,7 @@ class ArmSession:
         self.gripper_min, self.gripper_max = gripper_min, gripper_max
         self.gripper_value = 0.0
         self.stall_since: float | None = None
-        #: ⛔⭐⭐ HOW MANY TIMES THE JAWS HAVE STALLED IN A ROW, and when it was last said out
-        #: loud. Julien, 2026-08-15: *"the gripper arm print was way too often, and it happened
-        #: because I was pushing on the leader arm gripper and the follower was picking
-        #: something up, so it pushed too far in."*
-        #:
-        #: ⚠️ THE GUARD IS WORKING; the REPORTING is not. In MIRROR the follower's jaw command
-        #: is the leader's measured jaw position, re-sent every cycle. So the guard releases the
-        #: jaws, the next cycle commands them back onto the object, and 0.4 s later it fires
-        #: again — for as long as the operator squeezes the leader. Twenty identical lines in
-        #: ten seconds is how a real warning gets trained into background noise, which
-        #: [FINDINGS §0](../docs/FINDINGS.md) is a catalogue of.
+        # Track consecutive stalls and throttle repeat reports; a latch prevents immediate re-pushing.
         self.stall_count = 0
         self.stall_last_said = 0.0
         self._states: Any = None        # this cycle's chain read, for the stall guard
@@ -383,13 +261,7 @@ class ArmSession:
         self.prev_q = np.zeros(N_ARM)
         self.guide_ref: np.ndarray | None = None
 
-        # ⛔⭐ THE PARK IS ONE BLENDED PATH WITH A CURSOR ALONG IT, and this replaced a
-        # queue of separate legs on 2026-08-13. The earlier model drove to each waypoint
-        # and stopped dead, which is the thing Julien explicitly did not ask for:
-        # *"instead of moving and then jittering ninety degrees to the next side, in a
-        # smooth curve it would go to the next point."* `teleop_session.py` changed to
-        # `JointPath` on 2026-08-12 at 15:15, one hour after this class was written, and
-        # the class was left behind for a day. Audit: ROADMAP §6.1.
+        # One blended park path with an arc-length cursor; waypoint marks support progress reports.
         self.park_path: JointPath | None = None
         self.park_s = 0.0                       # arc-length cursor along the path
         self.park_marks: list[tuple[str, float]] = []   # waypoint name → arc length
@@ -429,43 +301,17 @@ class ArmSession:
         self._smooth = True                     # the caller's --no-smooth, per run
 
         self.thermal = ThermalGuard(warn_at=warn_at, stop_at=stop_at)
-        # ⛔⭐ THIS CYCLE'S READING, AND `None` MEANS BLIND RATHER THAN COLD. The status
-        # row prints `??°C ⚠️BLIND` for `None`, never a number: a fabricated 0 °C is what
-        # made a disarmed thermal guard look healthy on screen (FINDINGS §24.1), and the
-        # readout is the only place a human would have noticed.
-        #
-        # ⭐ Per arm, because the row is per arm. As a session-level pair these were one
-        # arm's temperatures painted on whichever row happened to be drawn — the shape of
-        # error that would hide one arm's gripper behind the other arm's shoulder.
+        # None means blind, not cold. Keep temperature reporting separate for each arm.
         self.hottest: float | None = None
         self.jaw_temp: float | None = None
-        # ⛔⭐ THE LAST CHAIN READ THIS ARM MANAGED, kept because the incident record needs
-        # it AFTER the chain has died. On 2026-08-14 the arm fell, the CAN link went away,
-        # and every value describing that instant was lost — the gravity torques had to be
-        # recovered by simulating joint angles the arm had already measured and thrown away
-        # ([FINDINGS §45](../docs/FINDINGS.md)). A fresh read on a dead chain raises; the
-        # last good reading is what actually describes the failure.
-        #
-        # ⚠️ `None` means the read failed, exactly like `hottest`. Never an empty list: an
-        # empty list would read as "seven motors reporting nothing", which is a different
-        # and much calmer claim than "I could not ask".
+        # Cache this cycle for incident reporting without a fresh read on a dead chain.
+        # A failed read sets states to None but preserves the last temperatures.
+        self.read_error: str | None = None
         self.states: Any = None
         self.temps: Any = None
 
-        #: ⛔⭐⭐ WHERE THE JAWS GOT STUCK, LATCHED. `None` means nothing is blocking them.
-        #:
-        #: This exists because the stall RELEASE was being undone on the very next cycle.
-        #: Julien's 2026-08-17 log shows it plainly: released to 0.152, then 0.151, then
-        #: 0.150, then 0.147, and the message *"ARM G GRIPPER STALLED (14 times now)"*.
-        #: Each release backed the command off to the measured jaw position, and each next
-        #: cycle MIRROR copied the leader's jaw straight back over it. **A one-cycle
-        #: correction against a source that re-commands every cycle can only ever nibble.**
-        #:
-        #: ⚠️ `teleop_session.py` already carried a comment describing exactly this — *"in
-        #: MIRROR the follower's jaw command is the leader's measured jaw, re-sent every
-        #: cycle, so squeezing the leader while the follower holds an object fires this
-        #: every 0.4 s indefinitely"* — so the diagnosis was written down and the fix was
-        #: never built. It is docs/ROADMAP.md §8.2 item 29.
+        # Latch the measured blocked position across cycles. Only opening beyond the
+        # clearance margin releases it, so mirror/teleop cannot immediately push again.
         self.jaw_block: float | None = None
         #: ⭐ Set to the block value when the latch CLEARS, so the loop can say so once. A
         #: latch that silently comes and goes is impossible to tell apart from a latch that
@@ -477,43 +323,13 @@ class ArmSession:
     # ------------------------------------------------------------- jaws ----
 
     def hold_jaw(self, wanted: float) -> float:
-        """The jaw value to actually command, honouring a latched block.
+        """Apply the jaw-block latch to a requested normalized position.
 
-        ⭐ THE RULE, and the asymmetry is the whole point:
-
-        | asked for | result |
-        |---|---|
-        | nothing latched | ✅ obeyed |
-        | **further CLOSED** than the block | ⛔ held at the block, so it stops pushing |
-        | **more OPEN** than the block by more than `JAW_CLEAR_MARGIN` | ✅ obeyed, **and the latch clears** |
-
-        ⭐ Bigger is more open: `o` adds to `gripper_value` and `c` subtracts, and the jaws
-        normalise to 0 closed and 1 open. So "further closed" is a smaller number.
-
-        ⚠️ **Opening always clears the latch**, which matters more than it looks. The object
-        may have been put down, the operator may have let go, or the leader's hand may have
-        opened. Anything that moves away from the obstruction is evidence the obstruction is
-        no longer being pushed into, and a latch that needed an explicit reset would
-        eventually be the reason the jaws refused to work for a reason nobody could see.
-
-        ⛔ It does NOT stop the jaws holding what they have. The block value IS the measured
-        position where they stalled, so commanding it keeps the grip and stops the pushing.
-        Releasing entirely would drop whatever is being held.
-
-        ⛔⭐⭐ THE MARGIN EXISTS BECAUSE THE FIRST VERSION CLEARED ON ANY VALUE ABOVE THE
-        BLOCK, AND THAT IS TOO EAGER. A jaw position read off a motor jitters, and the leader
-        in MIRROR is a hand-held arm whose jaws are being squeezed, so its measured jaw wanders
-        by a few thousandths every cycle. **One sample a hair above the block would unlatch
-        it**, the next cycle would push again, and the stall would recur — which is the exact
-        failure the latch was built to end.
-
-        ⚠️⚠️ I ALSO WROTE A TEST ASSERTING THE WRONG BEHAVIOUR AND ARGUED FOR IT. The old
-        `test_the_tiniest_opening_still_counts` said *"deliberately a strict inequality rather
-        than a tolerance"*, reasoning that a tolerance would let commands a hair below the
-        block through. **That was the wrong risk to weigh.** A hair below the block is
-        harmless — it is still not pushing. A hair above it disarms the whole mechanism. ⭐ A
-        test can encode a mistake as confidently as code can, and a docstring defending it
-        makes the mistake harder to see rather than easier.
+        With no block, return wanted. With a block, hold the measured stall
+        position until wanted exceeds it by JAW_CLEAR_MARGIN (larger is more
+        open). Then clear the latch and record jaw_unblocked_from for reporting.
+        The margin prevents measurement jitter from restarting repeated stalls;
+        holding the measured position preserves the grip instead of dropping it.
         """
         if self.jaw_block is None:
             return wanted
@@ -543,65 +359,60 @@ class ArmSession:
         chain = getattr(self.robot, "motor_chain", None)
         return bool(chain is not None and getattr(chain, "running", False))
 
-    def read_thermal(self):  # noqa: ANN201
-        """One thermal cycle. Returns the guard's verdict; `None` states = blind."""
-        chain = getattr(self.robot, "motor_chain", None)
+    def read_thermal(self, *, n_arm: int = N_ARM):
+        """Cache one chain read and return the guard verdict; unreadable means blind.
+
+        states and _states refer to the same cycle for reporting and the legacy
+        stall-helper API. Keep the last temperatures after a failed read.
+        """
         try:
-            states = chain.read_states()
-        except Exception:  # noqa: BLE001
+            states = self.robot.motor_chain.read_states()
+            self.read_error = None
+        except Exception as exc:
             states = None
+            self.read_error = f"{type(exc).__name__}: {exc}"
+        self.states = self._states = states
         if states is None:
-            self.stall_since = None      # a stall cannot be judged if it cannot be seen
-            self._states = None
+            self.stall_since = None
             self.hottest, self.jaw_temp = None, None
             return self.thermal.update(None), None, None
-        self._states = states
-        temps, hottest, jaw = motor_temperatures(states, N_ARM)
-        motor = temps.index(hottest) if hottest is not None else None
-        self.hottest, self.jaw_temp = hottest, jaw
-        return self.thermal.update(hottest, jaw, motor=motor), hottest, jaw
+        self.temps, self.hottest, self.jaw_temp = motor_temperatures(states, n_arm)
+        motor = self.temps.index(self.hottest) if self.hottest is not None else None
+        return self.thermal.update(self.hottest, self.jaw_temp, motor=motor), self.hottest, self.jaw_temp
 
-    def gripper_stall_release(self, t: float) -> float | None:
-        """Is the gripper pushing hard without moving? Returns a jaw value to back off to.
+    def gripper_stall_release(self, t: float, *, n_arm: int = N_ARM,
+                              torque: float = GRIPPER_STALL_TORQUE,
+                              velocity: float = GRIPPER_STALL_VEL,
+                              seconds: float = GRIPPER_STALL_SECONDS) -> float | None:
+        """Return a measured jaw position after sustained high torque/low velocity.
 
-        ⛔⭐ WHY THIS EXISTS: motor 7 was cooked three times. Pushing at full current
-        while not moving is the worst thermal case there is — full current, no motion, no
-        cooling — and the jaws reach it whenever they are commanded past whatever they are
-        holding. The release is to the **measured** jaw position, so the command stops
-        fighting the object and the motor stops heating.
-
-        ⭐ It returns a value instead of applying one, because *the class decides and the
-        script narrates*: the caller sets `gripper_value` and prints the warning. Returning
-        `None` means there is nothing to do.
-
-        ⚠️ It needs `read_thermal()` to have run this cycle, because the torque and
-        velocity come from the same chain read. Calling it without one is not an error; it
-        simply reports nothing, which is the same "cannot see it, cannot judge it" rule the
-        thermal guard uses.
-
-        ⛔ **This was missing from this class for a day**, while `teleop_session.py` had it
-        the whole time and this file even carried the `stall_since` variable with nothing
-        writing to it. Found by a systematic diff rather than by anything failing.
-        FINDINGS §36.5.
+        Call read_thermal first in the same cycle. Missing readings, no gripper or
+        an existing jaw block reset the timer and return None. SessionHealth
+        applies the returned value, latches it and reports the stall. This method
+        does not command a robot.
         """
         states = getattr(self, "_states", None)
-        if states is None or len(states) <= N_ARM:
+        if states is None or len(states) <= n_arm:
             self.stall_since = None
             return None
-        jaw = states[N_ARM]
-        pushing = abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
-        still = abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL
+        if self.jaw_block is not None:
+            self.stall_since = None
+            return None
+        jaw = states[n_arm]
+        pushing = abs(getattr(jaw, "eff", 0.0)) > torque
+        still = abs(getattr(jaw, "vel", 0.0)) < velocity
         if not (pushing and still):
             self.stall_since = None
+            self.stall_count = 0
             return None
         if self.stall_since is None:
             self.stall_since = t
             return None
-        if t - self.stall_since <= GRIPPER_STALL_SECONDS:
+        if t - self.stall_since <= seconds:
             return None
         self.stall_since = None
         q = np.asarray(self.robot.get_joint_pos(), dtype=float)
-        return float(q[N_ARM])
+        return float(q[n_arm])
 
     # ------------------------------------------------------------- modes ----
 
@@ -671,30 +482,13 @@ class ArmSession:
 
     def begin_path(self, legs: list[ParkLeg], t: float, smooth: bool = True,
                    mixed_leg_advice: bool = True) -> list[str]:
-        """Start a run through every leg, split wherever only the jaws move. Returns warnings.
+        """Validate every target, split jaws-only legs, then start the blended run.
 
-        ⛔ Every waypoint goes through `park_target_from`, so the gripper clamp and the
-        6-versus-7-joint reconciliation apply to all of them. A length mismatch on one
-        leg once raised mid-park and dropped the arm (FINDINGS §11), and that path
-        reaches every leg here, not only the first.
-
-        ⭐⭐ THE SPLIT IS THE GRAB FEATURE (ROADMAP §6.6.2, item 3). A blended corner
-        between "at the object, open" and "at the object, closed" closes the jaws during
-        the descent, so `plan_gripper_stops` breaks the run at every jaws-only leg: one
-        blended `JointPath` per segment, and between segments the arm holds while the
-        jaws are commanded and WAITED FOR (see `step_path`'s jaw phase). A run with no
-        jaws-only leg produces exactly one segment and behaves as it always has.
-
-        ⚠️ A leg that moves the arm AND the jaws together is reported in the returned
-        warnings rather than split — only the operator knows which he meant, and both
-        readings are defensible. That rule and its reasoning live on `plan_gripper_stops`.
-        `mixed_leg_advice=False` drops that advice (never the target warnings): a drive
-        to a recording's start pose is one positioning move whose destination nobody can
-        re-save, so "save a waypoint where only the jaws change" would be noise there.
-
-        ⚠️ `smooth=False` is the caller's `--no-smooth`: the path is still blended, and
-        only the easing ramp is switched off. Blending is the *shape*; easing is the
-        *speed along it*. They are independent axes and Julien wants both adjustable.
+        Every waypoint passes park_target_from for joint count and jaw limits.
+        Between segments, step_path holds the arm and waits for the jaw movement.
+        Mixed arm/jaw legs produce advice rather than a split; mixed_leg_advice
+        suppresses that advice only, never target warnings. smooth=False disables
+        the speed easing ramp, not geometric blending. Return collected warnings.
         """
         warnings: list[str] = []
         targets = []
@@ -800,36 +594,17 @@ class ArmSession:
                   settle_seconds: float = PARK_SETTLE_SECONDS,
                   progress_eps: float = PARK_PROGRESS_EPS,
                   max_cursor_lag: float = MAX_CURSOR_LAG) -> ParkStep:
-        """Advance the park by one control cycle and report what happened.
+        """Advance one park cycle and return a ParkStep with measured progress.
 
-        ⛔ Completion is judged from the **measured** pose, never from the command. The
-        command always arrives first, so testing it would declare success while the arm
-        was still travelling. That was a real bug and it hid for two sessions.
+        Arrival requires the path cursor to finish AND the measured arm to arrive;
+        a closed loop must not finish immediately because its end is its start.
+        The cursor waits for lagging arms. Progress includes either cursor motion
+        or a shrinking measured gap. Arm error excludes jaws, so holding an object
+        does not prevent arrival.
 
-        ⛔⭐ ARRIVAL IS GATED ON THE CURSOR REACHING THE END OF THE PATH, not on the
-        error alone. A run like `p 1 2 1` finishes where it started, so the distance to
-        the final target is small at t=0 as well — judging on that would declare the
-        whole sequence complete before the arm had moved at all.
-
-        ⭐ The cursor waits when the arm falls behind. The trajectory is a *shape*, and a
-        command racing ahead while the arm cuts its own corner is not the shape anyone
-        chose. Progress means "the cursor moved OR the arm closed the gap": without the
-        first half a legitimately slow leg looks stalled, and without the second an arm
-        pinned against something never does.
-
-        ⭐⭐ THE JAW PHASE (verdict "jaws"). At the end of every segment but the last the
-        arm holds still, the next waypoint's jaw value is commanded (through the block
-        latch), and the run resumes when the jaws are DONE — measured as "still for
-        `JAW_SETTLE_SECONDS` after at least `JAW_MIN_WAIT`", never as a dwell time. A jaw
-        stalled on an object is still, so a successful grab resumes the run by the same
-        rule as an empty close. `JAW_TIMEOUT_SECONDS` bounds a jaw that never settles, so
-        a jammed gripper cannot stop the run for ever; a timeout is reported, not hidden.
-        On the resume cycle `check_grasp` grades a closing leg (item 10) and rides along
-        on the step.
-
-        ⛔ `err` and `lag` are ARM-ONLY — see `_arm_err`. A held object parks the jaw a
-        finger's width from its command for the whole rest of the run, and counting that
-        would freeze the cursor and turn every successful grab into a "blocked" park.
+        At segment boundaries, hold the arm before moving jaws through the block
+        latch. Resume after measured stillness and the minimum wait, or a reported
+        timeout. The resume step includes a grasp assessment for a closing leg.
         """
         blocked = ParkStep("blocked", float("inf"), 0.0, 0.0, None, None,
                            t - self.park_leg_t, t - self.park_start_t,

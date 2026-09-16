@@ -4,7 +4,7 @@ Reviewed September 15, 2026 against `c8069cc`. The findings below describe that 
 
 Implemented since the review: recording completion, corrected interfaces, shared camera services/rendering, replay state, composite sequencing, explicit stop causes and controlled stopping. Settings, park, recording-save and playback prompts own their transitions. Plan formatting, acquired-device cleanup, incident assembly and CLI definitions are separate. See [the current continuation](CLEANUP.md#acquired-resources-incident-assembly-cli-and-playback-continuation) for behavior, evidence and limits.
 
-Explicit controls mapping edits are also extracted. Mirror confirmation, controls-mode coordination, startup assembly and control-cycle coordination still live in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
+Explicit controls mapping edits, mirror confirmation, input polling and health checking are also extracted. Read-only recording recovery inspection is implemented. Cross-mode dispatch, startup assembly and ordered motion commands remain in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
 
 ## Decision
 

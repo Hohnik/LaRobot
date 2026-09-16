@@ -185,9 +185,10 @@ def frames_verdict(meta_cameras: dict, recording_dir: Path,
 
 
 def orphaned_frames(recording_dir: Path, files: list[Path]) -> list[str]:
-    """Frame directories no recording accounts for — dead sessions and stale slots.
+    """Report unclaimed frames without assuming they are disposable.
 
-    A `pending_*` directory is a take whose session died before the save digit; a slot directory whose `.json` is missing or frameless is debris from an overwritten or deleted recording. Both would read as belonging to something, which is why the checker names them instead of leaving them plausible.
+    Missing or unreadable JSON can reflect an interrupted save. Pending images
+    may be the only camera evidence left; they do not reconstruct joint samples.
     """
     frames_root = recording_dir / "frames"
     if not frames_root.is_dir():
@@ -203,10 +204,10 @@ def orphaned_frames(recording_dir: Path, files: list[Path]) -> list[str]:
     out = []
     for child in sorted(frames_root.iterdir()):
         if child.is_dir() and child.resolve() not in claimed:
-            kind = ("a session died before the save digit"
+            kind = ("pending camera files; may belong to an active or interrupted session"
                     if child.name.startswith("pending_")
-                    else "no recording claims it")
-            out.append(f"{child.relative_to(recording_dir)} — {kind}; safe to delete.")
+                    else "no readable recording claims it")
+            out.append(f"{child.relative_to(recording_dir)} — {kind}; preserve for inspection.")
     return out
 
 
@@ -221,6 +222,19 @@ def main() -> int:
     folder = REPO / args.dir if not Path(args.dir).is_absolute() else Path(args.dir)
     files = listing(folder, "*.json")
     litter = sidecars(folder)
+    orphans = orphaned_frames(folder, files)
+    if orphans:
+        print()
+        print(f"⚠️ {len(orphans)} frame director(ies) no recording accounts for:")
+        for line in orphans:
+            print(f"   {line}")
+    recovery_dirs = sorted(folder.glob(".save-*"))
+    if recovery_dirs:
+        print(f"⚠️ {len(recovery_dirs)} interrupted save directory(s): "
+              + ", ".join(path.name for path in recovery_dirs))
+    if orphans or recovery_dirs:
+        print("   Inspect with checks/check_recording_recovery.py --dir " + str(folder))
+        print("   Retained images alone do not recover unsaved joint samples. Do not delete automatically.")
     if not files:
         print(f"no recordings in {folder}")
         return 0
@@ -298,12 +312,6 @@ def main() -> int:
                     frame_faults.append(path.name)
                 print(f"      ⛔ {fault}")
 
-    orphans = orphaned_frames(folder, files)
-    if orphans:
-        print()
-        print(f"⚠️ {len(orphans)} frame director(ies) no recording accounts for:")
-        for line in orphans:
-            print(f"   {line}")
 
     print()
     if label_faults:

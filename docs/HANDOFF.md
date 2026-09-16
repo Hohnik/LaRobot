@@ -1,6 +1,6 @@
 # Handoff — start here if you have no context
 
-## Current continuation — September 15, 2026
+## Current continuation — September 16, 2026
 
 Start with [CLEANUP.md](CLEANUP.md) for the current branch, preserved training work and recordings, implementation decisions, checks, and next steps. [README.md](../README.md) has the dedicated launcher commands. Fable's final commit was `499d0b7`, exactly the version Julien recalled; the cleanup continues from it on `codex/teleop-cleanup`. The Linux station has not been rechecked in this continuation.
 

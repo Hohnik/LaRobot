@@ -82,10 +82,13 @@ from yam.teleop import (  # noqa: E402
 )
 from yam.recording_store import save_take  # noqa: E402
 from yam.teleop_cli import build_parser  # noqa: E402
+from yam.session_health import SessionHealth  # noqa: E402
+from yam.session_input import SessionInput  # noqa: E402
 from yam.session_resources import SessionResources  # noqa: E402
 from yam.recording_session import RecordingSession  # noqa: E402
 from yam.lifecycle import StopCause, StopRequest, controlled_stop  # noqa: E402
 from yam.composite import CompositeRun  # noqa: E402
+from yam.mirror_session import MirrorSession  # noqa: E402
 from yam.playback_session import PlaybackSession  # noqa: E402
 from yam.provenance import dt_now, git_commit  # noqa: E402
 from yam.cameras.session import open_session_cameras  # noqa: E402
@@ -588,13 +591,10 @@ def main() -> int:  # noqa: PLR0915
     scrub_ref_t = scrub_ref_s = scrub_ref_h = 0.0
     # Capture each arrival's purpose before advancing a composite leg (FINDINGS §72.1).
     park_purpose: dict[str, str] = {}
-    # Mirror state belongs to the session: the link relates a leader and follower.
-    mirror_link: MirrorLink | None = None
-    #: ⚠️ Declared here so the stop report can read it even if it somehow runs before a link
-    #: was ever engaged. It is a count, so 0 is the honest starting value.
-    mirror_clipped_at = 0
-    mirror_leader: ArmSession | None = None
-    mirror_follower: ArmSession | None = None
+    health = SessionHealth(n_arm=N_ARM, stall_torque=GRIPPER_STALL_TORQUE,
+                           stall_velocity=GRIPPER_STALL_VEL, stall_seconds=GRIPPER_STALL_SECONDS,
+                           emit=print)
+    mirror = MirrorSession(align_speed=MIRROR_ALIGN_SPEED, n_arm=N_ARM, emit=print, hint=hint)
     # A pending `s` or `p` waiting for its digit, and the sequence being typed after `p`.
     pending: str | None = None
     park_prompt = ParkPrompt()
@@ -966,6 +966,8 @@ def main() -> int:  # noqa: PLR0915
             playback.prepare(loaded, layout, take_arms, slot, args.teleop_speed)
             park_to_take_start()
 
+        inputs = SessionInput(shared_reader=shared_puck, selection=selection, n_arm=N_ARM,
+                              button_rate=GRIPPER_BUTTON_RATE, clamp=clamp_gripper, emit=print)
         playback_prompt = PlaybackPrompt(playback, load_take=load_take, hint=hint, emit=print)
 
         composite = CompositeRun(load_take=load_take, begin_path=begin_path,
@@ -982,19 +984,19 @@ def main() -> int:  # noqa: PLR0915
                     one_arm.robot.max_lag = value
                 elif name == "vel_ff":
                     one_arm.robot.vel_ff = value
-            if name == "mirror_gap" and mirror_link is not None:
-                mirror_link.max_gap = value
-            if name == "mirror_catchup" and mirror_link is not None:
-                mirror_link.catchup = value
+            if name == "mirror_gap" and mirror.link is not None:
+                mirror.link.max_gap = value
+            if name == "mirror_catchup" and mirror.link is not None:
+                mirror.link.catchup = value
 
         def show_settings_status() -> None:
             for one_arm in arms:
                 print("     " + status_row(
                     one_arm, "", args.reach, args.floor,
-                    note=(mirror_link.status(
-                        mirror_leader.robot.get_joint_pos(),
+                    note=(mirror.link.status(
+                        mirror.leader.robot.get_joint_pos(),
                         one_arm.robot.get_joint_pos())
-                        if mirror_link is not None
+                        if mirror.link is not None
                         and one_arm.mode == "mirror" else "")))
 
         settings_panel = SettingsPanel(
@@ -1062,91 +1064,7 @@ def main() -> int:  # noqa: PLR0915
                         "released until you choose below (Ctrl-C again forces it)")
                     break
 
-                # A fault on any arm stops the whole session. Check the stop after the per-arm loop.
-                for one in arms:
-                    if not one.alive():
-                        stop = StopRequest(
-                            StopCause.FAULT,
-                            f"arm {one.name}: the motor chain STOPPED — I2RT's control "
-                            "thread exited, almost certainly on a motor fault. Commands "
-                            "are no longer reaching the arm.")
-                if stop:
-                    break
-
-                # Guard device reads separately from thermal decisions; a failed read must not disable the guard.
-                # Keep each arm's last valid state for the incident report.
-                for one in arms:
-                    try:
-                        one.states = one.robot.motor_chain.read_states()
-                        read_error = None
-                    except Exception as exc:  # noqa: BLE001
-                        one.states, read_error = None, f"{type(exc).__name__}: {exc}"
-
-                    if one.states is None:
-                        one.hottest, one.jaw_temp = None, None
-                        one.stall_since = None            # cannot judge a stall we cannot see
-                        verdict = one.thermal.update(None)
-                    else:
-                        one.temps, one.hottest, one.jaw_temp = motor_temperatures(
-                            one.states, N_ARM)
-                        verdict = one.thermal.update(
-                            one.hottest, one.jaw_temp,
-                            motor=one.temps.index(one.hottest)
-                            if one.hottest is not None else None)
-                        # Skip absent grippers. Report latch release so repeated stalls can be distinguished.
-                        if one.jaw_unblocked_from is not None:
-                            print(f"\n  ⭐ arm {one.name} jaws opened past the block at "
-                                  f"{one.jaw_unblocked_from:.3f} — free to close again.\n")
-                            one.jaw_unblocked_from = None
-                        jaw = one.states[N_ARM] if len(one.states) > N_ARM else None
-                        if jaw is None:
-                            one.stall_since = None
-                        elif one.jaw_block is not None:
-                            # A latched jaw remains at its captured position. Opening beyond the latch
-                            # margin releases it; repeated close commands must not resume stall torque.
-                            one.stall_since = None
-                        elif (abs(getattr(jaw, "eff", 0.0)) > GRIPPER_STALL_TORQUE
-                                and abs(getattr(jaw, "vel", 0.0)) < GRIPPER_STALL_VEL):
-                            if one.stall_since is None:
-                                one.stall_since = loop_start
-                            elif loop_start - one.stall_since > GRIPPER_STALL_SECONDS:
-                                measured_jaw = float(np.asarray(
-                                    one.robot.get_joint_pos(), dtype=float)[N_ARM])
-                                one.gripper_value = measured_jaw
-                                # Latch at the measured jaw position so later teleop updates cannot reapply the stall.
-                                one.block_jaw_at(measured_jaw)
-                                one.stall_since = None
-                                one.stall_count += 1
-                                # Report a newly detected stall once; throttle repeated notifications with a count.
-                                if (one.stall_count == 1
-                                        or loop_start - one.stall_last_said > 5.0):
-                                    one.stall_last_said = loop_start
-                                    extra = ("" if one.stall_count == 1 else
-                                             f" ({one.stall_count} times now)")
-                                    print(f"\n⚠️  ARM {one.name} GRIPPER STALLED{extra} "
-                                          f"({jaw.eff:+.2f} Nm, not moving) — released to "
-                                          f"{measured_jaw:.3f} so it stops pushing.")
-                                    if one.stall_count > 1:
-                                        print("     Something is holding the jaws and the "
-                                              "command keeps pushing past it. In MIRROR that "
-                                              "is the leader's jaws being squeezed while the "
-                                              "follower already has hold of something.\n")
-                                    else:
-                                        print()
-                        else:
-                            one.stall_since = None
-                            # ⭐ Reset the streak once the jaws are free again, so the count
-                            # means "in a row" rather than "since the session began".
-                            one.stall_count = 0
-
-                    if verdict.warning:
-                        detail = f"  ({read_error})" if read_error else ""
-                        print(f"\n⚠️  arm {one.name}: {verdict.warning}{detail}\n")
-                    # ⛔ Recorded, not `break`ed — see the note on the liveness loop above.
-                    # ⚠️ A thermal stop on ONE arm stops the session, same ruling as a chain
-                    # death: the alternative is one arm cooking while the other is driven.
-                    if verdict.stop_reason:
-                        stop = StopRequest(StopCause.FAULT, f"arm {one.name}: {verdict.stop_reason}")
+                stop = health.check(arms, loop_start, stop=stop)
                 if stop:
                     break
 
@@ -1210,46 +1128,11 @@ def main() -> int:  # noqa: PLR0915
                         continue
 
                     if pending == "mirror_go":
-                        # At this prompt, i switches copy/mirror and displays the revised plan.
-                        if k == "i":
-                            args.mirror = "mirror" if args.mirror == "copy" else "copy"
-                            print(f"     ⭐ now {args.mirror.upper()}: "
-                                  + ("the follower reproduces the leader's angles unchanged, "
-                                     "for arms side by side" if args.mirror == "copy" else
-                                     "the follower negates the joints that reverse under "
-                                     "reflection, for arms FACING each other")
-                                  + "\n     Enter engages · i switches again · any other "
-                                    "key cancels\n")
-                            continue
-                        pending = None
-                        if k in ("\r", "\n", " ") and mirror_follower is not None:
-                            # Enable follower position control first; enter_hold() sets its mode, so assign mirror afterward.
-                            mirror_follower.enter_hold()
-                            mirror_follower.mode = "mirror"
-                            # ⭐ THE FOLLOW SPEED IS READ FROM THE FOLLOWER'S OWN CAP, not
-                            # repeated here. `MirrorLink`'s default is 1.0 because that is
-                            # SafeRobot's default; if `--max-speed` raises the cap, a
-                            # hardcoded 1.0 here would quietly become the binding limit and
-                            # the mirror would stay slow for no visible reason.
-                            mirror_link = MirrorLink(
-                                mode=args.mirror, align_speed=MIRROR_ALIGN_SPEED,
-                                catchup=args.mirror_catchup,
-                                follow_speed=getattr(mirror_follower.robot, "max_speed",
-                                                     args.max_speed),
-                                max_gap=args.mirror_gap)
-                            # ⭐ The baseline for "how often did SafeRobot hold the command
-                            # back during THIS link", which is the hardware-side half of the
-                            # diagnosis. A running total since the session began would say
-                            # nothing about the mirror run.
-                            mirror_clipped_at = getattr(mirror_follower.robot,
-                                                        "limited_cycles", 0)
-                            print(f"\n▶  MIRROR engaged: arm {mirror_follower.name} is "
-                                  f"following arm {mirror_leader.name}. "
-                                  "Press h, t, g or i to stop it.\n")
-                        else:
-                            mirror_leader = mirror_follower = None
-                            hint("")
-                            print("\n  mirror cancelled.\n")
+                        keep_prompt, args.mirror = mirror.confirm(
+                            k, mode=args.mirror, catchup=args.mirror_catchup,
+                            max_gap=args.mirror_gap, max_speed=args.max_speed)
+                        if not keep_prompt:
+                            pending = None
                         continue
 
                     if pending == "park":
@@ -1359,41 +1242,11 @@ def main() -> int:  # noqa: PLR0915
                         continue
                     if k == "i":
                         # Mirror engagement moves the follower; show the plan and require a second confirmation.
-                        if mirror_link is not None:
-                            mirror_link = None
-                            for one in arms:
-                                if one.mode == "mirror":
-                                    one.enter_hold()
-                            hint("")
-                            print("\n  ⭐ MIRROR off — the follower is HOLDING.\n")
+                        if mirror.link is not None:
+                            mirror.turn_off(arms)
                             continue
-                        try:
-                            lead_name, follow_name = pick_pair(
-                                [one.name for one in arms], selection.names())
-                        except ValueError as exc:
-                            hint(str(exc))
-                            continue
-                        mirror_leader = next(o for o in arms if o.name == lead_name)
-                        mirror_follower = next(o for o in arms if o.name == follow_name)
-                        pending = "mirror_go"
-                        start_gap = float(np.max(np.abs(
-                            np.asarray(mirror_follower.robot.get_joint_pos(), dtype=float)[:N_ARM]
-                            - np.asarray(mirror_leader.robot.get_joint_pos(), dtype=float)[:N_ARM])))
-                        print(f"\n⭐ MIRROR: arm {lead_name} LEADS, arm {follow_name} FOLLOWS "
-                              f"({args.mirror}).")
-                        print(f"     arm {follow_name} will first close a {start_gap:.2f} rad "
-                              f"gap at {MIRROR_ALIGN_SPEED} rad/s, then track continuously.")
-                        print(f"     ⚠️ HOLD ARM {lead_name} STILL until it says FOLLOWING, and "
-                              f"keep the space around arm {follow_name} clear.")
-                        # ⛔ SAID OUT LOUD BECAUSE NOTHING CHECKS IT. There is no collision
-                        # model anywhere in this project: no arm knows where the other one is.
-                        # MIRROR is the first mode where an arm moves with no hand on it, so
-                        # the operator is the only thing standing between two arms reaching
-                        # into the same space. ROADMAP §8.2 item 25.
-                        print("     ⛔ NOTHING CHECKS FOR THE ARMS COLLIDING. No arm knows "
-                              "where the other one is.")
-                        print("     Enter engages · i switches copy/mirror · any other key "
-                              "cancels\n")
+                        if mirror.preview(arms, selection.names(), args.mirror):
+                            pending = "mirror_go"
                         continue
                     if k == "n":
                         pending = "settings"
@@ -1753,10 +1606,7 @@ def main() -> int:  # noqa: PLR0915
                     elif k.isprintable() and k.strip():
                         print(f"\n  (key {k!r} does nothing — press ? for the list)\n")
                 # Leaving PARK cancels the remaining composite legs and pending handovers.
-                if mirror_link is not None and not any(one.mode == "mirror" for one in arms):
-                    mirror_link = None
-                    hint("")
-                    print("  ⭐ MIRROR off — the follower left the mode.\n")
+                mirror.observe_modes(arms)
 
                 # ⚠️ Per arm, because one arm can be parking while the other is being
                 # driven. Each arm's run is abandoned by ITS OWN mode leaving `park`.
@@ -1837,84 +1687,8 @@ def main() -> int:  # noqa: PLR0915
                                 print(line)
                             print("\n     SAVE to which slot? 0-9, any other key discards.\n")
 
-                # Read inputs every cycle, in every mode, to service buttons and prevent queued HID bursts.
-                # Read a shared puck once, route it to selected arms, and center all other arms.
-                shared_axes: list[float] | None = None
-                shared_buttons = 0
-                if shared_puck is not None:
-                    try:
-                        shared_axes = shared_puck.read()
-                        shared_buttons = getattr(shared_puck, "buttons", 0)
-                    except Exception as exc:  # noqa: BLE001
-                        # Same graceful stop as the per-arm guard below (FINDINGS §68.2).
-                        shared_axes = [0.0] * 6
-                        if not stop:
-                            stop = StopRequest(
-                                StopCause.FAULT, "the shared SpaceMouse stopped answering "
-                                f"({type(exc).__name__}) — unplugged?")
-                            print(f"\n⛔ {stop}")
-                            print("   Treating it as centred and parking safely.\n")
-                for one in arms:
-                    if shared_axes is not None:
-                        # ⭐ The puck follows the selection; unaimed arms read centred.
-                        aimed_now = one.name in selection.names()
-                        one.raw_axes = list(shared_axes) if aimed_now else [0.0] * 6
-                        buttons = shared_buttons if aimed_now else 0
-                    else:
-                        try:
-                            one.raw_axes = one.reader.read()
-                        except Exception as exc:  # noqa: BLE001
-                            # A puck read failure requests the controlled stop path rather than escaping
-                            # the loop directly and disabling raised arms.
-                            one.raw_axes = [0.0] * 6
-                            if not stop:
-                                stop = StopRequest(
-                                    StopCause.FAULT, f"arm {one.name}'s SpaceMouse stopped "
-                                    f"answering ({type(exc).__name__}) — unplugged?")
-                                print(f"\n⛔ {stop}")
-                                print("   Treating that puck as centred and parking "
-                                      "safely.\n")
-                            continue
-                        buttons = getattr(one.reader, "buttons", 0)
-                    pressed = buttons & ~one.buttons_prev              # rising edge only
-                    one.buttons_prev = buttons
-
-                    if one.learn_button is not None and (pending is not None or recording_prompt.active):
-                        # Only one prompt may own input; opening a new one cancels the previous prompt.
-                        one.learn_button = None
-                        print(f"\n  ⚠️ the gripper-button learning on arm {one.name} is "
-                              f"CANCELLED — another prompt opened. Press b to restart it.\n")
-                    if one.learn_button is not None and pressed:
-                        warn = one.axis_map.learn_button(one.learn_button, pressed)
-                        if warn:
-                            print(f"\n  ⚠️  {warn}\n")
-                        elif one.learn_button == "open":
-                            one.learn_button = "close"
-                            print(f"  ✓ OPEN  ← button 0x{pressed:02x}")
-                            print("   Now press the button you want for CLOSE …\n")
-                        else:
-                            one.learn_button = None
-                            print(f"  ✓ CLOSE ← button 0x{pressed:02x}")
-                            print(one.axis_map.buttons_row())
-                            print("   (f swaps them if they are the wrong way round)\n")
-                    elif pressed:
-                        # A press counts as "the control you just used", so f reverses it.
-                        # ⛔ But ONLY keys edit the map, exactly as for the axes: pressing
-                        # a button never rebinds anything.
-                        one.last_input_kind = "button"
-                        if one.axis_map.button_action(pressed) is None:
-                            print(f"\n  button 0x{pressed:02x} is not assigned — press b to set the "
-                                  f"gripper buttons (works in any mode)\n")
-                        elif one.mode not in ("teleop", "map"):
-                            print(f"\n  gripper buttons move the jaws in TELEOP (t) and CONTROLS (m); "
-                                  f"you are in {one.mode.upper()}\n")
-
-                    if one.learn_button is None and one.robot.num_dofs() > N_ARM and one.mode in ("teleop", "map"):
-                        action = one.axis_map.button_action(buttons)
-                        if action == "open":
-                            one.gripper_value = clamp_gripper(one.gripper_value + GRIPPER_BUTTON_RATE * dt)
-                        elif action == "close":
-                            one.gripper_value = clamp_gripper(one.gripper_value - GRIPPER_BUTTON_RATE * dt)
+                stop = inputs.poll(
+                    arms, dt, prompt_open=pending is not None or recording_prompt.active, stop=stop)
 
                 # Step each arm's mode in requested layout order, independent of key selection.
                 for one in arms:
@@ -1972,55 +1746,20 @@ def main() -> int:  # noqa: PLR0915
                         one.robot.command_joint_pos(full)
                         one.prev_q = q_target.copy()
 
-                    elif one.mode == "mirror" and mirror_link is not None:
+                    elif one.mode == "mirror" and mirror.link is not None:
                         # ⭐⭐ ONE ARM FOLLOWS THE OTHER. Every decision is `MirrorLink`'s
                         # (18 tests, no robot handle); this branch reads the two poses,
                         # carries the command out, and narrates. Same split as `replay_step`
                         # and `ArmSession` — the code that commands an arm is the code that
                         # cannot be tested without one, so it is kept as thin as possible.
-                        lead_q = np.asarray(mirror_leader.robot.get_joint_pos(), dtype=float)
+                        lead_q = np.asarray(mirror.leader.robot.get_joint_pos(), dtype=float)
                         follow_q = np.asarray(one.robot.get_joint_pos(), dtype=float)
-                        cmd = mirror_link.step(lead_q, follow_q, real_dt)
+                        cmd = mirror.link.step(lead_q, follow_q, real_dt)
                         if cmd is None:
                             # When mirror stops itself, stop follower commands and report its measured reason.
-                            joint_name = ""
-                            if mirror_link.stop_joint is not None:
-                                joint_name = YAM_JOINTS.get(
-                                    mirror_link.stop_joint + 1, ("joint",))[0]
-                            print(f"\n⛔ MIRROR STOPPED — {mirror_link.stop_reason}"
-                                  + (f", {joint_name}" if joint_name else ""))
-                            print(f"     {mirror_link.stop_detail}")
-                            # Use measured leader speed and follower lag when diagnosing mirror tracking.
-                            clipped = getattr(one.robot, "limited_cycles", 0) - mirror_clipped_at
-                            if clipped > 0:
-                                print(f"     ⚠️ SafeRobot held the command back on {clipped} "
-                                      f"cycle(s) (its "
-                                      f"{getattr(one.robot, 'max_lag', 0.25):.2f} rad "
-                                      "following-error limit).")
-                            if mirror_link.stop_cause == "follow_limit":
-                                # Name mirror-gap (stop tolerance) separately from max-speed (follower command rate).
-                                suggest = max(3.0, round(mirror_link.stop_leader_speed
-                                                         * 1.5 + 0.4, 1))
-                                print(f"     ⭐ TWO WAYS OUT, and the first is the limit "
-                                      f"that actually fired:")
-                                print(f"       1. `--mirror-gap {mirror_link.max_gap * 2:.2f}`"
-                                      f"  (now {mirror_link.max_gap:.2f}) — how far behind "
-                                      f"is TOLERATED before stopping.")
-                                print(f"       2. `--max-speed {suggest:g}`"
-                                      f"  (now {args.max_speed:.2f}) — how fast the follower "
-                                      f"may move. You moved the leader at "
-                                      f"{mirror_link.stop_leader_speed:.2f} rad/s.")
-                                # Report this run's measured leader speed; historical recordings are not its evidence.
-                                print(f"     ⚠️ `--max-lag` does NOT affect this stop.")
-                            elif mirror_link.stop_cause == "tracking":
-                                print("     ⭐ More `--max-speed` will NOT help: the arm, not "
-                                      "the software, is the limit.")
-                                print(f"     Either guide the leader more slowly, or loosen "
-                                      f"the tolerance with --mirror-gap "
-                                      f"{mirror_link.max_gap * 2:.2f}.")
-                            print("     Press i then Enter to engage it again.\n")
+                            mirror.report_stop(one, args.max_speed)
                             one.enter_hold(); hint("")
-                            mirror_link = None
+                            mirror.clear()
                         else:
                             full = np.asarray(cmd, dtype=float).copy()
                             # ⛔ The jaws go through the clamp, never straight from the leader.
@@ -2390,10 +2129,10 @@ def main() -> int:  # noqa: PLR0915
                     pad = " " * display_width(lead)
                     screen.set_rows([
                         status_row(one, lead if i == 0 else pad, args.reach, args.floor,
-                                   note=(mirror_link.status(
-                                       mirror_leader.robot.get_joint_pos(),
+                                   note=(mirror.link.status(
+                                       mirror.leader.robot.get_joint_pos(),
                                        one.robot.get_joint_pos())
-                                       if mirror_link is not None and one.mode == "mirror"
+                                       if mirror.link is not None and one.mode == "mirror"
                                        else ""))
                         for i, one in enumerate(arms)])
 

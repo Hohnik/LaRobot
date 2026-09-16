@@ -2,11 +2,11 @@
 
 Updated September 16, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
 
-The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings, park, recording-save and playback prompts now own their key transitions. Startup plan formatting, acquired-device cleanup, incident-field assembly and command-line definitions are separate. Controls mapping edits now have a separate handler too. Mirror confirmation, controls-mode coordination and the remaining application assembly still need work.
+The [architecture review](RESTRUCTURING.md) records the responsibility map and remaining sequence. Recording completion, shared camera acquisition, camera rendering, replay state and composite sequencing are now extracted, as described below. The controlled stop interaction also has its own module. Settings, park, recording-save and playback prompts now own their key transitions. Startup plan formatting, acquired-device cleanup, incident-field assembly and command-line definitions are separate. Controls mapping edits, mirror confirmation, input polling and health checks also have owners. The application retains cross-mode key dispatch, startup assembly and the ordered motion-command cycle. Read-only recovery inspection is available; current source contracts replace another set of historical ArmSession notes.
 
 ## Status
 
-The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park/recording/playback prompt ownership, startup plan formatting, acquired-device cleanup, incident assembly, CLI definitions and explicit controls mapping edits. Current validation passes 1020/1020 checks across 61 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
+The cleanup continues on `codex/teleop-cleanup` from Fable's final `499d0b7`. Completed work covers startup/shutdown ownership, shared recording state, readability, slot rollback, recording completion, shared camera/display extraction, replay state, composite sequencing, explicit shutdown causes, settings/park/recording/playback prompt ownership, startup plan formatting, acquired-device cleanup, incident assembly, CLI definitions, controls mapping edits, mirror coordination, input polling, health checks and recovery inspection. Current validation passes 1049/1049 checks across 65 files, 71/71 falsifier catches, and 32/32 isolated simulation checks. Structural and flag checks pass. No physical hardware has been operated and nothing has been pushed. All 3,455 original recording files still match the pre-switch hashes.
 
 Correction to the earlier handoff: `c8069cc` was missing the operator's `effective_limits` import after the display extraction. The old structural log already reported that failure. A previous simulation log said 32/32, but it did not establish that the final saved source was valid. The earlier claim that the checkpoint was fully verified was wrong. This continuation restores the import and adds a direct application test that enters TELEOP on both arms. The current isolated simulation passes with that fix.
 
@@ -97,15 +97,19 @@ The application now imports `git_commit` and `dt_now` from `yam.provenance`. The
 
 At the recording-lifecycle checkpoint, the operator `main()` still spanned roughly 3,900 lines. The later readability pass below reduces that further; architectural work remains. Camera state, slot persistence, replay/composite coordination, terminal prompts, and the control loop still meet in that function. Reducing a line count is not the acceptance criterion; removing duplicated decisions and testing the actual application boundary is.
 
-## Next work, in order
+## Remaining boundaries and the next decisions
 
-1. Review mirror confirmation and controls-mode coordination. Explicit mapping edits are extracted; mode transitions and shared speed keys remain in the operator. Settings, park-sequence, recording-save and playback prompts are extracted. Preserve key-consumption order, selected-arm ownership and explicit confirmation before motion.
-2. Continue separating startup assembly and control-cycle coordination where a component can own a coherent responsibility. Acquired-device cleanup, incident-field assembly, plan formatting and CLI definitions are extracted. The flag checker now follows directly called `yam.*.build_parser` imports. Keep limits, confirmations and motion-command order unchanged; moving the whole loop into a new class does not resolve its coupling.
-3. Add recovery inspection for retained frame directories and interrupted slot publication. Inspect actual files before proposing repairs. Joint samples held only in memory are not automatically preserved on process exit.
-4. Re-read the team's refs before proposing specific transfers. The September fetch is a dated snapshot; the newer dual-wield simulator has narrower behavior than this reference operator.
+The operator is now 2,251 lines; ArmSession is 755. Neither number is a target to preserve. Independent state machines and acquired resources have owners; moving the remaining code merely to shorten the entry point would hide coordination without simplifying it.
 
-The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) gives the remaining boundaries and acceptance criteria.
-The current simulator does not validate USB/CAN timing, gravity compensation, camera delivery, gripper calibration, collision avoidance, or real stopping behavior. Fake-device failure tests establish call ordering and ownership; they cannot establish that a motor physically disabled. Missing disable confirmations remain an operator-visible failure.
+- **Startup assembly stays visible:** parse/validate first, acquire inside the cleanup boundary, register returned handles before configuration, then initialize sessions. Resource cleanup already has a tested owner. A further builder abstraction should earn its place by reducing repeated configuration, not by passing every factory and local through a new context object.
+- **Cross-mode dispatch stays ordered:** prompt consumption precedes ordinary keys; selection affects edits/mode changes; input polling precedes arm commands; composite arrival and playback start gates share one cycle. Moving these branches independently can silently change which key or cycle performs motion. Direct application tests now cover the important recent boundaries; this is still not a claim of exhaustive behavior coverage.
+- **Motion calculation stays with its existing owners:** ArmSession, MirrorLink, CartesianTeleop and SafeRobot. Their physical behavior, limits and calibration were not redesigned. A future single command interface is a separate design change because modes currently command differently.
+- **Recovery is inspection only:** use the commands below before deciding how to repair an actual interrupted save. No recovery evidence exists in the two current local recording roots. An automatic repair policy cannot be justified by file presence alone.
+- **Team transfer remains a separate step:** re-read the team's refs before proposing particular transfers. The September fetch is a dated snapshot. Nothing has been pushed and the station has not been contacted.
+
+The [architecture review](RESTRUCTURING.md#implementation-sequence-and-acceptance) preserves the earlier proposal. This continuation completes its selected local ownership/recovery work; the remaining entries above describe deliberate boundaries and future design choices, not a technical blocker or a request for Julien to repeat permission. Save verified checkpoints without treating each as a reason to interrupt authorized work.
+
+The simulator does not validate USB/CAN timing, gravity compensation, camera delivery, gripper calibration, collision avoidance or real stopping behavior. Fake-device tests establish software call ordering and ownership, not that a motor physically disabled. Missing disable confirmations remain an operator-visible failure. Hardware validation and team publication require their own operator action/instruction.
 
 ## Reproducing the software evidence without changing saved data
 
@@ -318,3 +322,48 @@ The first production-handler test exposed an existing mismatch between behavior 
 Six handler tests exercise permuted-axis reversal, paired exchange and actual reversal, unbind/rebind direction, copied revert snapshots, missing observed axes and non-edit key pass-through. An additional application test forks the maps in a temporary configuration, enters controls on B, edits and reverts, swaps 1→2, verifies a repeated 2 leaves that swap intact, then uses 1 to restore it; G's map remains unchanged throughout. Existing shared-map behavior is not changed by this test's deliberate fork.
 
 Current evidence: 1,020/1,020 checks across 61 files, 71/71 falsifier catches, 32/32 isolated simulator checks, structural/flag/link/prose checks and unchanged original recording hashes. The operator is 2,512 lines and the editing helper is 65 lines. Logs use `agents/codex/validation/controls-*`. Neither this extraction nor the reduced line count means all keyboard coordination is finished.
+
+
+## Mirror, input and health coordination
+
+This continuation follows `783c8f1` (operator 2,512 lines). The operator is now 2,251 lines and main spans 1,750. It has not been moved wholesale into a new class.
+
+| Owner | Responsibility | Stays in the operator |
+| --- | --- | --- |
+| [MirrorSession](../src/yam/mirror_session.py) | Pair preview, copy/reflection choice, confirmed engagement, cancellation and stop diagnostics | Pose reads, MirrorLink.step, jaw constraint and actual follower commands |
+| [SessionInput](../src/yam/session_input.py) | One shared-reader drain per cycle, selection routing, per-arm reads, button edges/learning and jaw target edits | Input service placement before mode commands; handle acquisition/cleanup |
+| [SessionHealth](../src/yam/session_health.py) | Liveness/thermal stop requests and stall reporting/latching | Controlled stop and final cleanup ordering |
+| [ArmSession](../src/yam/session.py) | Single thermal read, current measurement cache and gripper-stall decision | Session-wide coordination |
+
+Mirror confirmation still enables follower position control before setting its mode to mirror. It takes the follower's actual speed cap and current clipping-counter baseline. Preview/toggle alone never commands a robot. Leaving the follower's mode clears the link. Six owner tests and an actual application test exercise preview, toggle, confirmation and mode exit.
+
+The old operator duplicated ArmSession's thermal/stall logic while its tested helper methods were unused. SessionHealth now calls those methods. A read failure remains blind, preserves the last temperature list for incident reporting and resets the stall timer; current states/hottest/jaw are unavailable. The public states and legacy _states reference the same successful read. A latched jaw does not restart stall pushing. Thresholds are supplied unchanged by the operator. Six tests use real ArmSession objects with fake chains, including missing readings, six-joint arms, latches and one overheated arm in a two-arm session.
+
+A temporary extraction error reset a pending puck-failure stop at the next health pass. The new actual-application failure test caught it before commit: the session ran past the intended stop. SessionHealth now accepts and preserves the pending StopRequest; the app test verifies fault status, parking before both shutdown calls and absence of an uncontrolled loop exit. This was an introduced, uncommitted extraction regression, not a newly discovered defect in `783c8f1`. The old source-string test was replaced by behavior evidence. The shared-puck source test now also drives real application selection keys and verifies exactly one read per pass through B, G and BOTH. Six direct input tests additionally cover failures, edge learning and jaw bounds.
+
+The structural checker still forbids moved state as bare operator locals. For fields consumed by the new services, it now requires an attribute access in the declared owner source and the operator's service call. A regression removes each in turn. This is a limited static check, not proof of runtime control flow; the application tests supply the stronger integration evidence.
+
+## Read-only recording recovery inspection
+
+Run from the repository root:
+
+```sh
+.venv-teleop/bin/python checks/check_recording_recovery.py --dir recordings
+.venv-teleop/bin/python checks/check_recording_recovery.py --dir recordings/sim
+```
+
+Add `--json` for structured evidence. Exit 0 means no interrupted-save/unclaimed-frame evidence in that one directory, 1 means inspection is needed, and 2 means the directory could not be inspected. This is not a camera-quality or trajectory-validity certificate. Stop recording before making recovery decisions; the report is a snapshot, not a lock.
+
+[recording_recovery](../src/yam/recording_recovery.py) reports published, candidate and previous JSON separately, plus current/previous frame directories. It counts images/indexes without decoding images or following symlinks. Recovery manifest paths are displayed but never used to locate arbitrary files. Invalid manifests do not suppress the remaining candidate/previous evidence. It cannot infer matching JSON/image provenance, durable writes or unsaved in-memory joints. It never repairs, renames or deletes anything.
+
+The older recording checker said unclaimed frames were safe to delete and returned early when no JSON existed. It now reports retained evidence even without published slots, identifies staging directories and directs the reader to inspection. The unconditional deletion advice is removed. Nine tests include actual store publication/rollback failures, post-publication cleanup failure, malformed metadata, symlinks, frame-only evidence, directory errors and CLI behavior. Byte content and modification-time snapshots verify read-only inspection in the failed-rollback and CLI cases.
+
+On September 16, local inspection found nine published JSON files under recordings and two under recordings/sim, with no interrupted-save or unclaimed/pending-frame evidence. This is a dated local finding; re-run inspection after a failure rather than treating these counts as permanent.
+
+## Source contracts and evidence for this continuation
+
+Sixteen ArmSession passages moved verbatim into [the source-note archive](archive/session-source-notes.md). Current docstrings explain the actual owners, selection including a shared puck, the base-pose distinction, blind thermal state, jaw latch, path splitting, measured arrival and jaw settlement. The previous class docstring's claim that map state was absent was obsolete. Historical incident narratives remain available without contradicting the current contracts. This prose pass reduced ArmSession from 991 to 755 lines; parsed executable statements were identical after removing docstrings. Motion algorithms were not altered by it.
+
+Validation: 1,049/1,049 checks across 65 files, 71/71 falsifier catches and 32/32 isolated simulator interactions. Structural, flag, link and prose checks pass with the existing ceilings. All 3,455 original recording files still match the pre-switch SHA-256 manifest. Logs use `agents/codex/validation/coordination-*`, `recovery-*` and `session-prose-equivalence.txt`; the simulator-copy file names its disposable checkout. An early suite run exposed the now-replaced shared-puck source assertion and a temporary malformed test fixture; the final suite, not that intermediate run, is the evidence above.
+
+No physical robot/camera session, station connection, change to calibration/limits or remote push occurred. The saved data, original training branch/environment and Fable close-out refs remain preserved.

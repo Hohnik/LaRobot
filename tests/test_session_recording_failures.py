@@ -585,6 +585,71 @@ def test_controls_edit_stays_on_its_arm_and_revert_restores_session_map():
     assert all(arm.mode == 'hold' for arm in arms)
 
 
+
+def exercise_puck_failure():
+    events = []
+    original_shutdown = app.shutdown_robot
+    def broken_read():
+        raise OSError('injected puck disconnect')
+    def cycle(number, arms, root):
+        if number == 1:
+            arms[0].reader = SimpleNamespace(read=broken_read, buttons=0)
+    def park(arms, keys, clamp):
+        assert all(arm.mode == 'hold' and arm.alive() for arm in arms)
+        events.append('park')
+        return 'arrived'
+    def shutdown(robot):
+        events.append('shutdown')
+        return original_shutdown(robot)
+    with patch.object(app, 'park_arms', park), patch.object(app, 'shutdown_robot', shutdown):
+        code, text, _, _, _ = run_session({}, on_cycle=cycle, max_cycles=7)
+    return code, text, events
+
+
+
+def test_mirror_preview_toggle_confirm_and_mode_exit_use_same_pair():
+    owners, observed = [], []
+    original = app.MirrorSession
+    def create(**kwargs):
+        owner = original(**kwargs)
+        owners.append(owner)
+        return owner
+    def cycle(number, arms, root):
+        owner = owners[0]
+        if number == 2:
+            assert owner.link is None and all(a.mode == 'hold' for a in arms)
+            observed.append('preview')
+        elif number == 4:
+            assert owner.leader is arms[0] and owner.follower is arms[1]
+            assert owner.link.mode == 'mirror' and arms[1].mode == 'mirror'
+            observed.append('confirmed')
+        elif number == 6:
+            assert owner.link is None and all(a.mode == 'hold' for a in arms)
+            observed.append('ended')
+    with patch.object(app, 'MirrorSession', create):
+        code, text, _, _, _ = run_session({1: 'i', 2: 'i', 3: '\n', 5: 'ah', 7: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == ['preview', 'confirmed', 'ended'], text
+    assert 'MIRROR off — the follower left the mode' in text
+
+
+def exercise_shared_puck_selection():
+    """Drive the real key/loop routing with a fake single shared reader."""
+    from test_session_input import reader
+    shared = reader()
+    original = app.SessionInput
+    observed = []
+    def factory(**kwargs):
+        kwargs['shared_reader'] = shared
+        return original(**kwargs)
+    def cycle(number, arms, root):
+        if number in (2, 3, 4):
+            observed.append((shared.calls, [one.raw_axes[0] for one in arms]))
+    with patch.object(app, 'SessionInput', factory):
+        code, text, *_ = run_session({2: 'a', 3: 'a', 4: 'q'}, on_cycle=cycle)
+    assert code == 0, text
+    assert observed == [(1, [1., 0.]), (2, [0., 1.]), (3, [1., 1.])], observed
+
+
 def main():
     tests = [v for (k, v) in globals().items() if k.startswith('test_') and callable(v)]
     passed = 0

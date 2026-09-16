@@ -131,6 +131,32 @@ CLASS_INTERNAL = [
 RETIRED_LOCALS = ["control_frame", "park"]
 
 
+# These fields now live behind cycle services. Require both their explicit owner
+# accesses and the operator's entry call; do not exempt them from the local-name
+# check. This is structural evidence, not proof of runtime control flow.
+SERVICE_FIELDS = {
+    "session_input.py": ("inputs", "poll", "one",
+                         {"reader", "learn_button", "buttons_prev"}),
+    "session.py": ("health", "check", "self",
+                   {"stall_since", "hottest", "jaw_temp", "states", "temps"}),
+}
+
+
+def delegated_fields(main, source, receiver, method, holder, fields):
+    """Return fields accessed by an owner whose entry is called in main."""
+    invoked = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                  and isinstance(n.func.value, ast.Name)
+                  and n.func.value.id == receiver and n.func.attr == method
+                  for n in ast.walk(main))
+    if not invoked:
+        return set()
+    tree = ast.parse(source)
+    compile(source, "<field owner>", "exec")
+    return {n.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+            and n.value.id == holder and n.attr in fields}
+
+
 def main_function(tree: ast.Module) -> ast.FunctionDef:
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "main":
@@ -216,7 +242,12 @@ def run(moved: list[str]) -> int:
             used[node.attr] = used.get(node.attr, 0) + 1
     print(f"✓ arm.<field> / one.<field> accesses: {sum(used.values())}  "
           f"{dict(sorted(used.items()))}")
-    missing = [m for m in moved if m not in used]
+    delegated = set()
+    for filename, (receiver, method, holder, fields) in SERVICE_FIELDS.items():
+        source = (REPO / "src/yam" / filename).read_text()
+        delegated.update(delegated_fields(fn, source, receiver, method, holder, fields))
+    print(f"✓ fields accessed in called service owners: {sorted(delegated)}")
+    missing = [m for m in moved if m not in used and m not in delegated]
     if missing:
         faults += len(missing)
         print(f"⛔ moved but never read through `arm`: {missing} — did the field get dropped?")
