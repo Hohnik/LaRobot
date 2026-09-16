@@ -99,6 +99,7 @@ from yam.cameras.writer import (  # noqa: E402
 )
 from yam.fake.arm import StillPuck, build_fake_robot  # noqa: E402
 from yam.ui.recording_prompt import RecordingPrompt, save_slot_action  # noqa: E402
+from yam.ui.controls_editor import edit_controls  # noqa: E402
 from yam.ui.playback_prompt import PlaybackChoice, PlaybackPrompt  # noqa: E402
 from yam.ui.park_prompt import ParkAction, ParkPrompt  # noqa: E402
 from yam.ui.session_plan import session_plan_lines  # noqa: E402
@@ -273,8 +274,8 @@ MAP_HELP = """
   DRIVE     push the puck — the strongest direction wins, so the motion is unambiguous
   REVERSE   f   flip the direction of the control you just used   ← the main one
   SWAP      1 2 3 4 5 6   EXCHANGE the control you just used with that motion's
-                          (1=X 2=Y 3=UP 4=ROLL 5=PITCH 6=YAW). Both move, so nothing
-                          is left unbound — and the same key again swaps back
+                          (1=X 2=Y 3=UP 4=ROLL 5=PITCH 6=YAW). Neither is left unbound.
+                          The message names the key that swaps this pair back
   UNBIND    u   the control you just used drives nothing
   BUTTONS   b   assign the two puck buttons to gripper OPEN / CLOSE (press them)
                 then f swaps them, same as it reverses an axis. Hold to move
@@ -1434,8 +1435,6 @@ def main() -> int:  # noqa: PLR0915
                         # ⛔ EVERY EDIT IN THIS BRANCH IS KEY-DRIVEN. Moving the puck
                         # must never change the map — see FINDINGS §11 for what
                         # happened when it did.
-                        active = wizard.last_active_axis
-                        driven = wizard.axis_map.motion_driven_by(active) if active is not None else None
                         if k == "q":
                             stop = StopRequest(StopCause.QUIT, "quit requested")
                         elif k in "tghm":
@@ -1453,51 +1452,8 @@ def main() -> int:  # noqa: PLR0915
                             else:
                                 wizard.enter_hold()
                                 print("\n⭐ MODE: HOLD\n")
-                        elif k == "f":
-                            if active is None:
-                                print("\n  push the puck first — f reverses the control you just used.\n")
-                            elif driven is None:
-                                print(f"\n  puck {PUCK_AXES[active]} drives nothing, so there is no "
-                                      f"direction to reverse. Press 1-6 to give it a motion.\n")
-                            else:
-                                wizard.axis_map.flip(driven)
-                                print(f"\n  ↔ REVERSED → {wizard.axis_map.row(driven, wizard.frame).strip()}"
-                                      f"   (push {PUCK_AXES[active]} again to feel it)\n")
-                        elif k in "123456":
-                            if active is None:
-                                print("\n  push the puck first — 1-6 reassigns the control you just used.\n")
-                            else:
-                                target = int(k) - 1
-                                if driven is not None:
-                                    # Exchange both bindings; choosing the same exchange again restores the original map.
-                                    wizard.axis_map.swap(driven, target)
-                                    print(f"\n  ⇄ SWAPPED {motions_for(wizard.frame)[driven]['short']} ↔ "
-                                          f"{motions_for(wizard.frame)[target]['short']}")
-                                    print(f"      {wizard.axis_map.row(target, wizard.frame).strip()}")
-                                    print(f"      {wizard.axis_map.row(driven, wizard.frame).strip()}")
-                                    print("      (press the same key again to swap back)\n")
-                                else:
-                                    # The active control drove nothing, so there is nothing
-                                    # to exchange with. The direction he was last pushing
-                                    # becomes this motion's positive sense.
-                                    displaced = wizard.axis_map.bind(target, active, wizard.last_active_value)
-                                    print(f"\n  ✓ puck {PUCK_AXES[active]} now drives "
-                                          f"{motions_for(wizard.frame)[target]['short']} → "
-                                          f"{wizard.axis_map.row(target, wizard.frame).strip()}")
-                                    if displaced is not None:
-                                        print(f"  ⚠️  {motions_for(wizard.frame)[displaced]['short']} was using that "
-                                              f"control and is now UNBOUND — it will not move.")
-                                    print()
-                        elif k == "u":
-                            if driven is None:
-                                print("\n  that control already drives nothing.\n")
-                            else:
-                                wizard.axis_map.unbind(driven)
-                                print(f"\n  unbound {motions_for(wizard.frame)[driven]['short']} — it will not move\n")
-                        elif k == "0":
-                            wizard.axis_map = wizard.axis_map_at_start.copy()
-                            print("\n  reverted to the controls this session started with:")
-                            print(wizard.axis_map.describe(wizard.frame) + "\n")
+                        elif edit_controls(wizard, k, emit=print):
+                            pass
                         elif k == "?":
                             print(map_reference(wizard.frame))
                             print(MAP_HELP)

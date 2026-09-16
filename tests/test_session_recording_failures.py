@@ -18,7 +18,7 @@ sys.modules[spec.name] = app
 spec.loader.exec_module(app)
 
 def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
-                on_cycle=None, saver=None, max_cycles=40):
+                on_cycle=None, saver=None, max_cycles=40, extra_args=()):
     output = io.StringIO()
     saved = []
     sessions = []
@@ -68,6 +68,7 @@ def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
         stack.enter_context(patch.object(app, 'ArmSession', record_session))
         stack.enter_context(patch.object(app, 'save_take', save))
         argv = ['teleop_session.py', '--sim', '--arms', 'B,G', '--start-mode', 'hold', '--yes']
+        argv += list(extra_args)
         if capture is not None:
             # This bypass is confined to the fake-device test: no real discovery.
             argv += ['--cameras', 'test']
@@ -548,6 +549,40 @@ def test_playback_preview_and_speed_adjustment_do_not_start_a_path():
         code, text, _, _, _ = run_session({1: 'l5', 3: '+', 5: 'q', 6: 'q'}, on_cycle=cycle)
     assert code == 0 and observed == [2, 4], text
     assert 'PLAY 5' in text and 'play cancelled' in text
+
+
+
+def test_controls_edit_stays_on_its_arm_and_revert_restores_session_map():
+    initial, observed = {}, []
+    def cycle(number, arms, root):
+        if number == 2:
+            for arm in arms:
+                initial[arm.name] = arm.axis_map.copy()
+            arms[0].last_active_axis = arms[0].axis_map.source[0]
+            arms[0].last_active_value = 1
+        elif number == 3:
+            assert arms[0].mode == 'map'
+            assert arms[0].axis_map.sign[0] == -initial['B'].sign[0]
+            assert arms[1].axis_map == initial['G']
+            observed.append('B edited')
+        elif number == 5:
+            assert arms[0].axis_map == initial['B']
+            assert arms[1].axis_map == initial['G']
+            observed.append('reverted')
+        elif number in (7, 9):
+            expected = initial['B'].copy()
+            expected.swap(0, 1)
+            assert arms[0].axis_map == expected and arms[1].axis_map == initial['G']
+            observed.append('swapped')
+        elif number == 11:
+            assert arms[0].axis_map == initial['B']
+            observed.append('swap reversed')
+    code, text, _, arms, _ = run_session(
+        {1: 'm', 2: 'f', 4: '0', 6: '2', 8: '2', 10: '1', 12: 'h', 13: 'q'},
+        on_cycle=cycle, extra_args=('--fork-map',))
+    assert code == 0 and observed == ['B edited', 'reverted', 'swapped', 'swapped', 'swap reversed'], text
+    assert 'press 1 to swap back' in text and 'already drives' in text
+    assert all(arm.mode == 'hold' for arm in arms)
 
 
 def main():

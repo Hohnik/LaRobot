@@ -85,7 +85,7 @@ Useful flags: `--arms B,G` · `--start-mode hold|guide|teleop` · `--mirror copy
 |---|---|
 | *push the puck* | the arm performs whatever that control is bound to. **Nothing is edited** |
 | **`f`** | **reverse the direction of the control you just used** — the main one |
-| `1`…`6` | **SWAP** that control with another motion's — **1**=X **2**=Y **3**=UP **4**=ROLL **5**=PITCH **6**=YAW. Both move, so nothing is orphaned, and **the same key again swaps back** |
+| `1`…`6` | **SWAP** that control with another motion's — **1**=X **2**=Y **3**=UP **4**=ROLL **5**=PITCH **6**=YAW. Both bindings are exchanged. The message names the **previous motion’s key** to swap back; pressing the newly selected motion again leaves it unchanged |
 | `u` | that control drives nothing |
 | **`b`** | **assign the two puck buttons** to gripper OPEN / CLOSE — it asks you to press each one. Then `f` swaps them, exactly as it reverses an axis |
 | `0` | revert the whole map to how it was when the session started |
