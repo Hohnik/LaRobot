@@ -49,11 +49,20 @@ def main() -> None:
     marker_body_right_id = sim.model.body("target_marker_right").id
     marker_mocap_right_id = sim.model.body_mocapid[marker_body_right_id]
 
+    paths = SpaceMouse.connected_paths()
     dev0 = SpaceMouse(
-        device_index=0, expo=EXPO, lin_scale=LIN_SCALE, ang_scale=ANG_SCALE
+        device_path=paths[0],
+        side="left",
+        expo=EXPO,
+        lin_scale=LIN_SCALE,
+        ang_scale=ANG_SCALE,
     )
     dev1 = SpaceMouse(
-        device_index=1, expo=EXPO, lin_scale=LIN_SCALE, ang_scale=ANG_SCALE
+        device_path=paths[1],
+        side="right",
+        expo=EXPO,
+        lin_scale=LIN_SCALE,
+        ang_scale=ANG_SCALE,
     )
 
     with dev0 as dev_left, dev1 as dev_right:

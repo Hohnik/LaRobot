@@ -1,4 +1,4 @@
-from typing import Annotated, Self, override
+from typing import Annotated, Literal, Self, override
 
 import numpy as np
 import numpy.typing as npt
@@ -16,16 +16,22 @@ Buttons = Annotated[list[int], "Length 2 list with close=0, open=1"]
 class SpaceMouse(Input):
     def __init__(
         self,
-        device_index: int,
+        device_path: str,
+        side: Literal["left", "right"],
         expo: float = 0.6,
         lin_scale: float = 0.12,
         ang_scale: float = 0.8,
     ) -> None:
-        self.device_index = device_index
+        self.device_path = device_path
+        self.side = side
         self.expo = expo
         self.lin_scale = lin_scale
         self.ang_scale = ang_scale
         self._spacemouse: pyspacemouse.SpaceMouseDevice | None = None
+
+    @classmethod
+    def connected_paths(cls) -> list[str]:
+        return list(pyspacemouse.get_connected_devices_by_path())
 
     @classmethod
     @override
@@ -34,10 +40,10 @@ class SpaceMouse(Input):
 
     def __enter__(self) -> Self:
         assert self.is_available(), ConnectionError("SpaceMouse is not available")
-        self._spacemouse = pyspacemouse.open(
-            device_index=self.device_index, axis_convention=AxisConvention.ROS
+        self._spacemouse = pyspacemouse.open_by_path(
+            path=self.device_path, axis_convention=AxisConvention.ROS
         )
-        if self.device_index == 0:
+        if self.side == "left":
             self._spacemouse.set_led(True)
         else:
             self._spacemouse.set_led(False)
@@ -45,7 +51,7 @@ class SpaceMouse(Input):
 
     def __exit__(self, *_: object) -> None:
         assert self._spacemouse is not None
-        if self.device_index == 0:
+        if self.side == "left":
             self._spacemouse.set_led(False)
         self._spacemouse.close()
 
