@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from yam.recording import Trajectory
+import yam.incident as incident_module
 ROOT = Path(__file__).resolve().parent.parent
 spec = importlib.util.spec_from_file_location('recording_failure_app', ROOT / 'apps/teleop_session.py')
 app = importlib.util.module_from_spec(spec)
@@ -57,6 +58,8 @@ def run_session(schedule, *, fail_save=False, capture=None, sink_factory=None,
         return (saver or real_save)(take, *args, **kwargs)
     with TemporaryDirectory() as d, ExitStack() as stack:
         root = Path(d)
+        stack.enter_context(patch.object(incident_module, 'INCIDENT_DIR', root / 'recordings/incidents'))
+        stack.enter_context(patch.object(incident_module, 'usb_snapshot', lambda: []))
         shutil.copytree(ROOT / 'config', root / 'config')
         stack.enter_context(patch.object(app, 'REPO', root))
         for (name, relative) in [('MAP_FILE', 'config/spacemouse_map.json'), ('BACKUP_FILE', 'config/spacemouse_map.prev.json'), ('PARK_FILE', 'config/park_pose.json'), ('TAKES_DIR', 'recordings')]:
@@ -457,7 +460,6 @@ def test_multiple_pose_prompt_waits_for_second_confirmation():
     assert code == 0 and observed == ['waiting', 'confirmed'], text
 
 
-
 def test_recording_reaim_preserves_both_slots_until_matching_confirmation():
     schedule, before, checked = {1: 'w', 5: 'w', 7: '4', 8: '5', 9: '5'}, {}, []
     owners = []
@@ -512,6 +514,40 @@ def test_recording_prompt_cancels_gripper_button_learning():
         {1: 'w', 5: 'w', 7: 'x', 20: 'q'}, on_cycle=cycle)
     assert code == 0 and observed == ['cancelled'], text
     assert 'gripper-button learning on arm B is CANCELLED' in text
+
+
+def test_planned_quit_still_fails_when_disable_confirmation_is_incomplete():
+    original = app.shutdown_robot
+    calls = []
+    def shutdown(robot):
+        disabled = original(robot)
+        calls.append(disabled)
+        return disabled[:-1]
+    with patch.object(app, 'shutdown_robot', shutdown):
+        code, text, _, arms, _ = run_session({1: 'q'})
+    assert code == 1 and len(calls) == 2, text
+    assert all(not arm.alive() for arm in arms)
+    assert 'could not confirm motors [7] disabled' in text
+
+
+def test_playback_preview_and_speed_adjustment_do_not_start_a_path():
+    observed = []
+    def cycle(number, arms, root):
+        if number == 1:
+            take = Trajectory(meta={'arms': ['B', 'G'], 'joints_per_arm': 7})
+            start = [v for arm in arms for v in arm.robot.get_joint_pos()]
+            take.append(0, start)
+            take.append(1, [v + .1 for v in start])
+            shelf = root / 'recordings/sim'
+            shelf.mkdir(parents=True, exist_ok=True)
+            take.save(shelf / '5.json')
+        elif number in (2, 4):
+            assert all(arm.mode == 'hold' for arm in arms)
+            observed.append(number)
+    with patch.object(app.ArmSession, 'begin_path', side_effect=AssertionError('preview started motion')):
+        code, text, _, _, _ = run_session({1: 'l5', 3: '+', 5: 'q', 6: 'q'}, on_cycle=cycle)
+    assert code == 0 and observed == [2, 4], text
+    assert 'PLAY 5' in text and 'play cancelled' in text
 
 
 def main():

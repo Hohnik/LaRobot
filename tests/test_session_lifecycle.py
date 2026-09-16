@@ -29,6 +29,7 @@ def exercise(*, failure="build_G", sim=True, dry=False, missing_puck=False,
              bad_puck=None, bad_close=None, bad_shutdown=None, incomplete_shutdown=False,
              camera_failure=False):
     events = []
+    live = {}
     incidents = []
     output = io.StringIO()
 
@@ -61,6 +62,7 @@ def exercise(*, failure="build_G", sim=True, dry=False, missing_puck=False,
         if failure == "build_" + name:
             raise RuntimeError("injected build failure " + name)
         events.append("build_" + name)
+        live[name] = True
 
         def read():
             if failure == "read_" + name:
@@ -81,13 +83,14 @@ def exercise(*, failure="build_G", sim=True, dry=False, missing_puck=False,
         return SimpleNamespace(
             name=name, robot=robot, frame=kwargs["frame"],
             axis_map=kwargs["axis_map"], axis_map_at_start=kwargs["axis_map"].copy(),
-            base_pose=[0.0] * 7, alive=lambda: True, enter_hold=refuse_loop,
+            base_pose=[0.0] * 7, alive=lambda: live[name], enter_hold=refuse_loop,
             thermal=SimpleNamespace(max_seen=28, max_jaw_seen=28))
 
     def shutdown(robot):
         events.append("shutdown_" + robot.name)
         if bad_shutdown == robot.name:
             raise OSError("shutdown failed")
+        live[robot.name] = False
         return [1] if incomplete_shutdown else list(range(1, 8))
 
     class RefuseLoop:
@@ -129,7 +132,7 @@ def exercise(*, failure="build_G", sim=True, dry=False, missing_puck=False,
             code = app.main()
     assert signal.getsignal(signal.SIGINT) == old_signal
     assert threading.excepthook is old_hook
-    return SimpleNamespace(code=code, events=events, text=output.getvalue(), incidents=incidents)
+    return SimpleNamespace(code=code, events=events, text=output.getvalue(), incidents=incidents, live=live)
 
 
 def test_dry_run_acquires_nothing():

@@ -164,12 +164,33 @@ def src_constants() -> dict[str, object]:
     return _SRC_CONSTS
 
 
-def read_parser(path: Path) -> Parser:
+def read_parser(path: Path, _seen: frozenset[Path] = frozenset()) -> Parser:
+    """Read local arguments and directly called, imported yam build_parser factories.
+
+    Resolve only this explicit builder convention; never import or execute source.
+    A missing/cyclic builder remains a known parser with no accepted flags, so
+    documented options fail instead of silently escaping validation.
+    """
     out = Parser(path=path)
+    if path in _seen:
+        return out
     try:
         tree = ast.parse(path.read_text())
     except (OSError, SyntaxError):
         return out
+    calls = {node.func.id for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom) or node.level or not node.module:
+            continue
+        if not node.module.startswith("yam."):
+            continue
+        for alias in node.names:
+            if alias.name == "build_parser" and (alias.asname or alias.name) in calls:
+                out.has_parser = True
+                owner = REPO / "src" / Path(*node.module.split("."))
+                imported = read_parser(owner.with_suffix(".py"), _seen | {path})
+                out.flags.update(imported.flags)
     # ⭐ The file's own constants win over src/, since a script may shadow a name.
     consts = {**src_constants(), **literal_constants(tree)}
 

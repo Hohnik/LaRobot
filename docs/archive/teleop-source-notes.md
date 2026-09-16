@@ -1658,3 +1658,400 @@ stopped with any key.
     a display fault has no business stopping a session that is holding 4.3 kg.
     """
 ```
+
+
+## Incident assembly extraction — September 16, 2026
+
+Historical source comments from the operator at `142d5a9`; current schema assembly lives in `yam.incident.session_facts`.
+
+```python
+# ⛔ A LAMBDA, not `safe_fact(loop_timer.to_dict)`. `_safe_fact`'s own docstring says a local here may be unbound if the loop never ran a cycle, and the attribute access in the shorter form happens OUTSIDE its try, so on the failed-build path it would raise and take the whole incident file with it.
+# ⭐ The field whose absence cost the most on 2026-08-14: the
+# gravity torques at the moment of failure had to be recovered by
+# simulating the joint angles, when the arm had measured them and
+# thrown them away.
+# ⭐ Read at the top of the teardown, never here: after the
+# disable loop above, `one.alive()` is False on every path.
+# The key is renamed on purpose, so old incident files (whose
+# `chain_alive` was always the meaningless post-shutdown read)
+# cannot be confused with files carrying the real measurement.
+```
+
+
+## Remaining long operator comments — September 16, 2026
+
+Historical explanations moved during the resource/reporting continuation after `142d5a9`. Line numbers refer to the intermediate source before this comment-only pass. Current contracts remain at the call sites; some old wording (especially that CONTROLS does not move motors) is historical and does not describe current behavior. Executable ASTs matched exactly before and after this pass. Relative documentation links below are adjusted for this archive.
+
+### Operator comments near line 1224
+
+```python
+                # ---- 1. is every robot still there? -----------------------
+                # ⛔⭐ A FAULT ON ONE ARM STOPS ALL OF THEM. ROADMAP §6's ruling, and the
+                # reason is physical: a chain death on B must not leave G uncommanded and
+                # sagging while the operator is still looking at B.
+                #
+                # ⛔⭐⭐ NOTE THE SHAPE, BECAUSE `break` CHANGED MEANING HERE. This used to
+                # be `if not chain_alive(robot): stop_reason = …; break`, straight out of the
+                # `while`. Inside a `for one in arms:` a `break` leaves only the FOR, so the
+                # cycle would carry on commanding arms with a stop already decided. The stop
+                # is recorded in the loop and acted on after it.
+```
+
+### Operator comments near line 1244
+
+```python
+                # ---- 2. temperatures and the gripper stall guard -----------
+                # ⛔⭐ ONLY THE READ IS WRAPPED. The decisions are not, and that is the
+                # entire point of this shape. The previous version wrapped the read AND
+                # every check that followed in one `try`, whose handler set
+                # `hottest = 0.0` — so a failed read silently disarmed the thermal stop
+                # and printed a calm "hottest 0°C". A guard with a path around it is
+                # the defect this repo keeps paying for (working contract rule 7);
+                # here the path was its own exception handler. See ThermalGuard.
+                #
+                # ⚠️ Per arm, and each arm keeps its OWN last reading, because the incident
+                # record wants the last good values from a chain that may now be dead.
+```
+
+### Operator comments near line 1273
+
+```python
+                        # ---- gripper stall guard ------------------------------
+                        # ⚠️ With --no-gripper the chain has 6 motors, so states[6] would
+                        # IndexError. It used to be guarded by raising StopIteration out of
+                        # the shared try — which worked, but meant the "no gripper" path and
+                        # the "read failed" path were the same code path. Now it is just an
+                        # if, because there is nothing left to jump out of.
+                        # ⭐⭐ SAY IT ONCE WHEN THE LATCH LETS GO. His 2026-08-17 log showed
+                        # three stalls at 0.117, 0.098 and 0.104 and there was **no way to
+                        # tell** whether those were three deliberate squeezes or one latch
+                        # being cleared twice by a jittering measurement. A latch that
+                        # silently comes and goes is indistinguishable from one that never
+                        # worked, so the next run must not leave the same ambiguity.
+```
+
+### Operator comments near line 1439
+
+```python
+                        # ⭐ `i` AT THE PROMPT SWITCHES copy ↔ mirror and re-prints the plan.
+                        # Without it, discovering that `copy` is the wrong choice for how the
+                        # arms are standing means quitting the session and restarting with
+                        # `--mirror mirror`, which costs a puck assignment and two builds.
+                        # ⚠️ The plan line says what `i` does here, so this is not one key
+                        # with two hidden meanings — it is the mirror key, inside the mirror
+                        # prompt, changing the mirror.
+```
+
+### Operator comments near line 1458
+
+```python
+                            # ⛔ The follower goes under POSITION control before anything is
+                            # commanded. If it were left weightless the commands would do
+                            # nothing at all, and the readout would show it tracking.
+                            # ⛔ ORDER: the class's enter_hold() sets mode="hold",
+                            # so MIRROR is written AFTER it — the reverse order would
+                            # leave a mirror running while the row said HOLD (§52.1).
+```
+
+### Operator comments near line 1514
+
+```python
+                            # ⭐ How LONG the ease lasts, separately from its shape.
+                            # Julien: *"the smoothing should maybe be adjustable at the
+                            # beginning of the park, similar to the parking speed."*
+                            # ö/ä (or [/]) mean gripper step elsewhere, which is
+                            # meaningless while choosing a park — same
+                            # context-dependence as +/-.
+```
+
+### Operator comments near line 1576
+
+```python
+                    # ---- device configuration: works in EVERY mode ------------
+                    # ⛔ `b` USED TO LIVE IN THE CONTROLS BRANCH ONLY, while the
+                    # "press b to set the gripper buttons" hint printed in TELEOP as
+                    # well. So in TELEOP the hint appeared and b fell through to the
+                    # catch-all and did nothing. Julien hit exactly that: *"it says
+                    # press b to set the gripper, and then b does nothing either."*
+                    #
+                    # A message that tells you to press a key which does nothing
+                    # where you are is the same defect class as the refusal that
+                    # named the wrong arm (FINDINGS §16) — the text is right, the
+                    # context is wrong, and it costs the user a session to find out.
+                    # Button assignment is a property of the DEVICE, not of the
+                    # arm's mode, so it belongs above the mode dispatch entirely.
+```
+
+### Operator comments near line 1597
+
+```python
+                        # ⭐⭐ WHICH ARM THE MODE KEYS AIM AT — ROADMAP §6's decision, and
+                        # the reason is in `ArmSelector`: `g` on two arms at once is 8.6 kg
+                        # going weightless on one keypress.
+                        #
+                        # ⚠️ Handled HERE, above the mode dispatch, for the same reason `b`
+                        # and `v` are: which arm a key applies to is a property of the
+                        # SESSION, not of a mode. A selector that worked only in TELEOP
+                        # would be the `b` defect again (FINDINGS §17.1).
+```
+
+### Operator comments near line 1606
+
+```python
+                            # ⛔ CONTROLS is a wizard that belongs to the arm it was
+                            # entered on: it asks the operator to push one axis at a time
+                            # and edits that arm's map from the answers. Re-aiming the
+                            # keys underneath it would write one arm's answers into
+                            # another arm's map, which is the blast-radius bug the
+                            # per-arm map store exists to prevent.
+```
+
+### Operator comments near line 1627
+
+```python
+                        # ⭐⭐ MIRROR MODE. The selected arm leads; the other follows.
+                        #
+                        # ⛔ IT ASKS TWICE, exactly like `l`. Engaging starts a MOTION on the
+                        # follower — it ramps to the leader's pose — and the operator's hands
+                        # and eyes are on the leader at that moment. A single keypress that
+                        # moves an arm nobody is looking at is the one thing this session's
+                        # design refuses.
+```
+
+### Operator comments near line 1704
+
+```python
+                    # ---- MAP mode owns the keyboard while it is active --------
+                    # ⚠️ 1-6 mean "select a motion" here and "flip a rotation sign" in
+                    # the drive modes. Overloading is a real footgun in a codebase
+                    # whose motto is that this stack fails by lying, so it is bounded:
+                    # MAP mode is entered explicitly, announces itself loudly, holds
+                    # the arm still, and echoes the effect of every key. Nothing it
+                    # can do moves a motor.
+```
+
+### Operator comments near line 1750
+
+```python
+                                    # ⭐ SWAP, not steal. Julien's request after using this
+                                    # on the arm: the commonest edit is two controls in
+                                    # each other's places, and stealing left an orphan he
+                                    # then had to notice and re-bind. A straight exchange
+                                    # is also an involution, so pressing the same key
+                                    # again undoes it. See AxisMap.swap().
+```
+
+### Operator comments near line 1788
+
+```python
+                        # ⚠️ The rotation pair was MISSING here while the linear pair was
+                        # present, so in CONTROLS mode roll/pitch/yaw could not be sped up
+                        # or slowed down at all — Julien found it on the wizard. The keys were
+                        # copied from the drive-mode handler and the second pair was
+                        # dropped. Both scales are also printed in the status line now, so
+                        # a key that silently does nothing is visible rather than inferred.
+```
+
+### Operator comments near line 1963
+
+```python
+                        # ⭐ Both folders in a --sim session, with the simulated ones
+                        # marked, because "saved: 1, 2, 7" that silently mixes real
+                        # demonstrations with simulated ones is the confusion the folder
+                        # split exists to prevent.
+                        # ⛔ `listing` and not `glob`: a macOS `._5.json` sidecar in a hand-copied
+                        # recordings folder was offered here as a playable slot "._5" on the Linux
+                        # station (FINDINGS §76). It is not a recording and it cannot be loaded.
+```
+
+### Operator comments near line 2040
+
+```python
+                        # ⚠️ These now flip a ROBOT MOTION, not a puck axis. Under the
+                        # identity map that is the same arithmetic, which is why the
+                        # hand-dialled file still means what it meant. Under a
+                        # permutation it is the only reading that stays useful: when
+                        # Julien presses x he means "the gripper goes the wrong way",
+                        # which is a statement about the arm, not about the device.
+```
+
+### Operator comments near line 2061
+
+```python
+                        # ⭐ In PARK these mean the park speed. The teleop linear scale
+                        # is meaningless while the puck is not driving, and a key that
+                        # does nothing where you are is the defect class that made `b`
+                        # look broken (FINDINGS §17.1).
+                        # ⭐ In a SCRUB they mean the full-push pace — his time-lapse dial
+                        # (FINDINGS §68.5): "more than normal speed if I fully press the
+                        # control forward". Safe high: a fast cursor is held back by the
+                        # lag hold, so only the clock is fast, never the arm.
+```
+
+### Operator comments near line 2188
+
+```python
+                # ---- 4. act on the mode -----------------------------------
+                # ---- 3.5 the puck, read EVERY cycle in EVERY mode -------------
+                # ⛔ This used to sit inside the teleop/map branch, which had two
+                # consequences: the buttons were dead in GUIDE and HOLD, and the HID
+                # reports queued up while in those modes and then arrived in a burst
+                # on the next mode switch. Reading unconditionally costs nothing —
+                # TwistReader.read() is non-blocking by construction — and it is what
+                # makes button assignment work from wherever Julien happens to be.
+                # ⭐⭐ EVERY ARM READS ITS OWN PUCK, EVERY CYCLE, IN EVERY MODE.
+                #
+                # ⛔ This whole block used to read `arm.reader` once, outside any loop.
+                # With two arms that reads ONE hand and hands its deflection to both
+                # arms — and the leaked loop variable at the bottom of it made the
+                # gripper follow whichever arm the previous loop ended on
+                # (FINDINGS §54.1).
+                # ⭐⭐ ONE PUCK, N ARMS: THE PUCK FOLLOWS THE SELECTION (his design,
+                # 2026-08-18, FINDINGS §68.8): a → B drives B, a → G drives G, a → BOTH
+                # drives both arms at once, each from its own pose. The shared reader is
+                # read ONCE per cycle — two arms draining one HID queue would split the
+                # event stream between them — and unaimed arms read as centred.
+```
+
+### Operator comments near line 2290
+
+```python
+                            # ⭐ AXIS ISOLATION — Julien's design: only the strongest puck
+                            # direction is applied, so the arm performs exactly one motion and
+                            # it is obvious which gesture caused it. Half speed, because this
+                            # is the mode you experiment in.
+                            #
+                            # ⛔ Note what is NOT here: any call that edits the map. Deflection
+                            # observes; keys edit. The mode this replaced bound on deflection
+                            # and destroyed the hand-dialled map (FINDINGS §11).
+```
+
+### Operator comments near line 2373
+
+```python
+                                # ⛔⭐⭐ NAME BOTH FLAGS, AND NAME THE ONE THAT ACTUALLY
+                                # FIRED FIRST. This branch used to say only *"That
+                                # allowance is `--max-speed`. Raise it one step."*
+                                #
+                                # ⛔ On 2026-08-17 Julien raised `--max-lag` from 0.25 to
+                                # 0.4 to 1.0 across three sessions chasing this message,
+                                # and **none of it could ever have helped**: the stop is
+                                # triggered by the gap passing `--mirror-gap`, which was
+                                # sitting at its 0.35 default because he had not set it.
+                                # His own earlier run with `--mirror-gap 0.6` is the one he
+                                # described as working *"much better"*.
+                                #
+                                # ⚠️ Third time a speed-layer confusion has cost him a
+                                # session ([FINDINGS §58.3](../FINDINGS.md)). The
+                                # message named the limit's VALUE ("limit 0.35") and never
+                                # named the FLAG that sets it, so the number was unusable.
+                                #
+                                # ⭐ Two independent routes out, and both are stated,
+                                # because they do different things: a wider tolerance means
+                                # it does not stop, a faster follower means the gap does not
+                                # grow.
+```
+
+### Operator comments near line 2433
+
+```python
+                        # ⭐⭐ item 23 group ④ (2026-08-18): the CLASS advances the park.
+                        # `ArmSession.step_path` owns the cursor, the lag hold, the easing,
+                        # the stall guard and the verdict — 48 tests. This branch only
+                        # narrates the ParkStep it returns and performs the handovers,
+                        # which is the split the whole restructure was for: the class
+                        # decides, the script narrates.
+```
+
+### Operator comments near line 2470
+
+```python
+                            # ⛔⭐⭐ THE ARRIVAL CLEARS ITS OWN PATH — the fix for the bug
+                            # that killed the first two-arm playback. The generic "leaving
+                            # PARK abandons the run" block fires for any arm whose mode is
+                            # no longer `park` while `park_path` is still set; an ARRIVAL
+                            # used to leave the path in place, so with two arms the FIRST
+                            # arrival (which waits for the second) had its pending playback
+                            # cancelled as "abandoned". FINDINGS §57.1.
+```
+
+### Operator comments near line 2603
+
+```python
+                # ---- 4a. the playback: ONE cursor, every arm it was recorded from ----
+                #
+                # ⭐⭐ SESSION-LEVEL, AND IT HAS TO BE. The cursor is a clock, and one clock
+                # drives every arm. Inside the per-arm loop this block called `replay_step`
+                # once per arm, which with two arms would advance the SAME cursor twice per
+                # cycle — a playback running at double speed, silently.
+                #
+                # ⭐ FOLLOW THE RECORDING IN TIME, not along its length. A park traverses a
+                # *shape* at a constant joint speed, which throws away the thing hand-guiding
+                # provides: human timing and hesitation are the signal (ROADMAP §6.6).
+```
+
+### Operator comments near line 2657
+
+```python
+                        # ⭐⭐ SAY WHERE THE EXTRA TIME WENT. Julien's first playbacks ran
+                        # 2.3 s longer than the recording and the old message reported only
+                        # the total, so it read as a bug with no explanation. The whole
+                        # difference is the loop holding the clock while the arm catches up,
+                        # which is a decision this code makes on purpose. A readout has to
+                        # show what can go wrong, not only what looks tidy — the same lesson
+                        # as showing the jaw temperature separately (FINDINGS §11).
+```
+
+### Operator comments near line 2688
+
+```python
+                            # ⚠️ MEASURED, so read it as such. The playback holds its clock
+                            # once the arm falls behind, so the speeds here are not an even
+                            # sweep, and load changes with the arm's pose. It is the cheap
+                            # first answer; ROADMAP §7.5 has the active sweep if this is
+                            # ambiguous.
+                            # ⭐⭐ ONE list of names for BOTH the printed table and the
+                            # saved file, and they DISAGREED until 2026-08-17. The saved
+                            # JSON below already labelled every row with its arm, and its
+                            # comment says exactly why that is necessary — while this
+                            # print used `YAM_JOINTS.get(i + 1)` on a **flat** index. With
+                            # two arms that names arm B's seven joints correctly and then
+                            # labels every one of arm G's simply "joint", because the flat
+                            # indices 7-13 become keys 8-14 and `YAM_JOINTS` only holds
+                            # 1-7.
+                            #
+                            # ⛔ Julien's 2026-08-17 playback log is the evidence: six
+                            # named rows, six anonymous ones, and **nothing saying which
+                            # arm any row belonged to**. The six named rows read as "the
+                            # arm" when they were only arm B.
+                            #
+                            # ⚠️ Same family as the `label_verdict` defect: code written
+                            # for one arm that produces confident, plausible, wrong output
+                            # with two, and raises nothing. Building the list once is the
+                            # actual fix, because two copies is what let them drift.
+```
+
+### Operator comments near line 2791
+
+```python
+                # ---- 5. report --------------------------------------------
+                # CONTROLS mode reports continuously, not once a second: he is watching
+                # the arm and the readout together to attribute a motion to a gesture,
+                # and a 1 Hz readout is useless for that.
+                # ⚠️ CONTROLS owns the whole live block while it is open, so the other arm's
+                # row is not painted during it. That is a real gap at N>1 and it is deliberate
+                # for now: the wizard is a full-screen conversation with one arm, and `m`
+                # refuses when two arms are selected. Tracked in FINDINGS §54.2.
+```
+
+### Operator comments near line 2801
+
+```python
+                    # ⛔ NOT `arm = wizard`. Rebinding the session's own `arm` here would repoint it
+                    # at the wizard for the REST of the loop, including the incident record and
+                    # the shutdown. At N=1 it is the same object, so it would have worked and
+                    # proved nothing — the leaked-variable defect again (FINDINGS §54.1).
+                    # Both scales are always shown. Julien could not tell that ,/. were
+                    # doing nothing here because only the active axis's resulting speed
+                    # was displayed — a missing key looked identical to a key that worked.
+```

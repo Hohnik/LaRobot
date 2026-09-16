@@ -133,3 +133,52 @@ def describe(path: Path | None) -> str:
             f"   It holds the pose, the limits, the temperatures, the loop rate and the full\n"
             f"   USB bus at the moment this stopped. PASTE IT rather than committing it;\n"
             f"   recordings/ is gitignored on purpose.")
+
+
+def safe_fact(fn) -> Any:
+    """Read a possibly unavailable session fact without masking the original fault."""
+    return _safe("session", fn)
+
+
+def session_facts(arms, *, stop, arm_names, acquired_robots, reach, floor,
+                  loop_hz, loop_timing, alive_at_teardown) -> dict:
+    """Assemble the operator's incident schema after device cleanup.
+
+    Liveness is supplied from before cleanup. Other arm fields use the last
+    available session state. Callables defer possibly uninitialized loop locals
+    until inside safe_fact; partial startup must still produce an incident.
+    """
+    return {
+        "stop_reason": str(stop) if stop is not None else None,
+        "stop_cause": stop.cause.value if stop is not None else None,
+        "arms": [one.name for one in arms] or arm_names,
+        "acquired_robots": list(acquired_robots),
+        "reach_limit": reach,
+        "floor_limit": floor,
+        "loop_hz": safe_fact(loop_hz),
+        "loop_timing": safe_fact(loop_timing),
+        "per_arm": [
+            {
+                "arm": one.name,
+                "mode": safe_fact(lambda one=one: one.mode),
+                "commanded_joints": safe_fact(
+                    lambda one=one: [round(float(v), 4) for v in one.prev_q]),
+                "measured_joints": safe_fact(
+                    lambda one=one: [round(float(getattr(s, "pos", float("nan"))), 4)
+                                     for s in one.states]),
+                "ee": safe_fact(
+                    lambda one=one: [round(float(v), 4)
+                                     for v in one.teleop.ee_position()]),
+                "hottest_seen_c": safe_fact(lambda one=one: one.thermal.max_seen),
+                "hottest_jaw_seen_c": safe_fact(
+                    lambda one=one: one.thermal.max_jaw_seen),
+                "last_temperatures_c": safe_fact(
+                    lambda one=one: [round(float(v), 1) for v in one.temps]),
+                "last_torques_nm": safe_fact(
+                    lambda one=one: [round(float(getattr(s, "eff", float("nan"))), 3)
+                                     for s in one.states]),
+                "chain_alive_at_teardown": alive_at_teardown.get(one.name, False),
+            }
+            for one in arms
+        ],
+    }

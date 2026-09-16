@@ -2,9 +2,9 @@
 
 Reviewed September 15, 2026 against `c8069cc`. The findings below describe that snapshot; several are now resolved. [CLEANUP](CLEANUP.md) records current behavior, validation and remaining work.
 
-Implemented since the review: recording completion, corrected interfaces, shared camera services/rendering, replay state, composite sequencing, explicit stop causes and the controlled stop interaction. Settings, park and recording-save prompts now own their transitions, and startup plan formatting is separate. See [recording-save prompt ownership](CLEANUP.md#recording-save-prompt-ownership) for the latest changes.
+Implemented since the review: recording completion, corrected interfaces, shared camera services/rendering, replay state, composite sequencing, explicit stop causes and controlled stopping. Settings, park, recording-save and playback prompts own their transitions. Plan formatting, acquired-device cleanup, incident assembly and CLI definitions are separate. See [the current continuation](CLEANUP.md#acquired-resources-incident-assembly-cli-and-playback-continuation) for behavior, evidence and limits.
 
-Acquired-device cleanup, argument assembly, the remaining modal prompts and control-cycle coordination still live in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
+Mirror confirmation, controls editing, startup assembly and control-cycle coordination still live in the application. The responsibility map below remains a proposal for those parts; it is not a claim that the entry point is already thin.
 
 ## Decision
 

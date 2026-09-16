@@ -190,22 +190,16 @@ def test_a_mode_key_ends_the_playback_for_EVERY_replay_arm() -> None:
 
 
 def test_liveness_is_captured_BEFORE_the_motors_are_disabled() -> None:
-    """⛔⭐ FINDINGS §58.45: `chain_alive` was read AFTER `shutdown_robot()`, so every
-    incident file ever written said False and the field measured nothing. The fix is an
-    ordering fact, and this file cannot execute the teardown, so it pins the ORDER in
-    the source: the capture must appear before the first `shutdown_robot(` call, and the
-    incident dict must use the captured value rather than a fresh `alive()` read."""
-    src = (REPO / "apps" / "teleop_session.py").read_text()
-    capture = src.find("alive_at_teardown = {")
-    disable = src.find("disabled = shutdown_robot(")
-    assert capture != -1, "the pre-shutdown liveness capture is gone"
-    assert disable != -1, "the shutdown call moved; update this test with care"
-    assert capture < disable, \
-        "liveness is captured AFTER shutdown_robot(), so the field is meaningless again"
-    assert '"chain_alive_at_teardown": alive_at_teardown.get(' in src, \
-        "the incident dict no longer records the pre-shutdown reading"
-    assert '"chain_alive": _safe_fact(lambda one=one: bool(one.alive()))' not in src, \
-        "the old post-shutdown read is back; it is always False (FINDINGS §58.45)"
+    """Execute startup failure and verify the report retains pre-disable liveness."""
+    from test_session_lifecycle import exercise
+
+    result = exercise(failure="before_loop")
+    assert result.code == 1 and result.live == {"B": False, "G": False}
+    args, _ = result.incidents[0]
+    facts = args[1]
+    assert facts["acquired_robots"] == ["B", "G"]
+    assert [arm["chain_alive_at_teardown"] for arm in facts["per_arm"]] == [True, True]
+    assert all("chain_alive" not in arm for arm in facts["per_arm"])
 
 
 def main() -> int:
