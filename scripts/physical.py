@@ -10,37 +10,36 @@ from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
 
-robot: MotorChainRobot = get_yam_robot(
-    channel="can0",
-    gripper_type=GripperType.LINEAR_4310,
-)
-
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
 model = mujoco.MjModel.from_xml_path(str(SCENE))
-LAG_LIMIT = 0.03
-GRIPPER_STEP = 0.005
-GRIPPER_OPEN, GRIPPER_SHUT = 0.03, 0.0
-NOMINAL_DT = 1 / 30
-MAX_DT = 2 * NOMINAL_DT
+LAG_LIMIT = 0.07
+GRIPPER_STEP = 0.05
+GRIPPER_OPEN, GRIPPER_SHUT = 0.049, 0.0
 
 try:
+    robot: MotorChainRobot = get_yam_robot(
+        channel="can0",
+        gripper_type=GripperType.LINEAR_4310,
+    )
+
     kin = CartesianKinematics(model=model, side="left", site_name="tcp")
     joint_indices = kin.qpos_indices
     pose = kin.forward(robot.get_joint_pos()[:6])
     target = CartesianTarget.from_pose(pose)
 
     path = SpaceMouse.connected_paths()[0]
-    device = SpaceMouse(device_path=path, side="left")
+    device = SpaceMouse(
+        device_path=path, side="left", expo=0.6, lin_scale=0.2, ang_scale=1.5
+    )
 
     with device as dev:
-        last_tick = time.perf_counter()
+        period = 1 / 30
+        next_tick = time.perf_counter()
+
         while True:
             # time
-            now = time.perf_counter()
-            elapsed = now - last_tick
-            last_tick = now
-            dt = min(elapsed, MAX_DT)
+            dt = period
 
             q_measured = robot.get_joint_pos()
             q = q_measured[:6]
@@ -48,16 +47,11 @@ try:
 
             # spacemouse - where to
             velocities, buttons = dev.read()
-            print(velocities, buttons)
-            print()
             target.integrate(velocities, dt=dt)
 
             kin_position = kin.forward(q)[:3, 3]
-            print(f"kin_position:\n{kin_position}\n")
-            print(f"target_position:\n{target.position}\n")
 
             delta = target.position - kin_position
-            print("delta:", delta)
             distance = np.linalg.norm(delta)
 
             if distance > LAG_LIMIT:
@@ -75,25 +69,12 @@ try:
             if buttons[0]:
                 gripper = max(GRIPPER_SHUT, gripper - GRIPPER_STEP)
             elif buttons[1]:
-                gripper = min(GRIPPER_OPEN, gripper + GRIPPER_STEP)
+                gripper = min(1, gripper + GRIPPER_STEP)
 
             robot.command_joint_pos(np.append(joints, gripper))
 
-    # while True:
-    #     q = robot.get_joint_pos()
-    #     obs = robot.get_observations()
-    #
-    #     robot.move_joints()
-    #
-    #     print("joint pos:", q)
-    #     print("joint vel:", obs["joint_vel"])
-    #     print("joint eff:", obs["joint_eff"])
-    #     # joint pos: [-0.33398184  0.00286107  0.00782025  0.0085832  -0.02613107  0.00820172 0.99899634]
-    #     # joint vel: [-0.002442    0.002442   -0.002442   -0.00732601 -0.00732601 -0.00732601]
-    #     # joint eff: [-6.83760684e-03  2.01709402e+00  7.26837607e+00  1.87301587e+00 -7.32600733e-03 -2.44200244e-03]
-    #     print()
-    #
-    #     time.sleep(0.5)
+            next_tick += period
+            time.sleep(max(0.0, next_tick - time.perf_counter()))
 
 finally:
     robot.enter_gravity_comp_idle()
