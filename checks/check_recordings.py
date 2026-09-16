@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report what is in `recordings/`, and whether any of it carries the §30.1 padding.
+"""Report recorded motion, stationary endings, provenance and camera files.
 
     uv run checks/check_recordings.py
     uv run checks/check_recordings.py --dir recordings --still 0.05
@@ -28,10 +28,9 @@ from yam.cameras.specs import camera_dir_name  # noqa: E402
 from yam.files import listing, sidecars  # noqa: E402
 from yam.recording import Layout, Trajectory  # noqa: E402
 
-#: Above this, a tail is the §30.1 defect: it produced 1.8 to 4.4 s. Below it, a tail is
-#: the arm coming to rest before the key was pressed, which is not a fault and not
-#: something to re-record for. ⚠️ The gap between the two cases is wide in the measured
-#: data, so this threshold is not delicate.
+#: Review endings longer than this. Joint data measures stillness, not when the
+#: operator pressed stop: a deliberate pause and the historical save-prompt defect
+#: can produce the same tail. Duration alone must not diagnose corruption.
 PADDING_S = 1.0
 
 #: A recording labelled HOLD should barely move. The measured wobble floor of a held
@@ -252,7 +251,7 @@ def main() -> int:
     # than one arm. A two-arm file and a one-arm file look identical in every other column,
     # and playing the wrong one into the wrong session is the mistake worth making visible.
     print(f"{'file':>9} {'arms':>6} {'commit':>9} {'recorded':>17} {'dur':>7} "
-          f"{'padding':>9} {'share':>6} {'peak p99':>9}  {'how it was made':<22}")
+          f"{'still tail':>9} {'share':>6} {'peak p99':>9}  {'how it was made':<22}")
     padded: list[tuple[str, bool]] = []   # (file name, its modes include a park)
     # ⛔ TWO LISTS, and they used to be one. On 2026-08-19 the Linux station printed
     # "⛔ 3 file(s) are labelled `live:hold` yet moved faster than 0.5 rad/s: 5.json,
@@ -272,9 +271,9 @@ def main() -> int:
             continue
         pad = traj.trailing_still_seconds(args.still)
         share = 100.0 * pad / traj.duration if traj.duration else 0.0
-        flag = "  ⛔" if pad > PADDING_S else ""
+        flag = "  ⚠️" if pad > PADDING_S else ""
         if pad > PADDING_S:
-            # ⭐ FINDINGS §73.1: a recording of an AUTOMATED run (its modes include a park) usually carries a real trailing pause — the seconds between the run finishing and the operator pressing w. Same measurement, different likely cause, different advice; the split keeps the §30.1 defect loud without telling anyone to re-record a healthy run.
+            # A park in the provenance supplies context, not proof of why a tail exists.
             is_run = any(":park" in m for m in (traj.meta.get("modes") or []))
             padded.append((path.name, is_run))
         # ⭐ `method` is shown because the defect in FINDINGS §35.4 was found by
@@ -358,25 +357,26 @@ def main() -> int:
         print("   `method` names only the mode the recording STARTED in. Not a fault in the")
         print("   data, and it does mean the label cannot be trusted for those files.")
         print()
-    defect = [name for name, is_run in padded if not is_run]
+    live_tails = [name for name, is_run in padded if not is_run]
     run_tails = [name for name, is_run in padded if is_run]
-    if defect:
-        print(f"⛔ {len(defect)} of {len(files)} carry more than {PADDING_S:.1f}s of "
-              f"padding: {', '.join(defect)}")
-        print("   That is the FINDINGS §30.1 defect. Re-record those; it takes seconds.")
+    if live_tails:
+        print(f"⚠️ {len(live_tails)} of {len(files)} carry more than {PADDING_S:.1f}s of "
+              f"trailing still time: {', '.join(live_tails)}")
+        print("   A deliberate pause and samples added after stopping can look identical.")
+        print("   Compare the stop message with the saved duration and sample count before")
+        print("   deciding whether the ending is unwanted. Preserve the recording for review.")
     if run_tails:
         print(f"⚠️ {len(run_tails)} run-recording(s) carry more than {PADDING_S:.1f}s of "
               f"trailing still time: {', '.join(run_tails)}")
-        print("   These recorded an automated run (their modes include a park), and the")
-        print("   tail is usually the gap between the run finishing and w being pressed —")
-        print("   not the §30.1 defect. Wasted ticks in an episode, not broken data. The")
-        print("   technique that avoids it: press w DURING the run's last leg (FINDINGS §73.1).")
+        print("   Their modes include a park. The ending may be intentional settling or")
+        print("   the gap before stop was pressed. Review the intended demonstration before")
+        print("   trimming or re-recording; this measurement alone does not establish a fault.")
     if not padded:
         print(f"✓ none of the {len(files)} files carry more than {PADDING_S:.1f}s of "
               f"trailing still time.")
-    print("\n⚠️ Padding is measured at the END only, so a pause in the middle is invisible,")
-    print("   and a deliberate pause at the end reads the same as padding. Tenths of a")
-    print("   second are the arm coming to rest, not the defect.")
+    print("\nStill time is measured at the END only, using the --still speed threshold.")
+    print("Pauses in the middle are not reported. A still tail alone does not diagnose")
+    print("the historical FINDINGS §30.1 save-prompt defect.")
     return 0
 
 

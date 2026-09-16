@@ -1,6 +1,6 @@
 # Station verification — September 16, 2026
 
-## Current status and the next operator action
+## Current status
 
 Julien chose physical-station verification after the local cleanup. He and a
 teammate are at the station. Both arms can be made available. **For the first live
@@ -16,11 +16,15 @@ was deliberate hand movement. Target-lead warnings remain documented below.
 The combined-arm run has also completed with exit 0, both arms parked and all
 14 motors confirmed disabled. Julien confirms that selection and movement worked
 as intended, without unexpected movement or resistance, and asks to use his
-selection/park workflow for subsequent checks. A camera-only D405 probe has passed.
-The next check is a short integrated recording, whose result remains pending.
+selection/park workflow for subsequent checks. The integrated D405 recording and
+operator-run replay have now passed, as detailed below. All five live logs end
+with exit 0 and disabled motors. This completes the attended validation sequence;
+it does not establish every mode, camera layout or training-data use as validated.
 
-Use [STATION_COMMANDS](STATION_COMMANDS.md) for the current operator sequence.
-It provides one short command that works from either the Mac or the station.
+Use [STATION_COMMANDS](STATION_COMMANDS.md) for the connection/folder map and the
+completed operator sequence. Validation slot 9 is occupied; the record helper
+now refuses another run to preserve that take. No new motor check is needed for
+this sequence. The same short helper works from either the Mac or the station.
 The previous split SSH/`cd` instructions caused a real error when the temporary
 station path was pasted at the Mac prompt. Do not repeat that workflow without
 clearly identifying the host.
@@ -202,15 +206,96 @@ Sampling faster than the camera produces duplicates; that count alone is not
 a dropped-frame count. This short test does not establish sustained two-camera
 delivery or performance while controlling and recording arms.
 
-The saved frame was inspected. It points upward at the arm and window; it is not
+The saved probe frame was inspected. It points upward at the arm and window; it is not
 a useful workspace view yet. Position and secure cameras before meaningful
 demonstrations. The image proves colour delivery in this probe; no depth stream
-was tested. The exact recording-camera startup path still needs its integrated
-test, including frame writers, take completion, slot publication and validation.
+was tested. At this checkpoint the exact recording-camera startup path still
+needed its integrated test; the following section records that completed check.
 
 Local evidence is under `camera-probe/` in the evidence directory. The remote
 frame/report names begin `recordings/cameras/2026-09-16_163638_`; the log is
 `logs/camera-probe-d405.txt`. No exposure-control command was issued.
+
+## Integrated recording and replay — completed
+
+Julien ran the prepared record profile at 17:10:03–17:12:58 CEST and reported
+"worked perfectly seems like it." The complete log, saved files and replay report
+were inspected. At startup the application measured the D405 at 1280×720,
+30.0 fps in YUYV. The take records B in HOLD and G in TELEOP.
+Julien subsequently replayed it, drove both arms and used in-session base parking.
+These later actions were beyond the suggested short take and are recorded as
+observed behavior, not commands sent by the agent.
+
+| Evidence | Result and limit |
+| --- | --- |
+| Joint data | 1,166 finite, correctly sized samples; 14 joints ordered B then G; strictly increasing timestamps across 11.88037 s |
+| Recorded sampling | 98.06 samples/s; median interval 10.06 ms, maximum 16.29 ms |
+| Recorded motion | B's largest peak-to-peak change was 0.00039 rad; G's six arm joints changed by 0.388–0.541 rad; the modes agree with the data |
+| Camera files | All 357 JPEGs decode at 1280×720; each file hash is distinct; disk filenames, index entries and saved counts agree |
+| Camera completion | Index reports flushed; zero reported writer drops or write errors; sequence 671–1027 has no gaps |
+| Host camera timing | 29.9985 fps; mean frame interval 33.335 ms, maximum 33.916 ms |
+| Timeline alignment | All camera host timestamps lie within the joint timeline; largest distance to a nearest joint sample is 5.874 ms. This does not measure exposure timing or hardware synchronization |
+| Publication | Stop and saved messages both report 11.9 s and 1,166 samples; JSON and frames are published under slot 9; no pending frames or interrupted-save directory remains |
+| Replay | Finished at 1.00× in 11.879 s, zero reported cursor-hold time, then HOLD. Worst target-to-measured joint lag 0.11254 rad, below the configured 0.15 rad cursor-hold threshold |
+| Replay timing | 949 tracking samples; rolling loop display approximately 80–85 Hz, last stored loop_hz 81.9. This differs from the recording rate and the whole-session mean |
+| Whole session | 16,135 passes, mean 10.3 ms/97 Hz; worst 55.9 ms at t=9.4 s; 206 passes over 15 ms, 10 over 20, three over 33 and one over 50 |
+| Exit | Both arms parked; reported final error B 0.020 rad and G 0.028 rad; all 14 motors confirmed disabled; exit 0 |
+| Temperatures | Both arms reached 37°C; jaws B 29°C and G 28°C |
+
+The first, middle and last camera frames were visually inspected. They show
+changing arm position, but retain the dark, tilted upward view of the arm/window.
+This verifies image delivery with control and recording. It is not a useful
+workspace demonstration view. Mounting/framing, the absent Logitech connection,
+physical left/right roles, depth and the team's training loader remain unverified.
+Later TELEOP output includes workspace-edge and target-lead warnings; no fault
+stop occurred. The existing measurement limits above still apply.
+
+### Corrected stationary-ending diagnosis
+
+The original recording checker flags 1.34626 s of trailing stillness as a definite
+FINDINGS §30.1 defect and tells the operator to re-record. That conclusion is not
+supported by this measurement. The take froze near displayed t=30 s and was saved
+near t=64 s with the same 1,166 samples and 11.9 s duration: waiting at the save
+prompt did not extend this recording. The user's intended length of the ending
+was not independently established, so the data is retained without trimming.
+
+The local checker now labels the column "still tail", reports a review warning,
+and explains that a pause and unwanted extra samples can look identical. The
+1.0 s review threshold, speed calculation and stored recording stay unchanged.
+Both ordinary and park-containing recordings retain their context without an
+automatic corruption diagnosis or instruction to discard/re-record.
+
+Verification: 76/76 recording tests and 9/9 recovery tests pass. The revised real
+CLI was also run on the station take from the disposable software-check checkout:
+same duration, 1.35 s ending and 357 frames at 30.0 fps, with the corrected advice.
+The motor-control operator checkout remains unchanged at `025fab1`.
+
+### Preservation and evidence
+
+The read-only snapshot at 15:14:56 UTC (`after-recording.json`) confirms reference
+HEAD/status/config still match the before snapshot; operator config matches its
+copied baseline and application status is empty. LaRobot remains separately on
+`feature/physical` at `087a4fc` with `scripts/physical.py` edited.
+
+- Live log: `check-record-20260916T151003Z-556213.log`, 78,065 bytes,
+  SHA-256 `2168305b48861c64cec5020ebb5a056a0be5ec70ccef848c01c2a9932320ace7`.
+- Trajectory: `recordings/9.json`, 222,675 bytes,
+  SHA-256 `6b7c468383781ddf0a27f8e299d77686ea792941cf10447ebe783abec7b0b6c4`.
+- Replay report: `recordings/tracking/9_2026-09-16T17-12-00+02-00.json`.
+- Local `recording-validation.json` records all 12 data checks, frame timing,
+  dimensions and hashes for every one of the take's 359 files (36,292,877 bytes).
+  `recording-review/` holds the trajectory, index, replay report and three sampled
+  images; copied take-file hashes match the station. It is not the full image set.
+- The full take, tracking report, five live logs, copied config and source bundle
+  were copied without replacing a checkout to the persistent station directory
+  `/home/lavita/yam-validation-evidence/2026-09-16-025fab1-slot9`.
+  All 380 copied files, 36,862,481 bytes, match their hashes. Its MANIFEST.json
+  SHA-256 is `10980a29cd567fb7d3dc2450a1b480bd5f266cb443cd873300766768fa89bf54`.
+  This survives `/tmp` cleanup but remains on the same station disk.
+
+No complete image series was downloaded to the Mac. The original temporary take
+and all existing project checkouts were retained. No motor command, calibration
+change or team-remote push was performed by the agent.
 
 ## What was verified remotely
 
@@ -318,13 +403,15 @@ Local copied logs and the bundle are under
 `agents/codex/station-validation-2026-09-16/` (ignored). Remote logs, results.json,
 station-before.json, station-after-preparation.json and operator-config.json are
 under `/tmp/yam-validation-025fab1-LWvBIc/`. Transfers consist of the incremental
-source bundle, small logs/reports/helpers and one camera-probe image. No complete
+source bundle, small logs/reports/helpers, one camera-probe image and three take
+images plus the small trajectory/index/replay files. No complete
 recorded take, dependency environment or model collection was downloaded.
 
-The combined-arm result is reviewed. The next dependency is Julien running
-`/tmp/yam-station-check record`, saving slot 9 and reporting its physical behavior.
-Then inspect the take's joint samples, frame metadata and publication result.
-The Logitech connection and meaningful camera framing need physical attention.
+The attended B/G, combined-arm and integrated recording/replay sequence is complete.
+No new command is required to finish it. The review package is updated locally.
+The Logitech connection and meaningful camera framing still need physical attention
+before useful demonstration capture; a remote file check cannot establish those.
 Use device serials and B/G labels until physical left/right roles are established.
 Publication or replacing a working station checkout needs a separate decision.
-The completed local cleanup is separate from this still-open physical phase.
+This bounded validation close-out is not a claim that the full station layout or
+the team's application has been integrated and validated.

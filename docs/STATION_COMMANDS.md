@@ -1,72 +1,92 @@
-# Station checks: commands for Julien
+# Station checks: connection, folders and workflow
 
-## One command on either computer
+## Current status
 
-`/tmp/yam-station-check` is installed on Julien's Mac and the RoVita station.
-Use the same command from any directory on either machine. It connects when
-needed and returns to the shell where it was started. There are no separate SSH
-or `cd` steps. Do not close an SSH connection while a controller is running.
+The attended B/G, combined-arm and camera-backed recording/replay checks are
+complete. Slot 9 contains the verified take. `/tmp/yam-station-check record`
+now refuses another run because that slot is occupied; preserve it.
+No further motor command is required to finish this validation sequence.
 
-The helper checks candidate `025fab1`, its application files and copied config
-before starting. It writes a terminal log. These are temporary validation tools;
+## How the computers and folders relate
+
+The Mac connects by SSH using alias `yam-pc`, which resolves to
+`lavita@10.64.9.60` on the Linux station **RoVita**. Commands launched through SSH
+run on that station. They use its USB/CAN devices and write to its filesystem.
+
+| Location | Purpose | Git state at the verification snapshot |
+| --- | --- | --- |
+| Mac: `/Users/julien/Developer/Projects/yam-robotics` | Cleanup development and review package | `codex/teleop-cleanup`; latest revision is in Git and the package manifest |
+| Station: `/tmp/yam-validation-025fab1-LWvBIc/operator` | Tested application and disposable recordings | Fixed commit `025fab1`, detached HEAD; a pinned revision without an active branch |
+| Station: `/home/lavita/LaRobot` | Teammate's working project | `feature/physical` at `087a4fc`, with edited `scripts/physical.py` |
+| Station: `/home/lavita/yam-robotics` | Original Fable/reference checkout | `main` at `499d0b7`, with the station's park-pose edits |
+
+These are separate source folders and Git working trees on the same station.
+The test has its own copied configuration and recording directory. It reuses the
+reference checkout's Python environment and I2RT vendor directory without changing
+them. Both projects access the same physical arms, so controller ownership still
+has to be coordinated with the teammate.
+
+At the recording-check snapshot, Julien's `bash-5.2$` shell was in
+`/tmp/yam-validation-025fab1-LWvBIc`, the parent of `operator/`. The helper changes
+directory in its child process; on exit the original shell stays in that parent.
+That explains the `ls` output containing `check`, `logs`, `operator` and `checkout`.
+`cd .` leaves the current directory unchanged. To identify the current shell:
+
+```sh
+hostname
+pwd
+```
+
+The Codex terminal panel's local workspace label does not change when its shell
+enters SSH. The prompt and these commands identify where terminal commands run.
+
+## Helper and completed recording sequence
+
+`/tmp/yam-station-check` is installed on the Mac and RoVita. It connects from the
+Mac or runs locally on the station, from any directory. It returns to the shell
+where it started; no separate SSH or `cd` steps are needed. Do not close the SSH
+connection while a controller is running. These are temporary validation helpers;
 the normal repository launcher remains `./teleop`.
 
-## Next check: one short recording with the D405
+The completed check used the record profile, which opened D405 serial
+`260323072846` in colour and enabled both arms in HOLD. Julien selected G with
+`a`, entered TELEOP with `t`, used `w` to start/stop and saved into slot 9.
+The result contains 11.88 seconds, 1,166 samples of 14 joints and 357 images at
+about 30 fps. He also replayed it with the application's `l` workflow.
 
-B and G have passed the attended motion checks, including the shared-puck
-selection workflow. Now verify joint sampling, camera frames and take publication
-together. Arrange the D405 securely with G's working area in view. A stable table
-position is sufficient for this check.
+The helper verifies candidate `025fab1`, application status and copied config
+hashes before starting; its occupied-slot guard now prevents accidental reuse.
+A new capture test needs a deliberately prepared empty destination. Do not delete
+the verified take or bypass the guard to obtain another run.
 
-After other controllers are stopped and both workspaces are clear, paste:
+## Selection and exit workflow
 
-```sh
-/tmp/yam-station-check record
-```
+With the currently connected shared puck, `a` cycles B, G and BOTH. Each arm
+retains its mode. Pressing `t` on an arm already in TELEOP reports that state;
+it is not an error. `h` selects explicit HOLD. BOTH routes the shared puck to both
+arms. With separate pucks, each puck drives its own arm regardless of mode-key
+selection. The local handoff corrects the older generic shared-puck help text;
+the physical operator remains the tested application at `025fab1`.
 
-This opens D405 serial `260323072846` in colour and enables both arms in HOLD.
-It records B/G joint streams on one timeline. The planned take uses empty slot 9
-inside the disposable operator checkout; original recordings are untouched.
+The verified normal exit is `q`, wait for the menu, then `q` again. The second
+`q` intentionally parks the arms before disabling them. Keep their park paths
+clear. Ctrl-C and fault handling can also initiate parking. The alternative `d`
+disables directly and requires support for every enabled arm. Software keys do
+not replace the physical power cut. All five attended logs confirm motors disabled.
 
-1. Press `a` once to select G, then `t` for TELEOP.
-2. Press `w` to start recording. Move G gently for about 10–15 seconds.
-3. Release the puck and press `w` again.
-4. Wait for the save-slot prompt, press `9`, then wait for the saved confirmation.
-5. Use the verified park exit: `q`, wait for the menu, then `q` again.
-6. Confirm both arms report motors 1–7 disabled. Report how the run felt.
+## Saved evidence and remaining physical setup
 
-The second `q` intentionally parks both arms before disabling them. Keep both
-park paths clear. Ctrl-C and fault handling can also initiate parking. The
-alternative `d` disables directly and requires support for every enabled arm.
-Software keys do not replace the physical power cut.
+The full take, replay report and logs are preserved outside `/tmp` at
+`/home/lavita/yam-validation-evidence/2026-09-16-025fab1-slot9` on the station.
+It has a checksum manifest and README; it is evidence, not an installed controller.
+The temporary originals remain in place. Mac evidence contains metadata, logs and
+three sampled take images rather than the full image series.
 
-For a preview that opens no devices:
+The D405 view is still dark and tilted upward toward the arm and window. Aim and
+secure it toward the task before collecting useful demonstrations. The overhead
+Logitech was not enumerated; its connection still needs physical inspection.
+Left/right roles and camera mounts are not established, so the tests retained
+world-frame control. These setup limits do not undo the verified capture/save path.
 
-```sh
-/tmp/yam-station-check record --plan
-```
-
-## Your selection workflow
-
-With the currently connected shared puck, `a` cycles B, G and BOTH. It changes the
-selection while each arm retains its mode. Pressing `t` again on an arm already
-in TELEOP reports that state; it is not an error. Use `h` for an explicit HOLD.
-BOTH sends the shared puck input to both arms. With separate pucks, each puck
-continues to drive its own arm regardless of mode-key selection.
-
-The station still runs the tested application. The local handoff version corrects
-two generic help messages that previously described separate pucks even when the
-session was using one shared puck. This changes wording only.
-
-## After recording
-
-Codex can read the terminal and saved log, then validate the saved joint samples,
-image files, frame metadata and publication result. That check is still pending.
-
-The D405 probe produced colour frames. Its view pointed up at the arm
-and window; aim and secure it toward the intended workspace before collecting
-useful demonstrations. It is not a verified wrist-camera mount. Keep control in
-the world frame. The overhead Logitech is not currently enumerated on the station;
-its USB connection needs checking. Left/right arm roles remain unspecified.
-
-Full evidence and limits: [STATION_VALIDATION](STATION_VALIDATION.md).
+Full results and limits: [STATION_VALIDATION](STATION_VALIDATION.md).
+Review readiness: [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md).

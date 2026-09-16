@@ -7,9 +7,11 @@ the verified arm-control paths. Julien tested B and G and reports normal behavio
 The local cleanup is complete. Further structural refactoring is not a prerequisite
 for this handoff.
 
-Combined-arm operation with the current shared puck has also been exercised.
-Camera-backed recording still needs attended validation.
-The active test and exact commands are in [STATION_COMMANDS](STATION_COMMANDS.md).
+Combined-arm operation with the current shared puck, a D405-backed take and its
+replay have also been verified. The current attended validation sequence is
+complete. Camera mounting/framing and the absent Logitech connection need physical
+setup before collecting useful demonstrations. The connection/folder map and
+tested workflow are in [STATION_COMMANDS](STATION_COMMANDS.md).
 Publication, installation into a working station checkout and integration with
 the team's application remain separate decisions.
 
@@ -18,7 +20,8 @@ the team's application remain separate decisions.
 The branch is `codex/teleop-cleanup`, based on Fable's final `499d0b7`.
 The entry point is `apps/teleop_session.py`, using the `src/yam` library.
 The motor-control application tested on Linux is `025fab1`; subsequent changes
-repair a dataset falsifier, clarify shared-puck help text and document verification.
+repair a dataset falsifier, clarify shared-puck help text, correct a misleading
+recording-checker diagnosis and document verification.
 They do not change the tested motion code. The latest complete local suite also
 passes after the help-text clarification.
 
@@ -37,7 +40,7 @@ values and stop policy were preserved. The operator is 1,973 lines.
 
 | Check | Result and limit |
 | --- | --- |
-| Mac software | 1,077/1,077 checks in 71 files; 71/71 deliberate falsifier catches |
+| Mac software | Latest full suite: 1,077/1,077 in 71 files; 71/71 falsifier catches at the fixture checkpoint. After the final diagnostic wording change: 76 recording and nine recovery tests pass, plus the actual checker on the station take |
 | Linux software | 1,075/1,075 candidate checks, then two focused new regressions; 71/71 falsifier catches |
 | Isolated simulator | 32/32 interactions; fake devices |
 | B | HOLD, TELEOP, automatic park and seven disabled motors; exit 0 |
@@ -46,11 +49,20 @@ values and stop policy were preserved. The operator is 1,973 lines.
 | Human observation | Julien says both arms felt normal, confirms the large GUIDE pose change was deliberate, and confirms combined selection moved exactly the intended arms without unexpected movement or resistance |
 | Hardware timing | Single-arm means about 99 Hz; combined mean 98 Hz, worst observed pass 54.4 ms; no hard real-time guarantee |
 | Camera only | D405 colour image received at 1280×720; five-second probe reported 26.75 fps and 33.32 ms mean inter-frame gap |
+| Integrated recording | 11.88037 s; 1,166 samples of 14 joints at about 98 Hz; 357 readable 1280×720 images at 30 fps; index/count/timestamps agree, no writer drops/errors or interrupted save |
+| Replay | Operator-run 1.00× replay finished into HOLD; worst joint lag 0.11254 rad, below the configured 0.15 rad pause threshold. Rolling replay loop display was about 80–85 Hz |
+
+The take has 1.35 s of stationary ending. Its duration and sample count did not
+grow while awaiting save. The checker now reports stillness as a review finding;
+it cannot infer the old save-prompt defect or require re-recording from that alone.
+The complete test take and logs are preserved with a verified manifest at
+`/home/lavita/yam-validation-evidence/2026-09-16-025fab1-slot9` on the station.
 
 The TELEOP runs contain target-lead warnings. These describe the gap between
 the requested tool pose and the solver's model pose. They do not directly measure
 contact or motor error. G's narrow terminal clipped some warning details.
-No new blocking cleanup defect was demonstrated by these runs. These observations
+The misleading checker conclusion was corrected without changing stored data or
+motion code. No new blocking control defect was demonstrated. These observations
 do not establish every mode, pose, payload or two-arm interaction as validated.
 
 ## How to review and run

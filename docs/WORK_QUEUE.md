@@ -4,7 +4,34 @@ Updated September 16, 2026. This queue implements Julien's instruction to contin
 through useful local work without stopping at each commit. The initial state below
 is based on verified checkout `190070e`; subsequent evidence is recorded per item.
 
-## Active phase: verify the physical station
+## Active phase: make the colleague handoff easy to use
+
+After the attended checks passed, Julien explicitly asked for a fresh readability
+review against the teammate's current implementation. The reference should be
+understandable and useful as inspiration for their own arm/features implementation.
+This extends the completed cleanup and validation; do not stop at the earlier
+package checkpoint while these newly requested items remain actionable.
+
+1. Capture a read-only source snapshot of the station's current LaRobot checkout,
+   including its in-progress physical script, and record revision/hash provenance.
+   Preserve the teammate's files and distinguish committed from working changes.
+2. Compare entry points, device ownership, control/mode flow, recording/cameras,
+   replay and integration contracts. Reuse/update BRIDGE where it is still useful;
+   dated module mappings are not evidence of the current team implementation.
+3. Review the reference's readability using that comparison. Identify concrete
+   navigation, naming or responsibility problems. Make bounded useful improvements
+   with behavior checks at changed boundaries; do not move a large loop merely to
+   claim fewer lines or change verified motion/calibration/stop semantics.
+4. Produce a concise colleague reading/feature map, with a sensible implementation
+   order and clear distinctions between reusable code, reference-only policy and
+   team-specific integration. Keep detailed evidence in the existing handoff.
+5. Verify, commit locally and regenerate the review package. Sending/pushing to a
+   colleague or changing their live checkout still requires a concrete destination
+   and instruction; a readiness question alone does not authorize publication.
+
+No answer from Julien is needed for these read-only comparisons and local changes.
+
+## Attended physical-station validation — completed
 
 Julien selected physical-station verification on September 16 and is there with a
 teammate who is currently working on it. This is new work after the completed local
@@ -29,18 +56,20 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    arms felt normal and the GUIDE movement was deliberate. Combined B/G/BOTH
    shared-puck selection and parking were exercised. Julien explicitly confirms
    selection moved the intended arms without unexpected movement or resistance.
-   Target-lead warnings are
-   explained with their measurement limits. The agent has sent no motor command.
-5. Record results, limits and preserved state. All four raw logs are saved locally.
-   The post-combined snapshot at 15:03:25 UTC confirms the reference checkout and
-   operator config remain unchanged. The teammate's separate checkout has advanced
-   independently. STATION_VALIDATION records outcomes and limits; refresh
-   preservation after the remaining capture check.
-6. Verify one camera-backed take. The camera-only D405 probe passed; the Logitech
-   is not enumerated. Julien explained the current camera placement. The recording
-   profile is prepared and dry-run tested from both computers, using empty slot 9
-   in the disposable checkout. Pending: operator-run take, then validate joints,
-   image files, frame metadata and publication. The D405 needs useful framing.
+   Target-lead warnings are explained with their measurement limits. The agent has
+   sent no motor command.
+5. Record results, limits and preserved state. Complete: all five live logs saved
+   locally. The post-recording snapshot confirms reference checkout and operator
+   config remain unchanged. The full take and supporting evidence are also copied
+   outside /tmp on the station; all 380 copied files match their checksums.
+6. Verify one camera-backed take. Complete: 11.88 s, 1,166 finite/ordered samples of
+   14 joints, 357 readable 1280×720 images at 30 fps. Index/counts/host timestamps
+   agree, no writer losses/errors or interrupted save. Julien also replayed the
+   take successfully into HOLD. The 1.35 s stationary ending exposed a misleading
+   checker diagnosis; wording corrected and verified by 76 recording tests, nine
+   recovery tests and the actual checker on the take. Useful camera framing and
+   the Logitech connection still need physical setup before demonstration capture;
+   the completed test establishes the pipeline with the available D405 view.
 7. Improve command handoff and prepare colleague review. Complete: the same short command
    now works on the Mac and station. Two misleading shared-puck help messages are
    corrected locally; the full suite passes 1,077/1,077. README now includes the
@@ -52,10 +81,9 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    Publication and promotion into an existing working checkout remain separate
    decisions; no colleague message or push is authorized by a readiness question.
 
-Evidence and commands: [STATION_VALIDATION](STATION_VALIDATION.md). A passing local
-suite does not complete physical checks. Review packaging is complete. The next
-dependency is the operator-run recording. Do not start another robot
-controller remotely in place of that handoff.
+Evidence: [STATION_VALIDATION](STATION_VALIDATION.md). Connection and folder map:
+[STATION_COMMANDS](STATION_COMMANDS.md). No further motion is needed for this
+sequence. The new colleague-readability phase above is actionable independently.
 
 ## Broader review — completed locally
 

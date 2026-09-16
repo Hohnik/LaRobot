@@ -4,14 +4,21 @@ Updated September 16, 2026. This is the current implementation handoff for the c
 
 ## Current status
 
-**Next phase is now active:** Julien selected physical-station verification.
+**The attended station-validation sequence is complete.** Julien selected this
+phase after the local cleanup.
 [STATION_VALIDATION](STATION_VALIDATION.md) records the passed Linux software checks,
 preserved station work and attended B, G and combined-arm runs. Julien reports
-normal operation; all four logs confirm successful exits and disabled motors.
-Target-lead warnings are documented with their diagnostic limits. A D405-only
-probe delivered colour images. The integrated recording check remains pending.
-[STATION_COMMANDS](STATION_COMMANDS.md) gives the short command and recording steps.
+normal operation; all five logs confirm successful exits and disabled motors.
+The integrated take contains 1,166 joint samples and 357 verified D405 images;
+its operator-run replay also completed. Target-lead warnings, replay timing and
+the camera's unsuitable framing are recorded with their limits. The recording
+checker now reports a stationary ending without claiming it proves a defect.
+[STATION_COMMANDS](STATION_COMMANDS.md) explains SSH, separate folders and workflow.
 [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md) summarizes review readiness.
+
+Julien has now requested a colleague-focused readability comparison against the
+current LaRobot implementation. That new local phase is active in WORK_QUEUE;
+the completed validation is not a reason to stop its useful independent work.
 
 The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
 `499d0b7`. No user answer or technical unblock is needed for this completed pass.
@@ -25,7 +32,7 @@ its older counts and "incomplete" statements are dated evidence, not current sta
 | Operator structure | 1,973 lines, down from 2,261 before the broader pass. Shared speed/rotation policy has one owner; startup and ordered motion coordination remain explicit. Two shared-puck help messages were subsequently clarified. |
 | Core source explanations | robot.py 1,078 → 673 lines; recording.py 803 → 615. Executable AST unchanged in these prose passes. Historical explanations archived verbatim; current contracts corrected. |
 | Status display | Both settings and heartbeat acquire detached snapshots; rendering has no robot handle. Mirror status reuses displayed poses. |
-| Local verification | Latest suite: 1,077/1,077 checks in 71 files after the portable fixture and shared-puck wording changes. Falsifiers: 71/71 at the fixture checkpoint. Isolated simulator: 32/32 at the completed broader review. |
+| Local verification | Latest full suite: 1,077/1,077 in 71 files after fixture/shared-puck changes; 76 recording and nine recovery tests plus the actual station checker pass after the final diagnostic correction. Falsifiers: 71/71 at the fixture checkpoint; isolated simulator: 32/32 at the broader review. |
 | Preservation / remaining decisions | All 3,455 original recording files unchanged at the broader local close-out. The separately authorized station checks are recorded in STATION_VALIDATION. No remote publication or replacement of a working station checkout. |
 
 The normal simulated operator starts from the repository root with:

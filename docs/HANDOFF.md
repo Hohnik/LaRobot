@@ -8,13 +8,17 @@ The broader local source/structure review is complete; read the current status
 and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any older
 "next step" below as still pending. No automatic background continuation is running.
 
-Physical-station verification is now active. Read
+The attended physical-station validation sequence is complete. Read
 [STATION_VALIDATION](STATION_VALIDATION.md) for the current Linux evidence and the
-attended B, G and combined-arm tests. Julien reports normal operation; all four
-logs confirm disabled motors and exit 0. Target-lead warnings retain their
-diagnostic limits. A short camera-backed take is the next check; use
-[STATION_COMMANDS](STATION_COMMANDS.md) for the command that works on either machine.
+attended B, G, combined-arm and recording/replay tests. Julien reports normal
+operation; all five logs confirm disabled motors and exit 0. The take has 1,166
+joint samples and 357 verified D405 images. The full evidence is preserved outside
+`/tmp` on the station. Camera framing/connection and training integration retain
+their limits. Use [STATION_COMMANDS](STATION_COMMANDS.md) for SSH/folder identities
+and the tested workflow; slot 9 is occupied and its helper now protects the take.
 [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md) summarizes readiness for review.
+Julien subsequently requested a fresh colleague-focused readability comparison
+against the current LaRobot source. Follow the active queue before ending that work.
 August network/device/interface details below may be stale.
 
 ## Archived August handoff
