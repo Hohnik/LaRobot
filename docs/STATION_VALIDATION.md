@@ -8,26 +8,34 @@ checks, Julien wants the exact commands and explanation first, then runs them in
 the station terminal himself.** Do not start a motor controller remotely in place
 of that agreed handoff. Software checks and preparation continue independently.
 
-Software checks and simulation on the Linux station have passed. No live motor
-command has been run in this phase. The attended HOLD check below is pending;
-physical verification is not complete.
+Software checks and simulation on the Linux station have passed. Julien has now
+run B from his Mac through SSH. He reports that control worked as expected. The
+terminal and saved log confirm HOLD, TELEOP, parking and all seven motors disabled,
+with exit code 0. Two late target-lead warnings remain to be explained below.
+G and the combined station workflow have not been physically verified.
 
-On the **Linux station terminal**, after the teammate has stopped any controller
-using the arms, the prepared command is:
+The next bounded check is G by itself. Use the existing remote shell, after the
+teammate has yielded G and its workspace is clear:
 
 ```sh
 cd /tmp/yam-validation-025fab1-LWvBIc
-./hold B
+./hold G
 ```
 
-This runs candidate `025fab1` with `--arm B --start-mode hold --yes`, using the
+This runs candidate `025fab1` with `--arm G --start-mode hold --yes`, using the
 station's existing Python environment and a copy of its current configuration.
-It enables arm B, assigns a SpaceMouse by the application's wiggle prompt, and
-starts HOLD. Follow the assignment prompt, then leave the puck centred. Observe
-for about 20 seconds: B should hold its pose, display temperatures and joint
-positions, and report no fault or BLIND reading. G should remain untouched by this
-process. This is the first test, not permission to try GUIDE, TELEOP, mirror or
-saved waypoints in the same session.
+It enables G and starts HOLD. Follow any SpaceMouse assignment prompt, then leave
+the puck centred. Observe for about 20 seconds: G should hold its pose, display
+temperatures and joint positions, and report no fault or BLIND reading. This
+command opens only G's motor chain.
+
+If B met an obstacle or stopped following the intended motion, report that before
+continuing to commanded motion. If B felt normal and G holds normally, press `t`
+and try small, slow movements within clear space. Release the puck between them,
+then press `h` and check that G holds the current pose. A persistent STUCK warning,
+unexpected motion, resistance or a fault ends this check for review. Do not push
+through resistance or change speed, calibration or limits to make a warning vanish.
+GUIDE, mirror, saved waypoints and recording are separate later checks.
 
 **Normal exit for this test:** press `q`, wait for the menu, support the arm so it
 cannot fall when torque is removed, then press `d`. Confirm that the terminal
@@ -37,16 +45,82 @@ that path clear and the physical power cut available. Software HOLD/quit keys ar
 not a hardware emergency stop. These are existing controller behaviors, not new
 shutdown guarantees introduced by this test.
 
-The helper captures a terminal log under this run's `logs/hold-B-*.log`; Codex can
+The helper captures a terminal log under this run's `logs/hold-G-*.log`; Codex can
 read it over SSH. Julien must still report what the physical arm did: a log cannot
 prove absence of unexpected motion, contact, sound or heat. If startup refuses or
 a fault appears, stop the sequence and inspect that evidence before trying again.
-After the first result is reviewed, the same helper accepts G for a separate test.
 Further commanded motion needs another explained, operator-run step.
 
 `./hold B --plan` exercises the same helper without `--yes` and opens no devices.
-That exact wrapper dry run has passed. Do not copy these /tmp paths as permanent
-installation instructions; verify their existence and candidate before resuming.
+That wrapper dry run and both arm plans passed during preparation. Do not copy
+these /tmp paths as permanent installation instructions; verify their existence
+and candidate before resuming.
+
+To reconnect from the Mac, without starting a controller:
+
+```sh
+ssh -t -o ControlPath=none yam-pc 'cd /tmp/yam-validation-025fab1-LWvBIc && exec bash --noprofile --norc -i'
+```
+
+Codex can read this task's terminal snapshot and the saved station log. Its private
+tool SSH session was closed; it is separate from Julien's interactive shell.
+There is no background log monitor or automatic continuation.
+
+## First attended run: B
+
+Julien ran `./hold B` on September 16, 16:07:40–16:08:23 CEST. His report was:
+"It seems to work as it should, I was able to control."
+The app terminal shows the SSH command, operator output and a returned shell prompt.
+The station log independently ends with `COMMAND_EXIT_CODE="0"`.
+
+| Observation | Recorded result and scope |
+| --- | --- |
+| Candidate | `025fab1cadbb8bbed962b7727866d79f885d8743`; application source remains unchanged |
+| Startup | Seven B motors enabled; existing jaw limits verified, normalized jaw position 0.999; no calibration requested |
+| HOLD | About seven seconds of unchanged displayed joint positions; this was shorter than the proposed 20-second hold |
+| TELEOP | Entered around t=7 s and continued until t=35 s; measured joint values changed; Julien reports successful control |
+| Temperature | Highest reported motor temperature 35°C; gripper 31°C; no BLIND temperature reading |
+| Timing | 3,550 passes, mean 10.1 ms (99 Hz); worst 45.6 ms at t=7.8 s; one pass over each of 15, 20 and 33 ms |
+| Warning | `STUCK lead 1cm/14°` at t=34 and t=35 s; no fault stop |
+| Exit | Operator-requested quit followed the park-and-disable path; park reported 0.019 rad remaining error; motors 1–7 confirmed disabled |
+| Persistence | Axis map reported unchanged; all operator configuration hashes match the pre-run copy |
+| Reference checkout | HEAD, porcelain status and every configuration hash still match the before-preparation snapshot |
+
+The timing outlier occurred near TELEOP entry. This log does not attribute its
+cause or establish a worst-case latency bound. The motor-disable line is the
+controller's confirmation; the physical observation remains Julien's report.
+This run did not exercise direct `d` disable, GUIDE, G, simultaneous arm control,
+gripper open/close, cameras, recording or replay. G's behavior was not separately
+reported, although the command selected B only.
+
+### Meaning of the two warnings
+
+The display warns when translation or rotation target lead exceeds 80% of its
+configured bound. Here 14 degrees exceeds the angular threshold of 0.20 rad
+(about 11.5 degrees). The displayed 1 cm is below the translation threshold of 4 cm.
+
+The quantities come from `CartesianTeleop.lead()`: the integrated tool target
+minus the solver's internal forward-kinematics pose. The solver is seeded from
+measured joints on mode entry and then integrates its own state. This warning is
+not a direct measurement of motor tracking error, contact or collision. The
+separate status `q` values are read from the robot. A pose limitation, competing
+IK objectives or requested rotation could explain the solver gap; this log cannot
+select a cause. Do not claim the arm was physically blocked or that the warning
+is harmless solely from this output.
+
+An asynchronous question asks Julien whether he noticed contact, resistance or
+failure to follow near the end. His general success report is already recorded;
+the more specific answer is pending. Source review found no demonstrated new
+cleanup regression from this run. Motion code and operating limits stay unchanged
+while validating this candidate.
+
+The 10,974-byte raw log is `logs/hold-B-20260916T140740Z.log` under the remote
+validation directory and the local evidence directory below. Both copies have
+SHA-256 `51f178ec2429b5bf890f2bd1b677b907806be03dcec907796e82cba09315e1ce`.
+Local `after-B.json` records the read-only preservation check at 14:12:24 UTC.
+Its operator application status is empty; its configuration and reference-checkout
+comparisons are true. The operator's pre-existing copied park-pose difference
+and vendor symlink remain expected differences from the committed tree.
 
 ## What was verified remotely
 
@@ -156,7 +230,10 @@ station-before.json, station-after-preparation.json and operator-config.json are
 under `/tmp/yam-validation-025fab1-LWvBIc/`. Only the bundle and small text logs were
 transferred; no recordings, dependencies or models were downloaded.
 
-Resume with the attended B HOLD result, then decide the next small physical test
-from that evidence. The user's terminal command and physical observation are the
-current dependency. This phase remains open until the chosen physical checks are
-performed and assessed; the completed local-cleanup queue is separate.
+Resume with the pending observation about B's late warning and the explained G
+check above. The next dependency is Julien running that check and describing its
+physical behavior. After reviewing G, choose the smallest relevant combined-arm
+or recording check; camera roles must be supplied before naming views in a take.
+Those workflows remain unverified. Publication or replacing a working station
+checkout needs a separate decision. The completed local cleanup is separate from
+this still-open physical phase.

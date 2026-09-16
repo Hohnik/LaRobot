@@ -6,8 +6,10 @@ Updated September 16, 2026. This is the current implementation handoff for the c
 
 **Next phase is now active:** Julien selected physical-station verification.
 [STATION_VALIDATION](STATION_VALIDATION.md) records the passed Linux software checks,
-preserved station work and the exact operator-run HOLD test. No physical test has
-run yet; that phase remains pending independently of the completed cleanup below.
+preserved station work and the first attended B run. Julien reports successful
+control; the log confirms HOLD, TELEOP, parking and all seven motors disabled.
+Two late target-lead warnings are documented with their diagnostic limits.
+G and the combined station workflow remain unverified; the next G check is prepared.
 
 The broader local review is complete on `codex/teleop-cleanup`, based on Fable's
 `499d0b7`. No user answer or technical unblock is needed for this completed pass.
@@ -112,7 +114,7 @@ The shared trajectory lifecycle and slot persistence are now extracted, as detai
 
 ## Decisions still reserved for the operator
 
-No changes to motion limits, calibration, camera exposure policy, or the physical stopping policy are bundled into cleanup. No physical motor setpoints or real camera sessions are run by this agent. Hardware validation belongs to Julien. Pushing to the team remote requires his explicit instruction. The Linux station has not been contacted during this work.
+No changes to motion limits, calibration, camera exposure policy, or the physical stopping policy are bundled into cleanup. Julien runs the physical checks; this agent prepares them and reads their logs. Station access and attended verification were separately authorized after the local cleanup. Current evidence is in STATION_VALIDATION. Pushing to the team remote requires his explicit instruction.
 
 ## Recording lifecycle checkpoint
 

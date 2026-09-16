@@ -2,7 +2,7 @@
 
 ## Current continuation — September 16, 2026
 
-Start with [CLEANUP.md](CLEANUP.md) for the current branch, preserved training work and recordings, implementation decisions, checks, and next steps. [README.md](../README.md) has the dedicated launcher commands. Fable's final commit was `499d0b7`, exactly the version Julien recalled; the cleanup continues from it on `codex/teleop-cleanup`. The Linux station has not been rechecked in this continuation.
+Start with [CLEANUP.md](CLEANUP.md) for the current branch, preserved training work and recordings, implementation decisions, checks, and next steps. [README.md](../README.md) has the dedicated launcher commands. Fable's final commit was `499d0b7`, exactly the version Julien recalled; the cleanup continues from it on `codex/teleop-cleanup`. Current Linux evidence is in STATION_VALIDATION below.
 
 The broader local source/structure review is complete; read the current status
 and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any older
@@ -10,7 +10,10 @@ and close-out in CLEANUP plus [WORK_QUEUE](WORK_QUEUE.md) before treating any ol
 
 Physical-station verification is now active. Read
 [STATION_VALIDATION](STATION_VALIDATION.md) for the current Linux evidence and the
-user-run first live test; the August network/device/interface details below may
+user-run B test and prepared G check. Julien reports successful B control; the log
+confirms parking and motor disable. Two late target-lead warnings need a specific
+physical observation. G and combined
+workflows remain unverified. August network/device/interface details below may
 be stale.
 
 ## Archived August handoff

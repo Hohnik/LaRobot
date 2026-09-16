@@ -24,15 +24,23 @@ cleanup. The station is reachable as yam-pc; no login details are needed from hi
    Complete: separate operator copy, B/G plans and logged helper dry run verified.
 4. Perform attended real-device checks when the teammate yields the selected arm.
    Both arms are available, but Julien explicitly wants to run the first commands
-   himself after explanation. Pending: his B HOLD run and observed behavior.
-   No motor command has been sent by this continuation.
-5. Record results, limits and preserved state. Software/preparation evidence is
-   recorded in STATION_VALIDATION; physical results remain pending. Publication
-   and promotion into an existing working checkout remain separate decisions.
+   himself after explanation. B baseline complete: Julien reports successful
+   control; the log shows HOLD, TELEOP, park and seven disabled motors, exit 0.
+   Two late target-lead warnings need his specific observation; their display
+   condition has been traced to the solver's target gap. Next: explained G-only
+   HOLD, small TELEOP movements if behavior is normal, HOLD and supported disable.
+   Combined-arm and recording workflows remain unverified; choose their bounded
+   tests after reviewing G. The agent has sent no motor command.
+5. Record results, limits and preserved state. B's raw log is saved locally with a
+   matching station hash; reference checkout and operator config remain unchanged.
+   STATION_VALIDATION records the result, timing/warning limits and remaining
+   observation. Update it after G. Publication and promotion into an existing
+   working checkout remain separate decisions.
 
 Evidence and commands: [STATION_VALIDATION](STATION_VALIDATION.md). A passing local
-suite does not complete item 4. Advance independent preparation while waiting for
-the physical availability answer; do not start another robot controller meanwhile.
+suite does not complete item 4. Software preparation and B evidence review are
+complete. The next dependency is the operator-run G check and physical observation;
+do not start another robot controller remotely while waiting.
 
 ## Broader review — completed locally
 
