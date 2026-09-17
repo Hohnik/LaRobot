@@ -1,6 +1,24 @@
 # Teleop cleanup: current work and handoff
 
-Updated September 16, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
+Updated September 17, 2026. This is the current implementation handoff for the cleanup branch. The August evidence remains in FINDINGS and the earlier sections of HANDOFF.
+
+## Public review branch
+
+Julien authorized publication to a new branch in the public `Hohnik/LaRobot`
+repository on September 17. The destination is
+[`codex/teleop-reference-cleanup`](https://github.com/Hohnik/LaRobot/tree/codex/teleop-reference-cleanup).
+It starts from verified cleanup `ee8421a`; publication changes only documentation.
+The original local `codex/teleop-cleanup` branch remains preserved at that revision.
+Existing team branches and station checkouts are outside this publication action.
+
+Before publication, the six advertised remote tips still matched the September 16
+comparison. The current tree contains 216 tracked files, excluding recordings,
+environments, vendor files and ignored local evidence. A scan of the 1,414 outgoing
+history blobs found no supported credential patterns or sensitive filenames.
+This is a bounded preflight check, not proof that every possible secret is absent.
+Local publication receipts and the final remote revision are recorded under
+`agents/codex/publication-2026-09-17/`. Older no-publication statements below describe
+the scope and results of their dated cleanup checkpoints.
 
 ## Current status
 

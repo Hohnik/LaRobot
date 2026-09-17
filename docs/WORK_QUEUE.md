@@ -1,8 +1,20 @@
 # Teleop cleanup work queue
 
-Updated September 16, 2026. This queue implements Julien's instruction to continue
+Updated September 17, 2026. This queue implements Julien's instruction to continue
 through useful local work without stopping at each commit. The initial state below
 is based on verified checkout `190070e`; subsequent evidence is recorded per item.
+
+## Public review delivery — September 17
+
+Julien explicitly requested a new branch in the public repository. The selected
+destination is `Hohnik/LaRobot`, branch `codex/teleop-reference-cleanup`, starting
+from reviewed `ee8421a`. Source and tests are unchanged; the added documentation
+identifies this public review branch. Publication is authorized for that new ref.
+The original cleanup branch, existing team branches and station checkouts remain
+preserved. The local publication receipt records the remote commit verification.
+
+This instruction supersedes earlier notes that publication awaited permission.
+It does not request a merge, colleague message, deployment or motor operation.
 
 ## Colleague handoff and source readability — completed locally
 

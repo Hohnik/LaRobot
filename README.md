@@ -1,5 +1,12 @@
 # yam-robotics — the YAM bimanual teleop walkthrough
 
+## Public reference review
+
+`codex/teleop-reference-cleanup` contains the cleaned teleop reference for the team.
+Start with the [colleague handoff](docs/COLLEAGUE_HANDOFF.md) for small runnable
+examples and a feature reading map. The [team comparison](docs/BRIDGE.md) explains
+how it relates to the existing physical, recording and training branches.
+
 ## Run this checkout
 
 Use `./teleop` from the repository root. It installs the locked Python 3.12 dependencies into `.venv-teleop` on first use and preserves the training environment in `.venv`.

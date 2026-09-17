@@ -172,4 +172,6 @@ the specific failing recorder/reader probe above.
 Evidence is retained locally under `agents/codex/team-review-2026-09-16/`:
 station `snapshot.json`, `compatibility-review.json`, `branch-review.json`,
 byte-verified source copies and the reproducible `review_branches.py` probe.
-No team source file was modified, no message was sent, and no branch was pushed.
+During the September 16 comparison, no team source file was modified, no message
+was sent, and no branch was pushed. Julien subsequently authorized the separate
+public reference branch described in [COLLEAGUE_HANDOFF](COLLEAGUE_HANDOFF.md).

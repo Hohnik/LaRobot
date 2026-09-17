@@ -13,9 +13,12 @@ small owners and examples below, then read their integration in the operator.
 September 16 physical and ABC pushes. It records concrete compatibility problems
 and a proposed implementation order.
 
-The branch is `codex/teleop-cleanup`, based on Fable's `499d0b7`.
-No team branch has been changed or pushed. The package manifest identifies the
-exact reviewed source revision and its checksums.
+The public review branch is
+[`codex/teleop-reference-cleanup`](https://github.com/Hohnik/LaRobot/tree/codex/teleop-reference-cleanup),
+based on Fable's `499d0b7` and the locally verified cleanup at `ee8421a`.
+Julien authorized this separate branch on September 17. Existing team branches
+and station working copies remain unchanged. The package manifest identifies
+the exact archived revision and its checksums.
 
 ## Two small examples to run first
 
@@ -131,5 +134,6 @@ Preserve and compare the station's waypoints before installation.
 
 The archive excludes recordings, Python environments and the I2RT checkout.
 Follow README for pinned dependencies. The incremental Git bundle requires
-Fable's `499d0b7` history. Publication and installation need an explicit destination
-and instruction; this handoff does not alter the teammate's working checkout.
+Fable's `499d0b7` history. Public source review is separate from installation and
+integration into the teammate's working checkout. Preserve its configuration and
+coordinate any later physical-device use.

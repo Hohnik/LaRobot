@@ -15,7 +15,7 @@ run on that station. They use its USB/CAN devices and write to its filesystem.
 
 | Location | Purpose | Git state at the verification snapshot |
 | --- | --- | --- |
-| Mac: `/Users/julien/Developer/Projects/yam-robotics` | Cleanup development and review package | `codex/teleop-cleanup`; latest revision is in Git and the package manifest |
+| Mac: `/Users/julien/Developer/Projects/yam-robotics` | Cleanup development and review package | `codex/teleop-reference-cleanup` for public review; original `codex/teleop-cleanup` retained at `ee8421a` |
 | Station: `/tmp/yam-validation-025fab1-LWvBIc/operator` | Tested application and disposable recordings | Fixed commit `025fab1`, detached HEAD; a pinned revision without an active branch |
 | Station: `/home/lavita/LaRobot` | Teammate's working project | Clean `feature/physical` at `fd2c64b` in the September 16, 15:47 UTC snapshot; the pushed tip matched afterward |
 | Station: `/home/lavita/yam-robotics` | Original Fable/reference checkout | `main` at `499d0b7`, with the station's park-pose edits |
