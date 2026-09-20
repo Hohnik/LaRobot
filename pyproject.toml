@@ -9,12 +9,14 @@ dependencies = [
     "mjviser>=0.0.14",
     "mujoco==3.12",
     "numpy>=2.5.2",
+    "pillow>=12.0.0",
     "pynput>=1.8.2",
     "pyspacemouse>=2.1.0",
     "viser>=1.0.30",
     "rust-just>=1.58.0",
     "torch==2.11.0",
     "torchcodec==0.11.0",
+    "h5py>=3.16.0",
 ]
 
 [build-system]
@@ -42,6 +44,7 @@ required-environments = [
 
 [tool.basedpyright]
 extraPaths = ["src"]
+typeCheckingMode = "off"
 reportUnknownMemberType = "none"
 
 [tool.ty]

@@ -9,6 +9,7 @@ class Frame:
     """A single frame from one named camera."""
 
     camera_name: str
+    timestamp_ns: int
 
     # Depth can be none because of the C920
     rgb: NDArray[np.uint8]
