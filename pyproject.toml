@@ -30,6 +30,7 @@ dev = [
 
 
 [tool.basedpyright]
+extraPaths = ["src"]
 reportUnknownMemberType = "none"
 
 [tool.ty]

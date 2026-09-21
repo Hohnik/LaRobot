@@ -43,7 +43,7 @@ class CartesianKinematics:
         self.qpos_indices = np.array(
             [
                 self.model.jnt_qposadr[self.model.joint(f"{self.side}_joint{i}").id]
-                for i in range(1, 7)
+                for i in range(1, ARM_JOINTS + 1)
             ]
         )
 

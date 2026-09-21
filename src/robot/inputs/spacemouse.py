@@ -34,9 +34,10 @@ class SpaceMouse(Input):
 
     def __enter__(self) -> Self:
         assert self.is_available(), ConnectionError("SpaceMouse is not available")
-        self._spacemouse = pyspacemouse.open(
+        self._spacemouse = pyspacemouse.open_by_path(
             device_index=self.device_index, axis_convention=AxisConvention.ROS
         )
+
         if self.device_index == 0:
             self._spacemouse.set_led(True)
         else:
