@@ -1,105 +1,100 @@
+import argparse
+from contextlib import ExitStack
 from pathlib import Path
 
-import mujoco
 import numpy as np
 import viser
 from mjviser import ViserMujocoScene
 
+from robot.arm.teleoperation import ArmState, update_arm
 from robot.environment.simulation import Simulation
-from robot.inputs.keyboard import Keyboard
 from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-LEFT_JOINTS = slice(0, 6)
-RIGHT_JOINTS = slice(6, 14)
 GRIPPER_OPEN, GRIPPER_SHUT = 0.0495, 0.0
+GRIPPER_STEP = 0.005
 LAG_LIMIT = 0.03
+EXPO, LIN_SCALE, ANG_SCALE = 0.6, 0.4, 1.5
+# NOTE: Values are not perfectly aligned with camera position.
+POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)
 
 
-def main(args) -> None:
+def main(args: argparse.Namespace) -> None:
+    if args.device == "keyboard":
+        raise NotImplementedError("Keyboard input is not implemented yet")
+
     sim = Simulation(str(SCENE), realtime=True)
 
     server = viser.ViserServer(port=8080)
-    # NOTE: Values are not perfectly aligned with camera position!!!
-    server.initial_camera.position = (0.086, 0.0, 1.6)
-    server.initial_camera.look_at = (1.086, 0.0, 0)
-    server.initial_camera.fov = np.radians(60)
+    server.initial_camera.position = POSITION
+    server.initial_camera.look_at = LOOK_AT
+    server.initial_camera.fov = FOV
 
     view = ViserMujocoScene(server, sim.model, num_envs=1)
     view.camera_tracking_enabled = False
 
-    kin = CartesianKinematics(sim.model)
-    left_joint_incides = kin.left_qpos_indices
+    sides = ("left", "right") if args.dual else ("left",)
 
-    pose = kin.forward(sim.data.qpos[left_joint_incides])
-    target = CartesianTarget.from_pose(pose=pose)
+    with ExitStack() as stack:
+        arms = {}
 
-    # marker
-    marker_body_id = sim.model.body("target_marker").id
-    marker_mocap_id = sim.model.body_mocapid[marker_body_id]
-
-    match args.device[0]:
-        case "spacemouse":
-            device = SpaceMouse(expo=0.4, lin_scale=0.5, ang_scale=2.5)
-        case "keyboard":
-            device = Keyboard()
-
-    with device as dev:
-        gripper = GRIPPER_OPEN
-        while True:
-            measured_joints = sim.data.qpos[left_joint_incides]
-
-            # spacemouse - where to
-            velocities, buttons = dev.read()
-            target.integrate(velocities)
-
-            # lag - only move in a radius
-            kin_position = kin.forward(measured_joints)[:3, 3]
-
-            delta = target.position - kin_position
-            distance = np.linalg.norm(delta)
-
-            if distance > LAG_LIMIT:
-                target.position = kin_position + delta / distance * LAG_LIMIT
-
-            # update joints
-            joints = kin.inverse(
-                measured_joints,
-                target_position=target.position,
-                target_rotation=target.rotation,
+        for device_index, side in enumerate(sides):
+            device = stack.enter_context(
+                SpaceMouse(
+                    device_index=device_index,
+                    expo=EXPO,
+                    lin_scale=LIN_SCALE,
+                    ang_scale=ANG_SCALE,
+                )
             )
 
-            # gripper
-            if buttons[0] and gripper >= GRIPPER_SHUT:
-                gripper -= 0.005
-            elif buttons[1] and gripper <= GRIPPER_OPEN:
-                gripper += 0.005
+            kin = CartesianKinematics(sim.model, side=side)
+            pose = kin.forward(sim.data.qpos[kin.qpos_indices])
+            marker_body_id = sim.model.body(f"target_marker_{side}").id
 
-            # marker
-            quat = np.empty(4)
-            mujoco.mju_mat2Quat(quat, target.rotation.ravel())
-            sim.data.mocap_pos[marker_mocap_id] = target.position
-            sim.data.mocap_quat[marker_mocap_id] = quat
+            # Mirror the left mouse in dual mode for matching thumb actions.
+            mirrored_buttons = args.dual and side == "left"
+            arms[side] = ArmState(
+                kin=kin,
+                target=CartesianTarget.from_pose(pose=pose),
+                marker_mocap_id=int(sim.model.body_mocapid[marker_body_id]),
+                device=device,
+                gripper=GRIPPER_OPEN,
+                close_button=1 if mirrored_buttons else 0,
+                open_button=0 if mirrored_buttons else 1,
+            )
 
-            sim.step(left=np.append(joints, gripper))
-
+        while True:
+            commands = {
+                side: update_arm(
+                    sim,
+                    arm,
+                    gripper_open=GRIPPER_OPEN,
+                    gripper_shut=GRIPPER_SHUT,
+                    gripper_step=GRIPPER_STEP,
+                    lag_limit=LAG_LIMIT,
+                )
+                for side, arm in arms.items()
+            }
+            sim.step(**commands)
             view.update_from_mjdata(sim.data)
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(usage="%(prog)s [options]")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         "--device",
         "-d",
         choices=["spacemouse", "keyboard"],
-        nargs=1,
-        help="select a input device",
         required=True,
+        help="Input device to use (keyboard is not implemented yet)",
     )
-    args = parser.parse_args()
-    main(args)
+    parser.add_argument(
+        "--dual",
+        action="store_true",
+        help="Control both arms using two SpaceMice",
+    )
+    main(parser.parse_args())
