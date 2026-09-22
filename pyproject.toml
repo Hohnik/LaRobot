@@ -39,6 +39,7 @@ override-dependencies = [
 ]
 
 [tool.basedpyright]
+extraPaths = ["src"]
 reportUnknownMemberType = "none"
 
 [tool.ty]
