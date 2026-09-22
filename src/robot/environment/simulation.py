@@ -37,7 +37,9 @@ class Simulation:
     @property
     def state(self) -> np.ndarray:
         """The current state of the simulation (qpos of the 14 actuated joints)"""
-        return self.data.qpos[self.qadr].astype(np.float32)
+        state = self.data.qpos[self.qadr].astype(np.float32)
+        state[[6, 13]] = np.clip(state[[6, 13]]/0.0475, 0.0, 1.0)
+        return state
 
     def step(
         self, left: np.ndarray | None = None, right: np.ndarray | None = None
