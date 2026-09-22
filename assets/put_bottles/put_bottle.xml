@@ -226,7 +226,6 @@
     </body>
     <geom group="3" name="table_plane" pos="0.6 0 0.75" rgba="0 0 0 0" size="0.2975 0.65 0.01" type="plane"></geom>
     <body name="bin_container" pos="0.65 0.0 0.83" quat="0.707 0.707 0 0">
-      <freejoint name="bin_joint"></freejoint>
       <geom conaffinity="0" contype="0" density="0" group="2" mass="0.15" material="water_bottle_garbage_can_mat" mesh="water_bottle_garbage_can_vis" name="water_bottle_gc_vis" type="mesh"></geom>
       <geom conaffinity="0" contype="0" density="0" group="2" material="water_bottle_garbage_can_mat" mesh="water_bottle_garbage_can_inner" name="water_bottle_gc_inner" type="mesh"></geom>
       <geom class="water_bottle_bin_col" mesh="water_bottle_gc_col0"></geom>
@@ -534,7 +533,7 @@
     </body>
     <body name="bottle_5" pos="0.62 0.38 0.754">
       <freejoint name="bottle_5_joint"></freejoint>
-      <body name="bottle_4_bottle_4_object">
+      <body name="bottle_4_bottle_4_object" pos="0 0 0.08">
         <inertial diaginertia="0.00012679617 0.00012679183 2.1964781e-05" mass="0.05" pos="0 0 0"></inertial>
         <geom conaffinity="0" contype="0" density="0" friction="0.95 0.3 0.1" group="2" material="bottle_4_bottle_4_Scene_-_Root.008" mesh="bottle_4_bottle_4_model_normalized_0_vis" solimp="0.998 0.998 0.001" solref="0.001 1" type="mesh"></geom>
         <geom condim="6" density="0" friction="3.0 0.03 0.003" group="3" mesh="bottle_4_bottle_4_bottled_collision_mesh_0" priority="1" rgba="0 0 0 0" solimp="0.998 0.998 0.001" solref="0.004 1" type="mesh"></geom>
@@ -543,7 +542,7 @@
     </body>
     <body name="bottle_6" pos="0.78 0.38 0.754">
       <freejoint name="bottle_6_joint"></freejoint>
-      <body name="bottle_7_bottle_7_object">
+      <body name="bottle_7_bottle_7_object" pos="0 0 0.08">
         <inertial diaginertia="0.00011789572 0.00011824638 2.2808766e-05" mass="0.05" pos="0 0 0"></inertial>
         <geom conaffinity="0" contype="0" density="0" friction="0.95 0.3 0.1" group="2" material="bottle_7_bottle_7_Material.049" mesh="bottle_7_bottle_7_model_normalized_0_vis" solimp="0.998 0.998 0.001" solref="0.001 1" type="mesh"></geom>
         <geom condim="6" density="0" friction="3.0 0.03 0.003" group="3" mesh="bottle_7_bottle_7_bottled_collision_mesh_0" priority="1" rgba="0 0 0 0" solimp="0.998 0.998 0.001" solref="0.004 1" type="mesh"></geom>
