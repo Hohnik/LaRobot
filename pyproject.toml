@@ -13,11 +13,8 @@ dependencies = [
     "pyspacemouse>=2.1.0",
     "viser>=1.0.30",
     "rust-just>=1.58.0",
-
-#for abc-import
-    "torch==2.11.0+cu128",
-    "torchcodec==0.11.0+cpu",
-    "abc-minimal"
+    "torch==2.11.0",
+    "torchcodec==0.11.0",
 ]
 
 [build-system]
@@ -31,11 +28,16 @@ dev = [
     "ipykernel>=7.3.0",
     "matplotlib>=3.11.1",
     "ruff>=0.16.5",
+    "abc-minimal",
 ]
 
 [tool.uv]
 override-dependencies = [
     "mujoco==3.12",
+]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
 [tool.basedpyright]
@@ -51,8 +53,12 @@ lint.mccabe.max-complexity = 8
 
 [tool.uv.sources]
 abc-minimal = { git = "https://github.com/amazon-far/abc.git" }
-torch = { index = "pytorch-cu128" }
-torchcodec = { index = "pytorch-cpu" }
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchcodec = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

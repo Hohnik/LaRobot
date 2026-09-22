@@ -4,7 +4,6 @@ import mujoco
 import numpy as np
 
 from robot.environment.simulation import Simulation
-from robot.inputs.input import Input
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
 
@@ -14,7 +13,6 @@ class ArmState:
     kin: CartesianKinematics
     target: CartesianTarget
     marker_mocap_id: int
-    device: Input
     gripper: float
     close_button: int = 0
     open_button: int = 1
@@ -23,6 +21,8 @@ class ArmState:
 def update_arm(
     sim: Simulation,
     arm: ArmState,
+    velocities: np.ndarray,
+    buttons: np.ndarray,
     *,
     gripper_open: float = 0.0495,
     gripper_shut: float = 0.0,
@@ -31,7 +31,6 @@ def update_arm(
 ) -> np.ndarray:
     measured_joints = sim.data.qpos[arm.kin.qpos_indices]
 
-    velocities, buttons = arm.device.read()
     arm.target.integrate(velocities)
 
     # Keep the target within lag_limit of the measured position.
@@ -40,7 +39,8 @@ def update_arm(
     distance = np.linalg.norm(delta)
 
     if distance > lag_limit:
-        arm.target.position = measured_position + delta / distance * lag_limit
+        direction = delta / distance
+        arm.target.position = measured_position + direction * lag_limit
 
     joints = arm.kin.inverse(
         measured_joints,
@@ -58,4 +58,4 @@ def update_arm(
     sim.data.mocap_pos[arm.marker_mocap_id] = arm.target.position
     sim.data.mocap_quat[arm.marker_mocap_id] = quat
 
-    return np.append(joints, arm.gripper)
+    return np.concatenate((joints, [arm.gripper]))
