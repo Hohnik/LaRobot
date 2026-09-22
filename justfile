@@ -1,5 +1,4 @@
 # Use `just <recipy>` to execute a task
-
 @_default:
     -just --list --unsorted
 
@@ -20,3 +19,7 @@ setup-project:
 # start sim for teleoperation
 start-sim *args:
     uv run scripts/start_sim.py {{ args }}
+
+# use laya to control the arms in the sim
+laya-inference:
+    uv run scripts/laya_inference.py
