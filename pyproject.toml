@@ -13,6 +13,11 @@ dependencies = [
     "pyspacemouse>=2.1.0",
     "viser>=1.0.30",
     "rust-just>=1.58.0",
+
+#for abc-import
+    "torch==2.11.0+cu128",
+    "torchcodec==0.11.0+cpu",
+    "abc-minimal"
 ]
 
 [build-system]
@@ -28,6 +33,10 @@ dev = [
     "ruff>=0.16.5",
 ]
 
+[tool.uv]
+override-dependencies = [
+    "mujoco==3.12",
+]
 
 [tool.basedpyright]
 extraPaths = ["src"]
@@ -39,3 +48,18 @@ environment.extra-paths = ["typings"]
 [tool.ruff]
 lint.extend-select = ["C901"]
 lint.mccabe.max-complexity = 8
+
+[tool.uv.sources]
+abc-minimal = { git = "https://github.com/amazon-far/abc.git" }
+torch = { index = "pytorch-cu128" }
+torchcodec = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
