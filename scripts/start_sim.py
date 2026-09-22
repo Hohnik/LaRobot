@@ -1,6 +1,7 @@
 import argparse
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import viser
@@ -39,7 +40,8 @@ def main(args: argparse.Namespace) -> None:
     sides = ("left", "right") if args.dual else ("left",)
 
     with ExitStack() as stack:
-        arms = {}
+        arms: dict[Literal["left", "right"], ArmState] = {}
+        devices: dict[Literal["left", "right"], SpaceMouse] = {}
 
         for device_index, side in enumerate(sides):
             device = stack.enter_context(
@@ -50,6 +52,7 @@ def main(args: argparse.Namespace) -> None:
                     ang_scale=ANG_SCALE,
                 )
             )
+            devices[side] = device
 
             kin = CartesianKinematics(sim.model, side=side)
             pose = kin.forward(sim.data.qpos[kin.qpos_indices])
@@ -61,7 +64,6 @@ def main(args: argparse.Namespace) -> None:
                 kin=kin,
                 target=CartesianTarget.from_pose(pose=pose),
                 marker_mocap_id=int(sim.model.body_mocapid[marker_body_id]),
-                device=device,
                 gripper=GRIPPER_OPEN,
                 close_button=1 if mirrored_buttons else 0,
                 open_button=0 if mirrored_buttons else 1,
@@ -72,6 +74,7 @@ def main(args: argparse.Namespace) -> None:
                 side: update_arm(
                     sim,
                     arm,
+                    *devices[side].read(),
                     gripper_open=GRIPPER_OPEN,
                     gripper_shut=GRIPPER_SHUT,
                     gripper_step=GRIPPER_STEP,
@@ -85,16 +88,18 @@ def main(args: argparse.Namespace) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument(
+    _ = parser.add_argument(
         "--device",
         "-d",
         choices=["spacemouse", "keyboard"],
         required=True,
         help="Input device to use (keyboard is not implemented yet)",
+        type=str,
     )
-    parser.add_argument(
+    _ = parser.add_argument(
         "--dual",
         action="store_true",
         help="Control both arms using two SpaceMice",
+        type=bool,
     )
     main(parser.parse_args())

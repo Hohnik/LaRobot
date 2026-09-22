@@ -22,17 +22,22 @@ def sha256(path):
 
 def download(url, path, expected_sha=None):
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists() and (
-        expected_sha is None or sha256(path) == expected_sha
-    ):
+    if path.exists() and (expected_sha is None or sha256(path) == expected_sha):
         return
 
     partial = path.with_name(path.name + ".part")
     subprocess.run(
         [
-            "curl", "--fail", "--location", "--continue-at", "-",
-            "--user-agent", "abc-prepare/1.0",
-            "--output", str(partial), url,
+            "curl",
+            "--fail",
+            "--location",
+            "--continue-at",
+            "-",
+            "--user-agent",
+            "abc-prepare/1.0",
+            "--output",
+            str(partial),
+            url,
         ],
         check=True,
     )
@@ -53,9 +58,7 @@ def setup():
     download(metadata["uri"], checkpoint, metadata["sha256"])
 
     # The manifest ships inside the installed abc_sim package.
-    manifest = json.loads(
-        (SIM_DIR / "models" / "assets_manifest.json").read_text()
-    )
+    manifest = json.loads((SIM_DIR / "models" / "assets_manifest.json").read_text())
     packages = {p["name"]: p for p in manifest["packages"]}
 
     # Required specifically for put_plastic_bottles_in_bin.
@@ -89,10 +92,12 @@ if __name__ == "__main__":
     from abc_minimal.config import VizPolicyConfig, VizSimEvalConfig
     from abc_minimal.viz_policy import main
 
-    main(VizPolicyConfig(
-        sim=VizSimEvalConfig(
-            checkpoint=str(checkpoint),
-            task="put_plastic_bottles_in_bin",
-        ),
-        port=8080,
-    ))
+    main(
+        VizPolicyConfig(
+            sim=VizSimEvalConfig(
+                checkpoint=str(checkpoint),
+                task="put_plastic_bottles_in_bin",
+            ),
+            port=8080,
+        )
+    )
