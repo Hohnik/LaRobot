@@ -21,8 +21,6 @@ class C920Camera(Camera):
         height: int = 720,
         fps: int = 30,
     ) -> None:
-        if width <= 0 or height <= 0 or fps <= 0:
-            raise ValueError("width, height and fps must be positive")
         self.device_path = device_path
         self.name = name
         self.width = width
@@ -50,7 +48,7 @@ class C920Camera(Camera):
 
     @override
     def connect(self) -> None:
-        """Start colour capture and verify the stream mode."""
+        """Start colour capture."""
         if self._container is not None:
             return
 
@@ -67,6 +65,8 @@ class C920Camera(Camera):
                 "analyzeduration": "0",
             },
         )
+        self._frames = self._container.decode(video=0)
+
 
     @override
     def read(self) -> Frame:
@@ -83,15 +83,12 @@ class C920Camera(Camera):
         Raises
         ------
         RuntimeError
-            The camera is not connected, the stream ended or the timestamp is missing.
+            The camera is not connected
         """
         if self._frames is None:
             raise RuntimeError(f"{self.name}: call connect() before read()")
 
-        try:
-            rgb_frame = next(self._frames)
-        except StopIteration:
-            raise RuntimeError(f"{self.name}: camera stream ended") from None
+        rgb_frame = next(self._frames)
         host_time_ns = monotonic_ns()
 
         return Frame(

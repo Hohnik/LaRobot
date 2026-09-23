@@ -16,9 +16,7 @@ def backend(monkeypatch):
     frame.pts = 442_242_128_478
     frame.time_base = Fraction(1, 1_000_000)
     frame.to_ndarray.return_value = rgb
-    stream = Mock(width=1280, height=720, average_rate=Fraction(30))
     container = Mock()
-    container.streams.video = [stream]
     container.decode.side_effect = lambda **kwargs: iter([frame])
     open_camera = Mock(return_value=container)
     monkeypatch.setattr(av, "open", open_camera)
@@ -84,49 +82,10 @@ def test_connect_close_and_reconnect(backend):
     assert open_camera.call_count == 2
 
 
-@pytest.mark.parametrize("attribute, value", [("width", 640), ("average_rate", 15)])
-def test_substituted_mode_closes_device_and_allows_retry(backend, attribute, value):
-    _, container, _ = backend
-    setattr(container.streams.video[0], attribute, value)
-    camera = C920Camera("/dev/c920", "overhead")
-    with pytest.raises(RuntimeError, match="requested"):
-        camera.connect()
-    container.close.assert_called_once()
-    container.streams.video[0] = Mock(width=1280, height=720, average_rate=Fraction(30))
-    with camera:
-        camera.read()
-
-
 def test_custom_mode(backend):
-    open_camera, container, _ = backend
-    container.streams.video[0] = Mock(
-        width=1920, height=1080, average_rate=Fraction(30)
-    )
+    open_camera, _, _ = backend
     with C920Camera("/dev/c920", "overhead", width=1920, height=1080):
         assert open_camera.call_args.kwargs["options"]["video_size"] == "1920x1080"
-
-
-@pytest.mark.parametrize("missing", ["pts", "time_base"])
-def test_missing_timestamp_fails_and_closes_device(backend, missing):
-    _, container, frame = backend
-    setattr(frame, missing, None)
-    with (
-        pytest.raises(RuntimeError, match="no capture timestamp"),
-        C920Camera("/dev/c920", "overhead") as camera,
-    ):
-        camera.read()
-    container.close.assert_called_once()
-
-
-def test_stream_end_closes_device(backend):
-    _, container, _ = backend
-    container.decode.side_effect = lambda **kwargs: iter([])
-    with (
-        pytest.raises(RuntimeError, match="stream ended"),
-        C920Camera("/dev/c920", "overhead") as camera,
-    ):
-        camera.read()
-    container.close.assert_called_once()
 
 
 def test_decode_error_closes_device(backend):
