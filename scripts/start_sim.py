@@ -8,10 +8,13 @@ import viser
 from mjviser import ViserMujocoScene
 
 from robot.arm.teleoperation import ArmState, update_arm
+from robot.cameras.sim_camera import SimCamera
 from robot.environment.simulation import Simulation
 from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
+from robot.recording.recorder import Recorder
+from robot.recording.sample import Sample
 
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
@@ -76,19 +79,40 @@ def main(args: argparse.Namespace) -> None:
                 open_button=0 if mirrored_buttons else 1,
             )
 
+        cameras = [
+            stack.enter_context(SimCamera(sim, name, 224, 224, 10))
+            for _, name in sim.list_cameras()
+        ]
+        recorder = stack.enter_context(Recorder(ROOT / "data" / "episodes"))
+
         while True:
-            commands = {
-                side: update_arm(
+            commands = {}
+            for side, arm in arms.items():
+                velocities, buttons = devices[side].read()
+                commands[side] = update_arm(
                     sim,
                     arm,
-                    *devices[side].read(),
+                    velocities,
+                    buttons,
                     gripper_open=GRIPPER_OPEN,
                     gripper_shut=GRIPPER_SHUT,
                     gripper_step=GRIPPER_STEP,
                     lag_limit=LAG_LIMIT,
                 )
-                for side, arm in arms.items()
-            }
+
+            action = sim.data.ctrl.astype(np.float32)
+            for side, command in commands.items():
+                action_slice = slice(0, 7) if side == "left" else slice(7, 14)
+                action[action_slice] = command
+
+            sample = Sample(
+                timestamp_ns=int(sim.data.time * 1_000_000_000),
+                frames=tuple(camera.read() for camera in cameras),
+                state=sim.state,
+                action=action,
+            )
+            recorder.record(sample)
+
             sim.step(**commands)
             view.update_from_mjdata(sim.data)
 

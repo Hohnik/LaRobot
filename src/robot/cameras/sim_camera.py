@@ -1,5 +1,5 @@
-import numpy as np
 from functools import cache
+from time import monotonic_ns
 from typing import override
 
 import mujoco
@@ -118,7 +118,12 @@ class SimCamera(Camera):
         if self._render_due(now):
             renderer = self._renderer
             renderer.update_scene(self.sim.data, camera=self._camera_id)
-            self._last_frame = Frame(camera_name=self.name, rgb=renderer.render().transpose(2,0,1))
+            self._last_frame = Frame(
+                camera_name=self.name,
+                timestamp_ns_capture=int(now * 1e9),
+                timestamp_ns_host=monotonic_ns(),
+                rgb=renderer.render(),
+            )
             self._latest_time = now
         assert self._last_frame is not None  # _render_due() covers the None case
         return self._last_frame
