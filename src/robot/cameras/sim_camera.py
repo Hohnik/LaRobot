@@ -1,4 +1,5 @@
 from functools import cache
+from time import monotonic_ns
 from typing import override
 
 import mujoco
@@ -10,6 +11,24 @@ from robot.environment.simulation import Simulation
 
 @cache  # Switching between multiple renderers is expensive so we reuse them where possible.
 def _shared_renderer(sim: Simulation, width: int, height: int) -> mujoco.Renderer:
+    """Reuse a renderer for each simulation and image size.
+
+    Parameters
+    ----------
+    sim : Simulation
+        Simulation whose model is rendered.
+    width : int
+        Image width in pixels.
+    height : int
+        Image height in pixels.
+
+    Returns
+    -------
+    Renderer shared by calls with the same arguments.
+    ```
+    mujoco.Renderer
+    ```
+    """
     return mujoco.Renderer(sim.model, height, width)
 
 
@@ -25,6 +44,23 @@ class SimCamera(Camera):
         fps: int = 10,
         offset: float = 0.0,
     ) -> None:
+        """Configure the camera's image size and simulation-time cadence.
+
+        Parameters
+        ----------
+        sim : Simulation
+            Simulation to render.
+        name : str
+            Camera name in the model.
+        width : int, optional
+            Image width in pixels; defaults to 224.
+        height : int, optional
+            Image height in pixels; defaults to 224.
+        fps : int, optional
+            Capture rate per simulation time unit; defaults to 10.
+        offset : float, optional
+            Negated initial capture timestamp; defaults to 0.0.
+        """
         self.sim: Simulation = sim
         self.name: str = name
         self.width: int = width
@@ -46,6 +82,7 @@ class SimCamera(Camera):
 
     @override
     def connect(self) -> None:
+        """Resolve the camera name and warm up rendering."""
         names = [self.sim.model.cam(i).name for i in range(self.sim.model.ncam)]  # pyright: ignore[reportAny]
         try:
             self._camera_id = names.index(self.name)
@@ -83,7 +120,8 @@ class SimCamera(Camera):
             renderer.update_scene(self.sim.data, camera=self._camera_id)
             self._last_frame = Frame(
                 camera_name=self.name,
-                timestamp_ns=int(now * 1_000_000_000),
+                timestamp_ns_capture=int(now * 1e9),
+                timestamp_ns_host=monotonic_ns(),
                 rgb=renderer.render(),
             )
             self._latest_time = now

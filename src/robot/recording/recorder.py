@@ -88,15 +88,15 @@ class Recorder:
         camera = cameras[frame.camera_name]
         assert isinstance(camera, h5py.Group)
         timestamps = camera["timestamps"]
-        if len(timestamps) > 0 and frame.timestamp_ns <= timestamps[-1]:
-            if frame.timestamp_ns == timestamps[-1]:
+        if len(timestamps) > 0 and frame.timestamp_ns_capture <= timestamps[-1]:
+            if frame.timestamp_ns_capture == timestamps[-1]:
                 return
             raise ValueError(f"{frame.camera_name}: frame timestamps must not decrease")
 
         output = BytesIO()
         Image.fromarray(frame.rgb).save(output, format="JPEG", quality=JPEG_QUALITY)
         self._append(camera["frames"], np.frombuffer(output.getvalue(), dtype=np.uint8))
-        self._append(timestamps, frame.timestamp_ns)
+        self._append(timestamps, frame.timestamp_ns_capture)
 
     @staticmethod
     def _append(dataset: h5py.Dataset, value: object) -> None:
@@ -125,8 +125,8 @@ class Recorder:
     def _validate_frame(frame: Frame) -> None:
         if not frame.camera_name or "/" in frame.camera_name:
             raise ValueError("camera_name must be non-empty and cannot contain '/'")
-        if frame.timestamp_ns < 0:
-            raise ValueError("frame timestamp_ns must be non-negative")
+        if frame.timestamp_ns_capture < 0:
+            raise ValueError("frame timestamp_ns_capture must be non-negative")
         if frame.rgb.ndim != 3 or frame.rgb.shape[2] != 3 or not frame.rgb.size:
             raise ValueError("frame RGB must have shape (height, width, 3)")
         if frame.rgb.dtype != np.uint8:

@@ -39,8 +39,8 @@ def test_recording_writes_each_camera_frame_once_as_jpeg(tmp_path):
     state = np.zeros(14, dtype=np.float32)
     first_rgb = np.full((8, 10, 3), (20, 80, 140), dtype=np.uint8)
     second_rgb = np.full((8, 10, 3), (140, 80, 20), dtype=np.uint8)
-    first = Frame("overhead", 100, first_rgb)
-    second = Frame("overhead", 200, second_rgb)
+    first = Frame("overhead", 100, 10_100, first_rgb)
+    second = Frame("overhead", 200, 10_200, second_rgb)
     recorder = Recorder(tmp_path)
 
     with recorder:
@@ -80,9 +80,13 @@ def test_recording_rejects_decreasing_camera_timestamps(tmp_path):
     rgb = np.zeros((8, 10, 3), dtype=np.uint8)
 
     with Recorder(tmp_path) as recorder:
-        recorder.record(Sample(200, (Frame("overhead", 200, rgb),), state, state))
+        recorder.record(
+            Sample(200, (Frame("overhead", 200, 10_200, rgb),), state, state)
+        )
         with pytest.raises(ValueError, match="timestamps must not decrease"):
-            recorder.record(Sample(300, (Frame("overhead", 100, rgb),), state, state))
+            recorder.record(
+                Sample(300, (Frame("overhead", 100, 10_300, rgb),), state, state)
+            )
 
 
 def test_recording_keeps_camera_streams_independent(tmp_path):
@@ -95,8 +99,8 @@ def test_recording_keeps_camera_streams_independent(tmp_path):
             Sample(
                 100,
                 (
-                    Frame("overhead", 100, rgb),
-                    Frame("wrist", 50, rgb),
+                    Frame("overhead", 100, 10_100, rgb),
+                    Frame("wrist", 50, 10_050, rgb),
                 ),
                 state,
                 state,
@@ -106,8 +110,8 @@ def test_recording_keeps_camera_streams_independent(tmp_path):
             Sample(
                 200,
                 (
-                    Frame("overhead", 200, rgb),
-                    Frame("wrist", 150, rgb),
+                    Frame("overhead", 200, 10_200, rgb),
+                    Frame("wrist", 150, 10_150, rgb),
                 ),
                 state,
                 state,

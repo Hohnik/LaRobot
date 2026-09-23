@@ -27,6 +27,13 @@ POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)
 
 
 def main(args: argparse.Namespace) -> None:
+    """Run simulated arm teleoperation with a browser viewer.
+
+    Parameters
+    ----------
+    args : argparse.Namespace
+        Input selection (`device`) and two-arm mode (`dual`).
+    """
     if args.device == "keyboard":
         raise NotImplementedError("Keyboard input is not implemented yet")
 

@@ -13,6 +13,20 @@ SIM_DIR = Path(abc_sim.__file__).resolve().parent
 
 
 def sha256(path):
+    """Compute a file's SHA-256 digest.
+
+    Parameters
+    ----------
+    path : pathlib.Path
+        File to hash.
+
+    Returns
+    -------
+    Hexadecimal digest.
+    ```
+    str
+    ```
+    """
     digest = hashlib.sha256()
     with path.open("rb") as f:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -21,6 +35,17 @@ def sha256(path):
 
 
 def download(url, path, expected_sha=None):
+    """Download a file unless an acceptable local copy exists.
+
+    Parameters
+    ----------
+    url : str
+        Source URL.
+    path : pathlib.Path
+        Destination file.
+    expected_sha : str, optional
+        Expected SHA-256 digest; defaults to no checksum check.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists() and (expected_sha is None or sha256(path) == expected_sha):
         return
@@ -48,6 +73,15 @@ def download(url, path, expected_sha=None):
 
 
 def setup():
+    """Prepare the policy checkpoint and required simulation assets.
+
+    Returns
+    -------
+    Local checkpoint path.
+    ```
+    pathlib.Path
+    ```
+    """
     # Policy and matching prompt metadata.
     stem = "abc_dit_xl_200k_model"
     metadata_path = POLICIES / f"{stem}.json"
