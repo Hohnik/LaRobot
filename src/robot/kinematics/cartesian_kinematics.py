@@ -11,6 +11,18 @@ RADS_PER_SECOND = 6.0
 
 
 class CartesianKinematics:
+    """Compute site poses and inverse-kinematics steps for one arm.
+
+    Parameters
+    ----------
+    model : mujoco.MjModel
+        Model containing the arm joints and target site.
+    side : {'left', 'right'}
+        Arm to use.
+    site_name : {'tcp', 'grasp'}, optional
+        Site suffix; defaults to 'tcp'.
+    """
+
     def __init__(
         self,
         model: mujoco.MjModel,
@@ -48,6 +60,20 @@ class CartesianKinematics:
         )
 
     def forward(self, joint_positions: np.ndarray) -> np.ndarray:
+        """Compute the selected site's pose from arm joint positions.
+
+        Parameters
+        ----------
+        joint_positions : array_like, shape (6,)
+            Arm joint positions in joint-number order.
+
+        Returns
+        -------
+        ```
+        ndarray, shape (4, 4)
+        ```
+        Homogeneous transform from the site frame to the world frame.
+        """
         joint_positions = np.asarray(joint_positions, dtype=float)
 
         if joint_positions.shape != (ARM_JOINTS,):
@@ -72,6 +98,26 @@ class CartesianKinematics:
         target_rotation: np.ndarray,
         dt: float = 1 / CONTROL_HZ,
     ) -> np.ndarray:
+        """Take one inverse-kinematics step toward the target pose.
+
+        Parameters
+        ----------
+        current_joint_positions : array_like, shape (6,)
+            Current arm joint positions in joint-number order.
+        target_position : array_like, shape (3,)
+            Target site position in the world frame, using model length units.
+        target_rotation : array_like, shape (3, 3)
+            Target site rotation relative to the world frame.
+        dt : float, optional
+            Integration time step; defaults to 1 / CONTROL_HZ.
+
+        Returns
+        -------
+        ```
+        ndarray, shape (6,)
+        ```
+        Arm joint positions after one step, in joint-number order.
+        """
         current_joint_positions = np.asarray(
             current_joint_positions,
             dtype=float,
