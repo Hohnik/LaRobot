@@ -17,6 +17,15 @@ class Recorder:
         return self
 
     def record(self, frames: list[Frame], states: np.ndarray):
+        """Increment the tick counter; file writing is not implemented.
+
+        Parameters
+        ----------
+        frames : list[Frame]
+            Currently unused camera frames.
+        states : ndarray
+            Currently unused state values.
+        """
         # TODO: Implement writing to file
         self.step += 1
 

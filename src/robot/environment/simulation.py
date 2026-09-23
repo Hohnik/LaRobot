@@ -23,6 +23,15 @@ class Simulation:
         scene: str,
         realtime: bool = False,
     ):
+        """Load the scene and initialize the simulation state.
+
+        Parameters
+        ----------
+        scene : str
+            Path to the MuJoCo scene XML.
+        realtime : bool, optional
+            Pace control ticks using wall time; defaults to False.
+        """
         self.model: mujoco.MjModel = mujoco.MjModel.from_xml_path(scene)  # fixed data
         self.realtime: bool = realtime  # if True, step() will sleep to stay at ~30 Hz
 
