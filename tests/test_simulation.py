@@ -18,6 +18,13 @@ def test_reset_sets_the_init_pose():
     assert np.allclose(sim.state, INIT_POS, atol=0.05)
 
 
+def test_state_preserves_gripper_positions_in_metres():
+    sim = Simulation(SCENE)
+    sim.data.qpos[sim.qadr[[6, 13]]] = [0.02, 0.04]
+
+    np.testing.assert_allclose(sim.state[[6, 13]], [0.02, 0.04])
+
+
 def test_one_step_advances_one_tick():
     sim = Simulation(SCENE)
     sim.step(LEFT, RIGHT)

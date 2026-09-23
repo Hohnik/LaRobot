@@ -1,10 +1,7 @@
-"""Unit tests for CartesianKinematics on the bimanual put_bottle scene.
-
-The solver addresses the left arm by name (left_joint1..6, left_tcp_site), so it
-has to be built from the full scene model, not the single-arm yam.xml.
-"""
+"""Unit tests for CartesianKinematics on the bimanual put_bottle scene."""
 
 from pathlib import Path
+from typing import Literal
 
 import mujoco
 import numpy as np
@@ -28,9 +25,9 @@ def model() -> mujoco.MjModel:
     return mujoco.MjModel.from_xml_path(SCENE)
 
 
-@pytest.fixture
-def kin(model: mujoco.MjModel) -> CartesianKinematics:
-    return CartesianKinematics(model)
+@pytest.fixture(params=["left", "right"])
+def kin(model: mujoco.MjModel, request: pytest.FixtureRequest) -> CartesianKinematics:
+    return CartesianKinematics(model, request.param)
 
 
 def rotation_angle(a: np.ndarray, b: np.ndarray) -> float:
@@ -40,26 +37,55 @@ def rotation_angle(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def rotated_about_tool_z(rotation: np.ndarray, degrees: float) -> np.ndarray:
+    """Apply a rotation about the tool's local z axis.
+
+    Parameters
+    ----------
+    rotation : ndarray, shape (3, 3)
+        Initial tool orientation.
+    degrees : float
+        Rotation angle in degrees.
+
+    Returns
+    -------
+    Updated tool orientation.
+    ```
+    ndarray, shape (3, 3)
+    ```
+    """
     c, s = np.cos(np.radians(degrees)), np.sin(np.radians(degrees))
     return rotation @ np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
-@pytest.mark.parametrize("site", ["left_tcp_site", "left_grasp_site"])
+@pytest.mark.parametrize("side", ["left", "right"])
+@pytest.mark.parametrize("site", ["tcp", "grasp"])
 @pytest.mark.parametrize("joints", [HOME, BENT], ids=["home", "bent"])
 def test_forward_matches_the_mujoco_site_pose(
-    model: mujoco.MjModel, site: str, joints: np.ndarray
+    model: mujoco.MjModel,
+    site: Literal["tcp", "grasp"],
+    side: Literal["left", "right"],
+    joints: np.ndarray,
 ):
     """FK must agree with MuJoCo's own forward pass on the same model"""
-    kin = CartesianKinematics(model, site_name=site)
+    kin = CartesianKinematics(model, site_name=site, side=side)
+    expected_indices = np.array(
+        [
+            model.jnt_qposadr[model.joint(f"{side}_joint{i}").id]
+            for i in range(1, ARM_JOINTS + 1)
+        ]
+    )
     data = mujoco.MjData(model)
-    data.qpos[kin.left_qpos_indices] = joints
+    data.qpos[expected_indices] = joints
     mujoco.mj_forward(model, data)
 
     pose = kin.forward(joints)
 
+    assert np.array_equal(kin.qpos_indices, expected_indices)
     assert pose.shape == (4, 4)
-    assert np.allclose(pose[:3, 3], data.site(site).xpos, atol=1e-9)
-    assert np.allclose(pose[:3, :3], data.site(site).xmat.reshape(3, 3), atol=1e-9)
+    assert np.allclose(pose[:3, 3], data.site(f"{side}_{site}_site").xpos, atol=1e-9)
+    assert np.allclose(
+        pose[:3, :3], data.site(f"{side}_{site}_site").xmat.reshape(3, 3), atol=1e-9
+    )
     assert np.array_equal(pose[3], [0, 0, 0, 1])
 
 
@@ -121,7 +147,9 @@ def test_inverse_stays_within_the_joint_limits(
     for _ in range(3 * CONTROL_HZ):  # three seconds, plenty to reach the range
         joints = kin.inverse(joints, far_below, pose[:3, :3])
 
-    joint_ids = [model.joint(f"left_joint{i}").id for i in range(1, ARM_JOINTS + 1)]
+    joint_ids = [
+        model.joint(f"{kin.side}_joint{i}").id for i in range(1, ARM_JOINTS + 1)
+    ]
     lower, upper = model.jnt_range[joint_ids].T
     at_a_limit = np.isclose(joints, lower, atol=1e-6) | np.isclose(
         joints, upper, atol=1e-6

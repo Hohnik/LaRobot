@@ -1,3 +1,5 @@
+from typing import Literal
+
 import mink
 import mujoco
 import numpy as np
@@ -5,18 +7,32 @@ import numpy as np
 from robot import CONTROL_HZ
 
 ARM_JOINTS = 6
-RADS_PER_SECOND = 10.0
+RADS_PER_SECOND = 6.0
 
 
 class CartesianKinematics:
+    """Compute site poses and inverse-kinematics steps for one arm.
+
+    Parameters
+    ----------
+    model : mujoco.MjModel
+        Model containing the arm joints and target site.
+    side : {'left', 'right'}
+        Arm to use.
+    site_name : {'tcp', 'grasp'}, optional
+        Site suffix; defaults to 'tcp'.
+    """
+
     def __init__(
         self,
         model: mujoco.MjModel,
-        site_name: str = "left_tcp_site",  # ['left_tcp_site', 'left_grasp_site', 'right_tcp_site', 'right_grasp_site']
+        side: Literal["left", "right"],
+        site_name: Literal["tcp", "grasp"] = "tcp",
     ):
         self.model = model
         self.configuration = mink.Configuration(self.model)
-        self.site_name = site_name
+        self.side = side
+        self.site_name = f"{side}_{site_name}_site"
         self.frame_task = mink.FrameTask(
             frame_name=self.site_name,
             frame_type="site",
@@ -29,18 +45,35 @@ class CartesianKinematics:
             mink.ConfigurationLimit(self.model),
             mink.VelocityLimit(
                 self.model,
-                {f"left_joint{i}": RADS_PER_SECOND for i in range(1, ARM_JOINTS + 1)},
+                {
+                    f"{self.side}_joint{i}": RADS_PER_SECOND
+                    for i in range(1, ARM_JOINTS + 1)
+                },
             ),
         ]
 
-        self.left_qpos_indices = np.array(
+        self.qpos_indices = np.array(
             [
-                self.model.jnt_qposadr[self.model.joint(f"left_joint{i}").id]
-                for i in range(1, 7)
+                self.model.jnt_qposadr[self.model.joint(f"{self.side}_joint{i}").id]
+                for i in range(1, ARM_JOINTS + 1)
             ]
         )
 
     def forward(self, joint_positions: np.ndarray) -> np.ndarray:
+        """Compute the selected site's pose from arm joint positions.
+
+        Parameters
+        ----------
+        joint_positions : array_like, shape (6,)
+            Arm joint positions in joint-number order.
+
+        Returns
+        -------
+        ```
+        ndarray, shape (4, 4)
+        ```
+        Homogeneous transform from the site frame to the world frame.
+        """
         joint_positions = np.asarray(joint_positions, dtype=float)
 
         if joint_positions.shape != (ARM_JOINTS,):
@@ -49,7 +82,7 @@ class CartesianKinematics:
             )
 
         qpos = self.configuration.q.copy()
-        qpos[self.left_qpos_indices] = joint_positions
+        qpos[self.qpos_indices] = joint_positions
         self.configuration.update(qpos)
 
         pose = self.configuration.get_transform_frame_to_world(
@@ -65,6 +98,26 @@ class CartesianKinematics:
         target_rotation: np.ndarray,
         dt: float = 1 / CONTROL_HZ,
     ) -> np.ndarray:
+        """Take one inverse-kinematics step toward the target pose.
+
+        Parameters
+        ----------
+        current_joint_positions : array_like, shape (6,)
+            Current arm joint positions in joint-number order.
+        target_position : array_like, shape (3,)
+            Target site position in the world frame, using model length units.
+        target_rotation : array_like, shape (3, 3)
+            Target site rotation relative to the world frame.
+        dt : float, optional
+            Integration time step; defaults to 1 / CONTROL_HZ.
+
+        Returns
+        -------
+        ```
+        ndarray, shape (6,)
+        ```
+        Arm joint positions after one step, in joint-number order.
+        """
         current_joint_positions = np.asarray(
             current_joint_positions,
             dtype=float,
@@ -92,7 +145,7 @@ class CartesianKinematics:
         target_pose[:3, 3] = target_position
 
         qpos = self.configuration.q.copy()
-        qpos[self.left_qpos_indices] = current_joint_positions
+        qpos[self.qpos_indices] = current_joint_positions
         self.configuration.update(qpos)
 
         self.frame_task.set_target(mink.SE3.from_matrix(target_pose))
@@ -108,4 +161,4 @@ class CartesianKinematics:
 
         self.configuration.integrate_inplace(velocity, dt)
 
-        return self.configuration.q[self.left_qpos_indices].copy()
+        return self.configuration.q[self.qpos_indices].copy()

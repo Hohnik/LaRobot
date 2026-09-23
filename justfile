@@ -11,12 +11,12 @@ check:
     @ruff check --fix
 
 test:
-    pytest
+    uv run pytest
 
 # setup project for development
 setup-project:
     uv run pybind11-stubgen mujoco -o typings
 
-# start sim with input device: `spacemouse`|`keyboard`
-start-sim device:
-    uv run scripts/start_sim.py --device {{ device }}
+# start sim with input device: `spacemouse`|`keyboard` and optional args
+start-sim device *args:
+    uv run scripts/start_sim.py --device {{ device }} {{ args }}

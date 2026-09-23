@@ -33,4 +33,16 @@ class Input(ABC):
     ) -> None: ...
 
     @abstractmethod
-    def read(self) -> tuple[Velocities, Buttons]: ...
+    def read(self) -> tuple[Velocities, Buttons]:
+        """Read Cartesian velocity commands and button states.
+
+        Returns
+        -------
+        Linear xyz and angular xyz commands, then close/open button states.
+        ```
+        tuple[Velocities, Buttons]
+        Velocities: ndarray, shape (6,)
+        Buttons: list[int], length 2
+        ```
+        """
+        ...
