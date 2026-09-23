@@ -13,12 +13,20 @@ def test_read_returns_the_cached_frame_until_the_interval_passed():
     sim = Simulation(SCENE)
     with SimCamera(sim, name="overhead", width=32, height=32, fps=10) as cam:
         first = cam.read()
+        assert first.timestamp_ns_capture == int(sim.data.time * 1e9)
+        assert isinstance(first.timestamp_ns_capture, int)
+        assert isinstance(first.timestamp_ns_host, int)
+        assert first.timestamp_ns_host > 0
         assert cam.read() is first  # same tick: no re-render
         for _ in range(4):  # 4/30 s of sim time is more than 1/10 s
             action = np.zeros(sim.model.nu)
             left, right = action[0:7], action[7:]
             sim.step(left, right)
-        assert cam.read() is not first
+        latest = cam.read()
+        assert latest is not first
+        assert latest.timestamp_ns_capture == int(sim.data.time * 1e9)
+        assert latest.timestamp_ns_capture > first.timestamp_ns_capture
+        assert latest.timestamp_ns_host >= first.timestamp_ns_host
 
 
 def test_read_outside_the_connect_close_cycle_fails():

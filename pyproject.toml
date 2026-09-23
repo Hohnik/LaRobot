@@ -9,6 +9,7 @@ dependencies = [
     "mjviser>=0.0.14",
     "mujoco==3.12",
     "numpy>=2.5.2",
+    "pyrealsense2>=2.58.4; sys_platform == 'linux'",
     "pynput>=1.8.2",
     "pyspacemouse>=2.1.0",
     "viser>=1.0.30",
