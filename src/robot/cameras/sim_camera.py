@@ -1,4 +1,5 @@
 from functools import cache
+from time import monotonic_ns
 from typing import override
 
 import mujoco
@@ -119,8 +120,8 @@ class SimCamera(Camera):
             renderer.update_scene(self.sim.data, camera=self._camera_id)
             self._last_frame = Frame(
                 camera_name=self.name,
-                timestamp_ns_capture=now,
-                timestamp_ns_host=now,
+                timestamp_ns_capture=int(now * 1e9),
+                timestamp_ns_host=monotonic_ns(),
                 rgb=renderer.render(),
             )
             self._latest_time = now
