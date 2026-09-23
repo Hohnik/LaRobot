@@ -1,23 +1,25 @@
 from contextlib import ExitStack
 from pathlib import Path
+from time import perf_counter
+import argparse
 
 import numpy as np
 import viser
 from mjviser import ViserMujocoScene
 from abc_minimal.config import SimEvalConfig
-from abc_minimal.eval_policy import resolve_prompt
+from abc_minimal.eval_policy import resolve_prompt, RTCManager
 from abc_minimal.policy import DiTInferencePolicy
 
-from robot.arm.teleoperation import ArmState, update_arm
 from robot.environment.simulation import Simulation
 from robot.cameras.sim_camera import SimCamera
 
+ACTION_DIM = 15
+PREFIX_LENGTH = 4
+LEAD_LENGTH = 4
+RTC_START = ACTION_DIM - LEAD_LENGTH
+FAST_INFERENCE = False
 ROOT = Path(__file__).parents[1]
 SCENE = ROOT / "assets/put_bottles/put_bottle.xml"
-GRIPPER_OPEN, GRIPPER_SHUT = 0.0475, 0.0
-GRIPPER_STEP = 0.005
-LAG_LIMIT = 0.03
-EXPO, LIN_SCALE, ANG_SCALE = 0.6, 0.4, 1.5
 # NOTE: Values are not perfectly aligned with camera position.
 POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)
 
@@ -37,9 +39,14 @@ def main() -> None:
     config = SimEvalConfig(
         checkpoint=str(checkpoint),
         task="put_plastic_bottles_in_bin",
-        fast_inference=False,
-        rtc=False,
+        fast_inference=FAST_INFERENCE,
+        fast_compile_mode="max-autotune",
+        rtc=True,
+        execute_chunk_dim=ACTION_DIM,
+        rtc_inference_lead_steps=LEAD_LENGTH,
+        rtc_prefix_length=PREFIX_LENGTH
     )
+
     config.prompt = resolve_prompt(config)
 
     policy = DiTInferencePolicy(
@@ -56,9 +63,8 @@ def main() -> None:
             )
             for name in ("top", "left", "right")
         }
-
-        while True:
-            obs = {
+        def read_observation():
+            return {
                 "state":sim.state.copy(),
                 "images": {
                     name: cameras[name].read().rgb
@@ -66,12 +72,49 @@ def main() -> None:
                 },
                 "prompt": config.prompt,
             }
-            actions = policy.infer(obs)
-            for action in actions[:15]:
+        if config.fast_inference:
+            print("Compiling and warming up policy...", flush=True)
+            started = perf_counter()
+            warmup_noise = np.random.default_rng(0).standard_normal(
+                (policy.chunk_length, policy.action_dim), dtype=np.float32
+            )
+            policy.enable_fast_inference(
+                compile_mode=config.fast_compile_mode,
+                warmup_obs=read_observation(),
+                warmup_noise=warmup_noise,
+                rtc_prefix_length=PREFIX_LENGTH
+            )
+            print(f"Fast inference ready in {perf_counter() - started:.1f}s", flush=True)
+
+        rtc_manager = RTCManager(
+            policy=policy,
+            prefix_length=PREFIX_LENGTH,
+            inference_lead_steps=LEAD_LENGTH,
+            execute_chunk_dim=ACTION_DIM
+        )
+        stack.callback(rtc_manager.close)
+
+        obs = read_observation()
+        actions = policy.infer(obs)
+
+        while True:
+            for idx, action in enumerate(actions[:ACTION_DIM]):
+                if idx == RTC_START:
+                    rtc_manager.start(obs=read_observation(), current_actions=actions, noise=None)
                 target = action.copy()
                 target[[6, 13]] = np.clip(target[[6, 13]],0 ,1) * 0.0475
                 sim.step(left=target[:7], right=target[7:])
                 view.update_from_mjdata(sim.data)
+            pred = rtc_manager.get()
+            if not pred[2]:
+                print("prediction lag!")
+            actions = pred[0]
+            
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fast_inference", type=bool, default=False)
+    args = parser.parse_args()
+
+    FAST_INFERENCE = args.fast_inference
     main()
