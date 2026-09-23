@@ -6,7 +6,7 @@ This is a student project in which we want to learn how to build a robotics and 
 
 ## How we work
 
-- Keep one commit at max. 500 lines of code.
+- Keep pull requests below 500 lines of code.
 - Write every line by hand, even if you take the code from somewhere else. Then you get a chance to understand what happens, and why it happens.
 - Another team member reviews your code.
 - Every building block of the system is a GitHub issue. Take one, and solve it.
