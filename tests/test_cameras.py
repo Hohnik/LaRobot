@@ -13,6 +13,8 @@ def test_read_returns_the_cached_frame_until_the_interval_passed():
     sim = Simulation(SCENE)
     with SimCamera(sim, name="overhead", width=32, height=32, fps=10) as cam:
         first = cam.read()
+        assert first.rgb.shape == (32, 32, 3)
+        assert first.rgb.dtype == np.uint8
         assert first.timestamp_ns_capture == int(sim.data.time * 1e9)
         assert isinstance(first.timestamp_ns_capture, int)
         assert isinstance(first.timestamp_ns_host, int)
