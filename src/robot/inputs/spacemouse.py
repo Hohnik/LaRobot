@@ -14,6 +14,20 @@ Buttons = Annotated[list[int], "Length 2 list with close=0, open=1"]
 
 
 class SpaceMouse(Input):
+    """Read SpaceMouse controls with cubic response shaping and scaling.
+
+    Parameters
+    ----------
+    device_index : int
+        Device index passed to pyspacemouse.
+    expo : float, optional
+        Cubic weight in the linear/cubic blend; defaults to 0.6.
+    lin_scale : float, optional
+        Linear output multiplier; defaults to 0.12.
+    ang_scale : float, optional
+        Angular output multiplier; defaults to 0.8.
+    """
+
     def __init__(
         self,
         device_index: int,

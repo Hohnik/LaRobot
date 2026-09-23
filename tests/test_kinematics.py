@@ -37,6 +37,22 @@ def rotation_angle(a: np.ndarray, b: np.ndarray) -> float:
 
 
 def rotated_about_tool_z(rotation: np.ndarray, degrees: float) -> np.ndarray:
+    """Apply a rotation about the tool's local z axis.
+
+    Parameters
+    ----------
+    rotation : ndarray, shape (3, 3)
+        Initial tool orientation.
+    degrees : float
+        Rotation angle in degrees.
+
+    Returns
+    -------
+    Updated tool orientation.
+    ```
+    ndarray, shape (3, 3)
+    ```
+    """
     c, s = np.cos(np.radians(degrees)), np.sin(np.radians(degrees))
     return rotation @ np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 

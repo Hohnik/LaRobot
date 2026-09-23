@@ -11,7 +11,7 @@ check:
     @ruff check --fix
 
 test:
-    pytest
+    uv run pytest
 
 # setup project for development
 setup-project:
