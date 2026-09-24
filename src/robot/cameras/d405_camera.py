@@ -10,7 +10,7 @@ from robot.cameras.frame import Frame
 
 @final
 class D405Camera(Camera):
-    """Read RGB frames and SDK timestamps from a D405 selected by serial."""
+    """Read RGB frames and timestamps from a D405 selected by serial."""
 
     def __init__(
         self,
@@ -64,7 +64,7 @@ class D405Camera(Camera):
 
     @override
     def read(self) -> Frame:
-        """Wait for a colour frame and retain its SDK timestamp and clock domain.
+        """Wait for a colour frame and retain its timestamp.
 
         Returns
         -------
