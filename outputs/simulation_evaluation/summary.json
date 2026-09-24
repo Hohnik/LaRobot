@@ -1,0 +1,200 @@
+{
+  "checkpoint": "/home/lavita/Documents/temp/LaRobot/scripts/policies/abc_dit_xl_200k_model.pt",
+  "config": {
+    "camera_backend": "mjwarp",
+    "camera_height": 168,
+    "camera_width": 224,
+    "checkpoint": "scripts/policies/abc_dit_xl_200k_model.pt",
+    "clip": {
+      "bpe_name": "bpe_simple_vocab_16e6.txt.gz",
+      "bpe_url": "https://github.com/openai/CLIP/raw/main/clip/bpe_simple_vocab_16e6.txt.gz",
+      "cache_dir": "/home/lavita/.cache/clip",
+      "model_name": "ViT-B-32.pt",
+      "model_url": "https://openaipublic.azureedge.net/clip/models/40d365715913c9da98579312b702a82c18be219cc2a73407c4526f58eba950af/ViT-B-32.pt",
+      "vision_model_name": "ViT-B-16.pt",
+      "vision_model_url": "https://openaipublic.azureedge.net/clip/models/5806e77cd80f8b59890b7e101eabd078d9fb84e6937f9e85e4ecb61988df416f/ViT-B-16.pt"
+    },
+    "device": "auto",
+    "diffusion_steps": 10,
+    "execute_chunk_dim": 15,
+    "fast_compile_mode": "max-autotune",
+    "fast_inference": false,
+    "gpu_id": null,
+    "log_every_chunk": false,
+    "model": {
+      "action_dim": 14,
+      "camera_keys": [
+        "top",
+        "left",
+        "right"
+      ],
+      "chunk_length": 30,
+      "depth": 32,
+      "hidden_size": 1536,
+      "mlp_ratio": 4.0,
+      "num_heads": 24,
+      "state_dim": 14,
+      "task_embed_dim": 512,
+      "vision_backbone": "dinov3",
+      "vision_pool_mlp_ratio": 4,
+      "vision_pool_num_heads": 8,
+      "vision_pool_num_queries": 12,
+      "vit_depth": 12,
+      "vit_embed_dim": 768,
+      "vit_num_heads": 12
+    },
+    "norm_stats_path": null,
+    "num_chunks": 236,
+    "num_worlds": 5,
+    "output_dir": null,
+    "parallel_worlds": 0,
+    "policy": "auto",
+    "policy_seed": 0,
+    "prefix_length": null,
+    "prompt": "sim throw plastic bottles in bin",
+    "randomization": null,
+    "rtc": true,
+    "rtc_inference_lead_steps": 4,
+    "rtc_prefix_length": 4,
+    "save_video": false,
+    "seed": 20260511,
+    "task": "put_plastic_bottles_in_bin",
+    "vanilla_physics": false,
+    "video_every_n_actions": 1,
+    "video_fps": 30,
+    "vla_model": {
+      "backbone": {
+        "activation_checkpointing": true,
+        "checkpoint": null,
+        "feature_layer": -1,
+        "fixed_seq_len": 256,
+        "image_size": 224,
+        "load_base_checkpoint": true,
+        "proprio_token": true,
+        "train_backbone": true,
+        "train_siglip": true,
+        "train_token_embedding": false
+      },
+      "camera_keys": [
+        "top",
+        "left",
+        "right"
+      ],
+      "dit": {
+        "action_dim": 14,
+        "chunk_length": 30,
+        "depth": 8,
+        "direct_state_conditioning": true,
+        "hidden_size": 512,
+        "mlp_ratio": 4.0,
+        "num_heads": 8,
+        "num_pool_tokens": 8,
+        "pool_num_heads": 8,
+        "pool_qk_norm": true,
+        "state_dim": 14
+      }
+    }
+  },
+  "format": "abc_minimal_sim_eval/v1",
+  "mean_max_bottles_in_bin": 4.0,
+  "mean_max_progress": 0.6666666865348816,
+  "mean_reward": 0.6666666865348816,
+  "num_success": 0,
+  "num_worlds": 1,
+  "prompt": "sim throw plastic bottles in bin",
+  "resolved_device": "cuda",
+  "success_rate": 0.0,
+  "task": "put_plastic_bottles_in_bin",
+  "worlds": [
+    {
+      "chunk_metrics": [],
+      "final_success": false,
+      "final_task_eval": {
+        "bin_bottom_y": -0.0837152972817421,
+        "bin_radius_bottom": 0.06838925182819366,
+        "bin_radius_top": 0.08741602674126625,
+        "bin_top_y": 0.11797062307596207,
+        "bottle_center_offsets": [
+          [
+            0.0,
+            0.0,
+            0.08335883915424347
+          ],
+          [
+            0.0,
+            0.0,
+            0.08250001072883606
+          ],
+          [
+            0.0,
+            0.0,
+            0.07826532423496246
+          ],
+          [
+            0.0,
+            0.0,
+            0.08000000566244125
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0
+          ]
+        ],
+        "bottle_in_bin_mask": [
+          true,
+          true,
+          true,
+          true,
+          false,
+          false
+        ],
+        "bottle_names": [
+          "bottle_1",
+          "bottle_2",
+          "bottle_3",
+          "bottle_4",
+          "bottle_5",
+          "bottle_6"
+        ],
+        "bottle_reaches": [
+          0.11426268517971039,
+          0.11208236217498779,
+          0.0944645032286644,
+          0.09072357416152954,
+          0.09845367819070816,
+          0.09366070479154587
+        ],
+        "bottles_in_bin": [
+          "bottle_1",
+          "bottle_2",
+          "bottle_3",
+          "bottle_4"
+        ],
+        "closest_height_margin": 0.19920046627521515,
+        "closest_radial_margin": 0.06155210733413696,
+        "closest_upper_height_margin": 0.2764683663845062,
+        "ever_success": false,
+        "max_bottles_in_bin_so_far": 4,
+        "num_active_bottles": 6,
+        "num_bottles_in_bin": 4,
+        "reward": 0.6666666865348816,
+        "success": false,
+        "success_count": 6
+      },
+      "max_reward": 0.6666666865348816,
+      "reward": 0.6666666865348816,
+      "steps": 3540,
+      "success": false,
+      "termination_reason": "timeout",
+      "wall_s": 118.137292103027,
+      "world_index": 0,
+      "world_seed": 20260511
+    }
+  ]
+}
