@@ -5,8 +5,9 @@ from time import perf_counter
 
 import numpy as np
 import viser
+from abc_sim import make_task_evaluator
 from abc_minimal.config import SimEvalConfig
-from abc_minimal.eval_policy import RTCManager, resolve_prompt
+from abc_minimal.eval_policy import RTCManager, resolve_prompt, build_summary
 from abc_minimal.policy import DiTInferencePolicy
 from mjviser import ViserMujocoScene
 
@@ -48,6 +49,10 @@ def main() -> None:
     )
 
     config.prompt = resolve_prompt(config)
+    evaluator = make_task_evaluator(sim.model, config.task)
+
+    if evaluator is None:
+        raise RuntimeError(f"No evaluator available for task {config.task!r}")
 
     policy = DiTInferencePolicy(
         checkpoint=checkpoint,
@@ -101,24 +106,83 @@ def main() -> None:
         )
         stack.callback(rtc_manager.close)
 
+        episode_started = perf_counter()
         obs = read_observation()
         actions = policy.infer(obs)
+        
+        evaluation = evaluator.evaluate_qpos_batch(
+            sim.data.qpos[None,:]
+        )
+        max_reward = evaluation.scalar_reward()
 
-        while True:
+        steps = 0
+        success = False
+
+        for chunk_index in range(config.num_chunks):
             for idx, action in enumerate(actions[:ACTION_DIM]):
-                if idx == RTC_START:
+                if(
+                    idx == RTC_START
+                    and chunk_index + 1 < config.num_chunks
+                ):
                     rtc_manager.start(
-                        obs=read_observation(), current_actions=actions, noise=None
+                        obs=read_observation(),
+                        current_actions=actions,
+                        noise=None,
                     )
+
                 target = action.copy()
-                target[[6, 13]] = np.clip(target[[6, 13]], 0, 1) * 0.0475
+                target[[6,13]] = (
+                    np.clip(target[[6,13]],0,1) * 0.0475
+                )
                 sim.step(left=target[:7], right=target[7:])
+                steps += 1
+
+                evaluation = evaluator.evaluate_qpos_batch(
+                    sim.data.qpos[None, :]
+                )
+                max_reward = max(
+                    max_reward,
+                    evaluation.scalar_reward(),
+                )
+                if evaluation.scalar_success():
+                    success = True
+                    break
                 view.update_from_mjdata(sim.data)
+
+            if success:
+                break
+            if chunk_index + 1 == config.num_chunks:
+                break
+
             pred = rtc_manager.get()
             if not pred[2]:
                 print("prediction lag!")
             actions = pred[0]
 
+        output_dir = ROOT / "outputs" / "simulation_evaluation"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        episode_result = {
+            "world_index": 0,
+            "world_seed": config.seed,
+            "success": success,
+            "final_success": evaluation.scalar_success(),
+            "reward": evaluation.scalar_reward(),
+            "max_reward": max_reward,
+            "steps": steps,
+            "wall_s": perf_counter() - episode_started,
+            "termination_reason": "success" if success else "timeout",
+            "chunk_metrics": [],
+            "final_task_eval": evaluation.to_info(squeeze=True),
+        }
+
+        build_summary(
+            config=config,
+            ckpt_path=checkpoint.resolve(),
+            device="cuda",
+            worlds=[episode_result],
+            out_dir=output_dir,
+        )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
