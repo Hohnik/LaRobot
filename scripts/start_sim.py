@@ -32,7 +32,7 @@ def main(args: argparse.Namespace) -> None:
     Parameters
     ----------
     args : argparse.Namespace
-        Input selection (`device`) and two-arm mode (`dual`).
+        Input selection (`device`) and two-arm mode (`mirrored`).
     """
     if args.device == "keyboard":
         raise NotImplementedError("Keyboard input is not implemented yet")
@@ -47,7 +47,7 @@ def main(args: argparse.Namespace) -> None:
     view = ViserMujocoScene(server, sim.model, num_envs=1)
     view.camera_tracking_enabled = False
 
-    sides = ("left", "right") if args.dual else ("left",)
+    sides = ("left", "right") if args.mirrored else ("left",)
 
     with ExitStack() as stack:
         arms: dict[Literal["left", "right"], ArmState] = {}
@@ -68,8 +68,8 @@ def main(args: argparse.Namespace) -> None:
             pose = kin.forward(sim.data.qpos[kin.qpos_indices])
             marker_body_id = sim.model.body(f"target_marker_{side}").id
 
-            # Mirror the left mouse in dual mode for matching thumb actions.
-            mirrored_buttons = args.dual and side == "left"
+            # Mirror the left mouse in mirrored mode for matching thumb actions.
+            mirrored_buttons = args.mirrored and side == "left"
             arms[side] = ArmState(
                 kin=kin,
                 target=CartesianTarget.from_pose(pose=pose),
@@ -124,13 +124,12 @@ if __name__ == "__main__":
         "-d",
         choices=["spacemouse", "keyboard"],
         required=True,
-        help="Input device to use (keyboard is not implemented yet)",
+        help="Input device to use",
         type=str,
     )
     _ = parser.add_argument(
-        "--dual",
+        "--mirrored",
         action="store_true",
-        help="Control both arms using two SpaceMice",
-        type=bool,
+        help="Controll one arm and mirror its motion onto the other",
     )
     main(parser.parse_args())
