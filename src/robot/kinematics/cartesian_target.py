@@ -14,6 +14,16 @@ Pose = Annotated[npt.NDArray[np.float64], "4x4 homogeneous transformation matrix
 
 
 class CartesianTarget:
+    """Track a target pose by integrating Cartesian velocities.
+
+    Parameters
+    ----------
+    position : array_like, shape (3,), optional
+        Initial position; defaults to the origin.
+    rotation : array_like, shape (3, 3), optional
+        Initial orientation; defaults to the identity.
+    """
+
     def __init__(
         self,
         position: Vector3 | None = None,
@@ -34,10 +44,33 @@ class CartesianTarget:
 
     @classmethod
     def from_pose(cls, pose: Pose) -> Self:
+        """Create a target from a homogeneous pose matrix.
+
+        Parameters
+        ----------
+        pose : ndarray, shape (4, 4)
+            Homogeneous transform containing the initial position and rotation.
+
+        Returns
+        -------
+        Target with copies of the supplied position and rotation.
+        ```
+        return cls(position=pose[:3, 3], rotation=pose[:3, :3])
+        ```
+        """
         return cls(position=pose[:3, 3], rotation=pose[:3, :3])
 
     @property
     def pose(self) -> Pose:
+        """Get the current target pose.
+
+        Returns
+        -------
+        New homogeneous transform containing the current position and rotation.
+        ```
+        ndarray, shape (4, 4)
+        ```
+        """
         pose = np.eye(4)
         pose[:3, 3] = self.position
         pose[:3, :3] = self.rotation
@@ -47,7 +80,17 @@ class CartesianTarget:
     def rotation_matrix(axis_angle: Vector3) -> Rotation:
         """Rotation matrix from an axis-angle vector (Rodrigues' formula).
 
-        Direction of `axis_angle` is the rotation axis, its length is the angle in radians.
+        Parameters
+        ----------
+        axis_angle : ndarray, shape (3,)
+            Rotation axis scaled by the angle in radians.
+
+        Returns
+        -------
+        Rotation matrix; identity for angles below 1e-12 radians.
+        ```
+        ndarray, shape (3, 3)
+        ```
         """
         angle = np.linalg.norm(axis_angle)
         if angle < 1e-12:
@@ -59,7 +102,23 @@ class CartesianTarget:
         return np.eye(3) + np.sin(angle) * K + (1 - np.cos(angle)) * (K @ K)
 
     def integrate(self, velocities: Velocities, dt: float = 1 / CONTROL_HZ) -> Pose:
-        """Advance the pose by one step. velocity = (linear xyz, angular xyz)."""
+        """Advance the pose by one step.
+
+        Parameters
+        ----------
+        velocities : ndarray, shape (6,)
+            Linear xyz, then angular xyz, in the pose's reference frame.
+            Rates use position units and radians per unit of `dt`.
+        dt : float, optional
+            Time step matching the velocity units; defaults to 1 / CONTROL_HZ.
+
+        Returns
+        -------
+        Homogeneous transform containing the updated position and rotation.
+        ```
+        ndarray, shape (4, 4)
+        ```
+        """
         linear, angular = velocities[:3], velocities[3:]
         self.position = self.position + linear * dt
         self.rotation = self.rotation_matrix(angular * dt) @ self.rotation
