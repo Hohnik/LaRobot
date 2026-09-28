@@ -4,6 +4,10 @@ LaRobot is an environment for the [YAM robot arms](https://i2rt.com/collections/
 
 This is a student project in which we want to learn how to build a robotics and AI system ourselves. The goal is to understand how the parts work together. If the robot arm does the job at the end, that is a good bonus but holds no priority over understanding how it works.
 
+<img src="docs/ARCHITECTURE.png" alt="LaRobot architecture" width="100%">
+
+---
+
 ## How we work
 
 - Keep pull requests below 500 lines of code.
