@@ -98,7 +98,7 @@ def main(args: argparse.Namespace) -> None:
             )
 
             robot: MotorChainRobot = get_yam_robot(
-                channel="can0" if side == "left" else "can1",
+                channel="can-left" if side == "left" else "can-right",
                 gripper_type=GripperType.LINEAR_4310,
             )
 
