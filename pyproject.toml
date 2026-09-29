@@ -12,7 +12,6 @@ dependencies = [
     "numpy>=2.5.2",
     "pillow>=12.0.0",
     "pyrealsense2>=2.58.4; sys_platform == 'linux'",
-    "pynput>=1.8.2",
     "pyspacemouse>=2.1.0",
     "viser>=1.0.30",
     "rust-just>=1.58.0",
