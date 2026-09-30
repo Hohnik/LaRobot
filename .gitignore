@@ -1,6 +1,8 @@
 typings/
 +.ignore
 +recordings/
+data/
+scripts/policies/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -222,6 +224,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-#weight files
-scripts/policies/*

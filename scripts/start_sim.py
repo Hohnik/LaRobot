@@ -10,6 +10,7 @@ from mjviser import ViserMujocoScene
 from robot.arm.teleoperation import ArmState, update_arm
 from robot.cameras.sim_camera import SimCamera
 from robot.environment.simulation import Simulation
+from robot.inputs.input import Input
 from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
@@ -34,9 +35,6 @@ def main(args: argparse.Namespace) -> None:
     args : argparse.Namespace
         Input selection (`device`) and two-arm mode (`dual`).
     """
-    if args.device == "keyboard":
-        raise NotImplementedError("Keyboard input is not implemented yet")
-
     sim = Simulation(str(SCENE), realtime=True)
 
     server = viser.ViserServer(port=8080)
@@ -51,18 +49,19 @@ def main(args: argparse.Namespace) -> None:
 
     with ExitStack() as stack:
         arms: dict[Literal["left", "right"], ArmState] = {}
-        devices: dict[Literal["left", "right"], SpaceMouse] = {}
+        devices: dict[Literal["left", "right"], Input] = {}
 
         for device_index, side in enumerate(sides):
-            device = stack.enter_context(
-                SpaceMouse(
-                    device_index=device_index,
-                    expo=EXPO,
-                    lin_scale=LIN_SCALE,
-                    ang_scale=ANG_SCALE,
-                )
-            )
-            devices[side] = device
+            device: Input
+            match args.device:
+                case "spacemouse":
+                    device = SpaceMouse(
+                        device_index=device_index,
+                        expo=EXPO,
+                        lin_scale=LIN_SCALE,
+                        ang_scale=ANG_SCALE,
+                    )
+            devices[side] = stack.enter_context(device)
 
             kin = CartesianKinematics(sim.model, side=side)
             pose = kin.forward(sim.data.qpos[kin.qpos_indices])
@@ -122,10 +121,9 @@ if __name__ == "__main__":
     _ = parser.add_argument(
         "--device",
         "-d",
-        choices=["spacemouse", "keyboard"],
-        required=True,
+        choices=["spacemouse"],
+        default="spacemouse",
         help="Input device to use",
-        type=str,
     )
     _ = parser.add_argument(
         "--dual",
