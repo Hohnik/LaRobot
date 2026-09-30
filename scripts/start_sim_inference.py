@@ -12,6 +12,7 @@ from mjviser import ViserMujocoScene
 
 from robot.cameras.sim_camera import SimCamera
 from robot.environment.simulation import Simulation
+from robot.evaluation.put_bottles import PlacementEvaluator
 
 ACTION_DIM = 15
 PREFIX_LENGTH = 4
@@ -26,6 +27,7 @@ POSITION, LOOK_AT, FOV = (0.086, 0.0, 1.6), (1.086, 0.0, 0), np.radians(60)
 
 def main() -> None:
     sim = Simulation(str(SCENE), realtime=True)
+    evaluator = PlacementEvaluator(sim.model)
 
     server = viser.ViserServer(port=8080)
     server.initial_camera.position = POSITION
@@ -104,20 +106,45 @@ def main() -> None:
         obs = read_observation()
         actions = policy.infer(obs)
 
-        while True:
+        evaluation = evaluator.evaluate(sim.data)
+        max_num_inside = evaluation.num_inside
+        steps = 0
+
+        for chunk_index in range(config.num_chunks):
             for idx, action in enumerate(actions[:ACTION_DIM]):
-                if idx == RTC_START:
+                if idx == RTC_START and chunk_index + 1 < config.num_chunks:
                     rtc_manager.start(
                         obs=read_observation(), current_actions=actions, noise=None
                     )
                 target = action.copy()
                 target[[6, 13]] = np.clip(target[[6, 13]], 0, 1) * 0.0475
                 sim.step(left=target[:7], right=target[7:])
+                steps += 1
                 view.update_from_mjdata(sim.data)
+
+                evaluation = evaluator.evaluate(sim.data)
+                max_num_inside = max(max_num_inside, evaluation.num_inside)
+
+                if evaluation.success:
+                    break
+
+            if evaluation.success or chunk_index + 1 == config.num_chunks:
+                break
             pred = rtc_manager.get()
             if not pred[2]:
                 print("prediction lag!")
             actions = pred[0]
+        termination_reason = "success" if evaluation.success else "timeout"
+
+        print(
+            "Evaluation finished: "
+            f"success={evaluation.success}, "
+            f"bottles_inside={evaluation.num_inside}/6, "
+            f"max_bottles_inside={max_num_inside}/6, "
+            f"steps={steps}, "
+            f"termination={termination_reason}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
