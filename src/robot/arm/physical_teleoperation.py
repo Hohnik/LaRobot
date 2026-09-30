@@ -1,10 +1,57 @@
+import logging
+import socket
+from contextlib import ExitStack
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 
 from robot import CONTROL_HZ
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
+
+if TYPE_CHECKING:
+    from i2rt.robots.motor_chain_robot import MotorChainRobot
+
+Side = Literal["left", "right"]
+logger = logging.getLogger(__name__)
+
+
+def check_devices(channels: tuple[str, ...], paths: list[str]) -> None:
+    """Check Linux SocketCAN interface names and input count before activation.
+
+    Interface existence does not guarantee the bus is up or configured with
+    the correct bitrate; connection validation remains the driver's job.
+    """
+    if len(set(channels)) != len(channels):
+        raise ValueError("Each arm must have its own CAN interface")
+    if len(paths) < len(channels):
+        raise ConnectionError(f"Need {len(channels)} SpaceMice, but found {len(paths)}")
+    for channel in channels:
+        try:
+            socket.if_nametoindex(channel)
+        except OSError as exc:
+            raise ConnectionError(f"CAN interface {channel!r} does not exist") from exc
+
+
+def shutdown_robots(robots: dict[Side, "MotorChainRobot"]) -> None:
+    """Idle all connected arms, then close every arm after manual support."""
+    if not robots:
+        return
+
+    # ExitStack attempts every close even if another close or the prompt fails.
+    with ExitStack() as stack:
+        for robot in robots.values():
+            stack.callback(robot.close)
+        for side, robot in robots.items():
+            try:
+                robot.enter_gravity_comp_idle()
+            except Exception:
+                logger.exception("Could not idle the %s arm", side)
+        input(
+            "Teleoperation stopped. Support/place the arms safely, then press "
+            "Enter to disable motor torque."
+        )
 
 
 @dataclass

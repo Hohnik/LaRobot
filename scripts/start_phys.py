@@ -1,10 +1,7 @@
 import argparse
-import logging
-import socket
 import time
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal
 
 import mujoco
 import numpy as np
@@ -13,7 +10,14 @@ from i2rt.robots.motor_chain_robot import MotorChainRobot
 from i2rt.robots.utils import GripperType
 
 from robot import CONTROL_HZ
-from robot.arm.physical_teleoperation import ArmState, update_arm
+from robot.arm.physical_teleoperation import (
+    ArmState,
+    Side,
+    check_devices,
+    shutdown_robots,
+    update_arm,
+)
+from robot.inputs.input import Input
 from robot.inputs.spacemouse import SpaceMouse
 from robot.kinematics.cartesian_kinematics import CartesianKinematics
 from robot.kinematics.cartesian_target import CartesianTarget
@@ -25,79 +29,38 @@ GRIPPER_STEP = 0.05
 LAG_LIMIT = 0.07
 EXPO, LIN_SCALE, ANG_SCALE = 0.6, 0.2, 1.5
 DT = 1 / CONTROL_HZ
-Side = Literal["left", "right"]
-logger = logging.getLogger(__name__)
-
-
-def shutdown_robots(robots: dict[Side, MotorChainRobot]) -> None:
-    """Idle all connected arms, then close every arm after manual support."""
-    if not robots:
-        return
-
-    # ExitStack attempts every close even if another close or the prompt fails.
-    with ExitStack() as stack:
-        for robot in robots.values():
-            stack.callback(robot.close)
-        for side, robot in robots.items():
-            try:
-                robot.enter_gravity_comp_idle()
-            except Exception:
-                logger.exception("Could not idle the %s arm", side)
-        input(
-            "Teleoperation stopped. Support/place the arms safely, then press "
-            "Enter to disable motor torque."
-        )
-
-
-def check_devices(
-    args: argparse.Namespace, sides: tuple[Side, ...], channels: dict[str, str]
-) -> list[str]:
-    """Check interface names and input count before activating any motors."""
-    if args.device == "keyboard":
-        raise NotImplementedError("Keyboard input is not implemented yet")
-
-    if args.dual and args.left_channel == args.right_channel:
-        raise ValueError("Each arm must have its own CAN interface")
-    for side in sides:
-        try:
-            socket.if_nametoindex(channels[side])
-        except OSError as exc:
-            raise ConnectionError(
-                f"CAN interface {channels[side]!r} for the {side} arm does not exist"
-            ) from exc
-
-    paths = SpaceMouse.connected_paths()
-    if len(paths) < len(sides):
-        raise ConnectionError(f"Need {len(sides)} SpaceMice, but found {len(paths)}")
-    return paths
 
 
 def main(args: argparse.Namespace) -> None:
     """Run physical arm teleoperation using one or two SpaceMice.
 
-    CAN interfaces must already be configured and brought up.
+    CAN interfaces must already be configured and brought up. The current
+    i2rt hardware backend uses Linux SocketCAN.
     """
     sides: tuple[Side, ...] = ("left", "right") if args.dual else ("left",)
     channels = {"left": args.left_channel, "right": args.right_channel}
-    paths = check_devices(args, sides, channels)
+    paths = SpaceMouse.connected_paths()
+    check_devices(tuple(channels[side] for side in sides), paths)
     model = mujoco.MjModel.from_xml_path(str(SCENE))
 
     with ExitStack() as stack:
         arms: dict[Side, ArmState] = {}
-        devices: dict[Side, SpaceMouse] = {}
+        devices: dict[Side, Input] = {}
         robots: dict[Side, MotorChainRobot] = {}
 
         # Open every input before activating either arm.
         for device_index, side in enumerate(sides):
-            devices[side] = stack.enter_context(
-                SpaceMouse(
-                    device_path=paths[device_index],
-                    side=side,
-                    expo=EXPO,
-                    lin_scale=LIN_SCALE,
-                    ang_scale=ANG_SCALE,
-                )
-            )
+            device: Input
+            match args.device:
+                case "spacemouse":
+                    device = SpaceMouse(
+                        device_path=paths[device_index],
+                        side=side,
+                        expo=EXPO,
+                        lin_scale=LIN_SCALE,
+                        ang_scale=ANG_SCALE,
+                    )
+            devices[side] = stack.enter_context(device)
 
         # Register cleanup before connecting, including partial initialization.
         stack.callback(shutdown_robots, robots)
@@ -145,8 +108,7 @@ def main(args: argparse.Namespace) -> None:
 
             next_tick += DT
             now = time.perf_counter()
-            if next_tick <= now:
-                next_tick = now + DT
+            next_tick = next_tick if next_tick > now else now + DT
             time.sleep(next_tick - now)
 
 
@@ -155,9 +117,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--device",
         "-d",
-        choices=["spacemouse", "keyboard"],
-        required=True,
-        help="Input device to use (keyboard is not implemented yet)",
+        choices=["spacemouse"],
+        default="spacemouse",
+        help="Input device to use",
     )
     parser.add_argument(
         "--dual", action="store_true", help="Control both arms using two SpaceMice"

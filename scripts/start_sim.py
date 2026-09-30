@@ -124,13 +124,12 @@ if __name__ == "__main__":
         "-d",
         choices=["spacemouse", "keyboard"],
         required=True,
-        help="Input device to use (keyboard is not implemented yet)",
+        help="Input device to use",
         type=str,
     )
     _ = parser.add_argument(
         "--dual",
         action="store_true",
         help="Control both arms using two SpaceMice",
-        type=bool,
     )
     main(parser.parse_args())

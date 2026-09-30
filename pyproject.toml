@@ -20,6 +20,7 @@ dependencies = [
     "torchcodec==0.11.0",
     "h5py>=3.16.0",
     "pillow>=12.0.0",
+    "pyserial>=3.5",
 ]
 
 [build-system]

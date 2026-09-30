@@ -2,13 +2,19 @@
 
 import argparse
 import importlib.util
+import socket
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from robot.arm.physical_teleoperation import ArmState, update_arm
+from robot.arm.physical_teleoperation import (
+    ArmState,
+    check_devices,
+    shutdown_robots,
+    update_arm,
+)
 from robot.kinematics.cartesian_target import CartesianTarget
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "start_phys.py"
@@ -50,7 +56,7 @@ def test_mirrored_gripper_buttons_and_bounds(gripper, buttons, expected):
 
 @pytest.fixture
 def hardware(monkeypatch):
-    monkeypatch.setattr(start_phys.socket, "if_nametoindex", lambda _: 1)
+    monkeypatch.setattr(socket, "if_nametoindex", lambda _: 1)
     mouse = MagicMock()
     mouse.connected_paths.return_value = ["left-mouse", "right-mouse"]
     mouse.return_value.__enter__.return_value.read.return_value = (np.zeros(6), [0, 0])
@@ -82,14 +88,45 @@ def test_second_arm_failure_cleans_up_first(hardware):
     assert mouse.return_value.__exit__.call_count == 2
 
 
-def test_missing_interface_does_not_activate_arms(hardware, monkeypatch):
+def test_duplicate_channels_do_not_activate_arms(hardware):
     args, factory, _ = hardware
-    monkeypatch.setattr(
-        start_phys.socket, "if_nametoindex", MagicMock(side_effect=OSError())
-    )
-    with pytest.raises(ConnectionError, match="can-left"):
+    args.right_channel = args.left_channel
+    with pytest.raises(ValueError, match="own CAN interface"):
         start_phys.main(args)
     factory.assert_not_called()
+
+
+@pytest.mark.parametrize("missing_channel", ["can-left", "can-right"])
+def test_missing_interface_does_not_activate_either_arm(
+    hardware, monkeypatch, missing_channel
+):
+    args, factory, mouse = hardware
+
+    def lookup(channel):
+        if channel == missing_channel:
+            raise OSError("No such device")
+        return 1
+
+    monkeypatch.setattr(socket, "if_nametoindex", lookup)
+    with pytest.raises(ConnectionError, match=missing_channel):
+        start_phys.main(args)
+    factory.assert_not_called()
+    mouse.assert_not_called()
+
+
+def test_single_arm_only_checks_selected_interface(monkeypatch):
+    lookup = MagicMock(return_value=1)
+    monkeypatch.setattr(socket, "if_nametoindex", lookup)
+    check_devices(("can-left",), ["mouse-1"])
+    lookup.assert_called_once_with("can-left")
+
+
+def test_can_open_failure_comes_from_driver(hardware):
+    args, factory, _ = hardware
+    factory.side_effect = OSError("Cannot open CAN channel")
+    with pytest.raises(OSError, match="Cannot open CAN channel"):
+        start_phys.main(args)
+    factory.assert_called_once()
 
 
 def test_missing_mouse_does_not_activate_arms(hardware):
@@ -136,7 +173,7 @@ def test_shutdown_attempts_all_arms_even_when_idle_and_close_fail(monkeypatch):
     prompt = MagicMock(return_value="")
     monkeypatch.setattr("builtins.input", prompt)
     with pytest.raises(RuntimeError, match="close failed"):
-        start_phys.shutdown_robots({"left": left, "right": right})
+        shutdown_robots({"left": left, "right": right})
     right.enter_gravity_comp_idle.assert_called_once()
     prompt.assert_called_once()
     left.close.assert_called_once()
@@ -146,5 +183,5 @@ def test_prompt_eof_still_closes_arms(monkeypatch):
     robot = MagicMock()
     monkeypatch.setattr("builtins.input", MagicMock(side_effect=EOFError()))
     with pytest.raises(EOFError):
-        start_phys.shutdown_robots({"left": robot})
+        shutdown_robots({"left": robot})
     robot.close.assert_called_once()
