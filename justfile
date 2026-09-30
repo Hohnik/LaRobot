@@ -20,3 +20,7 @@ setup-project:
 # start sim with input device: `spacemouse`|`keyboard` and optional args
 start-sim device *args:
     uv run scripts/start_sim.py --device {{ device }} {{ args }}
+
+# start physical control with configured CAN interfaces
+start-phys device *args:
+    uv run scripts/start_phys.py --device {{ device }} {{ args }}
