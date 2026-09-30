@@ -14,9 +14,18 @@ BOTTLE_NAMES = (
 
 @dataclass(frozen=True)
 class BottleEvaluation:
+    """Result of evaluating the placement of all six bottles.
+
+    Parameters
+    ----------
+    inside : tuple[bool, ...]
+        One value per bottle indicating whether its center is inside the bin.
+    """
+
     inside: tuple[bool,...]
 
     def __post_init__(self) -> None:
+        """Validate that one result exists for every configured bottle."""
         if len(self.inside) != len(BOTTLE_NAMES):
             raise ValueError(
                 f"Expected {len(BOTTLE_NAMES)} bottle results, "
@@ -25,14 +34,17 @@ class BottleEvaluation:
 
     @property
     def num_inside(self) -> int:
+        """Number of bottle centers currently inside the bin."""
         return sum(self.inside)
 
     @property
     def progress(self) -> float:
+        """Fraction of the six bottles currently inside the bin."""
         return self.num_inside / len(BOTTLE_NAMES)
 
     @property
     def inside_names(self) -> tuple[str, ...]:
+        """Names of the bottles currently inside the bin."""
         return tuple(
             name
             for name, is_inside in zip(BOTTLE_NAMES, self.inside)
@@ -41,10 +53,20 @@ class BottleEvaluation:
 
     @property
     def success(self) -> bool:
+        """True when all six bottle centers are inside the bin."""
         return self.num_inside ==len(BOTTLE_NAMES)
 
 class PlacementEvaluator:
+    """Evaluate whether bottle centers are inside the simulated bin."""
+
     def __init__(self, model: mujoco.MjModel) -> None:
+        """Resolve the bottle and bin bodies and measure the bin geometry.
+
+        Parameters
+        ----------
+        model : mujoco.MjModel
+            MuJoCo model containing the six bottles and the bin.
+        """
         self.model = model
 
         ids = []
@@ -63,6 +85,7 @@ class PlacementEvaluator:
         ) = self._measure_bin_geometry()
 
     def _find_body_id(self, body_name: str) -> int:
+        """Return the MuJoCo body ID for a named body."""
         body_id = mujoco.mj_name2id(
             self.model,
             mujoco.mjtObj.mjOBJ_BODY,
@@ -77,6 +100,7 @@ class PlacementEvaluator:
         return body_id 
 
     def _bin_collision_vertices(self) -> np.ndarray:
+        """Return the bin collision-mesh vertices in the bin frame."""
         vertices = []
 
         for geom_id in range(self.model.ngeom):
@@ -120,6 +144,7 @@ class PlacementEvaluator:
     def _measure_bin_geometry(
             self,
     ) -> tuple[float, float, float, float]:
+        """Measure the bin heights and tapered radii from its collision mesh."""
         vertices = self._bin_collision_vertices()
 
         heights = vertices[:,1] #y of every vertex [x,y,z]
@@ -151,6 +176,7 @@ class PlacementEvaluator:
         )
 
     def _allowed_radius(self, heights: np.ndarray) -> np.ndarray:
+        """Return the interpolated bin radius at each local height."""
         height_fraction = (
             (heights - self._bin_bottom_height) / (self._bin_top_height - self._bin_bottom_height)
         )
@@ -161,6 +187,19 @@ class PlacementEvaluator:
         )
 
     def evaluate(self, data: mujoco.MjData) -> BottleEvaluation:
+        """Evaluate bottle placement in the current simulation state.
+
+        Parameters
+        ----------
+        data : mujoco.MjData
+            Current MuJoCo simulation data.
+
+        Returns
+        -------
+        BottleEvaluation
+            Placement result containing progress, bottle names and success.
+        """
+        
         positions = self._bottle_positions_in_bin_frame(data)
 
         heights = positions[:,1]
@@ -184,6 +223,7 @@ class PlacementEvaluator:
             self,
             data:mujoco.MjData,
     ) -> np.ndarray:
+        """Return the bottle centers of mass expressed in the bin frame."""
         bottle_positions = []
 
         for body_id in self._bottle_body_ids:
