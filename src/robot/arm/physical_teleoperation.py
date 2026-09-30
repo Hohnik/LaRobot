@@ -21,7 +21,21 @@ def check_devices(channels: tuple[str, ...], paths: list[str]) -> None:
     """Check Linux SocketCAN interface names and input count before activation.
 
     Interface existence does not guarantee the bus is up or configured with
-    the correct bitrate; connection validation remains the driver's job.
+    the correct bitrate.
+
+    Parameters
+    ----------
+    channels : tuple[str, ...]
+        CAN interface names for the selected arms.
+    paths : list[str]
+        Discovered SpaceMouse device paths.
+
+    Raises
+    ------
+    ValueError
+        Two arms use the same interface.
+    ConnectionError
+        An interface is missing or there are too few SpaceMice.
     """
     if len(set(channels)) != len(channels):
         raise ValueError("Each arm must have its own CAN interface")
@@ -35,11 +49,19 @@ def check_devices(channels: tuple[str, ...], paths: list[str]) -> None:
 
 
 def shutdown_robots(robots: dict[Side, "MotorChainRobot"]) -> None:
-    """Idle all connected arms, then close every arm after manual support."""
+    """Enter gravity compensation, prompt for support, then close the arms.
+
+    Closing is attempted for every arm even if the prompt or another close
+    fails. Idle failures are logged.
+
+    Parameters
+    ----------
+    robots : dict[Side, MotorChainRobot]
+        Connected arms keyed by side.
+    """
     if not robots:
         return
 
-    # ExitStack attempts every close even if another close or the prompt fails.
     with ExitStack() as stack:
         for robot in robots.values():
             stack.callback(robot.close)
@@ -56,7 +78,21 @@ def shutdown_robots(robots: dict[Side, "MotorChainRobot"]) -> None:
 
 @dataclass
 class ArmState:
-    """Store a physical arm's target and normalized gripper command."""
+    """Store a physical arm's target and gripper controls.
+
+    Parameters
+    ----------
+    kin : CartesianKinematics
+        Arm kinematics.
+    target : CartesianTarget
+        Mutable Cartesian target pose.
+    gripper : float
+        Gripper command from 0 (closed) to 1 (open).
+    close_button : int, optional
+        Close-button index; defaults to 0.
+    open_button : int, optional
+        Open-button index; defaults to 1.
+    """
 
     kin: CartesianKinematics
     target: CartesianTarget
@@ -77,11 +113,36 @@ def update_arm(
     gripper_step: float = 0.05,
     lag_limit: float = 0.07,
 ) -> np.ndarray:
-    """Compute six joint targets and a gripper target from measured arm joints.
+    """Update the target and compute one physical control tick.
 
-    Hardware gripper commands are normalized to [0, 1], unlike simulation
-    gripper positions in metres. Keep the commanded value between ticks so
-    releasing the button holds the target even while the gripper is moving.
+    Parameters
+    ----------
+    arm : ArmState
+        Target and gripper command to update in place.
+    measured_joints : ndarray, shape (6,)
+        Measured arm joint positions in radians, excluding the gripper.
+    velocities : ndarray, shape (6,)
+        Linear xyz (m/s) and angular xyz (rad/s) in the model's world frame.
+    buttons : list[int]
+        Button states indexed by the arm's button mappings.
+    dt : float, optional
+        Control timestep in seconds; defaults to 1 / CONTROL_HZ.
+    gripper_open : float, optional
+        Upper normalized gripper bound; defaults to 1.0.
+    gripper_shut : float, optional
+        Lower normalized gripper bound; defaults to 0.0.
+    gripper_step : float, optional
+        Gripper command change per tick; defaults to 0.05.
+    lag_limit : float, optional
+        Maximum target position lag in metres; defaults to 0.07.
+
+    Returns
+    -------
+    Six joint targets in radians followed by the normalized gripper command.
+    The gripper target is retained when neither button is pressed.
+    ```
+    ndarray, shape (7,)
+    ```
     """
     arm.target.integrate(velocities, dt=dt)
 
